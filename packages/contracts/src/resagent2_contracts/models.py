@@ -611,6 +611,7 @@ class ModuleTaskRequest(ContractModel):
     inputs: CapabilityInput
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     constraints: list[NonEmptyStr] = Field(default_factory=list)
+    answers: list[UserAnswer] = Field(default_factory=list)
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
     parent_session_id: SessionId | None = None

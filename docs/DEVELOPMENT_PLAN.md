@@ -21,7 +21,7 @@
 | Phase 0 | 文档和目录基线 | completed |
 | Phase 1 | contracts 包 | completed |
 | Phase 2 | 最小共享 runtime 和 Agentic Loop | completed |
-| Phase 3 | ResAgent Workflow Core | not_started |
+| Phase 3 | ResAgent Workflow Core | completed |
 | Phase 4 | Legacy Adapters 与黄金闭环 | not_started |
 | Phase 5 | Coding Agent vNext | not_started |
 | Phase 6 | Experiment Agent vNext | not_started |
@@ -205,12 +205,23 @@
 
 ### 完成标准
 
-- [ ] 同一输入 state 得到同一 ready Task 集合；
-- [ ] Scheduler 不调用 LLM 选择普通状态转换；
-- [ ] failed payload 不可能变 completed；
-- [ ] Attempt/Artifact 历史不可覆盖；
-- [ ] restart 后可从 state 恢复；
-- [ ] ARCHITECTURE 与实际一致。
+- [x] 同一输入 state 得到同一 ready Task 集合；
+- [x] Scheduler 不调用 LLM 选择普通状态转换；
+- [x] failed payload 不可能变 completed；
+- [x] Attempt/Artifact 历史不可覆盖；
+- [x] restart 后可从 state 恢复；
+- [x] ARCHITECTURE 与实际一致；
+- [x] 14 个 orchestrator tests、全仓 50 个 tests 通过。
+
+### 实施记录（2026-08-26）
+
+- 发布包：`resagent2-orchestrator 0.1.0`；
+- 线性、并行、repair、ask-user/resume 和 invalid transition 均由 fake ModulePort 验证；
+- Artifact 会 resolve workspace 边界、复制到冻结目录、计算 SHA-256 并绑定 run/task/attempt；
+- 下游 Task 自动接收直接依赖任务登记的 ArtifactRef；
+- WorkflowPatch 保存旧 revision，terminal Attempt 历史不被改写；
+- JsonRunStore 使用同目录临时文件、fsync 和原子 replace；
+- Phase 4 未自动开始，尚未调用任何旧 Agent 或服务器。
 
 ## 7. Phase 4：Legacy Adapters 与黄金闭环
 

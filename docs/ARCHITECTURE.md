@@ -1,6 +1,6 @@
 # ResAgent2 系统架构
 
-**状态**：目标架构；contracts 和最小 shared runtime v0.1.0 已实现
+**状态**：目标架构；contracts、最小 shared runtime 和 Workflow Core v0.1.0 已实现
 **更新规则**：实现状态变化时，本文件必须和代码在同一 commit 更新。
 
 ## 1. 系统目标
@@ -422,7 +422,7 @@ stateDiagram-v2
     running --> blocked: result blocked
     running --> needs_user_input: question returned
     failed --> pending: retry allowed
-    blocked --> pending: recovery dependency completed
+    blocked --> pending: explicit retry after recovery
     needs_user_input --> pending: answer supplied
     pending --> skipped: superseded before execution
 ```
@@ -445,6 +445,20 @@ stateDiagram-v2
 
 ## 12. 完成判定
 
+### 12.1 Phase 3 已实现边界
+
+`resagent2_orchestrator` 当前是同步、单进程的确定性 Workflow Core：
+
+- ready Task 仅由 `pending + 所有 depends_on completed` 计算，顺序与 Workflow 中顺序一致；
+- 每次 ModulePort 调用前先创建并保存 running Attempt；
+- ModuleResult.status 决定 Task 状态，payload 或 summary 不能覆盖失败状态；
+- retry 创建新 Attempt，ask-user resume 才携带 parent_session_id 和该 Task 的 UserAnswer；
+- 依赖任务登记的 ArtifactRef 自动成为下游请求的 input_artifacts；
+- WorkflowPatch 只能基于当前 revision，旧 Workflow 保存在 workflow_history；
+- RunStore 每次保存完整 ResearchRun，JsonRunStore 使用原子替换恢复。
+
+显式 repair 的最小路径是：blocked Task → WorkflowPatch 增加 repair Task → repair completed → `retry_task` 把原 Task 重新置为 pending。Scheduler 不自行发明 repair Task。
+
 模块的 `finish` 只是候选结果。确定性 finalizer 必须检查证据后生成 ModuleResult。
 
 Run completed 必须满足：
@@ -464,7 +478,7 @@ Run completed 必须满足：
 | 文档与目录基线 | 本阶段建立 |
 | contracts package | 已实现 v0.1.0；22 个契约测试通过 |
 | shared runtime | 已实现 v0.1.0；14 个 runtime 测试通过 |
-| Workflow Scheduler | 未实现 |
+| Workflow Scheduler | 已实现 v0.1.0；14 个 orchestrator 测试通过 |
 | Scientific Agent vNext | 未实现 |
 | Coding Agent vNext | 未实现 |
 | Experiment Agent vNext | 未实现 |

@@ -228,6 +228,7 @@ class ModuleTaskRequest:
     inputs: CapabilityInput
     input_artifacts: list[ArtifactRef]
     constraints: list[str]
+    answers: list[UserAnswer]
     budget: TaskBudget
     workspace: WorkspaceGrant | None
     parent_session_id: str | None
@@ -241,9 +242,12 @@ class ModuleTaskRequest:
 | inputs | capability 专有的类型化参数 |
 | input_artifacts | 已授权、可追溯的输入 |
 | constraints | 本次 Task 的附加限制 |
+| answers | 只包含属于本 Task 已持久化问题的用户答案；普通调用为空 |
 | budget | 本次调用的 step、时间、token/usage 边界 |
 | workspace | 允许读写的物理范围和访问模式 |
 | parent_session_id | 仅用于显式 resume；普通 retry 默认为空 |
+
+`answers` 与 `parent_session_id` 配合实现 ask-user 恢复：ResAgent 保存 Answer 后创建新的 Attempt，把该 Task 的 Answer 和上次 paused Session 一起传回模块。其他 Task 的答案不得注入；普通 failed/blocked retry 不复用 Session。
 
 ## 9. ModuleResult
 

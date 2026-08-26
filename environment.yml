@@ -9,5 +9,6 @@ dependencies:
   - pip:
       - -e ./packages/contracts
       - -e ./packages/runtime
+      - -e ./packages/orchestrator
 variables:
   PYTHONNOUSERSITE: "1"

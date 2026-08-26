@@ -16,9 +16,9 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：Phase 2 已完成，Phase 3 尚未开始。**
+**阶段：Phase 3 已完成，Phase 4 尚未开始。**
 
-当前已实现独立的 `resagent2-contracts` 包、共享 `resagent2-runtime` Agentic Loop 和相应测试；工作流调度器和三个具体子 Agent 仍未实现。下一阶段只能从 `docs/DEVELOPMENT_PLAN.md` 进入，不能跳过计划提前堆功能。
+当前已实现 `resagent2-contracts`、共享 `resagent2-runtime` Agentic Loop，以及确定性的 `resagent2-orchestrator` Workflow Core。三个真实子 Agent 和 legacy adapter 仍未接入。下一阶段只能从 `docs/DEVELOPMENT_PLAN.md` 进入，不能跳过计划提前堆功能。
 
 ## 四个角色
 

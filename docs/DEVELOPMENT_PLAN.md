@@ -336,7 +336,7 @@ ResearchRequest
 
 ## 11. Phase 8：稳定化与按需高级能力
 
-只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证。
+只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证、内容寻址环境与镜像加速（国内网络下复用 conda 环境、减少重复下载）。
 
 每项必须先有：
 

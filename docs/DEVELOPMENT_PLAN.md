@@ -32,13 +32,13 @@
 | Phase 1 | contracts 1.0 基础实现 | completed |
 | Phase 2 | 最小 shared runtime / Agentic Loop | completed |
 | Phase 3 | ResAgent Workflow Core 与语义对齐 | completed |
-| Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | in_progress |
+| Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | not_started |
 | Phase 6 | Experiment Agent vNext | not_started |
 | Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3 已重新验收完成。Phase 4 已开始：本地 mock E2E、三个 legacy adapter 骨架与真实模块接线、runtime resume、payload 持久化均已落地并在服务器验证过真实闭环；当前处于 hardening 收尾（见 §7 完成标准）。
+Phase 3 已重新验收完成。Phase 4 已完成：Planning Port、三个 legacy adapter、runtime resume、payload 持久化、mock E2E 和服务器真实短闭环均已落地并完成 hardening。Phase 5 尚未开始。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -170,7 +170,7 @@ contracts 包“代码已实现”不等于所有字段“运行语义已接通�
 - [x] create_run 拒绝 questions 非空的 WorkflowProposal；
 - [x] 为上述两条增加负向测试；
 - [x] 裁定 success_criteria 方向：保留可执行语义，不降级为纯说明字段。AUTOMATIC 表示任务完成后由机器基于已登记 Artifact 自动判定，MANUAL 表示需人工确认；evidence_key 的解析目标与求值器留待 evidence 求值阶段（Phase 7）定义，本阶段只锁定方向；
-- [x] 记录 Phase 3 payload 策略：Scheduler 不持久化/解释 payload，跨任务数据必须成为 Artifact；每个生产 capability 的 payload model 和消费方在对应 Agent 阶段定义；
+- [x] 记录 Phase 3 当时的 payload 策略；Phase 4 随后增加 `Attempt.payload` 持久化，但 Scheduler 仍不解释 payload，跨任务数据仍必须成为 Artifact；每个原生 capability 的强类型 payload model 和领域消费方在对应 Agent 阶段定义；
 - [x] 将 `.resagent2/` 加入 `.gitignore`；
 - [x] 清除 src/build 误读风险：正式验证只针对 `packages/*/src`，构建产物不得作为源码；
 - [x] 复核“失败 Attempt Artifact 不向下游传播”的代码与测试；
@@ -229,7 +229,7 @@ Planning Port 在创建 Workflow 之前运行，不能作为黄金 Workflow 中�
 ResearchRequest
   → Planning Port 产生 WorkflowProposal
   → Validator 接受 code → experiment → scientific_analyze Workflow
-  → Coding Adapter 产生小 patch Artifact
+  → Coding Adapter 产生小 patch Artifact（legacy retry 例外见下文）
   → Experiment Adapter 运行短命令并产生 metrics Artifact
   → Scientific Adapter 形成 ScientificConclusion
   → 当前工程 gate 完成，并单独报告尚未实现的科学闭环限制
@@ -237,13 +237,19 @@ ResearchRequest
 
 ### 完成标准
 
-- [ ] 一个命令运行完整 mock E2E；
-- [ ] 每一步有 Task/Attempt/Artifact；
-- [ ] Planning 不出现在 WorkflowTask 列表；
-- [ ] ask-user 能穿过 orchestrator 和 runtime 完成真实 resume；
-- [ ] 中途终止后可从磁盘状态恢复（指恢复到最后一次稳定保存的 Run 状态，即 Task 边界；中断一个正在运行的模块调用并原样续跑不在 Phase 4 范围，属后续 runtime 能力）；
-- [ ] ModuleResult payload 有明确消费者，不被静默丢弃；
-- [ ] 本地小任务通过后才允许服务器短实验。
+- [x] 一个命令运行完整 mock E2E；
+- [x] mock E2E 每一步都有 Task/Attempt/Artifact；真实 legacy E2E 的实验结果和科学结论必须登记 Artifact，代码证据只允许下述有界例外；
+- [x] Planning 不出现在 WorkflowTask 列表；
+- [x] ask-user 能穿过 orchestrator 和 runtime 完成真实 resume；
+- [x] 可从磁盘恢复到最后一次稳定保存的 Run 状态，即 Task 边界；中断一个正在运行的模块调用并原样续跑不在 Phase 4 范围；
+- [x] ModuleResult payload 持久化到 Attempt，不被静默丢弃；跨 Task 消费仍只使用 ArtifactRef；
+- [x] 本地 mock/全仓测试通过后，在服务器固定 commit 上完成真实短实验。
+
+### 已接受的 legacy 限制
+
+旧 CodingAgent 可能在失败 Attempt 中已经修改目标文件，retry 成功时却返回空 `changed_files`。这会导致 code Task 最终 completed，但没有可登记的 `code_change` Artifact。Phase 4 不修补即将在 Phase 5 删除的旧模块，也不把失败诊断伪装为成功交付物。
+
+真实 E2E 仅在以下条件同时成立时接受这个例外：三个预期 Task 都最终 completed；code Task 有 Attempt 且 `util.py` 相对测试仓库 Git 基线确实改变；`experiment_result` 与 `scientific_decision` 分别由对应 Task 登记为 ArtifactRef。缺少实验或科学证据仍必须返回非零退出码。原生 Coding Agent 在 Phase 5 仍必须交付 code Artifact，不能继承这个例外。
 
 ## 8. Phase 5：Coding Agent vNext
 
@@ -354,11 +360,11 @@ ResearchRequest
 | 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
 | ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
-| retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | retry/repair 已有，resume 跨层待接 |
+| retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | 已实现：retry 新 Attempt、ask-user resume 复用并校验 Session、repair 使用 WorkflowPatch |
 | Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5 | 登记复核已有，runtime 访问层待实现 |
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
 | success criterion 求值 | SuccessCriterion | Phase 3/7 | 仅存储，方向已裁定为可执行语义，求值器待 Phase 7 |
-| ModuleResult payload | ModuleResult[PayloadT] | Phase 3/5-7 | Core 不持久化；生产模型与直接消费方在对应 Agent 阶段定义 |
+| ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
 | 科学分析闭环 | ScientificConclusion | Phase 7 | 未实现 |
 | final summary 事实约束 | 最终报告契约待定 | Phase 7 | 未实现 |
 
@@ -384,3 +390,4 @@ ResearchRequest
 | 2026-08-26 | Phase 2 | `deaa126` | 14 runtime tests | runtime 0.1.0 |
 | 2026-08-26 | Phase 3 v0.1.0 | `d4e23b0` | 当时全仓 50 tests | 后因文档/语义冲突重开 |
 | 2026-08-26 | Phase 3 对齐与收尾 | completed | 全仓测试、Conda package check、文档交叉检查 | 控制面边界、questions、Artifact 传播、payload 策略和 finish gate 已对齐 |
+| 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |

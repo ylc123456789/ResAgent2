@@ -2,7 +2,7 @@
 
 **文档角色**：系统概念、职责边界和控制流的最高级事实来源（semantic source of truth）
 
-**当前基线**：contracts、最小 shared runtime、Workflow Core v0.1.0 已实现；Phase 3 已完成
+**当前基线**：contracts、最小 shared runtime、Workflow Core v0.1.0 与 Phase 4 legacy 黄金闭环已实现；Phase 4 已完成
 
 **更新规则**：任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、计划和代码。
 
@@ -344,7 +344,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - 没有未解决的 required failure；
 - final summary 只引用已登记事实。
 
-这些条件目前缺少完整模型和代码，不属于“Phase 3 已实现”。它们在进入真实黄金闭环前逐项落到 contracts、代码和测试；在此之前不得据此宣称 Run 科学闭环完成。
+这些条件目前缺少完整模型和代码，不属于当前 finish gate。Phase 4 的 legacy 黄金闭环只证明任务执行、证据冻结和科学分析链路已经连通，不等于最终科学闭环 gate 已实现；后者在 Phase 7 逐项落到 contracts、代码和测试。
 
 `SuccessCriterion` 当前只被持久化，不被 Scheduler 求值；`evidence_key` 也没有运行期解析器。Task 完成仍由模块 finalizer 的 ModuleStatus 决定。是否让 criterion 进入机器 gate，必须先定义 evidence_key 指向和求值责任，再改契约。
 
@@ -360,6 +360,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - validator 拒绝 scientific_plan / ask_user 进入 WorkflowTask；
 - Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
 - PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
+- 三个 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
 - runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
 - 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
 - fake ModulePort 的确定性测试。
@@ -371,7 +372,9 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - success criteria 求值；
 - 最终科学闭环 gate 和 final summary；
 - 真实 filesystem/process/Git Tools；
-- 三个 vNext 专业 Agent（legacy adapter 与 mock E2E 已在 Phase 4 落地）。
+- 三个 vNext 专业 Agent。
+
+Phase 4 的真实闭环存在一项有界兼容限制：旧 CodingAgent 可能在失败 Attempt 中已经修改工作区，随后成功 retry 却返回空 `changed_files`，因此该次 Run 可能没有 `code_change` Artifact。Phase 4 的真实 E2E 只在 code Task 最终 completed、目标文件相对 Git 基线确实改变、实验结果和科学结论均已登记为 ArtifactRef 时接受该例外。它只适用于待删除的 legacy adapter，不改变“原生 Coding Agent 应交付 code Artifact”的架构要求。
 
 具体阶段和验收状态只见 `DEVELOPMENT_PLAN.md`；字段定义只见 `CONTRACTS.md`。
 

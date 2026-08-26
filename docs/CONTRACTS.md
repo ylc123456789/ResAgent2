@@ -270,27 +270,27 @@ class ModuleResult[PayloadT]:
 - completed_with_warnings：至少有一条 WarningRecord；
 - ArtifactCandidate 可随失败结果作为诊断输出登记，但不能让失败状态变成功。
 
-`summary` 只用于人类展示；`payload` 是 capability 专有数据。当前 Scheduler 尚未持久化或解释 payload，专业 Agent 接入前必须明确每个结果模型由谁消费。
+`summary` 只用于人类展示；`payload` 是 capability 专有数据。Scheduler 将通过校验的 payload 原样持久化到对应 Attempt，供审计和恢复后读取，但不解释其中的领域语义，也不从 payload 推断状态。
 
-### 10.1 Phase 3 payload 消费策略
+### 10.1 当前 payload 持久化与消费策略
 
-Workflow Core 只消费 ModuleResult 的外层控制字段：status、artifacts、session、question、error 和 warnings。schema 1.0 的裸 `ModuleResult` 只校验 payload 可以被 Pydantic 接受，不执行 capability 专有结果校验，也不把 payload 写入 ResearchRun。
+Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：status、artifacts、session、question、error 和 warnings。schema 1.0 的裸 `ModuleResult` 只校验 payload 可以被 Pydantic 接受，不执行 capability 专有结果校验；Scheduler 把 payload 保存到 `Attempt.payload`，不将其提升为独立的 Run 控制状态。
 
-因此 Phase 3 的稳定规则是：
+因此当前稳定规则是：
 
 - 跨 Task、重启后或最终报告仍需使用的信息，必须通过 ArtifactCandidate 登记为 ArtifactRef；
 - payload 不能作为 Task 依赖、finish gate 或 provenance 的唯一依据；
-- 专业 Agent/legacy adapter 接入前，必须先定义 `ModuleResult[具体结果模型]` 以及直接消费方；
+- legacy adapter 的 dict payload 只作为过渡审计数据；原生专业 Agent 接入时必须定义 `ModuleResult[具体结果模型]` 以及领域消费方；
 - 如果某个结构化结果需要成为 Run 状态的一部分，应新增明确契约，而不是让 Scheduler 静默保存任意 payload。
 
-| task capability | 目标 payload/消费方 | 当前 Phase 3 行为 | 定义阶段 |
+| task capability | 目标 payload/消费方 | 当前行为 | 原生模型定义阶段 |
 |---|---|---|---|
-| scientific_analyze | ScientificConclusion → 科学闭环/final report | 无生产 binding；payload 持久化到 Attempt | Phase 7 |
-| literature_search | 有界文献结果 → Scientific Agent | 无生产 binding；持久结果必须登记 Artifact | Phase 7 |
-| code_understand | 代码理解结果 → 调用方 | 无生产 binding；模型待定义 | Phase 5 |
-| code_modify | 代码变化摘要 → 调用方；代码变化 → ArtifactRef | 无生产 binding；模型待定义 | Phase 5 |
-| experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无生产 binding；模型待定义 | Phase 6 |
-| experiment_run | 实验结构化结果（模型待定义）→ Scientific Agent；证据 → ArtifactRef | 无生产 binding；模型待定义 | Phase 6 |
+| scientific_analyze | ScientificConclusion → 科学闭环/final report | legacy payload 保存到 Attempt；结论另登记 `scientific_decision` Artifact | Phase 7 |
+| literature_search | 有界文献结果 → Scientific Agent | 无 production binding；持久结果必须登记 Artifact | Phase 7 |
+| code_understand | 代码理解结果 → 调用方 | 无 production binding；模型待定义 | Phase 5 |
+| code_modify | 代码变化摘要 → 调用方；代码变化 → ArtifactRef | legacy payload 保存到 Attempt；非空 changed_files 登记 `code_change` Artifact | Phase 5 |
+| experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无 production binding；模型待定义 | Phase 6 |
+| experiment_run | 实验结构化结果 → Scientific Agent；证据 → ArtifactRef | legacy payload 保存到 Attempt；实验结果另登记 `experiment_result` Artifact | Phase 6 |
 
 scientific_plan 和 ask_user 不在表中，因为它们不是 task capability。
 
@@ -429,7 +429,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前唯一支持版本为 `1.0`，不维护旧格式兼容层。`Attempt.payload`（可选字段）是 `1.0` 上的新增可选字段，按本规则属小版本演进；在下一 schema 小版本合并前先保持现状，并在该次变更中补迁移说明与 round-trip 测试。
+当前唯一支持版本为 `1.0`，不维护旧格式兼容层。Phase 4 之前 schema 尚未对外冻结，`Attempt.payload` 在冻结前并入 `1.0` 基线，并已有持久化测试；这不是对一个已发布 wire 版本的兼容承诺。从 Phase 4 完成起 `1.0` 冻结，后续增加可选字段必须发布至少 `1.1` 并提供迁移说明和 round-trip 测试。
 
 ## 18. 当前公共导出核对表
 
@@ -453,8 +453,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 这些是已确认缺口，不是隐含设计：
 
 1. 实现 success_criteria/evidence_key 的正式求值器（方向已裁定：保留可执行语义，求值器留待 Phase 7）；
-2. 为每个 capability 明确 ModuleResult payload model 及其消费方；
-3. 完成 parent_session_id 的 runtime resume 闭环；
-4. 在引入下一次字段变化前确定 `1.x` 的实际迁移方式。
+2. 在对应 vNext Agent 阶段为每个 capability 定义强类型 ModuleResult payload model 及其领域消费方；Phase 4 legacy dict payload 只作为过渡审计数据；
+3. 在引入下一次字段变化时按 §17 发布新的 schema 版本和迁移说明。
 
 这些工作的阶段、顺序和验收见 `DEVELOPMENT_PLAN.md`。

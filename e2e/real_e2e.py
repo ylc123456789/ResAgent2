@@ -30,6 +30,7 @@ from resagent2_contracts import (
     RunStatus,
     ScientificAnalyzeInput,
     TaskBudget,
+    TaskStatus,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSource,
@@ -75,6 +76,12 @@ if __name__ == "__main__":
     train(p.parse_args().epochs)
 """
 
+_EXPECTED_TASK_CAPABILITIES = {
+    Capability.CODE_MODIFY,
+    Capability.EXPERIMENT_RUN,
+    Capability.SCIENTIFIC_ANALYZE,
+}
+
 
 def _repo(workdir: Path) -> Path:
     repo = workdir / "repo"
@@ -97,6 +104,55 @@ def _grant(repo: Path) -> WorkspaceGrant:
         allowed_paths=["."],
         source=WorkspaceSource.EXISTING,
     )
+
+
+def _tracked_path_changed(repo: Path, path: str) -> bool:
+    """Return whether a tracked path differs from the E2E repository baseline."""
+    result = subprocess.run(
+        ["git", "diff", "--quiet", "--", path],
+        cwd=repo,
+        check=False,
+    )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError(f"git diff failed with exit code {result.returncode}")
+    return result.returncode == 1
+
+
+def _real_e2e_succeeded(run, *, code_workspace_changed: bool) -> bool:
+    """Evaluate Phase 4's legacy E2E using required semantics, not an item count.
+
+    The old CodingAgent can modify ``util.py`` in a failed attempt and then
+    complete a retry with an empty ``changed_files`` list.  In that one legacy
+    case the workspace diff is accepted as code-step evidence.  Experiment and
+    scientific evidence must always be registered, immutable ArtifactRefs.
+    """
+    tasks = {task.capability: task for task in run.workflow.tasks}
+    if (
+        len(run.workflow.tasks) != len(_EXPECTED_TASK_CAPABILITIES)
+        or set(tasks) != _EXPECTED_TASK_CAPABILITIES
+    ):
+        return False
+    if run.status != RunStatus.COMPLETED or any(
+        task.status != TaskStatus.COMPLETED or not task.attempts
+        for task in tasks.values()
+    ):
+        return False
+
+    artifacts = list(run.artifacts.values())
+
+    def has_artifact(capability: Capability, kind: str) -> bool:
+        task_id = tasks[capability].id
+        return any(
+            artifact.kind == kind and artifact.task_id == task_id
+            for artifact in artifacts
+        )
+
+    if not has_artifact(Capability.EXPERIMENT_RUN, "experiment_result"):
+        return False
+    if not has_artifact(Capability.SCIENTIFIC_ANALYZE, "scientific_decision"):
+        return False
+
+    return has_artifact(Capability.CODE_MODIFY, "code_change") or code_workspace_changed
 
 
 def run_code(workdir: Path) -> ModuleResult:
@@ -171,12 +227,21 @@ def run_full(workdir: Path) -> bool:
     for task in run.workflow.tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
+    code_workspace_changed = _tracked_path_changed(repo, "util.py")
+    code_artifact_present = any(
+        artifact.kind == "code_change" for artifact in run.artifacts.values()
+    )
+    if not code_artifact_present and code_workspace_changed:
+        print(
+            "code evidence=workspace diff "
+            "(accepted Phase 4 legacy retry limitation; no registered code Artifact)"
+        )
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
-    return run.status == RunStatus.COMPLETED and len(run.artifacts) >= 3
+    return _real_e2e_succeeded(run, code_workspace_changed=code_workspace_changed)
 
 
 def main() -> None:
-    stage = sys.argv[1] if len(sys.argv) > 1 else "analyze"
+    stage = sys.argv[1] if len(sys.argv) > 1 else "full"
     workdir = Path(os.environ.get("REAL_E2E_WORKDIR", tempfile.mkdtemp(prefix="resagent2-real-")))
     workdir.mkdir(parents=True, exist_ok=True)
     if stage == "code":

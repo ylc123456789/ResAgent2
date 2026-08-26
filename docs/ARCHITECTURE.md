@@ -1,6 +1,6 @@
 # ResAgent2 系统架构
 
-**状态**：目标架构；contracts v0.1.0 已实现，其余组件尚未实现
+**状态**：目标架构；contracts 和最小 shared runtime v0.1.0 已实现
 **更新规则**：实现状态变化时，本文件必须和代码在同一 commit 更新。
 
 ## 1. 系统目标
@@ -354,6 +354,21 @@ AgentDefinition(
 
 共享机制，不共享领域策略。
 
+### 8.3 Phase 2 已实现边界
+
+`resagent2_runtime` 当前提供一个同步、provider-neutral 的 AgentLoop：
+
+- AgentDefinition 注入 prompt、LLM client、Tools、ContextBuilder、PermissionPolicy 和 CompletionCheck；
+- AgentAction 与每个 Tool 的输入都经过 Pydantic schema 校验；
+- 权限检查发生在 Tool 执行之前；
+- Tool 返回 ToolObservation，不直接修改 AgentState；
+- 每个 action、observation 和 error 都进入事件列表并保存完整内存快照；
+- ask_user 只产生 QuestionDraft 和 paused SessionRef；
+- FinishCandidate 的 proposed_status 不参与最终状态决定；
+- timeout、step budget、LLM-call budget 和内部边界错误统一映射为 ModuleError。
+
+当前 Store、Tools 和 LLM client 都是内存/测试实现，只支持创建新 Session。真实 provider、磁盘恢复、resume、Artifact IO、filesystem/process/Git 均属于后续阶段。
+
 ## 9. Ask User
 
 子 Agent 不直接读取终端或维护用户对话，只返回：
@@ -448,7 +463,7 @@ Run completed 必须满足：
 |---|---|
 | 文档与目录基线 | 本阶段建立 |
 | contracts package | 已实现 v0.1.0；22 个契约测试通过 |
-| shared runtime | 未实现 |
+| shared runtime | 已实现 v0.1.0；14 个 runtime 测试通过 |
 | Workflow Scheduler | 未实现 |
 | Scientific Agent vNext | 未实现 |
 | Coding Agent vNext | 未实现 |

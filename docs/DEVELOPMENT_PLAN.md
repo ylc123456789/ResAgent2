@@ -20,7 +20,7 @@
 |---|---|---|
 | Phase 0 | 文档和目录基线 | completed |
 | Phase 1 | contracts 包 | completed |
-| Phase 2 | 最小共享 runtime 和 Agentic Loop | not_started |
+| Phase 2 | 最小共享 runtime 和 Agentic Loop | completed |
 | Phase 3 | ResAgent Workflow Core | not_started |
 | Phase 4 | Legacy Adapters 与黄金闭环 | not_started |
 | Phase 5 | Coding Agent vNext | not_started |
@@ -157,12 +157,20 @@
 
 ### 完成标准
 
-- [ ] AgentLoop 不 import 任何具体 Agent；
-- [ ] Tool 输入全部 schema 校验；
-- [ ] 权限在执行前检查；
-- [ ] 每步增量持久化；
-- [ ] finalizer 不信任 LLM proposed status；
-- [ ] runtime tests 和文档通过。
+- [x] AgentLoop 不 import 任何具体 Agent；
+- [x] Tool 输入全部 schema 校验；
+- [x] 权限在执行前检查；
+- [x] 每步增量持久化；
+- [x] finalizer 不信任 LLM proposed status；
+- [x] 14 个 runtime tests、22 个 contract tests 和文档通过。
+
+### 实施记录（2026-08-26）
+
+- 发布包：`resagent2-runtime 0.1.0`；
+- 三个黄金 Profile 使用同一 AgentLoop，分别验证只读、可写和等待用户输入；
+- 当前只有四个内存 Tool 和 ScriptedLLMClient，不包含真实 I/O；
+- Store 以深拷贝内存快照实现 SessionStore protocol，足以验证增量持久化语义；
+- Phase 3 未自动开始，Workflow Scheduler 仍保持在 runtime 之外。
 
 ## 6. Phase 3：ResAgent Workflow Core
 

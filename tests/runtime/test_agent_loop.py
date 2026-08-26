@@ -1,0 +1,247 @@
+from pydantic import BaseModel
+
+from resagent2_contracts import (
+    AgentOwner,
+    Capability,
+    CodeModifyInput,
+    CodeUnderstandInput,
+    ModuleStatus,
+    ModuleTaskRequest,
+    TaskBudget,
+)
+from resagent2_runtime import (
+    AgentAction,
+    AgentDefinition,
+    AgentLoop,
+    AllowListPermissionPolicy,
+    CompletionDecision,
+    ContextSection,
+    FinishCandidate,
+    FinishTool,
+    InMemorySessionStore,
+    ReadValueTool,
+    ScriptedLLMClient,
+    WriteValueTool,
+    AskUserTool,
+)
+
+
+class AcceptFinish:
+    """Test finalizer that accepts only an explicit finish candidate."""
+
+    def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
+        if candidate is None:
+            return CompletionDecision(complete=False)
+        return CompletionDecision(
+            complete=True,
+            summary="Deterministic completion check passed",
+            payload=candidate.result,
+        )
+
+
+class NeverFinish:
+    """Test finalizer that rejects every proposed finish."""
+
+    def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
+        return CompletionDecision(complete=False)
+
+
+class VerifiedResult(BaseModel):
+    value: int
+
+
+def build_context(request, state) -> list[ContextSection]:
+    return [
+        ContextSection(
+            name="task",
+            content=f"Goal: {request.goal}",
+            priority=100,
+            required=True,
+        ),
+        ContextSection(
+            name="memory",
+            content=str(state.memory),
+            priority=50,
+        ),
+    ]
+
+
+def request(capability: Capability) -> ModuleTaskRequest:
+    if capability == Capability.CODE_MODIFY:
+        inputs = CodeModifyInput(instructions="Store the verified value")
+    else:
+        inputs = CodeUnderstandInput(question="Read the reference value")
+    return ModuleTaskRequest(
+        run_id="run_runtime",
+        task_id="task_runtime",
+        attempt_number=1,
+        capability=capability,
+        goal="Exercise the shared loop",
+        inputs=inputs,
+        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+    )
+
+
+def definition(
+    *,
+    name: str,
+    llm: ScriptedLLMClient,
+    tools: tuple,
+    allowed_tools: set[str],
+    completion_check=None,
+    result_type=None,
+) -> AgentDefinition:
+    return AgentDefinition(
+        name=name,
+        owner=AgentOwner.CODING,
+        system_prompt="Follow the typed task and use only the provided tools.",
+        tools=tools,
+        llm_client=llm,
+        context_builder=build_context,
+        permission_policy=AllowListPermissionPolicy(allowed_tools),
+        completion_check=completion_check or AcceptFinish(),
+        result_type=result_type,
+    )
+
+
+def test_same_loop_runs_read_only_and_writable_profiles() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    read_definition = definition(
+        name="reader",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(tool="read_value", arguments={"key": "answer"}),
+                AgentAction(
+                    tool="finish",
+                    arguments={
+                        "proposed_status": "failed",
+                        "result": {"answer": 42},
+                    },
+                ),
+            ]
+        ),
+        tools=(ReadValueTool(), FinishTool()),
+        allowed_tools={"read_value", "finish"},
+    )
+    write_definition = definition(
+        name="writer",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(
+                    tool="write_value",
+                    arguments={"key": "verified", "value": True},
+                ),
+                AgentAction(
+                    tool="finish",
+                    arguments={"result": {"written": True}},
+                ),
+            ]
+        ),
+        tools=(WriteValueTool(), FinishTool()),
+        allowed_tools={"write_value", "finish"},
+    )
+
+    read_result = loop.run(
+        read_definition,
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_reader",
+        initial_memory={"answer": 42},
+    )
+    write_result = loop.run(
+        write_definition,
+        request(Capability.CODE_MODIFY),
+        session_id="session_writer",
+    )
+
+    assert read_result.status == ModuleStatus.COMPLETED
+    assert read_result.payload == {"answer": 42}
+    assert write_result.status == ModuleStatus.COMPLETED
+    assert store.load("session_writer").memory["verified"] is True
+    assert type(loop) is AgentLoop
+
+
+def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    ask_definition = definition(
+        name="needs-input",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(
+                    tool="ask_user",
+                    arguments={
+                        "text": "Which dataset should be used?",
+                        "requested_fields": ["dataset"],
+                        "reason": "The task has no dataset selection.",
+                    },
+                )
+            ]
+        ),
+        tools=(AskUserTool(),),
+        allowed_tools={"ask_user"},
+        completion_check=NeverFinish(),
+    )
+
+    result = loop.run(
+        ask_definition,
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_question",
+    )
+
+    assert result.status == ModuleStatus.NEEDS_USER_INPUT
+    assert result.question is not None
+    assert result.question.requested_fields == ["dataset"]
+    assert result.session is not None
+    assert result.session.status.value == "paused"
+
+
+def test_finalizer_does_not_trust_llm_proposed_status() -> None:
+    loop = AgentLoop(store=InMemorySessionStore())
+    accepted = definition(
+        name="accepted",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(
+                    tool="finish",
+                    arguments={
+                        "proposed_status": "failed",
+                        "result": {"valid": True},
+                    },
+                )
+            ]
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+    )
+
+    result = loop.run(
+        accepted,
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_finalizer",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+
+
+def test_final_payload_must_match_profile_result_schema() -> None:
+    loop = AgentLoop(store=InMemorySessionStore())
+    profile = definition(
+        name="typed-result",
+        llm=ScriptedLLMClient(
+            [AgentAction(tool="finish", arguments={"result": {"wrong": True}})]
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+        result_type=VerifiedResult,
+    )
+
+    result = loop.run(
+        profile,
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_typed_result",
+    )
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error is not None
+    assert result.error.code.value == "contract_error"

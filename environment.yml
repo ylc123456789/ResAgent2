@@ -8,5 +8,6 @@ dependencies:
   - pytest>=9,<10
   - pip:
       - -e ./packages/contracts
+      - -e ./packages/runtime
 variables:
   PYTHONNOUSERSITE: "1"

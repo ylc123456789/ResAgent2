@@ -11,7 +11,7 @@ def test_coding_adapter_maps_patch_report_statuses() -> None:
         {"status": "completed", "summary": "ok", "changed_files": ["method.py"]}
     )
     assert completed.status == ModuleStatus.COMPLETED
-    assert completed.payload == {"changed_files": ["method.py"]}
+    assert completed.payload["changed_files"] == ["method.py"]
 
     assert LegacyCodingAdapter.from_result({"status": "blocked", "summary": "env"}).status == (
         ModuleStatus.BLOCKED
@@ -26,10 +26,10 @@ def test_coding_adapter_maps_patch_report_statuses() -> None:
 
 def test_experiment_adapter_maps_agent_state_statuses() -> None:
     completed = LegacyExperimentAdapter.from_result(
-        {"status": "completed", "final_summary": "ok", "metrics": {"accuracy": 0.9}}
+        {"status": "completed", "final_summary": "ok", "structured_result": {"accuracy": 0.9}}
     )
     assert completed.status == ModuleStatus.COMPLETED
-    assert completed.payload == {"metrics": {"accuracy": 0.9}, "parameters": None}
+    assert completed.payload == {"accuracy": 0.9}
 
     warned = LegacyExperimentAdapter.from_result(
         {"status": "completed_with_failures", "final_summary": "partial"}

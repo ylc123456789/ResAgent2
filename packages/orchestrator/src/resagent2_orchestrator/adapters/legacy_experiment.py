@@ -7,6 +7,11 @@ environment/process logic, and it must not hardcode conda/GPU details.
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
+from pathlib import Path
+
 from resagent2_contracts import (
     ErrorCode,
     ModuleError,
@@ -16,25 +21,44 @@ from resagent2_contracts import (
     WarningRecord,
 )
 
+_MODEL = "deepseek-chat"
+_API_BASE = "https://api.deepseek.com/v1"
+_API_KEY_ENV = "DEEPSEEK_API_KEY"
+
 
 class LegacyExperimentAdapter:
     """Map ModuleTaskRequest <-> reproagent ReproTask / AgentState."""
 
     def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
-        """Run the old reproagent.
+        root = os.environ.get("REPROAGENT_PATH", "/root/autodl-tmp/projects/reproagent")
+        src = str(Path(root) / "src")
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        models = importlib.import_module("reproagent.models")
+        agent = importlib.import_module("reproagent.agent")
 
-        Deferred to Phase 4 step 6: lazy-import ``reproagent.run_task``, call it
-        with ``to_spec``, and feed ``from_result`` the returned ``AgentState``.
-        """
-
-        raise RuntimeError(
-            "LegacyExperimentAdapter is not wired to a real reproagent module; "
-            "wire it in DEVELOPMENT_PLAN Phase 4 step 6."
+        inputs = request.inputs  # ExperimentRunInput
+        workspace = Path(request.workspace.root) if request.workspace else Path.cwd()
+        task = models.ReproTask(
+            workspace_dir=workspace,
+            experiment_goal=request.goal,
+            expected_metrics=list(inputs.expected_metrics),
+            expected_artifacts=list(inputs.expected_artifacts),
+            success_criteria=[],
+            model=_MODEL,
+            api_base=_API_BASE,
+            api_key_env=_API_KEY_ENV,
+            parent_run={
+                "module": "resagent",
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+            },
         )
+        state = agent.run_task(task)
+        return self.from_result(state.model_dump(mode="json"))
 
     @staticmethod
     def to_spec(request: ModuleTaskRequest) -> dict:
-        """Translate a request into the fields of reproagent's ReproTask."""
         inputs = request.inputs  # ExperimentRunInput
         return {
             "workspace_dir": request.workspace.root if request.workspace else None,
@@ -50,13 +74,9 @@ class LegacyExperimentAdapter:
 
     @staticmethod
     def from_result(raw: dict) -> ModuleResult:
-        """Map an AgentState-shaped dict into a ModuleResult."""
         status = raw["status"]
         summary = raw.get("final_summary") or raw.get("summary") or status
-        payload = {
-            "metrics": raw.get("metrics"),
-            "parameters": raw.get("parameters"),
-        }
+        payload = raw.get("structured_result") or raw.get("metrics")
         if status == "completed":
             return ModuleResult(status=ModuleStatus.COMPLETED, summary=summary, payload=payload)
         if status == "completed_with_failures":

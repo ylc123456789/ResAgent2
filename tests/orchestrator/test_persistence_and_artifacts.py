@@ -6,7 +6,9 @@ from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
     Capability,
+    ErrorCode,
     ExperimentRunInput,
+    ModuleError,
     ModuleResult,
     ModuleStatus,
     ResearchRequest,
@@ -175,6 +177,92 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
 
     assert len(analyze_port.requests[0].input_artifacts) == 1
     assert analyze_port.requests[0].input_artifacts[0].task_id == "task_experiment"
+
+
+def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace-retry"
+    workspace.mkdir()
+    (workspace / "crash.log").write_text("boom", encoding="utf-8")
+    (workspace / "metrics.json").write_text("{}", encoding="utf-8")
+    experiment_port = ScriptedModulePort(
+        [
+            ModuleResult(
+                status=ModuleStatus.FAILED,
+                summary="first attempt crashed",
+                error=ModuleError(
+                    code=ErrorCode.TOOL_FAILED,
+                    message="experiment crashed",
+                    retryable=True,
+                ),
+                artifacts=[
+                    ArtifactCandidate(
+                        kind="experiment_result",
+                        path="crash.log",
+                        media_type="text/plain",
+                        summary="diagnostic log of the failed attempt",
+                    )
+                ],
+            ),
+            ModuleResult(
+                status=ModuleStatus.COMPLETED,
+                summary="evidence",
+                artifacts=[
+                    ArtifactCandidate(
+                        kind="experiment_result",
+                        path="metrics.json",
+                        media_type="application/json",
+                        summary="metrics",
+                    )
+                ],
+            ),
+        ]
+    )
+    analyze_port = ScriptedModulePort(
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed")]
+    )
+    experiment = proposal().tasks[0]
+    analyze = TaskProposal(
+        id="task_analyze",
+        capability=Capability.SCIENTIFIC_ANALYZE,
+        goal="Analyze evidence",
+        rationale="Only verified evidence may cross the boundary",
+        depends_on=["task_experiment"],
+        inputs=ScientificAnalyzeInput(
+            question="What happened?", evidence_artifact_ids=[]
+        ),
+        success_criteria=experiment.success_criteria,
+    )
+    engine = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=experiment_port,
+                workspace=WorkspaceGrant(
+                    root=str(workspace),
+                    mode=WorkspaceMode.READ_WRITE,
+                    allowed_paths=["."],
+                    source=WorkspaceSource.EXISTING,
+                ),
+            ),
+            Capability.SCIENTIFIC_ANALYZE: ModuleBinding(
+                owner=AgentOwner.SCIENTIFIC,
+                port=analyze_port,
+            ),
+        },
+        store=JsonRunStore(tmp_path / "retry-state"),
+        artifact_root=tmp_path / "retry-artifacts",
+    )
+    combined = WorkflowProposal(
+        summary="retry",
+        scientific_rationale="A retried task must not leak its failed evidence",
+        tasks=[experiment, analyze],
+    )
+    engine.create_run("run_retry", request(), combined)
+    run = engine.run_until_stable("run_retry")
+
+    assert len(run.artifacts) == 2
+    assert len(analyze_port.requests[0].input_artifacts) == 1
+    assert analyze_port.requests[0].input_artifacts[0].attempt_number == 2
 
 
 def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:

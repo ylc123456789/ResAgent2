@@ -1,242 +1,218 @@
 # ResAgent2 开发计划
 
-**状态**：当前唯一实施计划
-**原则**：文档、代码、测试同步；一次只推进一个阶段。
+**文档角色**：开发顺序、阶段范围、完成状态和验收证据的唯一事实来源
 
-## 1. 状态标记
+**语义上级**：`ARCHITECTURE.md`
+
+**接口上级**：涉及 wire 字段时引用 `CONTRACTS.md`，不在本文件重复定义模型
+
+## 1. 计划纪律
+
+1. 一次只允许一个阶段为 `in_progress`；
+2. 先更新架构/契约/计划，再写改变语义的代码；
+3. 目标能力与当前实现必须分栏，不用未来目标证明当前阶段完成；
+4. 阶段只有在代码、测试、文档和验收证据都完成时才能标记 completed；
+5. 发现已完成阶段的核心声明不真实时，必须重开该阶段；
+6. 不因为“以后可能需要”提前增加抽象。
+
+状态定义：
 
 | 状态 | 含义 |
 |---|---|
 | not_started | 尚未开始 |
-| in_progress | 当前唯一开发阶段 |
-| blocked | 有明确外部阻塞 |
-| completed | 实现、文档和验收全部完成 |
+| in_progress | 当前正在开发或重新对齐 |
+| blocked | 有明确外部阻塞，当前无法推进 |
+| completed | 范围、代码、测试、文档和证据全部满足 |
 
-同一时间只能有一个 `in_progress` 阶段。
-
-## 2. 总体阶段
+## 2. 当前路线图
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Phase 0 | 文档和目录基线 | completed |
-| Phase 1 | contracts 包 | completed |
-| Phase 2 | 最小共享 runtime 和 Agentic Loop | completed |
-| Phase 3 | ResAgent Workflow Core | completed |
-| Phase 4 | Legacy Adapters 与黄金闭环 | not_started |
+| Phase 0 | 仓库、顶层架构和目录基线 | completed |
+| Phase 1 | contracts 1.0 基础实现 | completed |
+| Phase 2 | 最小 shared runtime / Agentic Loop | completed |
+| Phase 3 | ResAgent Workflow Core 与语义对齐 | completed |
+| Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | not_started |
 | Phase 5 | Coding Agent vNext | not_started |
 | Phase 6 | Experiment Agent vNext | not_started |
-| Phase 7 | Scientific Agent vNext | not_started |
-| Phase 8 | 稳定化与按需迁移高级能力 | not_started |
+| Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
+| Phase 8 | 稳定化与按需高级能力 | not_started |
 
-## 3. Phase 0：文档和目录基线
+Phase 3 已重新验收完成。Phase 4 是下一阶段，但在明确开始前保持 not_started。
 
-### 目标
-
-在写功能代码前，确定：
-
-- 系统职责和模块边界；
-- 共享 Agentic Loop；
-- LLM 计划与确定性调度的分工；
-- 顶层 WorkflowTask；
-- 模块请求/结果/Artifact/Question 契约；
-- 分阶段开发顺序。
-
-### 交付
-
-- `README.md`；
-- `docs/ARCHITECTURE.md`；
-- `docs/CONTRACTS.md`；
-- 本文件；
-- `docs/decisions/` 中的初始 ADR；
-- `packages/` 和 `tests/` 文档骨架。
-
-### 验收
-
-- [x] 新仓库建立；
-- [x] 目录结构明确；
-- [x] 四个模块职责明确；
-- [x] 任务图与 Agent 内部动作明确分离；
-- [x] 动态计划修订有边界；
-- [x] 代码尚未开始；
-- [x] 用户确认文档基线；
-- [x] 文档 commit 已推送。
-
-用户确认并推送后，Phase 0 标记 completed，Phase 1 才能开始。
-
-## 4. Phase 1：contracts 包
+## 3. Phase 0：仓库与架构基线
 
 ### 目标
 
-将 `CONTRACTS.md` 中最小公共类型实现为无运行时依赖的 Python 包。
+建立 monorepo、项目专属环境、模块边界、两种循环、顶层 WorkflowTask 和文档先行纪律。
 
-### 范围
+### 已完成交付
 
-- ID/value objects；
-- Workflow/WorkflowTask/WorkflowPatch；
-- ModuleTaskRequest/ModuleResult；
-- Attempt；
-- ArtifactRef/ArtifactCandidate；
+- README 和三份核心文档；
+- `docs/decisions/` 初始 ADR；
+- packages/tests 目录骨架；
+- Conda 环境 `ResAgent2` 和 environment.yml；
+- 新仓库与首次推送。
+
+### 历史验收
+
+- [x] 四个模块职责被区分；
+- [x] WorkflowTask 与 AgentAction 被分层；
+- [x] LLM 计划与确定性调度被分工；
+- [x] 动态 WorkflowPatch 有修改边界；
+- [x] 用户确认初始方向。
+
+后续发现初始文档混合目标和实现。该问题不重开仓库基线，而在 Phase 3 以三文档统一和 traceability 修复。
+
+## 4. Phase 1：contracts 1.0
+
+### 目标
+
+实现无 runtime/orchestrator/agent 依赖的最小公共数据包。
+
+### 已实现范围
+
+- ID namespace 和 schema_version；
+- ResearchRequest、Workflow、WorkflowTask、WorkflowPatch；
+- ModuleTaskRequest、ModuleResult；
+- Attempt、ArtifactCandidate/ArtifactRef；
 - Question/Answer；
-- Capability registry 类型；
-- status enums；
-- schema version。
+- Capability registry、状态和错误枚举；
+- strict Pydantic validation。
 
-### 不做
+### 历史验收
 
-- LLM；
-- Tool；
-- Workflow 执行；
-- 文件/进程/Git；
-- legacy 兼容。
+- [x] 包名 `resagent2-contracts 0.1.0`；
+- [x] wire schema `1.0`；
+- [x] contracts 不依赖其他项目包；
+- [x] ID、图、状态组合和 provenance 有测试；
+- [x] 当时 22 个 contract tests 通过。
 
-### 先写测试
+### 已知后续工作
 
-- schema round-trip；
-- ID namespace；
-- DAG 引用基本校验；
-- status 与 question/error 条件；
-- Artifact provenance 必填；
-- 禁止非法字段组合。
+contracts 包“代码已实现”不等于所有字段“运行语义已接通”。Phase 3 已强制控制面 capability 边界并拒绝带未解决 questions 的 Proposal；success_criteria 求值、生产 payload 模型/消费方、完整 pre-run 问答和 schema 演进仍按后续阶段推进。
 
-### 完成标准
-
-- [x] contracts 无对 runtime/orchestrator/agents 的依赖；
-- [x] 所有公共模型有 docstring 和 CONTRACTS 对应项；
-- [x] 22 个 contract tests 全部通过；
-- [x] 文档实现状态更新；
-- [x] `ResAgent2` 专属 Conda 环境和 `environment.yml` 已建立。
-
-### 实施记录（2026-08-26）
-
-- 发布包：`resagent2-contracts 0.1.0`；
-- wire schema：`1.0`；
-- 唯一第三方运行依赖：Pydantic 2；
-- 验证命令：`python -m pytest tests/contracts`；
-- Phase 2 未自动开始，避免在确认 Phase 1 前提前扩张抽象。
-
-## 5. Phase 2：最小共享 Runtime
+## 5. Phase 2：最小 shared runtime
 
 ### 目标
 
-实现一个可被三个 Agent 复用的最小 Agentic Loop。
+用一个可注入 Profile 的 Agentic Loop 支撑三类模块，而不提前实现真实 filesystem/process/Git。
 
-### 范围
+### 已实现范围
 
-- AgentDefinition；
-- AgentLoop；
+- AgentDefinition、AgentLoop；
 - typed AgentAction；
 - Tool protocol/registry/dispatcher；
-- mock LLM client；
-- Context sections 和总 token budget；
-- PermissionPolicy protocol；
-- event/state persistence；
-- completion check；
-- needs_user_input signal；
-- timeout 和结构化错误。
+- ScriptedLLMClient；
+- Context sections/budget；
+- PermissionPolicy；
+- 内存 SessionStore 和 event snapshots；
+- completion check、needs_user_input、timeout 和结构化错误；
+- read_value、write_value、finish、ask_user 四个测试 Tool。
 
-### 初始 Tools
+### 历史验收
 
-只实现测试用内存工具：
-
-- `read_value`；
-- `write_value`；
-- `finish`；
-- `ask_user`。
-
-真实 filesystem/process/git 留到 Coding Agent 阶段，避免提前抽象。
-
-### 黄金测试
-
-使用同一 AgentLoop 注入三个最小 Profile：
-
-1. 只读分析 Profile；
-2. 可写执行 Profile；
-3. 需要用户输入 Profile。
-
-验证 Loop 不修改即可产生不同 Agent 行为。
-
-### 完成标准
-
-- [x] AgentLoop 不 import 任何具体 Agent；
-- [x] Tool 输入全部 schema 校验；
-- [x] 权限在执行前检查；
-- [x] 每步增量持久化；
+- [x] Loop 不 import 具体 Agent；
+- [x] Tool 输入经过 schema 校验；
+- [x] 权限检查发生在 Tool 执行前；
+- [x] action/observation/error 增量进入 Session；
 - [x] finalizer 不信任 LLM proposed status；
-- [x] 14 个 runtime tests、22 个 contract tests 和文档通过。
+- [x] 三个测试 Profile 复用同一 Loop；
+- [x] 当时 14 个 runtime tests 通过。
 
-### 实施记录（2026-08-26）
+### 明确未实现
 
-- 发布包：`resagent2-runtime 0.1.0`；
-- 三个黄金 Profile 使用同一 AgentLoop，分别验证只读、可写和等待用户输入；
-- 当前只有四个内存 Tool 和 ScriptedLLMClient，不包含真实 I/O；
-- Store 以深拷贝内存快照实现 SessionStore protocol，足以验证增量持久化语义；
-- Phase 3 未自动开始，Workflow Scheduler 仍保持在 runtime 之外。
+- 真实 LLM provider；
+- 磁盘 SessionStore；
+- 根据 parent_session_id 恢复 Session；
+- filesystem/process/Git/Artifact IO。
 
-## 6. Phase 3：ResAgent Workflow Core
-
-### 目标
-
-实现不依赖真实子 Agent 的确定性 Scheduler。
-
-### 范围
-
-- ResearchRun；
-- Workflow validator；
-- ready Task 计算；
-- Task/Attempt 状态机；
-- capability → ModulePort；
-- ModuleResult 状态映射；
-- retry policy；
-- PendingQuestion 暂停/回答；
-- ArtifactCandidate 校验和登记；
-- WorkflowPatch 校验；
-- finish gate；
-- state 原子持久化和恢复。
-
-### 必测 Workflow
-
-1. 线性：plan → code → experiment → analyze；
-2. 并行：plan → baseline + treatment → analyze；
-3. repair：experiment blocked → code repair → experiment retry；
-4. ask user：task → paused → answer → resume；
-5. invalid graph：环、未知依赖、重复 ID、未知 capability。
-
-这些测试使用 fake ModulePort，不调用 LLM。
-
-### 完成标准
-
-- [x] 同一输入 state 得到同一 ready Task 集合；
-- [x] Scheduler 不调用 LLM 选择普通状态转换；
-- [x] failed payload 不可能变 completed；
-- [x] Attempt/Artifact 历史不可覆盖；
-- [x] restart 后可从 state 恢复；
-- [x] ARCHITECTURE 与实际一致；
-- [x] 14 个 orchestrator tests、全仓 50 个 tests 通过。
-
-### 实施记录（2026-08-26）
-
-- 发布包：`resagent2-orchestrator 0.1.0`；
-- 线性、并行、repair、ask-user/resume 和 invalid transition 均由 fake ModulePort 验证；
-- Artifact 会 resolve workspace 边界、复制到冻结目录、计算 SHA-256 并绑定 run/task/attempt；
-- 下游 Task 自动接收直接依赖任务登记的 ArtifactRef；
-- WorkflowPatch 保存旧 revision，terminal Attempt 历史不被改写；
-- JsonRunStore 使用同目录临时文件、fsync 和原子 replace；
-- Phase 4 未自动开始，尚未调用任何旧 Agent 或服务器。
-
-## 7. Phase 4：Legacy Adapters 与黄金闭环
+## 6. Phase 3：Workflow Core 与语义对齐（已完成）
 
 ### 目标
 
-在不重写三个旧模块的情况下，让新 ResAgent 跑通一个最小科研闭环。
+让 ResAgent 的确定性核心与最高级架构语义完全一致，并且只对实际实现的行为作完成声明。
+
+### 6.1 v0.1.0 已实现能力
+
+- ResearchRun 与 RunStore；
+- Workflow DAG 校验和稳定 ready 顺序；
+- Task/Attempt 状态映射；
+- capability → ModulePort binding；
+- retry、blocked、question pause/answer；
+- ArtifactCandidate 的登记、冻结、hash 和 provenance；
+- WorkflowPatch 与 workflow_history；
+- JsonRunStore 原子替换；
+- fake ModulePort 的线性、并行、repair、ask-user 和非法图测试。
+
+当前 finish gate 只包含：无 PendingQuestion、无 ready/running Task、所有 required 非-superseded Task completed。
+
+### 6.2 为什么 Phase 3 被重开
+
+审查确认原文档把最终目标写进“Phase 3 已实现”，并存在控制面/任务面、状态名、字段示例和责任边界冲突。因此历史 v0.1.0 代码保留，但 Phase 3 状态改回 in_progress。
+
+### 6.3 收尾对齐清单
+
+文档基线：
+
+- [x] `ARCHITECTURE.md` 成为概念和控制流的最高级事实来源；
+- [x] `CONTRACTS.md` 只负责 wire 字段和语义；
+- [x] 本文件只负责阶段、状态和验收；
+- [x] README 作为派生摘要同步 Phase 状态和文档权威关系；
+- [x] planning/replanning 不再冒充 RunStatus，skipped 统一为 superseded；
+- [x] Artifact runtime 检查与登记复核被定义为两道边界；
+- [x] 当前 finish gate 与最终目标 gate 分开；
+- [x] 示例使用真实 capability、ID namespace、必填字段和字段类型。
+
+代码/测试：
+
+- [x] validator 禁止 scientific_plan 和 ask_user 进入 WorkflowTask；
+- [x] create_run 拒绝 questions 非空的 WorkflowProposal；
+- [x] 为上述两条增加负向测试；
+- [x] 裁定 success_criteria 方向：保留可执行语义，不降级为纯说明字段。AUTOMATIC 表示任务完成后由机器基于已登记 Artifact 自动判定，MANUAL 表示需人工确认；evidence_key 的解析目标与求值器留待 evidence 求值阶段（Phase 7）定义，本阶段只锁定方向；
+- [x] 记录 Phase 3 payload 策略：Scheduler 不持久化/解释 payload，跨任务数据必须成为 Artifact；每个生产 capability 的 payload model 和消费方在对应 Agent 阶段定义；
+- [x] 将 `.resagent2/` 加入 `.gitignore`；
+- [x] 清除 src/build 误读风险：正式验证只针对 `packages/*/src`，构建产物不得作为源码；
+- [x] 复核“失败 Attempt Artifact 不向下游传播”的代码与测试；
+- [x] 运行全仓测试、文档交叉检查和 `git diff --check`。
+
+### 6.4 Phase 3 完成标准
+
+- [x] 三份核心文档按权威关系无互相矛盾；
+- [x] Workflow 中只允许任务面 capability；
+- [x] Phase 3 明确且测试了 Proposal.questions 边界：非空 Proposal 不得创建 Run；回答后重新规划属于 Phase 4 Planning Port；
+- [x] 当前 gate 的可观察条件有直接测试，文档不再声称未实现 gate；
+- [x] Task/Run/Attempt 状态图只使用 contracts 枚举；
+- [x] Artifact 自动传播只来自成功或 completed-with-warnings Attempt；
+- [x] state/artifact 默认目录不污染 Git；
+- [x] 全仓测试、Conda 环境 package check 和 `git diff --check` 通过；
+- [x] 用户要求完成 Phase 3 收尾。
+
+### 6.5 本阶段不做
+
+- 不接真实旧 Agent；
+- 不接真实 LLM；
+- 不实现 filesystem/process/Git Tools；
+- 不实现最终 ScientificConclusion gate；
+- 不为了未来并行执行改写同步 Scheduler。
+
+## 7. Phase 4：Planning Port、Adapters 与最小黄金闭环
+
+### 目标
+
+在不重写三个旧模块的前提下，用新 ResAgent 跑通一个边界清楚、可恢复的最小科研闭环。
 
 ### 顺序
 
-1. Legacy Scientific Adapter；
+1. 定义并实现 Scientific Planning Port adapter；
 2. Legacy Coding Adapter；
 3. Legacy Experiment Adapter；
-4. deterministic mock E2E；
-5. 本地真实小任务；
-6. 服务器短实验。
+4. Legacy Scientific Analyze Adapter；
+5. deterministic mock E2E；
+6. 本地真实小任务；
+7. 服务器固定 commit 的短实验。
+
+Planning Port 在创建 Workflow 之前运行，不能作为黄金 Workflow 中的 plan Task。
 
 ### Adapter 规则
 
@@ -244,58 +220,60 @@
 - 不修改旧模块内部 state；
 - 不复制旧模块业务 validator；
 - 原生失败状态必须保留；
-- 所有兼容逻辑集中在 adapter；
-- 标记删除条件。
+- 所有兼容逻辑集中在 adapter 并写删除条件；
+- 不把 summary 文本解析成状态。
 
-### 黄金闭环
+### 最小黄金闭环
 
 ```text
-固定 ResearchRequest
-  → Scientific Adapter 生成固定 Workflow
-  → Coding Adapter 生成小 patch
-  → Experiment Adapter 运行短命令并产出 metrics
-  → Scientific Adapter 分析
-  → finish gate 通过
+ResearchRequest
+  → Planning Port 产生 WorkflowProposal
+  → Validator 接受 code → experiment → scientific_analyze Workflow
+  → Coding Adapter 产生小 patch Artifact
+  → Experiment Adapter 运行短命令并产生 metrics Artifact
+  → Scientific Adapter 形成 ScientificConclusion
+  → 当前工程 gate 完成，并单独报告尚未实现的科学闭环限制
 ```
 
 ### 完成标准
 
 - [ ] 一个命令运行完整 mock E2E；
 - [ ] 每一步有 Task/Attempt/Artifact；
-- [ ] 中途 kill 后可恢复；
-- [ ] 用户能从 state 和 summary 理解过程；
-- [ ] 服务器只使用固定 commit 和短任务。
+- [ ] Planning 不出现在 WorkflowTask 列表；
+- [ ] ask-user 能穿过 orchestrator 和 runtime 完成真实 resume；
+- [ ] 中途终止后可从磁盘状态恢复；
+- [ ] ModuleResult payload 有明确消费者，不被静默丢弃；
+- [ ] 本地小任务通过后才允许服务器短实验。
 
 ## 8. Phase 5：Coding Agent vNext
 
 ### 目标
 
-用共享 AgentLoop 实现第一个真实专业 Agent，并首次提取通用执行能力。
+用 shared AgentLoop 实现第一个真实专业 Agent，并通过 Coding 与 Experiment 的共同需求提取通用执行能力。
 
-### 新增 Runtime 能力
+### Runtime 新增能力
 
 - filesystem boundary；
 - safe process runner；
 - Git workspace/read/diff；
 - readonly input；
 - command logs；
-- patch Artifact finalizer。
+- ArtifactCandidate 输出辅助。
 
 ### Coding 专有能力
 
-- Coding context；
-- code tools；
-- edit policy；
-- code result schema；
+- Coding context/prompt；
+- code tools 和 edit policy；
+- code result payload；
 - changed/untracked file finalizer；
 - verification policy。
 
 ### 完成标准
 
-- [ ] read-only 问答不写文件；
-- [ ] 路径和复合命令不能绕过权限；
-- [ ] 新文件进入 patch Artifact；
-- [ ] verification 失败影响状态；
+- [ ] read-only 任务不写文件；
+- [ ] 路径、symlink 和复合命令不能绕过权限；
+- [ ] 新文件进入 code Artifact；
+- [ ] verification 失败影响 ModuleStatus；
 - [ ] 通过旧 CodingAgent 黄金用例；
 - [ ] Legacy Coding Adapter 可删除。
 
@@ -303,11 +281,7 @@
 
 ### 目标
 
-复用 Coding 阶段验证过的 filesystem/process/Git，实现实验员。
-
-### 新增通用能力的条件
-
-只有 Coding 与 Experiment 语义相同时，才把能力移入 runtime。模块专有策略留在 Experiment 包。
+复用 Phase 5 已验证的 filesystem/process/Git 机制，实现实验员，不复制一套相似 runtime。
 
 ### Experiment 专有能力
 
@@ -317,76 +291,96 @@
 - dataset cache；
 - experiment confirmation；
 - metrics/evidence finalizer；
-- structured ExperimentResult。
+- structured ExperimentResult payload。
 
 ### 完成标准
 
-- [ ] repo identity 不因 basename 冲突；
+- [ ] repo identity 不依赖 basename；
 - [ ] timeout 清理完整进程树；
-- [ ] command policy 不依赖 LLM stage_hint；
-- [ ] completed 绑定当前 Attempt evidence；
+- [ ] command policy 不依赖 LLM 自报 stage；
+- [ ] completed 只绑定当前 Attempt 的合格 evidence；
 - [ ] 通过旧 reproagent 黄金用例；
 - [ ] Legacy Experiment Adapter 可删除。
 
-## 10. Phase 7：Scientific Agent vNext
+## 10. Phase 7：Scientific Agent vNext 与科学闭环
 
 ### 目标
 
-在 ScientificAdvisorPort 后重写科学顾问，不影响 Scheduler。
+在稳定 Planning/Analyze Ports 后重写科学顾问，并把“工程执行完成”提升为“可解释的科研闭环完成”。
 
 ### 范围
 
-- Scientific context；
-- Artifact allowlist reader；
+- Scientific context 和只读 Artifact allowlist；
 - literature tools；
-- WorkflowProposal/WorkflowPatch 输出；
+- WorkflowProposal/WorkflowPatch；
 - ScientificConclusion；
-- deterministic schema validator；
-- evidence/risk/confidence 语义。
+- evidence/risk/confidence 语义；
+- required scientific analysis closure；
+- final summary 只引用已登记事实。
+
+### 进入代码前必须先裁定
+
+- success_criteria/evidence_key 是否由模块 finalizer、独立 validator 或 Scheduler 求值；
+- 哪些 Artifact kind 强制需要 scientific_analyze；
+- final report 的最小契约；
+- “inconclusive” 与运行失败如何分别呈现。
 
 ### 完成标准
 
-- [ ] 不输出 executor/path/env/status；
-- [ ] Proposal 图通过统一 validator；
-- [ ] 运行失败与 ScientificDecision 分离；
-- [ ] 只读授权 Artifact；
-- [ ] 纯解释、规划、结果分析语义清楚；
+- [ ] Scientific Agent 不输出 executor/path/env/status；
+- [ ] Proposal/Patch 通过统一 validator；
+- [ ] 执行成功与 ScientificVerdict 分离；
+- [ ] 只读取授权 ArtifactRef；
+- [ ] 最终 gate 的每个科学条件有模型和测试；
 - [ ] Legacy Scientific Adapter 可删除。
 
-## 11. Phase 8：稳定化与高级能力
+## 11. Phase 8：稳定化与按需高级能力
 
-只按真实需求逐项评估：
-
-- Conversation 长期记忆；
-- Session 索引；
-- 内容寻址环境；
-- 并行 worker；
-- Skill 原语；
-- plugin/adapters 自动发现；
-- 云端 durable execution；
-- 多模型独立验证。
+只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证。
 
 每项必须先有：
 
 - 已复现需求；
 - 简单方案不足的证据；
-- 设计决策；
-- 测试和删除/回退方案。
+- ADR；
+- 测试；
+- 删除或回退方案。
 
-## 12. 文档同步规则
+## 12. 跨文档—代码追踪表
 
-每个 PR/commit 检查：
+| 架构概念/约束 | contract/接口 | 实现阶段 | 当前状态 |
+|---|---|---|---|
+| planning 在控制面 | ScientificPlanInput、WorkflowProposal | Phase 3/4 | 已实现：validator 拒绝控制面 task |
+| 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
+| 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
+| ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator 半闭环，runtime resume 待接 |
+| retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | retry/repair 已有，resume 跨层待接 |
+| Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5 | 登记复核已有，runtime 访问层待实现 |
+| 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
+| success criterion 求值 | SuccessCriterion | Phase 3/7 | 仅存储，方向已裁定为可执行语义，求值器待 Phase 7 |
+| ModuleResult payload | ModuleResult[PayloadT] | Phase 3/5-7 | Core 不持久化；生产模型与直接消费方在对应 Agent 阶段定义 |
+| 科学分析闭环 | ScientificConclusion | Phase 7 | 未实现 |
+| final summary 事实约束 | 最终报告契约待定 | Phase 7 | 未实现 |
 
-- [ ] 是否改变公开接口？更新 CONTRACTS。
-- [ ] 是否改变组件、状态或流程？更新 ARCHITECTURE。
-- [ ] 是否完成/开始计划项？更新本文件状态和证据。
-- [ ] 是否作出难以逆转的决策？新增或更新 ADR。
-- [ ] 是否新增概念？README 能否仍用简单语言解释？
-- [ ] 文档描述的是已实现还是目标？标记是否准确？
-- [ ] 对应测试是否在同一变更中？
+## 13. 文档同步检查
 
-## 13. 实施记录
+每次变更检查：
 
-| 日期 | 阶段 | commit | 测试/证据 | 备注 |
+- [ ] 是否改变概念、职责、控制流或状态语义？先更新 ARCHITECTURE。
+- [ ] 是否改变跨模块字段、类型或组合约束？更新 CONTRACTS 和 contract tests。
+- [ ] 是否开始/完成阶段或暴露缺口？更新 DEVELOPMENT_PLAN。
+- [ ] README 中的当前阶段、已实现边界和文档入口是否需要同步？
+- [ ] 是否作出难以逆转的决定？新增/更新 ADR。
+- [ ] 是否清楚区分“目标”“当前实现”“已知缺口”？
+- [ ] 是否在多个文档重复定义了同一事实？删掉副本并改为引用。
+- [ ] 对应代码与测试是否在同一变更中？
+
+## 14. 实施记录
+
+| 日期 | 阶段 | commit/状态 | 证据 | 备注 |
 |---|---|---|---|---|
-| 2026-08-26 | Phase 0 | `a7cb70a` | `git diff --cached --check` | 初始文档基线已推送，等待用户确认 |
+| 2026-08-26 | Phase 0 | `a7cb70a`, `5552c42` | 文档与仓库基线 | 已推送 |
+| 2026-08-26 | Phase 1 | `bd80aca` | 22 contract tests | contracts 0.1.0 |
+| 2026-08-26 | Phase 2 | `deaa126` | 14 runtime tests | runtime 0.1.0 |
+| 2026-08-26 | Phase 3 v0.1.0 | `d4e23b0` | 当时全仓 50 tests | 后因文档/语义冲突重开 |
+| 2026-08-26 | Phase 3 对齐与收尾 | completed | 全仓测试、Conda package check、文档交叉检查 | 控制面边界、questions、Artifact 传播、payload 策略和 finish gate 已对齐 |

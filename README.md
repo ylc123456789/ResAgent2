@@ -2,7 +2,7 @@
 
 ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
-它不追求成为通用 AGI 框架。它的目标是把科研过程组织成一条清晰、可暂停、可验证、可追踪的执行链：
+它不追求成为通用 AGI 框架。目标科研闭环是把科研过程组织成一条清晰、可暂停、可验证、可追踪的执行链：
 
 ```text
 研究目标
@@ -18,7 +18,7 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 **阶段：Phase 3 已完成，Phase 4 尚未开始。**
 
-当前已实现 `resagent2-contracts`、共享 `resagent2-runtime` Agentic Loop，以及确定性的 `resagent2-orchestrator` Workflow Core。三个真实子 Agent 和 legacy adapter 仍未接入。下一阶段只能从 `docs/DEVELOPMENT_PLAN.md` 进入，不能跳过计划提前堆功能。
+当前已实现 `resagent2-contracts`、共享 `resagent2-runtime` Agentic Loop，以及确定性的 `resagent2-orchestrator` Workflow Core v0.1.0。Phase 3 的控制面边界、Proposal questions、Artifact 传播、finish gate 测试和文档语义已经重新对齐。三个真实子 Agent 和 legacy adapter 仍未接入；Phase 4 尚未开始。
 
 ## 四个角色
 
@@ -57,7 +57,7 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## LLM 计划与确定性调度
 
-动作图仍由 LLM/Scientific Agent 提出。所谓“确定性 ResAgent”是指：
+Workflow 任务图仍由 LLM/Scientific Agent 提出。所谓“确定性 ResAgent”是指：
 
 ```text
 LLM 负责提出：做什么、为什么做、任务之间如何依赖。
@@ -70,7 +70,11 @@ LLM 不能直接：
 - 绕过 depends_on；
 - 修改 Attempt 历史；
 - 把 workspace 文件自动当作 Artifact；
-- 跳过用户确认、安全策略或科学分析闭环。
+- 在存在 PendingQuestion 时绕过暂停；
+- 绕过 Artifact 登记阶段已实现的 workspace 边界、hash 和 provenance 检查；
+- 把尚未实现的科学闭环条件伪装成已经通过。
+
+完整的 ScientificConclusion/final-summary 完成门槛计划在 Phase 7 实现，目前不是生效中的 finish gate。
 
 详细说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -117,15 +121,17 @@ python -m pytest tests/contracts
 - 可以独立测试；
 - 以后确有独立用户和发布需求时再拆包或拆仓。
 
-## 权威文档
+## 文档入口与权威关系
 
-本项目只维护少数权威文档：
+README 只是第一次进入项目的摘要，不是独立事实来源。发生冲突时按以下职责裁定：
 
-1. [README.md](README.md)：第一次进入项目的简要说明；
-2. [ARCHITECTURE.md](docs/ARCHITECTURE.md)：组件、工作流和状态；
-3. [CONTRACTS.md](docs/CONTRACTS.md)：接口和字段的准确语义；
-4. [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：当前唯一实施计划；
-5. [decisions/](docs/decisions/)：已经确认的重要架构决策。
+1. [ARCHITECTURE.md](docs/ARCHITECTURE.md)：系统概念、职责、控制流和状态语义的最高级事实来源；
+2. [CONTRACTS.md](docs/CONTRACTS.md)：跨模块字段、类型、组合约束和 wire 版本的唯一事实来源；
+3. [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：阶段、状态和验收证据的唯一事实来源；
+4. [decisions/](docs/decisions/)：难以逆转的架构决定及其理由；
+5. 代码和测试：当前实现行为的最终证据。
+
+README 必须从上述来源同步摘要，不得覆盖或重新定义它们。
 
 代码与文档必须同步：改变公开行为的 commit 必须同时更新对应文档和测试。
 

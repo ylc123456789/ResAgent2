@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     ArtifactCandidate,
     ArtifactRef,
+    AskUserInput,
     Attempt,
     AttemptStatus,
     Capability,
@@ -67,9 +68,9 @@ def plan_input() -> ScientificPlanInput:
 def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
     return WorkflowTask(
         id=task_id,
-        capability=Capability.SCIENTIFIC_PLAN,
-        goal="Plan the research run",
-        inputs=plan_input(),
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Inspect the entry point",
+        inputs=CodeUnderstandInput(question="Where is the entry point?"),
         depends_on=depends_on or [],
         success_criteria=[criterion()],
     )
@@ -143,10 +144,10 @@ def test_workflow_rejects_dependency_cycle() -> None:
 def test_proposal_rejects_duplicate_task_ids() -> None:
     proposal_task = TaskProposal(
         id="task_plan",
-        capability=Capability.SCIENTIFIC_PLAN,
-        goal="Plan the research run",
-        rationale="The run needs an explicit evidence path.",
-        inputs=plan_input(),
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Inspect the entry point",
+        rationale="Locate the code to change.",
+        inputs=CodeUnderstandInput(question="Where is the entry point?"),
         success_criteria=[criterion()],
     )
 
@@ -162,8 +163,8 @@ def test_task_input_must_match_capability() -> None:
     with pytest.raises(ValidationError, match="does not match"):
         WorkflowTask(
             id="task_plan",
-            capability=Capability.SCIENTIFIC_PLAN,
-            goal="Plan",
+            capability=Capability.CODE_MODIFY,
+            goal="Modify",
             inputs=CodeUnderstandInput(question="Where is the entry point?"),
             success_criteria=[criterion()],
         )
@@ -175,10 +176,44 @@ def test_module_request_input_must_match_capability() -> None:
             run_id="run_example",
             task_id="task_plan",
             attempt_number=1,
-            capability=Capability.SCIENTIFIC_PLAN,
-            goal="Plan",
+            capability=Capability.CODE_MODIFY,
+            goal="Modify",
             inputs=CodeUnderstandInput(question="Where is the entry point?"),
             budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=300),
+        )
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [Capability.SCIENTIFIC_PLAN, Capability.ASK_USER],
+)
+def test_task_rejects_control_plane_capabilities(capability: Capability) -> None:
+    if capability == Capability.SCIENTIFIC_PLAN:
+        inputs = plan_input()
+    else:
+        inputs = AskUserInput(
+            question=QuestionDraft(
+                text="Which one?",
+                requested_fields=["choice"],
+                reason="need input",
+            )
+        )
+    with pytest.raises(ValidationError, match="control-plane"):
+        TaskProposal(
+            id="task_control",
+            capability=capability,
+            goal="Control-plane",
+            rationale="Control-plane operations do not belong in a workflow",
+            inputs=inputs,
+            success_criteria=[criterion()],
+        )
+    with pytest.raises(ValidationError, match="control-plane"):
+        WorkflowTask(
+            id="task_control",
+            capability=capability,
+            goal="Control-plane",
+            inputs=inputs,
+            success_criteria=[criterion()],
         )
 
 

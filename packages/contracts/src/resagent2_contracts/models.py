@@ -443,6 +443,14 @@ def _validate_capability_input(capability: Capability, inputs: CapabilityInput) 
         )
 
 
+def _require_task_capability(capability: Capability) -> None:
+    """Reject control-plane capabilities that are never scheduled as tasks."""
+    if capability in {Capability.SCIENTIFIC_PLAN, Capability.ASK_USER}:
+        raise ValueError(
+            f"capability {capability.value!r} is control-plane and cannot be a task"
+        )
+
+
 class TaskProposal(ContractModel):
     """Scientific suggestion for one logical task, before scheduler acceptance."""
 
@@ -458,6 +466,7 @@ class TaskProposal(ContractModel):
     @model_validator(mode="after")
     def validate_input_type(self) -> TaskProposal:
         _validate_capability_input(self.capability, self.inputs)
+        _require_task_capability(self.capability)
         return self
 
 
@@ -479,6 +488,7 @@ class WorkflowTask(ContractModel):
     @model_validator(mode="after")
     def validate_task(self) -> WorkflowTask:
         _validate_capability_input(self.capability, self.inputs)
+        _require_task_capability(self.capability)
         numbers = [attempt.number for attempt in self.attempts]
         if numbers != list(range(1, len(numbers) + 1)):
             raise ValueError("attempt numbers must be contiguous and start at 1")

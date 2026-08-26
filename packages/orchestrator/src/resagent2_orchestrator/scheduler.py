@@ -60,6 +60,8 @@ class WorkflowScheduler:
     ) -> ResearchRun:
         if self.store.exists(run_id):
             raise OrchestrationError(f"run already exists: {run_id}")
+        if proposal.questions:
+            raise OrchestrationError("proposal has unresolved questions")
         if len(proposal.tasks) > request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
         self._require_bindings(task.capability for task in proposal.tasks)
@@ -126,6 +128,8 @@ class WorkflowScheduler:
             artifact_id
             for dependency_id in task.depends_on
             for dependency_attempt in self._task(run, dependency_id).attempts
+            if dependency_attempt.status
+            in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
             for artifact_id in dependency_attempt.artifact_ids
         ]
         task.input_artifacts = list(

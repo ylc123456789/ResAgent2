@@ -1,516 +1,459 @@
 # ResAgent2 跨模块契约
 
-**状态**：wire schema 1.0 已由 `resagent2-contracts 0.1.0` 实现
-**原则**：字段不仅说明格式，还必须说明用途、所有者和控制流语义。
+**文档角色**：跨模块 wire 对象的字段、类型、组合约束和版本的唯一事实来源
 
-## 1. 契约边界
+**语义上级**：`ARCHITECTURE.md`；本文件不得改变其中的模块职责和控制流
 
-模块之间只交换以下对象：
+**当前实现**：`resagent2-contracts 0.1.0`，wire schema `1.0`
+
+## 1. 使用规则
+
+本文件回答“模块之间传什么、字段准确表示什么”。
+
+- 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
+- Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
+- 代码与本文字段不一致时，视为 contract bug；
+- 本文写了目标语义但代码尚未强制时，必须明确标为“未实现约束”；
+- runtime 内部的 `AgentDefinition`、`AgentAction`、`FinishCandidate`、Tool 和 Context 类型不属于跨模块 wire contract，不在本文件定义。
+
+所有公共模型：
+
+- 继承严格 `ContractModel`；
+- 拒绝未知字段；
+- 序列化 `schema_version: "1.0"`；
+- 以下示意代码省略每个模型继承得到的 `schema_version`，但 wire 数据不能省略其版本语义。
+
+## 2. 跨模块对象范围
+
+| 边界 | 请求 | 响应/状态 |
+|---|---|---|
+| 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、最终报告（尚未建模） |
+| Planning Port | ScientificPlanInput/ResearchRequest | WorkflowProposal、WorkflowPatch |
+| Scheduler → 专业模块 | ModuleTaskRequest | ModuleResult |
+| 专业模块 → Artifact Registry | ArtifactCandidate | ArtifactRef |
+| ResAgent 持久化 | Workflow、WorkflowTask、Attempt、PendingQuestion | ResearchRun 属于 orchestrator 内部模型 |
+
+禁止跨模块读取另一个模块的内部 Session state、私有目录或 prompt；禁止从 summary 文本推断机器状态；禁止把任意 dict 作为长期接口。
+
+## 3. ID 命名空间
+
+| 类型 | 格式示例 | 范围 |
+|---|---|---|
+| RunId | `run_example` | 全局唯一 |
+| TaskId | `task_experiment` | Run 内唯一且跨 revision 稳定 |
+| SessionId | `session_coding_1` | 子模块内唯一 |
+| ArtifactId | `artifact_metrics` | Run 内唯一，不跨 Attempt 复用 |
+| QuestionId | `question_dataset` | Run 内唯一 |
+
+前缀后由字母或数字开头，只允许字母、数字、下划线和连字符，总长度由实现中的约束限制。ID 不能互换：TaskId 不是 SessionId，Attempt number 也不是 Agent step number。
+
+本文示例必须使用这些类型和前缀，不能用裸的 `run_treatment`、`implement_method` 或 `code_patch_001` 代替 TaskId/ArtifactId。
+
+## 4. 状态与所有权
+
+### 4.1 RunStatus
 
 ```text
-ResearchRequest
-WorkflowProposal / WorkflowPatch
-WorkflowTask
-ModuleTaskRequest
-ModuleResult
-ArtifactRef
-Question / Answer
-ScientificConclusion
+pending | running | paused | completed | failed
 ```
 
-禁止跨模块：
+由 ResAgent 写入。planning、replanning 和 interrupted 不是 schema 1.0 的 RunStatus。
 
-- 直接读取或修改另一模块的内部 state；
-- 依赖另一模块的私有目录结构；
-- 从 summary 文本猜状态；
-- 把任意 dict 当作长期接口；
-- 子 Agent 直接调用另一个子 Agent。
+### 4.2 TaskStatus
 
-## 2. ID 命名空间
+```text
+pending | running | completed | failed | blocked | needs_user_input | superseded
+```
 
-| ID | 含义 | 范围 |
-|---|---|---|
-| `run_id` | 一次顶层科研运行 | 全局唯一 |
-| `workflow_revision` | Run 中任务图的版本 | Run 内单调递增 |
-| `task_id` | Workflow 中一个完整工作单元 | Run 内唯一且稳定 |
-| `attempt_number` | Task 的第几次真实调用 | Task 内从 1 递增 |
-| `session_id` | 子 Agent 可恢复工作过程 | 模块内唯一 |
-| `artifact_id` | 冻结输出身份 | Run 内唯一，不跨 Attempt 复用 |
-| `question_id` | 一个等待用户回答的问题 | Run 内唯一 |
+由 Scheduler 写入。`superseded` 表示尚未开始的 Task 被新 Workflow revision 取代；schema 中不存在 `skipped`。
 
-这些 ID 不能互换。`task_id` 不是 `session_id`，`attempt_number` 也不是 Agent 内部 step number。
+### 4.3 AttemptStatus 与 ModuleStatus
 
-wire 格式使用可读前缀实现运行时命名空间校验：
+ModuleStatus 的五个结果值是 AttemptStatus 的子集：
 
-| 类型 | 格式示例 |
-|---|---|
-| RunId | `run_example` |
-| TaskId | `task_plan` |
-| SessionId | `session_coding_1` |
-| ArtifactId | `artifact_metrics` |
-| QuestionId | `question_dataset` |
+```text
+completed | completed_with_warnings | failed | blocked | needs_user_input
+```
 
-前缀后的内容由字母或数字开始，只允许字母、数字、下划线和连字符。前缀是契约的一部分，不能靠字段名暗示类型。
+AttemptStatus 另外包含 `running`，因此是六个值，不应说两个枚举“值相同”。ModuleStatus 由模块返回；AttemptStatus 由 Scheduler 根据已校验的 ModuleResult 记录。
 
-## 3. ResearchRequest
-
-表示用户已经确认要执行的研究目标。
+## 5. ResearchRequest
 
 ```python
 class ResearchRequest:
-    goal: str
-    hypothesis: str | None
-    context: str
-    constraints: list[str]
-    input_artifacts: list[ArtifactRef]
+    goal: NonEmptyStr
+    hypothesis: NonEmptyStr | None = None
+    context: str = ""
+    constraints: list[NonEmptyStr] = []
+    input_artifacts: list[ArtifactRef] = []
     budget: RunBudget
 ```
 
 | 字段 | 语义 |
 |---|---|
-| goal | 这次 Run 要解决的问题，不是执行步骤 |
-| hypothesis | 需要证据支持或反对的命题；可为空 |
+| goal | Run 要解决的问题，不是执行步骤 |
+| hypothesis | 要被证据支持或反对的命题；可为空 |
 | context | 已确认背景，不包含未授权文件内容 |
 | constraints | 整个 Run 必须遵守的限制 |
-| input_artifacts | 用户或历史 Run 明确提供的冻结输入 |
-| budget | Run 总体时间、调用、任务和资源边界 |
+| input_artifacts | 用户明确授权的已登记输入 |
+| budget | max_tasks、max_attempts_per_task、max_llm_calls、timeout_seconds |
 
-## 4. WorkflowProposal
+## 6. Planning Port 契约
 
-Scientific Agent 对“应该做什么”的建议。它尚未成为可执行 Workflow。
+### 6.1 WorkflowProposal
 
 ```python
 class WorkflowProposal:
-    summary: str
+    summary: NonEmptyStr
     tasks: list[TaskProposal]
-    questions: list[QuestionDraft]
-    scientific_rationale: str
-```
+    questions: list[QuestionDraft] = []
+    scientific_rationale: NonEmptyStr
 
-```python
 class TaskProposal:
-    id: str
+    id: TaskId
     capability: Capability
-    goal: str
-    rationale: str
-    depends_on: list[str]
-    required: bool
+    goal: NonEmptyStr
+    rationale: NonEmptyStr
+    depends_on: list[TaskId] = []
+    required: bool = True
     inputs: CapabilityInput
     success_criteria: list[SuccessCriterion]
 ```
 
-| 字段 | 语义 |
-|---|---|
-| id | Proposal 内稳定逻辑 ID；校验后成为 task_id |
-| capability | 完成任务所需能力，不是模块名 |
-| goal | 任务完成后应得到的结果 |
-| rationale | 为什么需要这个任务；不驱动状态机 |
-| depends_on | 同一 Proposal 中前置 task ID |
-| required | 是否属于当前 Run 的完成前置 |
-| inputs | capability 对应的类型化输入；实现时不保留任意 dict |
-| success_criteria | 可验证完成条件；自然语言不可判定项必须标记 |
+Proposal 已在 schema 层检查重复 ID、未知依赖和环，也由 validator 拒绝控制面 capability；仍需 ResAgent 做架构级校验：是否存在唯一 binding、预算和系统约束是否满足。
 
-Proposal 必须经过 ResAgent validator：
+`questions` 的唯一语义是“在创建 Workflow 前仍需用户澄清”。非空 Proposal 不能执行，回答后重新规划。`create_run` 会拒绝非空 questions。
 
-- ID 唯一；
-- capability 已注册且 owner 唯一；
-- depends_on 存在且图无环；
-- capability 专有输入通过 schema；
-- required 分支能够形成完成路径；
-- 不包含路径、环境和状态等不属于 Scientific Agent 的字段。
-
-## 5. Workflow 与 WorkflowTask
-
-Workflow 是 ResAgent 接受并持久化的任务图。
-
-```python
-class Workflow:
-    run_id: str
-    revision: int
-    tasks: list[WorkflowTask]
-    created_from: str
-```
-
-```python
-class WorkflowTask:
-    id: str
-    capability: Capability
-    goal: str
-    depends_on: list[str]
-    required: bool
-    inputs: CapabilityInput
-    status: TaskStatus
-    input_artifacts: list[str]
-    success_criteria: list[SuccessCriterion]
-    attempts: list[Attempt]
-    warnings: list[str]
-```
-
-`WorkflowTask` 是唯一顶层任务模型。不再另外建立 AgentTask、ScientificAction、PlannedAction 等平行任务模型。
-
-`inputs` 必须保留在持久化的 WorkflowTask 中，否则调度器无法从已接受的 Workflow 重建 ModuleTaskRequest。`capability` 必须与 `inputs.capability` 完全一致。
-
-## 6. WorkflowPatch
-
-运行中显式修改任务图的建议。
+### 6.2 WorkflowPatch
 
 ```python
 class WorkflowPatch:
     based_on_revision: int
-    reason: str
-    add_tasks: list[TaskProposal]
-    supersede_task_ids: list[str]
-    pending_task_updates: list[PendingTaskUpdate]
+    reason: NonEmptyStr
+    add_tasks: list[TaskProposal] = []
+    supersede_task_ids: list[TaskId] = []
+    pending_task_updates: list[PendingTaskUpdate] = []
+
+class PendingTaskUpdate:
+    task_id: TaskId
+    inputs: CapabilityInput | None = None
+    depends_on: list[TaskId] | None = None
 ```
 
-规则：
+Patch 只基于当前 revision；只能 supersede 或更新 pending Task；成功应用后 revision +1，旧 Workflow 进入 history。它不能修改已执行历史、running Task 或 Artifact。
 
-- 只基于当前 revision 应用；
-- 只允许修改 pending Task 的输入和依赖；
-- completed/failed Attempt 历史不可修改；
-- running Task 不可原地改输入；
-- supersede 只影响尚未开始的任务；
-- 每次成功应用后 revision +1，并保存旧 revision 的审计摘要。
+## 7. Workflow 与 WorkflowTask
 
-## 7. Capability
+```python
+class Workflow:
+    run_id: RunId
+    revision: int
+    tasks: list[WorkflowTask]
+    created_from: NonEmptyStr
 
-第一阶段固定 capability：
+class WorkflowTask:
+    id: TaskId
+    capability: Capability
+    goal: NonEmptyStr
+    inputs: CapabilityInput
+    depends_on: list[TaskId] = []
+    required: bool = True
+    status: TaskStatus = TaskStatus.PENDING
+    input_artifacts: list[ArtifactId] = []
+    success_criteria: list[SuccessCriterion]
+    attempts: list[Attempt] = []
+    warnings: list[WarningRecord] = []
+```
 
-| capability | owner | 意义 |
-|---|---|---|
-| `scientific_plan` | Scientific Agent | 从 ResearchRequest 生成 WorkflowProposal |
-| `scientific_analyze` | Scientific Agent | 分析已有证据并形成 ScientificConclusion/后续建议 |
-| `literature_search` | Scientific Agent | 检索和解释文献 |
-| `code_understand` | Coding Agent | 只读代码问答与定位 |
-| `code_modify` | Coding Agent | 修改代码并验证 |
-| `experiment_prepare` | Experiment Agent | 准备并审计 repo/env，不运行主要实验 |
-| `experiment_run` | Experiment Agent | 运行实验并收集证据 |
-| `ask_user` | ResAgent | 获取阻塞继续执行所需的人类输入 |
+`WorkflowTask` 是唯一顶层任务模型。`capability` 必须与 discriminated `inputs.capability` 相同。depends_on 只能引用同图中的 TaskId，图必须无环；Attempt number 必须从 1 连续递增。
 
-新增 capability 必须在同一变更中定义：
+合法示例：
 
-- owner；
-- request schema；
-- result schema；
-- side effects；
-- permission policy；
-- completion evidence；
-- contract tests。
+```python
+WorkflowTask(
+    id="task_run_treatment",
+    capability="experiment_run",
+    goal="运行 treatment 并记录验证集指标",
+    inputs={
+        "capability": "experiment_run",
+        "instructions": "运行 treatment 配置",
+        "expected_metrics": ["validation_accuracy"],
+    },
+    depends_on=["task_implement_method"],
+    input_artifacts=["artifact_code_patch_001"],
+    success_criteria=[{
+        "description": "产生 validation_accuracy",
+        "verification": "automatic",
+        "evidence_key": "validation_accuracy",
+    }],
+)
+```
 
-实现中的 `CapabilityDefinition` 保存上述 owner、request/result model、side effects、permission policy 和 completion evidence；`CapabilityRegistry` 禁止同一 capability 出现两次。
+### SuccessCriterion 当前语义
 
-### CapabilityInput
+```python
+class SuccessCriterion:
+    description: NonEmptyStr
+    verification: VerificationMode
+    evidence_key: NonEmptyStr | None = None
+```
 
-`CapabilityInput` 是以 `capability` 为 discriminator 的联合类型，不接受任意 dict：
+automatic criterion 在 schema 层要求 evidence_key。但 schema 1.0 尚未定义 evidence_key 指向哪个 payload/artifact 结构，Scheduler 也不求值 criteria。当前它是持久化的计划意图，Task 是否 completed 仍由模块 finalizer 返回的 ModuleStatus 决定。
 
-| capability | 输入模型 | 关键语义 |
-|---|---|---|
-| scientific_plan | ScientificPlanInput | 包含用户确认的 ResearchRequest |
-| scientific_analyze | ScientificAnalyzeInput | 科学问题和已登记证据 ID |
-| literature_search | LiteratureSearchInput | 有界检索 query 和最大结果数 |
-| code_understand | CodeUnderstandInput | 只读问题和 workspace 相对路径 |
-| code_modify | CodeModifyInput | 修改要求、授权相对路径和验证命令 |
-| experiment_prepare | ExperimentPrepareInput | repo 来源、输入 Artifact 和准备要求 |
-| experiment_run | ExperimentRunInput | 实验说明、参数和预期证据 |
-| ask_user | AskUserInput | 一个尚未持久化的 QuestionDraft |
+在定义求值器、证据路径和责任方前，不得把 success_criteria 写成已生效的 finish gate。
 
-## 8. ModuleTaskRequest
+## 8. Capability 与路由
 
-ResAgent 调用子 Agent 的统一外层请求。
+| capability | owner | 架构位置 | 当前说明 |
+|---|---|---|---|
+| scientific_plan | Scientific | 控制面 Planning Port | schema 保留；不得成为 WorkflowTask |
+| scientific_analyze | Scientific | 任务面 | 分析已登记证据 |
+| literature_search | Scientific | 任务面 | 有边界的文献检索 |
+| code_understand | Coding | 任务面 | 只读代码理解 |
+| code_modify | Coding | 任务面 | 授权范围内修改和验证 |
+| experiment_prepare | Experiment | 任务面 | 准备/审计 repo 和 env |
+| experiment_run | Experiment | 任务面 | 执行实验并收集证据 |
+| ask_user | Orchestrator | 控制信号 | schema 过渡保留；不得成为 WorkflowTask |
+
+`Capability` / `CapabilityInput` 联合类型仍保留这两个控制面类型作为过渡，但 Workflow validator 已拒绝 `scientific_plan` 与 `ask_user` 作为 Task。是否在下个 schema 版本移除这两个 task input 类型另行决定。
+
+`CapabilityDefinition` / `CapabilityRegistry` 描述 owner、request/result model、side effects、permission policy 和 completion evidence。Registry 拒绝同一 capability 出现两次，从而保证每个 capability 恰有一个 owner；同一个 owner 可以拥有多个不同 capability。它是注册表数据，不改变架构中的控制面/任务面区分。
+
+## 9. ModuleTaskRequest
 
 ```python
 class ModuleTaskRequest:
-    run_id: str
-    task_id: str
+    run_id: RunId
+    task_id: TaskId
     attempt_number: int
     capability: Capability
-    goal: str
+    goal: NonEmptyStr
     inputs: CapabilityInput
-    input_artifacts: list[ArtifactRef]
-    constraints: list[str]
-    answers: list[UserAnswer]
+    input_artifacts: list[ArtifactRef] = []
+    constraints: list[NonEmptyStr] = []
+    answers: list[UserAnswer] = []
     budget: TaskBudget
-    workspace: WorkspaceGrant | None
-    parent_session_id: str | None
+    workspace: WorkspaceGrant | None = None
+    parent_session_id: SessionId | None = None
 ```
 
-| 字段 | 语义 |
+| 字段 | 控制流语义 |
 |---|---|
-| run_id/task_id/attempt_number | provenance 和幂等边界 |
-| capability | 选择 Agent profile 和 request schema |
-| goal | 本次完整任务，不是单步 Tool 指令 |
-| inputs | capability 专有的类型化参数 |
-| input_artifacts | 已授权、可追溯的输入 |
-| constraints | 本次 Task 的附加限制 |
-| answers | 只包含属于本 Task 已持久化问题的用户答案；普通调用为空 |
-| budget | 本次调用的 step、时间、token/usage 边界 |
-| workspace | 允许读写的物理范围和访问模式 |
-| parent_session_id | 仅用于显式 resume；普通 retry 默认为空 |
+| run/task/attempt | provenance 与幂等边界 |
+| capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
+| input_artifacts | 已登记且已授权给本 Task 的输入证据 |
+| answers | 只包含属于本 Task 的已持久化回答 |
+| workspace | 此 Attempt 的最大物理访问范围 |
+| parent_session_id | 仅显式 resume 使用；普通 retry 为空 |
 
-`answers` 与 `parent_session_id` 配合实现 ask-user 恢复：ResAgent 保存 Answer 后创建新的 Attempt，把该 Task 的 Answer 和上次 paused Session 一起传回模块。其他 Task 的答案不得注入；普通 failed/blocked retry 不复用 Session。
+当前 orchestrator 会在 ask-user 后的新 Attempt 产生 `parent_session_id`；当前 runtime AgentLoop 仍只创建新 Session，尚未消费该字段。因此端到端 resume 未完成，不能仅凭请求字段宣称已实现。
 
-## 9. ModuleResult
-
-所有子 Agent 通过同一外层结果返回状态，但 payload 使用各自类型。
+## 10. ModuleResult
 
 ```python
-class ModuleResult[T]:
+class ModuleResult[PayloadT]:
     status: ModuleStatus
-    summary: str
-    payload: T | None
-    artifacts: list[ArtifactCandidate]
-    session: SessionRef | None
-    question: QuestionDraft | None
-    error: ModuleError | None
-    warnings: list[WarningRecord]
+    summary: NonEmptyStr
+    payload: PayloadT | None = None
+    artifacts: list[ArtifactCandidate] = []
+    session: SessionRef | None = None
+    question: QuestionDraft | None = None
+    error: ModuleError | None = None
+    warnings: list[WarningRecord] = []
 ```
 
-### ModuleStatus
+组合约束：
 
-| 值 | 准确含义 |
-|---|---|
-| completed | 确定性 finalizer 检查通过，核心输出完整 |
-| completed_with_warnings | 核心输出完成，但存在明确未验证项 |
-| failed | 本 Attempt 没有得到可接受核心结果；retry 可能有效 |
-| blocked | 缺少外部前置条件，仅重复本 Attempt 不会改变 |
-| needs_user_input | 唯一缺口是用户输入，并携带 question |
+- needs_user_input：必须有 question，不能有 error；
+- failed / blocked：必须有 ModuleError，不能有 question；
+- completed：不能有 error、question 或 warnings；
+- completed_with_warnings：至少有一条 WarningRecord；
+- ArtifactCandidate 可随失败结果作为诊断输出登记，但不能让失败状态变成功。
 
-`summary` 只用于展示，禁止解析它判断状态。
+`summary` 只用于人类展示；`payload` 是 capability 专有数据。当前 Scheduler 尚未持久化或解释 payload，专业 Agent 接入前必须明确每个结果模型由谁消费。
 
-字段组合由 schema 强制：
+### 10.1 Phase 3 payload 消费策略
 
-- `needs_user_input` 必须有 question，不能有 error；
-- `failed` / `blocked` 必须有 error，不能有 question；
-- `completed` 不能有 error、question 或 warnings；
-- `completed_with_warnings` 至少有一条 WarningRecord；
-- ArtifactCandidate 可以随失败结果返回用于诊断，但登记权仍属于 ResAgent。
+Workflow Core 只消费 ModuleResult 的外层控制字段：status、artifacts、session、question、error 和 warnings。schema 1.0 的裸 `ModuleResult` 只校验 payload 可以被 Pydantic 接受，不执行 capability 专有结果校验，也不把 payload 写入 ResearchRun。
 
-### ModuleError
+因此 Phase 3 的稳定规则是：
+
+- 跨 Task、重启后或最终报告仍需使用的信息，必须通过 ArtifactCandidate 登记为 ArtifactRef；
+- payload 不能作为 Task 依赖、finish gate 或 provenance 的唯一依据；
+- 专业 Agent/legacy adapter 接入前，必须先定义 `ModuleResult[具体结果模型]` 以及直接消费方；
+- 如果某个结构化结果需要成为 Run 状态的一部分，应新增明确契约，而不是让 Scheduler 静默保存任意 payload。
+
+| task capability | 目标 payload/消费方 | 当前 Phase 3 行为 | 定义阶段 |
+|---|---|---|---|
+| scientific_analyze | ScientificConclusion → 科学闭环/final report | 无生产 binding；payload 不持久化 | Phase 7 |
+| literature_search | 有界文献结果 → Scientific Agent | 无生产 binding；持久结果必须登记 Artifact | Phase 7 |
+| code_understand | 代码理解结果 → 调用方 | 无生产 binding；模型待定义 | Phase 5 |
+| code_modify | 代码变化摘要 → 调用方；代码变化 → ArtifactRef | 无生产 binding；模型待定义 | Phase 5 |
+| experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无生产 binding；模型待定义 | Phase 6 |
+| experiment_run | 实验结构化结果（模型待定义）→ Scientific Agent；证据 → ArtifactRef | 无生产 binding；模型待定义 | Phase 6 |
+
+scientific_plan 和 ask_user 不在表中，因为它们不是 task capability。
 
 ```python
 class ModuleError:
-    code: str
-    message: str
+    code: ErrorCode
+    message: NonEmptyStr
     retryable: bool
-    details: dict
+    details: dict[str, JsonValue] = {}
 ```
 
-`code` 使用稳定机器值，例如：
+ErrorCode 是固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing。
 
-```text
-invalid_input
-permission_denied
-tool_failed
-timeout
-budget_exhausted
-contract_error
-environment_unavailable
-artifact_missing
-```
-
-## 10. Attempt
+## 11. Attempt 与 SessionRef
 
 ```python
 class Attempt:
     number: int
     status: AttemptStatus
     started_at: datetime
-    finished_at: datetime | None
-    session: SessionRef | None
-    artifact_ids: list[str]
-    error: ModuleError | None
-```
+    finished_at: datetime | None = None
+    session: SessionRef | None = None
+    artifact_ids: list[ArtifactId] = []
+    error: ModuleError | None = None
 
-规则：
-
-- 调用模块前创建；
-- 开始后不可删除；
-- retry 创建新 Attempt；
-- resume 可继续同一 Session，但仍由 ResAgent 明确记录新的调用边界；
-- 新 Attempt 不能覆盖旧 Artifact；
-- Agent 内部 step 不进入顶层 Attempt 编号。
-
-终态 Attempt 必须有 `finished_at`；`failed` / `blocked` 还必须有 error。Running Attempt 不能提前携带 `finished_at` 或 error，同一 WorkflowTask 的 Attempt number 必须从 1 连续递增。
-
-## 11. ArtifactRef
-
-```python
-class ArtifactRef:
-    id: str
-    kind: str
-    producer: str
-    run_id: str
-    task_id: str
-    attempt_number: int
-    uri: str
-    sha256: str
-    media_type: str
-    summary: str
-    metadata: dict
-```
-
-| 字段 | 语义 |
-|---|---|
-| id | 不可复用的冻结输出身份 |
-| kind | 内容用途，如 code_change、experiment_result、scientific_decision |
-| producer | 实际生成内容的模块 |
-| run/task/attempt | provenance |
-| uri | 稳定存储位置，不等于任意 workspace 路径 |
-| sha256 | 内容完整性 |
-| media_type | 机器读取格式 |
-| summary | 人类预览，不是机器接口 |
-| metadata | 扩展 provenance；禁止隐藏 status 等核心字段 |
-
-ArtifactCandidate 只有经 ResAgent 校验存在性、路径边界、hash 和 Attempt 绑定后才能成为 ArtifactRef。
-
-ArtifactCandidate 只包含 `kind/path/media_type/summary/metadata`。它故意不包含 id、run/task/attempt、URI 或 hash，避免子 Agent 自行伪造已登记 provenance。
-
-## 12. WorkspaceGrant
-
-```python
-class WorkspaceGrant:
-    root: str
-    mode: Literal["read_only", "read_write"]
-    allowed_paths: list[str]
-    denied_paths: list[str]
-    source: WorkspaceSource
-```
-
-它表示授权，不表示 Artifact 或 repo identity。
-
-所有路径必须 resolve 后检查；禁止依赖当前工作目录、HOME 或未经校验的 symlink。
-
-契约层只接受相对于 root 的 `allowed_paths` / `denied_paths`，并拒绝绝对路径和 `..`。真正的 resolve、symlink 和物理边界检查属于后续 runtime。
-
-## 13. Question 与 Answer
-
-```python
-class QuestionDraft:
-    text: str
-    requested_fields: list[str]
-    reason: str
-```
-
-```python
-class PendingQuestion:
-    id: str
-    run_id: str
-    task_id: str | None
-    text: str
-    requested_fields: list[str]
-    created_at: datetime
-```
-
-```python
-class UserAnswer:
-    question_id: str
-    values: dict[str, str]
-    answered_at: datetime
-```
-
-子 Agent 只生成 QuestionDraft。ResAgent 负责持久化 PendingQuestion、暂停 Run、验证 Answer 并恢复。
-
-## 14. Agent 内部动作
-
-共享 Agentic Loop 使用统一外壳：
-
-```python
-class AgentAction:
-    tool: str
-    arguments: dict
-    reasoning_summary: str
-```
-
-`tool` 必须来自 AgentDefinition 的允许 Tool 集合。`arguments` 必须通过该 Tool 的 schema，不能直接作为 shell 字符串逃逸。
-
-结束使用显式候选：
-
-```python
-class FinishCandidate[T]:
-    proposed_status: str
-    result: T
-    artifact_paths: list[str]
-    unresolved_items: list[str]
-```
-
-最终 ModuleResult 由模块的确定性 completion check 生成，不直接信任 `proposed_status`。
-
-## 15. Agent Profile
-
-```python
-class AgentDefinition[StateT, ActionT, ResultT]:
-    name: str
-    system_prompt: PromptProvider
-    tools: list[Tool]
-    context_builder: ContextBuilder[StateT]
-    action_type: type[ActionT]
-    result_type: type[ResultT]
-    permission_policy: PermissionPolicy
-    completion_check: CompletionCheck[StateT, ResultT]
-```
-
-三个 Agent 共享 Loop，不共享 system prompt、领域 state 和 completion check。
-
-## 16. SessionRef
-
-```python
 class SessionRef:
-    id: str
-    module: str
-    state_uri: str
-    status: str
+    id: SessionId
+    module: AgentOwner
+    state_uri: NonEmptyStr
+    status: SessionStatus
     created_at: datetime
     updated_at: datetime
 ```
 
-Session 由子 Agent 写，ResAgent 只保存引用。Retry 和 Resume 语义：
+Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry 是同一 Task 的新 Attempt，默认新 Session；resume 是新 Attempt 引用旧 Session；repair 是新 WorkflowTask。
 
-- retry：同一 Task 的新 Attempt，默认新 Session；
-- resume：用户或策略明确要求在原现场继续，使用 parent_session_id；
-- repair：新的 WorkflowTask，不是 retry 或 resume。
+running Attempt 不能有 finished_at/error；终态必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。
 
-## 17. 状态映射
+## 12. Question 与 Answer
 
-| ModuleStatus | TaskStatus | Run 行为 |
+```python
+class QuestionDraft:
+    text: NonEmptyStr
+    requested_fields: list[NonEmptyStr] = []
+    reason: NonEmptyStr
+
+class PendingQuestion:
+    id: QuestionId
+    run_id: RunId
+    task_id: TaskId | None = None
+    text: NonEmptyStr
+    requested_fields: list[NonEmptyStr] = []
+    created_at: datetime
+
+class UserAnswer:
+    question_id: QuestionId
+    values: dict[NonEmptyStr, str]
+    answered_at: datetime
+```
+
+子 Agent 只生成 QuestionDraft；ResAgent 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。`reason` 是必填字段，任何 JSON 示例都不能省略。
+
+## 13. Artifact 契约
+
+```python
+class ArtifactCandidate:
+    kind: NonEmptyStr
+    path: str
+    media_type: NonEmptyStr
+    summary: NonEmptyStr
+    metadata: dict[str, JsonValue] = {}
+
+class ArtifactRef:
+    id: ArtifactId
+    kind: NonEmptyStr
+    producer: AgentOwner
+    run_id: RunId
+    task_id: TaskId
+    attempt_number: int
+    uri: NonEmptyStr
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    media_type: NonEmptyStr
+    summary: NonEmptyStr
+    metadata: dict[str, JsonValue] = {}
+```
+
+Candidate 的 path 必须是 workspace root 下无 `..` 的相对路径。Candidate 故意没有 id、URI、hash 或 provenance；这些只能由 ResAgent 登记时产生。
+
+runtime 负责 Tool 访问时的路径/权限检查；ResAgent 在登记时独立复核存在、containment、symlink、hash 和 Attempt 绑定。ArtifactRef 是冻结证据，不能被后续 Attempt 覆盖。
+
+## 14. WorkspaceGrant
+
+```python
+class WorkspaceGrant:
+    root: NonEmptyStr
+    mode: WorkspaceMode
+    allowed_paths: list[str] = []
+    denied_paths: list[str] = []
+    source: WorkspaceSource
+```
+
+Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；真实 filesystem runtime 做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
+
+## 15. ScientificConclusion
+
+```python
+class ScientificConclusion:
+    verdict: ScientificVerdict
+    summary: NonEmptyStr
+    evidence_artifact_ids: list[ArtifactId]
+    limitations: list[NonEmptyStr] = []
+    recommended_next_steps: list[NonEmptyStr] = []
+```
+
+Scientific verdict 与执行状态独立：一次成功的 scientific_analyze 可以得出 refutes 或 inconclusive。当前 Scheduler 没有把它接入最终 Run gate，属于后续闭环工作。
+
+## 16. 状态映射
+
+| ModuleStatus | Scheduler 写入的 TaskStatus | Run 行为 |
 |---|---|---|
-| completed | completed | 继续依赖图 |
-| completed_with_warnings | completed + warnings | 继续，最终报告显示警告 |
-| failed | failed，或 retry 后 pending | 按 RetryPolicy |
-| blocked | blocked | 创建显式 recovery/replan 或失败 |
-| needs_user_input | needs_user_input | 保存问题并 paused |
+| completed | completed | 继续依赖图；其 Artifact 可自动传给依赖任务 |
+| completed_with_warnings | completed，并追加 warnings | 继续依赖图；warnings 被持久化，未来报告消费者必须展示 |
+| failed | retryable 且预算允许时 pending，否则 failed | 可重试项重新进入调度；稳定后由 required Task gate 决定 Run completed/failed |
+| blocked | blocked | ResAgent 只能通过显式 WorkflowPatch/recovery 和 retry 恢复；稳定后由 required Task gate 决定 Run completed/failed |
+| needs_user_input | needs_user_input | ResAgent 保存 PendingQuestion，并把 Run 置为 paused |
 
-科学结论状态与上述运行状态独立：一个执行成功的分析可以得出“不支持假设”的结论。
+这张表描述 Scheduler 对一次 ModuleResult 的确定性映射。专业模块不能直接写 TaskStatus 或 RunStatus。ScientificVerdict 与运行状态独立：一次执行成功的 scientific_analyze 可以得出 refutes 或 inconclusive。
 
-## 18. 契约版本
+## 17. schema 版本规则
 
-- 初始阶段不维护旧格式兼容层；
-- 公共类型进入实现后增加 `schema_version`；
-- 改变字段语义必须更新本文件、迁移说明和 contract tests；
-- 只增加可选字段可以小版本演进；
-- 删除/改义字段需要显式版本升级；
-- 不允许通过 metadata 长期绕过正式 schema。
+- Python 包版本和 wire schema 版本独立演进；
+- 增加可选字段至少需要 schema 小版本和迁移说明；
+- 删除字段、改字段含义或改变必填性需要不兼容版本；
+- 每个版本必须有 round-trip 和非法组合 contract tests；
+- metadata 不得长期承载本应成为正式字段的状态；
+- schema 版本策略发生改变时必须先写 ADR。
 
-当前规则：
+当前唯一支持版本为 `1.0`，不维护旧格式兼容层。
 
-- 所有公共 BaseModel 都显式序列化 `schema_version: "1.0"`；
-- 模型拒绝未知字段，防止拼写错误或未评审字段被静默吞掉；
-- Python 包版本和 wire schema 版本分别演进，二者不能混为一谈。
+## 18. 当前公共导出核对表
 
-## 19. 已实现公共类型清单
-
-本节是代码导出与文档覆盖的核对表。稳定 Python 导入路径为 `resagent2_contracts`。
-
-| 类别 | 公共类型 |
+| 类别 | Python 公共类型 |
 |---|---|
-| 版本与 ID | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId |
-| 路由与状态 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus |
-| 错误与授权枚举 | ErrorCode、WorkspaceMode、WorkspaceSource、SessionStatus |
-| 科学与验证枚举 | VerificationMode、ScientificVerdict |
+| ID/版本 | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId |
+| 状态/路由 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus |
+| 错误/授权 | ErrorCode、WorkspaceMode、WorkspaceSource、SessionStatus |
+| 科学枚举 | VerificationMode、ScientificVerdict |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
-| 预算与入口 | RunBudget、TaskBudget、ResearchRequest |
+| 入口/预算 | RunBudget、TaskBudget、ResearchRequest |
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、CodeUnderstandInput、CodeModifyInput、ExperimentPrepareInput、ExperimentRunInput、AskUserInput、CapabilityInput |
 | 工作流 | SuccessCriterion、TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
-| 注册表与结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |
+| 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |
+
+## 19. 已知契约对齐项
+
+这些是已确认缺口，不是隐含设计：
+
+1. 实现 success_criteria/evidence_key 的正式求值器（方向已裁定：保留可执行语义，求值器留待 Phase 7）；
+2. 为每个 capability 明确 ModuleResult payload model 及其消费方；
+3. 完成 parent_session_id 的 runtime resume 闭环；
+4. 在引入下一次字段变化前确定 `1.x` 的实际迁移方式。
+
+这些工作的阶段、顺序和验收见 `DEVELOPMENT_PLAN.md`。

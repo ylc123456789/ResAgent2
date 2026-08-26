@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from resagent2_contracts import (
     AgentOwner,
     Capability,
@@ -12,7 +14,6 @@ from resagent2_contracts import (
     RunBudget,
     RunStatus,
     ScientificAnalyzeInput,
-    ScientificPlanInput,
     SessionRef,
     SessionStatus,
     SuccessCriterion,
@@ -28,6 +29,7 @@ from resagent2_contracts import (
 from resagent2_orchestrator import (
     InMemoryRunStore,
     ModuleBinding,
+    OrchestrationError,
     ScriptedModulePort,
     WorkflowScheduler,
 )
@@ -56,10 +58,14 @@ def criterion() -> SuccessCriterion:
     )
 
 
-def task(task_id: str, capability: Capability, depends_on=()) -> TaskProposal:
-    if capability == Capability.SCIENTIFIC_PLAN:
-        inputs = ScientificPlanInput(request=research_request())
-    elif capability == Capability.SCIENTIFIC_ANALYZE:
+def task(
+    task_id: str,
+    capability: Capability,
+    depends_on=(),
+    *,
+    required: bool = True,
+) -> TaskProposal:
+    if capability == Capability.SCIENTIFIC_ANALYZE:
         inputs = ScientificAnalyzeInput(
             question="What does the evidence show?",
             evidence_artifact_ids=[],
@@ -74,6 +80,7 @@ def task(task_id: str, capability: Capability, depends_on=()) -> TaskProposal:
         goal=f"Complete {task_id}",
         rationale="Required by the test workflow",
         depends_on=list(depends_on),
+        required=required,
         inputs=inputs,
         success_criteria=[criterion()],
     )
@@ -85,7 +92,6 @@ def completed(summary="done") -> ModuleResult:
 
 def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowScheduler:
     owners = {
-        Capability.SCIENTIFIC_PLAN: AgentOwner.SCIENTIFIC,
         Capability.SCIENTIFIC_ANALYZE: AgentOwner.SCIENTIFIC,
         Capability.CODE_MODIFY: AgentOwner.CODING,
         Capability.EXPERIMENT_RUN: AgentOwner.EXPERIMENT,
@@ -105,15 +111,13 @@ def test_linear_workflow_runs_to_completion() -> None:
         summary="linear",
         scientific_rationale="A minimal research sequence",
         tasks=[
-            task("task_plan", Capability.SCIENTIFIC_PLAN),
-            task("task_code", Capability.CODE_MODIFY, ["task_plan"]),
+            task("task_code", Capability.CODE_MODIFY),
             task("task_experiment", Capability.EXPERIMENT_RUN, ["task_code"]),
             task("task_analyze", Capability.SCIENTIFIC_ANALYZE, ["task_experiment"]),
         ],
     )
     engine = scheduler(
         {
-            Capability.SCIENTIFIC_PLAN: [completed()],
             Capability.CODE_MODIFY: [completed()],
             Capability.EXPERIMENT_RUN: [completed()],
             Capability.SCIENTIFIC_ANALYZE: [completed()],
@@ -128,9 +132,8 @@ def test_linear_workflow_runs_to_completion() -> None:
         TaskStatus.COMPLETED,
         TaskStatus.COMPLETED,
         TaskStatus.COMPLETED,
-        TaskStatus.COMPLETED,
     ]
-    assert [item.attempts[0].number for item in result.workflow.tasks] == [1, 1, 1, 1]
+    assert [item.attempts[0].number for item in result.workflow.tasks] == [1, 1, 1]
 
 
 def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
@@ -138,9 +141,8 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
         summary="parallel",
         scientific_rationale="Compare two runs",
         tasks=[
-            task("task_plan", Capability.SCIENTIFIC_PLAN),
-            task("task_baseline", Capability.EXPERIMENT_RUN, ["task_plan"]),
-            task("task_treatment", Capability.EXPERIMENT_RUN, ["task_plan"]),
+            task("task_baseline", Capability.EXPERIMENT_RUN),
+            task("task_treatment", Capability.EXPERIMENT_RUN),
             task(
                 "task_analyze",
                 Capability.SCIENTIFIC_ANALYZE,
@@ -150,15 +152,12 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     )
     engine = scheduler(
         {
-            Capability.SCIENTIFIC_PLAN: [completed()],
             Capability.EXPERIMENT_RUN: [completed("baseline"), completed("treatment")],
             Capability.SCIENTIFIC_ANALYZE: [completed()],
         }
     )
     engine.create_run("run_parallel", research_request(), proposal)
 
-    assert engine.ready_task_ids("run_parallel") == ["task_plan"]
-    engine.execute_task("run_parallel", "task_plan")
     assert engine.ready_task_ids("run_parallel") == [
         "task_baseline",
         "task_treatment",
@@ -167,6 +166,8 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
         "task_baseline",
         "task_treatment",
     ]
+    engine.execute_task("run_parallel", "task_baseline")
+    assert engine.ready_task_ids("run_parallel") == ["task_treatment"]
 
 
 def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> None:
@@ -227,7 +228,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
         ),
         session=SessionRef(
             id="session_child",
-            module=AgentOwner.SCIENTIFIC,
+            module=AgentOwner.EXPERIMENT,
             state_uri="memory://child",
             status=SessionStatus.PAUSED,
             created_at=NOW,
@@ -237,8 +238,8 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     port = ScriptedModulePort([question_result, completed()])
     engine = WorkflowScheduler(
         bindings={
-            Capability.SCIENTIFIC_PLAN: ModuleBinding(
-                owner=AgentOwner.SCIENTIFIC,
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
                 port=port,
             )
         },
@@ -247,7 +248,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     proposal = WorkflowProposal(
         summary="question",
         scientific_rationale="Ask for missing input",
-        tasks=[task("task_plan", Capability.SCIENTIFIC_PLAN)],
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     engine.create_run("run_question", research_request(), proposal)
 
@@ -354,3 +355,94 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
     assert run.status == RunStatus.FAILED
     assert error is not None
     assert error.code == ErrorCode.CONTRACT_ERROR
+
+
+def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    created = engine.create_run(
+        "run_ready_gate",
+        research_request(),
+        WorkflowProposal(
+            summary="ready gate",
+            scientific_rationale="Ready work prevents early completion",
+            tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        ),
+    )
+
+    assert created.status == RunStatus.RUNNING
+    assert engine.ready_task_ids("run_ready_gate") == ["task_experiment"]
+    assert created.workflow.tasks[0].attempts == []
+
+
+def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
+    optional_failure = ModuleResult(
+        status=ModuleStatus.FAILED,
+        summary="optional task failed",
+        error=ModuleError(
+            code=ErrorCode.TOOL_FAILED,
+            message="optional evidence unavailable",
+            retryable=False,
+        ),
+    )
+    engine = scheduler(
+        {
+            Capability.EXPERIMENT_RUN: [optional_failure],
+            Capability.CODE_MODIFY: [completed("replacement completed")],
+        }
+    )
+    engine.create_run(
+        "run_required_gate",
+        research_request(),
+        WorkflowProposal(
+            summary="required gate",
+            scientific_rationale="Only active required tasks gate completion",
+            tasks=[
+                task("task_old", Capability.EXPERIMENT_RUN),
+                task(
+                    "task_optional",
+                    Capability.EXPERIMENT_RUN,
+                    required=False,
+                ),
+            ],
+        ),
+    )
+    engine.apply_patch(
+        "run_required_gate",
+        WorkflowPatch(
+            based_on_revision=1,
+            reason="Replace the old required task",
+            supersede_task_ids=["task_old"],
+            add_tasks=[task("task_replacement", Capability.CODE_MODIFY)],
+        ),
+    )
+
+    run = engine.run_until_stable("run_required_gate")
+    states = {item.id: item.status for item in run.workflow.tasks}
+
+    assert run.status == RunStatus.COMPLETED
+    assert states == {
+        "task_old": TaskStatus.SUPERSEDED,
+        "task_optional": TaskStatus.FAILED,
+        "task_replacement": TaskStatus.COMPLETED,
+    }
+
+
+def test_create_run_rejects_proposal_with_unresolved_questions() -> None:
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    with pytest.raises(OrchestrationError, match="question"):
+        engine.create_run(
+            "run_questions",
+            research_request(),
+            WorkflowProposal(
+                summary="has questions",
+                scientific_rationale="Must be answered before running",
+                questions=[
+                    QuestionDraft(
+                        text="Which dataset?",
+                        requested_fields=["dataset"],
+                        reason="missing input",
+                    )
+                ],
+                tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+            ),
+        )

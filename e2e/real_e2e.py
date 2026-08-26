@@ -11,8 +11,10 @@ Stages: ``python -m e2e.real_e2e code|experiment|full``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -21,9 +23,11 @@ from resagent2_contracts import (
     CodeModifyInput,
     ExperimentRunInput,
     ModuleResult,
+    ModuleStatus,
     ModuleTaskRequest,
     ResearchRequest,
     RunBudget,
+    RunStatus,
     ScientificAnalyzeInput,
     TaskBudget,
     WorkspaceGrant,
@@ -31,6 +35,7 @@ from resagent2_contracts import (
     WorkspaceSource,
 )
 from resagent2_orchestrator import (
+    DeterministicPlanningPort,
     JsonRunStore,
     ModuleBinding,
     WorkflowScheduler,
@@ -131,80 +136,15 @@ def run_experiment(workdir: Path) -> ModuleResult:
     return LegacyExperimentAdapter().invoke(request)
 
 
-def run_full(workdir: Path) -> None:
-    from resagent2_contracts import SuccessCriterion, TaskProposal, VerificationMode, WorkflowProposal
-
+def run_full(workdir: Path) -> bool:
     repo = _repo(workdir)
-    proposal = WorkflowProposal(
-        summary="real golden loop",
-        scientific_rationale="Exercise code -> experiment -> analyze with real modules",
-        tasks=[
-            TaskProposal(
-                id="task_code",
-                capability=Capability.CODE_MODIFY,
-                goal="Add a docstring to the add() function in util.py",
-                rationale="Produce a verified code change",
-                depends_on=[],
-                required=True,
-                inputs=CodeModifyInput(
-                    instructions="Add a docstring to the add() function in util.py",
-                    verification_commands=["python -c \"import util; assert util.add(2, 3) == 5\""],
-                ),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="code change is verified",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="code_patch",
-                    )
-                ],
-            ),
-            TaskProposal(
-                id="task_experiment",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run train.py with 2 epochs and record accuracy",
-                rationale="Produce evidence",
-                depends_on=["task_code"],
-                required=True,
-                inputs=ExperimentRunInput(
-                    instructions="Run train.py with 2 epochs and record accuracy from metrics.json",
-                    expected_metrics=["accuracy"],
-                    expected_artifacts=["metrics.json"],
-                ),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="metrics.json is produced",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="metrics",
-                    )
-                ],
-            ),
-            TaskProposal(
-                id="task_analyze",
-                capability=Capability.SCIENTIFIC_ANALYZE,
-                goal="Analyze whether the recorded accuracy supports the method",
-                rationale="Form a conclusion",
-                depends_on=["task_experiment"],
-                required=True,
-                inputs=ScientificAnalyzeInput(
-                    question="Does the recorded accuracy support the method?",
-                    evidence_artifact_ids=[],
-                ),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="a conclusion is formed",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="conclusion",
-                    )
-                ],
-            ),
-        ],
-    )
     request = ResearchRequest(
         goal="Determine whether the method improves accuracy",
         budget=RunBudget(
             max_tasks=6, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
+    proposal = DeterministicPlanningPort().propose(request)
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
@@ -232,23 +172,27 @@ def run_full(workdir: Path) -> None:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
+    return run.status == RunStatus.COMPLETED and len(run.artifacts) >= 3
 
 
 def main() -> None:
     stage = sys.argv[1] if len(sys.argv) > 1 else "analyze"
-    workdir = Path("/root/autodl-tmp/resagent2-real-e2e")
+    workdir = Path(os.environ.get("REAL_E2E_WORKDIR", tempfile.mkdtemp(prefix="resagent2-real-")))
+    workdir.mkdir(parents=True, exist_ok=True)
     if stage == "code":
         result = run_code(workdir)
         print(f"status={result.status.value}")
         print(f"summary={result.summary}")
         print(f"payload={result.payload}")
+        sys.exit(0 if result.status == ModuleStatus.COMPLETED else 1)
     elif stage == "experiment":
         result = run_experiment(workdir)
         print(f"status={result.status.value}")
         print(f"summary={result.summary}")
         print(f"payload={result.payload}")
+        sys.exit(0 if result.status == ModuleStatus.COMPLETED else 1)
     elif stage == "full":
-        run_full(workdir)
+        sys.exit(0 if run_full(workdir) else 1)
     else:
         raise SystemExit(f"unknown stage: {stage}")
 

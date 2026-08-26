@@ -145,6 +145,23 @@ class AgentLoop:
                     error=error,
                 )
             state = self.store.load(resume_id)
+            if (
+                state.status != SessionStatus.PAUSED
+                or state.run_id != request.run_id
+                or state.task_id != request.task_id
+                or state.owner != definition.owner
+                or state.agent_name != definition.name
+            ):
+                error = ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message="resume target does not match request or is not paused",
+                    retryable=False,
+                )
+                return ModuleResult(
+                    status=ModuleStatus.FAILED,
+                    summary=error.message,
+                    error=error,
+                )
             state.status = SessionStatus.ACTIVE
             state.attempt_number = request.attempt_number
             state.updated_at = now

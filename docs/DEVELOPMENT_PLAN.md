@@ -32,13 +32,13 @@
 | Phase 1 | contracts 1.0 基础实现 | completed |
 | Phase 2 | 最小 shared runtime / Agentic Loop | completed |
 | Phase 3 | ResAgent Workflow Core 与语义对齐 | completed |
-| Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | not_started |
+| Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | in_progress |
 | Phase 5 | Coding Agent vNext | not_started |
 | Phase 6 | Experiment Agent vNext | not_started |
 | Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3 已重新验收完成。Phase 4 是下一阶段，但在明确开始前保持 not_started。
+Phase 3 已重新验收完成。Phase 4 已开始：本地 mock E2E、三个 legacy adapter 骨架与真实模块接线、runtime resume、payload 持久化均已落地并在服务器验证过真实闭环；当前处于 hardening 收尾（见 §7 完成标准）。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -241,7 +241,7 @@ ResearchRequest
 - [ ] 每一步有 Task/Attempt/Artifact；
 - [ ] Planning 不出现在 WorkflowTask 列表；
 - [ ] ask-user 能穿过 orchestrator 和 runtime 完成真实 resume；
-- [ ] 中途终止后可从磁盘状态恢复；
+- [ ] 中途终止后可从磁盘状态恢复（指恢复到最后一次稳定保存的 Run 状态，即 Task 边界；中断一个正在运行的模块调用并原样续跑不在 Phase 4 范围，属后续 runtime 能力）；
 - [ ] ModuleResult payload 有明确消费者，不被静默丢弃；
 - [ ] 本地小任务通过后才允许服务器短实验。
 

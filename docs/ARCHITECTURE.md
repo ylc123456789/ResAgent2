@@ -371,7 +371,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - success criteria 求值；
 - 最终科学闭环 gate 和 final summary；
 - 真实 filesystem/process/Git Tools；
-- 三个 vNext 专业 Agent、legacy adapters 和真实 E2E。
+- 三个 vNext 专业 Agent（legacy adapter 与 mock E2E 已在 Phase 4 落地）。
 
 具体阶段和验收状态只见 `DEVELOPMENT_PLAN.md`；字段定义只见 `CONTRACTS.md`。
 

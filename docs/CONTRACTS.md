@@ -246,7 +246,7 @@ class ModuleTaskRequest:
 | workspace | 此 Attempt 的最大物理访问范围 |
 | parent_session_id | 仅显式 resume 使用；普通 retry 为空 |
 
-当前 orchestrator 会在 ask-user 后的新 Attempt 产生 `parent_session_id`；当前 runtime AgentLoop 仍只创建新 Session，尚未消费该字段。因此端到端 resume 未完成，不能仅凭请求字段宣称已实现。
+当前 orchestrator 在 ask-user 后的新 Attempt 产生 `parent_session_id`；runtime AgentLoop 在 resume 时加载该 Session 并校验 run/task/agent/owner/paused 一致，端到端 resume 已接通。普通 retry 不复用 Session。
 
 ## 10. ModuleResult
 
@@ -285,7 +285,7 @@ Workflow Core 只消费 ModuleResult 的外层控制字段：status、artifacts�
 
 | task capability | 目标 payload/消费方 | 当前 Phase 3 行为 | 定义阶段 |
 |---|---|---|---|
-| scientific_analyze | ScientificConclusion → 科学闭环/final report | 无生产 binding；payload 不持久化 | Phase 7 |
+| scientific_analyze | ScientificConclusion → 科学闭环/final report | 无生产 binding；payload 持久化到 Attempt | Phase 7 |
 | literature_search | 有界文献结果 → Scientific Agent | 无生产 binding；持久结果必须登记 Artifact | Phase 7 |
 | code_understand | 代码理解结果 → 调用方 | 无生产 binding；模型待定义 | Phase 5 |
 | code_modify | 代码变化摘要 → 调用方；代码变化 → ArtifactRef | 无生产 binding；模型待定义 | Phase 5 |
@@ -429,7 +429,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前唯一支持版本为 `1.0`，不维护旧格式兼容层。
+当前唯一支持版本为 `1.0`，不维护旧格式兼容层。`Attempt.payload`（可选字段）是 `1.0` 上的新增可选字段，按本规则属小版本演进；在下一 schema 小版本合并前先保持现状，并在该次变更中补迁移说明与 round-trip 测试。
 
 ## 18. 当前公共导出核对表
 

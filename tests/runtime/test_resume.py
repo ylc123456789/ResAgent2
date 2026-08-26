@@ -115,3 +115,73 @@ def test_resume_unknown_session_fails_cleanly() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     assert result.error.code.value == "contract_error"
+
+
+def test_resume_rejects_non_paused_session() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    definition = AgentDefinition(
+        name="finisher",
+        owner=AgentOwner.SCIENTIFIC,
+        system_prompt="finish only",
+        tools=(FinishTool(),),
+        llm_client=ScriptedLLMClient([AgentAction(tool="finish", arguments={"result": {}})]),
+        context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"finish"}),
+        completion_check=_AcceptFinish(),
+    )
+
+    first = loop.run(definition, _request(attempt=1), session_id="session_done")
+    assert first.status == ModuleStatus.COMPLETED
+
+    result = loop.run(
+        definition,
+        _request(attempt=2, parent="session_done"),
+        session_id="session_done",
+    )
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error is not None
+    assert result.error.code.value == "contract_error"
+
+
+def test_resume_rejects_mismatched_task() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    definition = AgentDefinition(
+        name="needs-input",
+        owner=AgentOwner.SCIENTIFIC,
+        system_prompt="ask then finish",
+        tools=(AskUserTool(), FinishTool()),
+        llm_client=ScriptedLLMClient(
+            [
+                AgentAction(
+                    tool="ask_user",
+                    arguments={"text": "Which?", "requested_fields": ["x"], "reason": "r"},
+                ),
+                AgentAction(tool="finish", arguments={"result": {}}),
+            ]
+        ),
+        context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"ask_user", "finish"}),
+        completion_check=_AcceptFinish(),
+    )
+
+    first = loop.run(definition, _request(attempt=1), session_id="session_child")
+    assert first.status == ModuleStatus.NEEDS_USER_INPUT
+
+    other = ModuleTaskRequest(
+        run_id="run_resume",
+        task_id="task_other",
+        attempt_number=2,
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Pick a dataset",
+        inputs=CodeUnderstandInput(question="Which dataset?"),
+        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        parent_session_id="session_child",
+    )
+    result = loop.run(definition, other, session_id="session_child")
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error is not None
+    assert result.error.code.value == "contract_error"

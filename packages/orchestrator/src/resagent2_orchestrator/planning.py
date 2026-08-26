@@ -39,12 +39,15 @@ class DeterministicPlanningPort:
                 TaskProposal(
                     id="task_code",
                     capability=Capability.CODE_MODIFY,
-                    goal="Implement a minimal method",
-                    rationale="Produce a patch for the experiment",
+                    goal="Add a docstring to the add() function in util.py",
+                    rationale="Produce a verified code change",
                     depends_on=[],
                     required=True,
                     inputs=CodeModifyInput(
-                        instructions="Implement a minimal method",
+                        instructions="Add a docstring to the add() function in util.py",
+                        verification_commands=[
+                            "python -c \"import util; assert util.add(2, 3) == 5\""
+                        ],
                     ),
                     success_criteria=[
                         SuccessCriterion(
@@ -62,8 +65,9 @@ class DeterministicPlanningPort:
                     depends_on=["task_code"],
                     required=True,
                     inputs=ExperimentRunInput(
-                        instructions="Run the experiment",
+                        instructions="Run train.py and record accuracy from metrics.json",
                         expected_metrics=["accuracy"],
+                        expected_artifacts=["metrics.json"],
                     ),
                     success_criteria=[
                         SuccessCriterion(

@@ -13,6 +13,7 @@ ALLOWED_IMPORT_ROOTS = {
     "datetime",
     "hashlib",
     "importlib",
+    "json",
     "os",
     "pathlib",
     "shutil",

@@ -1,0 +1,60 @@
+from resagent2_contracts import ModuleStatus
+from resagent2_orchestrator.adapters import (
+    LegacyCodingAdapter,
+    LegacyExperimentAdapter,
+    LegacyScientificAnalyzeAdapter,
+)
+
+
+def test_coding_adapter_maps_patch_report_statuses() -> None:
+    completed = LegacyCodingAdapter.from_result(
+        {"status": "completed", "summary": "ok", "changed_files": ["method.py"]}
+    )
+    assert completed.status == ModuleStatus.COMPLETED
+    assert completed.payload == {"changed_files": ["method.py"]}
+
+    assert LegacyCodingAdapter.from_result({"status": "blocked", "summary": "env"}).status == (
+        ModuleStatus.BLOCKED
+    )
+    assert LegacyCodingAdapter.from_result({"status": "failed", "summary": "x"}).status == (
+        ModuleStatus.FAILED
+    )
+    assert LegacyCodingAdapter.from_result(
+        {"status": "needs_user_input", "summary": "clarify"}
+    ).status == ModuleStatus.NEEDS_USER_INPUT
+
+
+def test_experiment_adapter_maps_agent_state_statuses() -> None:
+    completed = LegacyExperimentAdapter.from_result(
+        {"status": "completed", "final_summary": "ok", "metrics": {"accuracy": 0.9}}
+    )
+    assert completed.status == ModuleStatus.COMPLETED
+    assert completed.payload == {"metrics": {"accuracy": 0.9}, "parameters": None}
+
+    warned = LegacyExperimentAdapter.from_result(
+        {"status": "completed_with_failures", "final_summary": "partial"}
+    )
+    assert warned.status == ModuleStatus.COMPLETED_WITH_WARNINGS
+    assert len(warned.warnings) == 1
+
+    assert LegacyExperimentAdapter.from_result(
+        {"status": "blocked", "summary": "need code"}
+    ).status == ModuleStatus.BLOCKED
+    assert LegacyExperimentAdapter.from_result(
+        {"status": "failed", "summary": "crashed"}
+    ).status == ModuleStatus.FAILED
+
+
+def test_scientific_adapter_maps_decision_statuses() -> None:
+    completed = LegacyScientificAnalyzeAdapter.from_result(
+        {"summary": "analyzed", "conclusion": {"status": "supported"}, "confidence": "high"}
+    )
+    assert completed.status == ModuleStatus.COMPLETED
+    assert completed.payload["conclusion"] == {"status": "supported"}
+    assert completed.payload["confidence"] == "high"
+
+    needs = LegacyScientificAnalyzeAdapter.from_result(
+        {"summary": "analyzed", "needs_user_input": ["which dataset?"]}
+    )
+    assert needs.status == ModuleStatus.NEEDS_USER_INPUT
+    assert needs.question is not None

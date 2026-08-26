@@ -300,6 +300,18 @@ def test_attempt_rejects_illegal_terminal_combinations() -> None:
         )
 
 
+def test_attempt_payload_round_trips() -> None:
+    attempt = Attempt(
+        number=1,
+        status=AttemptStatus.COMPLETED,
+        started_at=NOW,
+        finished_at=NOW,
+        payload={"accuracy": 0.9},
+    )
+    restored = Attempt.model_validate_json(attempt.model_dump_json())
+    assert restored.payload == {"accuracy": 0.9}
+
+
 def test_question_and_answer_have_distinct_owners() -> None:
     pending = PendingQuestion(
         id="question_dataset",

@@ -315,6 +315,7 @@ class Attempt:
     session: SessionRef | None = None
     artifact_ids: list[ArtifactId] = []
     error: ModuleError | None = None
+    payload: JsonValue | None = None
 
 class SessionRef:
     id: SessionId
@@ -327,7 +328,7 @@ class SessionRef:
 
 Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry 是同一 Task 的新 Attempt，默认新 Session；resume 是新 Attempt 引用旧 Session；repair 是新 WorkflowTask。
 
-running Attempt 不能有 finished_at/error；终态必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。
+running Attempt 不能有 finished_at/error；终态必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败/契约错误路径天然为 None。
 
 ## 12. Question 与 Answer
 

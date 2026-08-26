@@ -353,7 +353,7 @@ ResearchRequest
 | planning 在控制面 | ScientificPlanInput、WorkflowProposal | Phase 3/4 | 已实现：validator 拒绝控制面 task |
 | 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
-| ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator 半闭环，runtime resume 待接 |
+| ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
 | retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | retry/repair 已有，resume 跨层待接 |
 | Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5 | 登记复核已有，runtime 访问层待实现 |
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |

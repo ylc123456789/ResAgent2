@@ -131,29 +131,47 @@ class AgentLoop:
         """Run one new Agent session until completion, pause, or structured failure."""
 
         now = datetime.now(UTC)
-        state = AgentState(
-            session_id=session_id,
-            agent_name=definition.name,
-            owner=definition.owner,
-            run_id=request.run_id,
-            task_id=request.task_id,
-            attempt_number=request.attempt_number,
-            memory=initial_memory or {},
-            created_at=now,
-            updated_at=now,
-        )
-        if self.store.exists(state.session_id):
-            error = ModuleError(
-                code=ErrorCode.CONTRACT_ERROR,
-                message="session_id already exists",
-                retryable=False,
+        resume_id = request.parent_session_id
+        if resume_id is not None:
+            if not self.store.exists(resume_id):
+                error = ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message="cannot resume unknown session",
+                    retryable=False,
+                )
+                return ModuleResult(
+                    status=ModuleStatus.FAILED,
+                    summary=error.message,
+                    error=error,
+                )
+            state = self.store.load(resume_id)
+            state.status = SessionStatus.ACTIVE
+            state.attempt_number = request.attempt_number
+            state.updated_at = now
+        else:
+            state = AgentState(
+                session_id=session_id,
+                agent_name=definition.name,
+                owner=definition.owner,
+                run_id=request.run_id,
+                task_id=request.task_id,
+                attempt_number=request.attempt_number,
+                memory=initial_memory or {},
+                created_at=now,
+                updated_at=now,
             )
-            return ModuleResult(
-                status=ModuleStatus.FAILED,
-                summary=error.message,
-                error=error,
-            )
-        self._save(state)
+            if self.store.exists(state.session_id):
+                error = ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message="session_id already exists",
+                    retryable=False,
+                )
+                return ModuleResult(
+                    status=ModuleStatus.FAILED,
+                    summary=error.message,
+                    error=error,
+                )
+            self._save(state)
 
         try:
             registry = ToolRegistry(definition.tools)
@@ -167,8 +185,9 @@ class AgentLoop:
 
         started = self.clock()
         llm_calls = 0
+        attempt_steps = 0
         while (
-            state.step < request.budget.max_steps
+            attempt_steps < request.budget.max_steps
             and llm_calls < request.budget.max_llm_calls
         ):
             if self.clock() - started >= request.budget.timeout_seconds:
@@ -234,6 +253,7 @@ class AgentLoop:
                 )
 
             state.step += 1
+            attempt_steps += 1
             self._append_event(
                 state,
                 event_type="action",

@@ -242,6 +242,7 @@ class WorkflowScheduler:
         attempt.finished_at = finished
         attempt.session = result.session
         attempt.artifact_ids = artifact_ids
+        attempt.payload = result.payload
 
         if result.status in {
             ModuleStatus.COMPLETED,

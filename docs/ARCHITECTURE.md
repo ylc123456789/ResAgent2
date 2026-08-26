@@ -358,15 +358,16 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - Task/Attempt 状态映射、retry、question pause/answer；
 - WorkflowPatch、RunStore、Artifact 冻结登记；
 - validator 拒绝 scientific_plan / ask_user 进入 WorkflowTask；
-- Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning；payload 当前不持久化，跨任务信息必须登记为 Artifact；
+- Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
+- PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
+- runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
 - 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
 - fake ModulePort 的确定性测试。
 
 尚未实现或尚未对齐：
 
-- Planning Port 与真实 Scientific Agent；
+- Planning Port 的真实 Scientific Agent 实现（当前只有 DeterministicPlanningPort）；
 - Proposal.questions 的回答后重新规划生命周期（当前仅拒绝非空，回答重规划未实现）；
-- runtime Session resume 对 parent_session_id 的消费；
 - success criteria 求值；
 - 最终科学闭环 gate 和 final summary；
 - 真实 filesystem/process/Git Tools；

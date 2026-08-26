@@ -416,6 +416,7 @@ class Attempt(ContractModel):
     session: SessionRef | None = None
     artifact_ids: list[ArtifactId] = Field(default_factory=list)
     error: ModuleError | None = None
+    payload: JsonValue | None = None
 
     @model_validator(mode="after")
     def validate_outcome(self) -> Attempt:

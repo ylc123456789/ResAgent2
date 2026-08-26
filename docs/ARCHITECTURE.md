@@ -1,6 +1,6 @@
 # ResAgent2 系统架构
 
-**状态**：目标架构，尚未实现
+**状态**：目标架构；contracts v0.1.0 已实现，其余组件尚未实现
 **更新规则**：实现状态变化时，本文件必须和代码在同一 commit 更新。
 
 ## 1. 系统目标
@@ -447,7 +447,7 @@ Run completed 必须满足：
 | 组件 | 状态 |
 |---|---|
 | 文档与目录基线 | 本阶段建立 |
-| contracts package | 未实现 |
+| contracts package | 已实现 v0.1.0；22 个契约测试通过 |
 | shared runtime | 未实现 |
 | Workflow Scheduler | 未实现 |
 | Scientific Agent vNext | 未实现 |

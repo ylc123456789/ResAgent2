@@ -16,9 +16,9 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：文档基线。**
+**阶段：Phase 1 已完成，Phase 2 尚未开始。**
 
-当前仓库尚未实现运行时代码。本提交只确定目标架构、跨模块契约、开发顺序和验收标准。任何代码开发都必须从 `docs/DEVELOPMENT_PLAN.md` 中的当前阶段开始。
+当前已实现独立的 `resagent2-contracts` Python 包和契约测试；Agentic Loop、工作流调度器和三个子 Agent 仍未实现。下一阶段只能从 `docs/DEVELOPMENT_PLAN.md` 进入，不能跳过计划提前堆功能。
 
 ## 四个角色
 
@@ -95,6 +95,18 @@ docs/
 tests/
   契约、运行底座、工作流和端到端测试
 ```
+
+## 本地开发环境
+
+项目使用名为 `ResAgent2` 的 Conda 环境：
+
+```bash
+conda env create -f environment.yml
+conda activate ResAgent2
+python -m pytest tests/contracts
+```
+
+环境已存在时使用 `conda env update -n ResAgent2 -f environment.yml --prune` 同步依赖。
 
 逻辑模块保持独立，但暂时放在同一个 Git 仓库中：
 

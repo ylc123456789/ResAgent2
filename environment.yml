@@ -1,0 +1,12 @@
+name: ResAgent2
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pydantic>=2.12,<3
+  - pytest>=9,<10
+  - pip:
+      - -e ./packages/contracts
+variables:
+  PYTHONNOUSERSITE: "1"

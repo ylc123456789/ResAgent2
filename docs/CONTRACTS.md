@@ -1,6 +1,6 @@
 # ResAgent2 跨模块契约
 
-**状态**：目标契约，尚未实现
+**状态**：wire schema 1.0 已由 `resagent2-contracts 0.1.0` 实现
 **原则**：字段不仅说明格式，还必须说明用途、所有者和控制流语义。
 
 ## 1. 契约边界
@@ -39,6 +39,18 @@ ScientificConclusion
 | `question_id` | 一个等待用户回答的问题 | Run 内唯一 |
 
 这些 ID 不能互换。`task_id` 不是 `session_id`，`attempt_number` 也不是 Agent 内部 step number。
+
+wire 格式使用可读前缀实现运行时命名空间校验：
+
+| 类型 | 格式示例 |
+|---|---|
+| RunId | `run_example` |
+| TaskId | `task_plan` |
+| SessionId | `session_coding_1` |
+| ArtifactId | `artifact_metrics` |
+| QuestionId | `question_dataset` |
+
+前缀后的内容由字母或数字开始，只允许字母、数字、下划线和连字符。前缀是契约的一部分，不能靠字段名暗示类型。
 
 ## 3. ResearchRequest
 
@@ -83,7 +95,7 @@ class TaskProposal:
     rationale: str
     depends_on: list[str]
     required: bool
-    inputs: dict
+    inputs: CapabilityInput
     success_criteria: list[SuccessCriterion]
 ```
 
@@ -126,6 +138,7 @@ class WorkflowTask:
     goal: str
     depends_on: list[str]
     required: bool
+    inputs: CapabilityInput
     status: TaskStatus
     input_artifacts: list[str]
     success_criteria: list[SuccessCriterion]
@@ -134,6 +147,8 @@ class WorkflowTask:
 ```
 
 `WorkflowTask` 是唯一顶层任务模型。不再另外建立 AgentTask、ScientificAction、PlannedAction 等平行任务模型。
+
+`inputs` 必须保留在持久化的 WorkflowTask 中，否则调度器无法从已接受的 Workflow 重建 ModuleTaskRequest。`capability` 必须与 `inputs.capability` 完全一致。
 
 ## 6. WorkflowPatch
 
@@ -181,6 +196,23 @@ class WorkflowPatch:
 - permission policy；
 - completion evidence；
 - contract tests。
+
+实现中的 `CapabilityDefinition` 保存上述 owner、request/result model、side effects、permission policy 和 completion evidence；`CapabilityRegistry` 禁止同一 capability 出现两次。
+
+### CapabilityInput
+
+`CapabilityInput` 是以 `capability` 为 discriminator 的联合类型，不接受任意 dict：
+
+| capability | 输入模型 | 关键语义 |
+|---|---|---|
+| scientific_plan | ScientificPlanInput | 包含用户确认的 ResearchRequest |
+| scientific_analyze | ScientificAnalyzeInput | 科学问题和已登记证据 ID |
+| literature_search | LiteratureSearchInput | 有界检索 query 和最大结果数 |
+| code_understand | CodeUnderstandInput | 只读问题和 workspace 相对路径 |
+| code_modify | CodeModifyInput | 修改要求、授权相对路径和验证命令 |
+| experiment_prepare | ExperimentPrepareInput | repo 来源、输入 Artifact 和准备要求 |
+| experiment_run | ExperimentRunInput | 实验说明、参数和预期证据 |
+| ask_user | AskUserInput | 一个尚未持久化的 QuestionDraft |
 
 ## 8. ModuleTaskRequest
 
@@ -241,6 +273,14 @@ class ModuleResult[T]:
 
 `summary` 只用于展示，禁止解析它判断状态。
 
+字段组合由 schema 强制：
+
+- `needs_user_input` 必须有 question，不能有 error；
+- `failed` / `blocked` 必须有 error，不能有 question；
+- `completed` 不能有 error、question 或 warnings；
+- `completed_with_warnings` 至少有一条 WarningRecord；
+- ArtifactCandidate 可以随失败结果返回用于诊断，但登记权仍属于 ResAgent。
+
 ### ModuleError
 
 ```python
@@ -286,6 +326,8 @@ class Attempt:
 - 新 Attempt 不能覆盖旧 Artifact；
 - Agent 内部 step 不进入顶层 Attempt 编号。
 
+终态 Attempt 必须有 `finished_at`；`failed` / `blocked` 还必须有 error。Running Attempt 不能提前携带 `finished_at` 或 error，同一 WorkflowTask 的 Attempt number 必须从 1 连续递增。
+
 ## 11. ArtifactRef
 
 ```python
@@ -317,6 +359,8 @@ class ArtifactRef:
 
 ArtifactCandidate 只有经 ResAgent 校验存在性、路径边界、hash 和 Attempt 绑定后才能成为 ArtifactRef。
 
+ArtifactCandidate 只包含 `kind/path/media_type/summary/metadata`。它故意不包含 id、run/task/attempt、URI 或 hash，避免子 Agent 自行伪造已登记 provenance。
+
 ## 12. WorkspaceGrant
 
 ```python
@@ -331,6 +375,8 @@ class WorkspaceGrant:
 它表示授权，不表示 Artifact 或 repo identity。
 
 所有路径必须 resolve 后检查；禁止依赖当前工作目录、HOME 或未经校验的 symlink。
+
+契约层只接受相对于 root 的 `allowed_paths` / `denied_paths`，并拒绝绝对路径和 `..`。真正的 resolve、symlink 和物理边界检查属于后续 runtime。
 
 ## 13. Question 与 Answer
 
@@ -439,3 +485,28 @@ Session 由子 Agent 写，ResAgent 只保存引用。Retry 和 Resume 语义：
 - 只增加可选字段可以小版本演进；
 - 删除/改义字段需要显式版本升级；
 - 不允许通过 metadata 长期绕过正式 schema。
+
+当前规则：
+
+- 所有公共 BaseModel 都显式序列化 `schema_version: "1.0"`；
+- 模型拒绝未知字段，防止拼写错误或未评审字段被静默吞掉；
+- Python 包版本和 wire schema 版本分别演进，二者不能混为一谈。
+
+## 19. 已实现公共类型清单
+
+本节是代码导出与文档覆盖的核对表。稳定 Python 导入路径为 `resagent2_contracts`。
+
+| 类别 | 公共类型 |
+|---|---|
+| 版本与 ID | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId |
+| 路由与状态 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus |
+| 错误与授权枚举 | ErrorCode、WorkspaceMode、WorkspaceSource、SessionStatus |
+| 科学与验证枚举 | VerificationMode、ScientificVerdict |
+| 通用结果 | ModuleError、WarningRecord、SessionRef |
+| 预算与入口 | RunBudget、TaskBudget、ResearchRequest |
+| 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
+| 证据 | ArtifactCandidate、ArtifactRef |
+| capability 输入 | ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、CodeUnderstandInput、CodeModifyInput、ExperimentPrepareInput、ExperimentRunInput、AskUserInput、CapabilityInput |
+| 工作流 | SuccessCriterion、TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
+| 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
+| 注册表与结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |

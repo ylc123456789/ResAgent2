@@ -18,8 +18,8 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Phase 0 | 文档和目录基线 | in_progress |
-| Phase 1 | contracts 包 | not_started |
+| Phase 0 | 文档和目录基线 | completed |
+| Phase 1 | contracts 包 | completed |
 | Phase 2 | 最小共享 runtime 和 Agentic Loop | not_started |
 | Phase 3 | ResAgent Workflow Core | not_started |
 | Phase 4 | Legacy Adapters 与黄金闭环 | not_started |
@@ -58,7 +58,7 @@
 - [x] 任务图与 Agent 内部动作明确分离；
 - [x] 动态计划修订有边界；
 - [x] 代码尚未开始；
-- [ ] 用户确认文档基线；
+- [x] 用户确认文档基线；
 - [x] 文档 commit 已推送。
 
 用户确认并推送后，Phase 0 标记 completed，Phase 1 才能开始。
@@ -100,10 +100,19 @@
 
 ### 完成标准
 
-- [ ] contracts 无对 runtime/orchestrator/agents 的依赖；
-- [ ] 所有公共模型有 docstring 和 CONTRACTS 对应项；
-- [ ] contract tests 全部通过；
-- [ ] 文档实现状态更新。
+- [x] contracts 无对 runtime/orchestrator/agents 的依赖；
+- [x] 所有公共模型有 docstring 和 CONTRACTS 对应项；
+- [x] 22 个 contract tests 全部通过；
+- [x] 文档实现状态更新；
+- [x] `ResAgent2` 专属 Conda 环境和 `environment.yml` 已建立。
+
+### 实施记录（2026-08-26）
+
+- 发布包：`resagent2-contracts 0.1.0`；
+- wire schema：`1.0`；
+- 唯一第三方运行依赖：Pydantic 2；
+- 验证命令：`python -m pytest tests/contracts`；
+- Phase 2 未自动开始，避免在确认 Phase 1 前提前扩张抽象。
 
 ## 5. Phase 2：最小共享 Runtime
 

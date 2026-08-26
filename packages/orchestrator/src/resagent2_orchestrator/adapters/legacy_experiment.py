@@ -41,6 +41,9 @@ class LegacyExperimentAdapter:
         workspace = Path(request.workspace.root) if request.workspace else Path.cwd()
         task = models.ReproTask(
             workspace_dir=workspace,
+            external_repo_path=os.environ.get(
+                "REPROAGENT_EXTERNAL_REPO", str(workspace)
+            ),
             experiment_goal=request.goal,
             expected_metrics=list(inputs.expected_metrics),
             expected_artifacts=list(inputs.expected_artifacts),
@@ -48,6 +51,7 @@ class LegacyExperimentAdapter:
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
+            env_name=os.environ.get("REPROAGENT_ENV_NAME", ""),
             parent_run={
                 "module": "resagent",
                 "run_id": request.run_id,

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from resagent2_contracts import (
+    ArtifactCandidate,
     ErrorCode,
     ModuleError,
     ModuleResult,
@@ -71,6 +72,15 @@ class LegacyCodingAdapter:
         status = raw["status"]
         summary = raw.get("summary") or status
         if status == "completed":
+            artifacts = [
+                ArtifactCandidate(
+                    kind="code_change",
+                    path=path,
+                    media_type="text/plain",
+                    summary="changed file",
+                )
+                for path in raw.get("changed_files", [])
+            ]
             return ModuleResult(
                 status=ModuleStatus.COMPLETED,
                 summary=summary,
@@ -79,6 +89,7 @@ class LegacyCodingAdapter:
                     "produced_files": raw.get("produced_files", []),
                     "residual_risks": raw.get("residual_risks", []),
                 },
+                artifacts=artifacts,
             )
         if status == "blocked":
             return ModuleResult(

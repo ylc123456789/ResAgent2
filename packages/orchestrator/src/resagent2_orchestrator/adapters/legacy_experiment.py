@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from resagent2_contracts import (
+    ArtifactCandidate,
     ErrorCode,
     ModuleError,
     ModuleResult,
@@ -81,13 +82,30 @@ class LegacyExperimentAdapter:
         status = raw["status"]
         summary = raw.get("final_summary") or raw.get("summary") or status
         payload = raw.get("structured_result") or raw.get("metrics")
+        evidence = payload.get("evidence_files", []) if isinstance(payload, dict) else []
+        artifacts = [
+            ArtifactCandidate(
+                kind="experiment_result",
+                path=path,
+                media_type="application/json",
+                summary="experiment evidence",
+            )
+            for path in evidence
+            if isinstance(path, str) and not path.startswith("/") and path.endswith(".json")
+        ]
         if status == "completed":
-            return ModuleResult(status=ModuleStatus.COMPLETED, summary=summary, payload=payload)
+            return ModuleResult(
+                status=ModuleStatus.COMPLETED,
+                summary=summary,
+                payload=payload,
+                artifacts=artifacts,
+            )
         if status == "completed_with_failures":
             return ModuleResult(
                 status=ModuleStatus.COMPLETED_WITH_WARNINGS,
                 summary=summary,
                 payload=payload,
+                artifacts=artifacts,
                 warnings=[
                     WarningRecord(
                         code="unverified",

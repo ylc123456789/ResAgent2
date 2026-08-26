@@ -80,12 +80,19 @@ class DeterministicPlanningPort:
                 TaskProposal(
                     id="task_analyze",
                     capability=Capability.SCIENTIFIC_ANALYZE,
-                    goal="Analyze the evidence",
+                    goal=(
+                        "Determine whether the recorded accuracy supports the hypothesis "
+                        "that the method beats a ~0.5 random-chance baseline on the synthetic benchmark."
+                    ),
                     rationale="Form a conclusion from registered artifacts",
                     depends_on=["task_experiment"],
                     required=True,
                     inputs=ScientificAnalyzeInput(
-                        question="Does the evidence support the hypothesis?",
+                        question=(
+                            "The synthetic benchmark has a ~0.5 random-chance baseline. "
+                            "Does the recorded accuracy support the hypothesis that the method "
+                            "improves over baseline?"
+                        ),
                         evidence_artifact_ids=[],
                     ),
                     success_criteria=[

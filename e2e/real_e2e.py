@@ -51,30 +51,30 @@ from resagent2_runtime import OpenAICompatibleClient
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
 TRAIN_PY = """\
-import argparse, json
-import torch, torch.nn as nn, torch.optim as optim
+import argparse
+import json
+import random
 
 
 def train(epochs):
-    torch.manual_seed(0)
-    X = torch.randn(2000, 20)
-    y = (X.sum(dim=1) > 0).float().unsqueeze(1)
-    model = nn.Sequential(nn.Linear(20, 16), nn.ReLU(), nn.Linear(16, 1), nn.Sigmoid())
-    opt = optim.Adam(model.parameters(), lr=0.01)
-    loss = nn.BCELoss()
-    for _ in range(epochs):
-        opt.zero_grad()
-        loss(model(X), y).backward()
-        opt.step()
-    acc = ((model(X) > 0.5).float() == y).float().mean().item()
-    json.dump({"accuracy": round(acc, 4), "epochs": epochs}, open("metrics.json", "w"))
-    print(f"accuracy={acc:.4f}")
+    random.seed(0)
+    total = 2000
+    correct = 0
+    for _ in range(total):
+        features = [random.uniform(-1, 1) for _ in range(20)]
+        label = 1 if sum(features) > 0 else 0
+        prediction = 1 if sum(features) > 0.05 else 0
+        if prediction == label:
+            correct += 1
+    accuracy = correct / total
+    json.dump({"accuracy": round(accuracy, 4), "epochs": epochs}, open("metrics.json", "w"))
+    print(f"accuracy={accuracy:.4f}")
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--epochs", type=int, default=1)
-    train(p.parse_args().epochs)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=1)
+    train(parser.parse_args().epochs)
 """
 
 _EXPECTED_TASK_CAPABILITIES = {

@@ -1,10 +1,9 @@
-"""Real closed-loop test: drive the legacy adapters against the OLD modules.
+"""Real closed-loop test with native Coding and legacy experiment/scientific modules.
 
-Unlike mock_e2e, this calls the real CodingAgent / reproagent / ExpAgent (via
-their in-process Python APIs) and the real DeepSeek LLM. Module roots are
-resolved from CODINGAGENT_PATH / REPROAGENT_PATH / EXPAGENT_PATH (defaulting to
-the AutoDL layout); REPROAGENT_ENV_NAME may point at an existing torch env to
-skip conda env creation.
+Unlike mock_e2e, this calls the Phase 5 native Coding Agent plus the old
+reproagent / ExpAgent through their adapters, using the real DeepSeek LLM.
+REPROAGENT_PATH / EXPAGENT_PATH default to the AutoDL layout;
+REPROAGENT_ENV_NAME may point at an existing torch env to skip env creation.
 
 Stages: ``python -m e2e.real_e2e code|experiment|full``.
 """
@@ -35,6 +34,7 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSource,
 )
+from resagent2_coding import NativeCodingAgent
 from resagent2_orchestrator import (
     DeterministicPlanningPort,
     JsonRunStore,
@@ -42,10 +42,10 @@ from resagent2_orchestrator import (
     WorkflowScheduler,
 )
 from resagent2_orchestrator.adapters import (
-    LegacyCodingAdapter,
     LegacyExperimentAdapter,
     LegacyScientificAnalyzeAdapter,
 )
+from resagent2_runtime import OpenAICompatibleClient
 
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
@@ -82,6 +82,10 @@ _EXPECTED_TASK_CAPABILITIES = {
     Capability.SCIENTIFIC_ANALYZE,
 }
 
+_MODEL = "deepseek-chat"
+_API_BASE = "https://api.deepseek.com/v1"
+_API_KEY_ENV = "DEEPSEEK_API_KEY"
+
 
 def _repo(workdir: Path) -> Path:
     repo = workdir / "repo"
@@ -106,26 +110,18 @@ def _grant(repo: Path) -> WorkspaceGrant:
     )
 
 
-def _tracked_path_changed(repo: Path, path: str) -> bool:
-    """Return whether a tracked path differs from the E2E repository baseline."""
-    result = subprocess.run(
-        ["git", "diff", "--quiet", "--", path],
-        cwd=repo,
-        check=False,
+def _coding_agent() -> NativeCodingAgent:
+    return NativeCodingAgent(
+        OpenAICompatibleClient(
+            model=_MODEL,
+            api_base=_API_BASE,
+            api_key_env=_API_KEY_ENV,
+        )
     )
-    if result.returncode not in {0, 1}:
-        raise RuntimeError(f"git diff failed with exit code {result.returncode}")
-    return result.returncode == 1
 
 
-def _real_e2e_succeeded(run, *, code_workspace_changed: bool) -> bool:
-    """Evaluate Phase 4's legacy E2E using required semantics, not an item count.
-
-    The old CodingAgent can modify ``util.py`` in a failed attempt and then
-    complete a retry with an empty ``changed_files`` list.  In that one legacy
-    case the workspace diff is accepted as code-step evidence.  Experiment and
-    scientific evidence must always be registered, immutable ArtifactRefs.
-    """
+def _real_e2e_succeeded(run) -> bool:
+    """Require completed tasks and task-owned evidence for every golden step."""
     tasks = {task.capability: task for task in run.workflow.tasks}
     if (
         len(run.workflow.tasks) != len(_EXPECTED_TASK_CAPABILITIES)
@@ -151,8 +147,7 @@ def _real_e2e_succeeded(run, *, code_workspace_changed: bool) -> bool:
         return False
     if not has_artifact(Capability.SCIENTIFIC_ANALYZE, "scientific_decision"):
         return False
-
-    return has_artifact(Capability.CODE_MODIFY, "code_change") or code_workspace_changed
+    return has_artifact(Capability.CODE_MODIFY, "code_change")
 
 
 def run_code(workdir: Path) -> ModuleResult:
@@ -170,7 +165,7 @@ def run_code(workdir: Path) -> ModuleResult:
         budget=TaskBudget(max_steps=24, max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
     )
-    return LegacyCodingAdapter().invoke(request)
+    return _coding_agent().invoke(request)
 
 
 def run_experiment(workdir: Path) -> ModuleResult:
@@ -205,7 +200,7 @@ def run_full(workdir: Path) -> bool:
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=LegacyCodingAdapter(),
+                port=_coding_agent(),
                 workspace=_grant(repo),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
@@ -227,17 +222,8 @@ def run_full(workdir: Path) -> bool:
     for task in run.workflow.tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
-    code_workspace_changed = _tracked_path_changed(repo, "util.py")
-    code_artifact_present = any(
-        artifact.kind == "code_change" for artifact in run.artifacts.values()
-    )
-    if not code_artifact_present and code_workspace_changed:
-        print(
-            "code evidence=workspace diff "
-            "(accepted Phase 4 legacy retry limitation; no registered code Artifact)"
-        )
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
-    return _real_e2e_succeeded(run, code_workspace_changed=code_workspace_changed)
+    return _real_e2e_succeeded(run)
 
 
 def main() -> None:

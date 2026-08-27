@@ -2,7 +2,7 @@
 
 三个专业 Agent 共享的运行底座。
 
-当前已实现：
+Phase 4 已实现：
 
 - AgentDefinition；
 - AgentLoop；
@@ -17,7 +17,16 @@
 
 runtime 提供机制，不包含科研、代码修改或实验策略，也不包含 ResAgent Workflow Scheduler。
 
-Phase 2 只提供 `read_value`、`write_value`、`finish`、`ask_user` 四个内存 Tool。Artifact IO、真实 LLM provider、filesystem/process/Git 和持久化数据库尚未实现，等出现对应阶段的真实使用者再增加。
+Phase 5 已增加：
+
+- WorkspaceGrant 驱动的物理路径边界与 symlink containment；
+- list/read/search、create/replace 文件 Tool；
+- `shell=False` 的安全进程执行和命令日志；
+- Git clean/status/diff 观察；
+- 已登记 ArtifactRef 的只读、hash 校验访问；
+- OpenAI-compatible 的最小真实 LLM client。
+
+持久化数据库、环境创建、仓库 materialization 和领域策略仍不属于本阶段 runtime。
 
 ## 关键控制顺序
 

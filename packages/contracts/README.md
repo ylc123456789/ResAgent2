@@ -10,6 +10,7 @@
 - ArtifactRef、ArtifactCandidate；
 - Question/Answer；
 - Capability；
+- CodeUnderstandResult、CodeModifyResult、VerificationResult；
 - 公共 status 和 error code。
 
 本包只表达语义，不执行 LLM、文件、进程、Git 或工作流。它不得依赖 runtime、orchestrator 或任何具体 Agent。

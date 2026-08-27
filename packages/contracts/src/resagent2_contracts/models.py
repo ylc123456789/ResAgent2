@@ -365,6 +365,70 @@ class CodeModifyInput(ContractModel):
         return [_validate_relative_path(value) for value in values]
 
 
+class VerificationResult(ContractModel):
+    """Auditable outcome of one caller-declared verification command."""
+
+    command: NonEmptyStr
+    exit_code: int
+    timed_out: bool = False
+    stdout_path: str
+    stderr_path: str
+    duration_seconds: float = Field(ge=0)
+
+    @field_validator("stdout_path", "stderr_path")
+    @classmethod
+    def validate_log_path(cls, value: str) -> str:
+        return _validate_relative_path(value)
+
+
+class CodeUnderstandResult(ContractModel):
+    """Typed payload returned by the read-only Coding profile."""
+
+    answer: NonEmptyStr
+    evidence_files: list[str] = Field(min_length=1)
+    uncertainty: str = ""
+
+    @field_validator("evidence_files")
+    @classmethod
+    def validate_evidence_paths(cls, values: list[str]) -> list[str]:
+        return [_validate_relative_path(value) for value in values]
+
+
+class CodeModifyResult(ContractModel):
+    """Typed payload derived from Git state and verification evidence."""
+
+    changed_files: list[str]
+    deleted_files: list[str] = Field(default_factory=list)
+    patch_path: str
+    verification_results: list[VerificationResult] = Field(default_factory=list)
+    verification_passed: bool
+    residual_risks: list[NonEmptyStr] = Field(default_factory=list)
+
+    @field_validator("changed_files", "deleted_files")
+    @classmethod
+    def validate_changed_paths(cls, values: list[str]) -> list[str]:
+        return [_validate_relative_path(value) for value in values]
+
+    @field_validator("patch_path")
+    @classmethod
+    def validate_patch_path(cls, value: str) -> str:
+        return _validate_relative_path(value)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> CodeModifyResult:
+        if not self.changed_files and not self.deleted_files:
+            raise ValueError("code modification result requires a workspace change")
+        if set(self.changed_files) & set(self.deleted_files):
+            raise ValueError("a path cannot be both changed and deleted")
+        passed = all(
+            item.exit_code == 0 and not item.timed_out
+            for item in self.verification_results
+        )
+        if self.verification_passed != passed:
+            raise ValueError("verification_passed must match verification_results")
+        return self
+
+
 class ExperimentPrepareInput(ContractModel):
     """Inputs for preparing and auditing an experimental repository."""
 

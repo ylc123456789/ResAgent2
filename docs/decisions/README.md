@@ -15,4 +15,5 @@ ADR 状态：
 
 - `0001-monorepo-and-module-boundaries.md`；
 - `0002-shared-agentic-loop.md`；
-- `0003-llm-planning-deterministic-scheduling.md`。
+- `0003-llm-planning-deterministic-scheduling.md`；
+- `0004-workspace-and-process-boundaries.md`。

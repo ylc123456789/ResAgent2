@@ -22,4 +22,4 @@ agents/*        orchestrator
 - orchestrator 依赖 contracts，通过 Port/Adapter 调用 Agent；
 - orchestrator 不 import Agent 私有模型和内部 state。
 
-当前只建立文档骨架，尚无运行时代码。
+当前 `contracts`、`runtime`、`orchestrator` 均有可安装实现；`agents/coding` 在 Phase 5 提供第一个原生专业 Agent。Scientific 与 Experiment 仍处于 legacy adapter 过渡期。

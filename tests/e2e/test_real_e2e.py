@@ -44,17 +44,16 @@ def test_real_e2e_accepts_registered_artifacts_for_all_three_steps() -> None:
         artifact_kinds={"code_change", "experiment_result", "scientific_decision"}
     )
 
-    assert _real_e2e_succeeded(run, code_workspace_changed=False)
+    assert _real_e2e_succeeded(run)
 
 
-def test_real_e2e_accepts_documented_legacy_code_retry_exception() -> None:
+def test_real_e2e_requires_registered_code_evidence() -> None:
     run = _run(artifact_kinds={"experiment_result", "scientific_decision"})
 
-    assert _real_e2e_succeeded(run, code_workspace_changed=True)
-    assert not _real_e2e_succeeded(run, code_workspace_changed=False)
+    assert not _real_e2e_succeeded(run)
 
 
 def test_real_e2e_never_waives_registered_scientific_evidence() -> None:
     run = _run(artifact_kinds={"experiment_result"})
 
-    assert not _real_e2e_succeeded(run, code_workspace_changed=True)
+    assert not _real_e2e_succeeded(run)

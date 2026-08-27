@@ -287,12 +287,43 @@ Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：stat
 |---|---|---|---|
 | scientific_analyze | ScientificConclusion → 科学闭环/final report | legacy payload 保存到 Attempt；结论另登记 `scientific_decision` Artifact | Phase 7 |
 | literature_search | 有界文献结果 → Scientific Agent | 无 production binding；持久结果必须登记 Artifact | Phase 7 |
-| code_understand | 代码理解结果 → 调用方 | 无 production binding；模型待定义 | Phase 5 |
-| code_modify | 代码变化摘要 → 调用方；代码变化 → ArtifactRef | legacy payload 保存到 Attempt；非空 changed_files 登记 `code_change` Artifact | Phase 5 |
+| code_understand | CodeUnderstandResult → 调用方 | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
+| code_modify | CodeModifyResult → 调用方；代码变化 → ArtifactRef | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
 | experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无 production binding；模型待定义 | Phase 6 |
 | experiment_run | 实验结构化结果 → Scientific Agent；证据 → ArtifactRef | legacy payload 保存到 Attempt；实验结果另登记 `experiment_result` Artifact | Phase 6 |
 
 scientific_plan 和 ask_user 不在表中，因为它们不是 task capability。
+
+### 10.2 Coding Agent vNext payload
+
+```python
+class VerificationResult:
+    command: NonEmptyStr
+    exit_code: int
+    timed_out: bool = False
+    stdout_path: str
+    stderr_path: str
+    duration_seconds: float
+
+class CodeUnderstandResult:
+    answer: NonEmptyStr
+    evidence_files: list[str]
+    uncertainty: str = ""
+
+class CodeModifyResult:
+    changed_files: list[str]
+    deleted_files: list[str] = []
+    patch_path: str
+    verification_results: list[VerificationResult] = []
+    verification_passed: bool
+    residual_risks: list[NonEmptyStr] = []
+```
+
+`CodeUnderstandResult.evidence_files` 至少包含一个实际通过 Coding read/search Tool 观察过的 workspace 相对路径。`CodeModifyResult.changed_files` 包含本 Attempt 新增或内容改变且仍存在的文件；`deleted_files` 单独记录删除；二者不能重叠。`patch_path` 指向 runtime 生成的 Attempt patch。
+
+`verification_passed` 必须等于所有 `VerificationResult` 均为 exit_code 0 且未 timeout。没有声明 verification command 时结果列表为空且该字段为 true，但这只表示“没有失败的声明验证”，不等价于更强的测试充分性声明。
+
+这些类型是既有 `ModuleResult.payload` 扩展点的新命名形状，没有改变任何现有模型字段，因此 wire schema 仍为 `1.0`。Coding Agent 用强类型 finalizer 生成它们；Scheduler 仍只原样持久化，不基于 payload 改状态。
 
 ```python
 class ModuleError:
@@ -444,6 +475,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、CodeUnderstandInput、CodeModifyInput、ExperimentPrepareInput、ExperimentRunInput、AskUserInput、CapabilityInput |
+| Coding payload | VerificationResult、CodeUnderstandResult、CodeModifyResult |
 | 工作流 | SuccessCriterion、TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
 | 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |
@@ -453,7 +485,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 这些是已确认缺口，不是隐含设计：
 
 1. 实现 success_criteria/evidence_key 的正式求值器（方向已裁定：保留可执行语义，求值器留待 Phase 7）；
-2. 在对应 vNext Agent 阶段为每个 capability 定义强类型 ModuleResult payload model 及其领域消费方；Phase 4 legacy dict payload 只作为过渡审计数据；
+2. Experiment/Scientific capability 的强类型 ModuleResult payload model 及其领域消费方仍待对应 vNext 阶段定义；Coding payload 已在 Phase 5 完成；
 3. 在引入下一次字段变化时按 §17 发布新的 schema 版本和迁移说明。
 
 这些工作的阶段、顺序和验收见 `DEVELOPMENT_PLAN.md`。

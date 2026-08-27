@@ -10,5 +10,6 @@ dependencies:
       - -e ./packages/contracts
       - -e ./packages/runtime
       - -e ./packages/orchestrator
+      - -e ./packages/agents/coding
 variables:
   PYTHONNOUSERSITE: "1"

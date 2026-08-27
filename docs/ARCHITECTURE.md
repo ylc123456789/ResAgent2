@@ -2,7 +2,7 @@
 
 **文档角色**：系统概念、职责边界和控制流的最高级事实来源（semantic source of truth）
 
-**当前基线**：contracts、最小 shared runtime、Workflow Core v0.1.0 与 Phase 4 legacy 黄金闭环已实现；Phase 4 已完成
+**当前基线**：contracts、shared runtime、Workflow Core v0.1.0、Phase 4 黄金闭环与 Phase 5 原生 Coding Agent 已实现；Phase 5 已完成
 
 **更新规则**：任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、计划和代码。
 
@@ -251,6 +251,27 @@ sequenceDiagram
 
 只提供模块通用机制：Agentic Loop、LLM client、上下文组合、Tool 分发、权限协议、Session/event 持久化和统一错误映射。领域 prompt、领域 Tool、结果 finalizer 和 Workflow Scheduler 不属于共享 runtime。
 
+Phase 5 开始加入第二类共享机制：`WorkspaceBoundary`、无 shell 的 `ProcessRunner`、只读 Git 观察和已登记 Artifact 的只读访问。这些对象只提供物理边界和可审计执行，不决定“应该改什么代码”或“验证是否足以完成 Coding Task”。Coding 的编辑策略和 finalizer 仍属于 Coding Agent。
+
+### 8.6 Phase 5 Coding 执行边界
+
+原生 Coding Agent 同时拥有 `code_understand` 和 `code_modify` 两个 profile，但复用同一个 AgentLoop：
+
+```text
+ModuleTaskRequest
+  → 校验 capability 与 WorkspaceGrant
+  → 按 profile 注入只读或可写 Tool
+  → AgentLoop 执行动作
+  → Coding finalizer 从 Git 状态和真实命令结果生成 payload/ArtifactCandidate
+  → ModuleResult
+```
+
+`code_understand` 不注入写文件或进程 Tool，并在完成时再次确认 Git 状态未改变。`code_modify` 只允许精确文本替换和新文件创建；写入范围同时受 WorkspaceGrant 与 `CodeModifyInput.allowed_paths` 限制。LLM 不能提交任意 shell 字符串，只能请求执行调用方预先声明的 verification commands；验证前后 Git diff 必须相同，结果还必须绑定最终 diff hash。
+
+Phase 5 原生 Coding Agent 要求已有 Git workspace，不要求干净：finalizer 相对 HEAD 计算变化。若 workspace 预存在未提交改动，会一并计入 code_patch（已知限制；黄金闭环始终从干净仓库开始）。精确隔离预存在改动需要独立的 baseline 契约，不在本阶段实现。
+
+两条已知限制：(1) verification command 在无 OS 沙箱的真实子进程中运行，继承环境变量、可越出 workspace，其安全依赖命令由可信调用方预先声明（不做 OS 级隔离）；(2) finalizer 只判定「存在 Git 变更且验证命令通过」，不判定变更是否满足 instructions——后者由调用方声明的 verification command 承担，命令过弱（如恒真断言）时无法证明目标真正达成。
+
 ## 9. 模块通信规则
 
 专业模块不能直接互调。跨模块只通过：
@@ -360,7 +381,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - validator 拒绝 scientific_plan / ask_user 进入 WorkflowTask；
 - Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
 - PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
-- 三个 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
+- 原生 Coding Agent、Experiment/Scientific 两个剩余 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
 - runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
 - 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
 - fake ModulePort 的确定性测试。
@@ -372,9 +393,11 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - success criteria 求值；
 - 最终科学闭环 gate 和 final summary；
 - 真实 filesystem/process/Git Tools；
-- 三个 vNext 专业 Agent。
+- Experiment 与 Scientific 两个 vNext 专业 Agent。
 
-Phase 4 的真实闭环存在一项有界兼容限制：旧 CodingAgent 可能在失败 Attempt 中已经修改工作区，随后成功 retry 却返回空 `changed_files`，因此该次 Run 可能没有 `code_change` Artifact。Phase 4 的真实 E2E 只在 code Task 最终 completed、目标文件相对 Git 基线确实改变、实验结果和科学结论均已登记为 ArtifactRef 时接受该例外。它只适用于待删除的 legacy adapter，不改变“原生 Coding Agent 应交付 code Artifact”的架构要求。
+Coding Agent vNext 已通过 deterministic tests、orchestrator Artifact E2E 和服务器真实闭环；当前 Coding 路径不再使用 legacy adapter。
+
+历史说明：Phase 4 的旧 CodingAgent 曾允许“失败 Attempt 已改工作区、成功 retry 却缺少 `code_change` Artifact”的有界兼容例外。Phase 5 删除 legacy Coding adapter 后该例外不再属于当前执行路径；原生 Coding Task 必须登记 `code_patch` 和至少一个当前文件 `code_change` Artifact。
 
 具体阶段和验收状态只见 `DEVELOPMENT_PLAN.md`；字段定义只见 `CONTRACTS.md`。
 

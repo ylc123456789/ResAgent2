@@ -1,27 +1,8 @@
 from resagent2_contracts import ModuleStatus
 from resagent2_orchestrator.adapters import (
-    LegacyCodingAdapter,
     LegacyExperimentAdapter,
     LegacyScientificAnalyzeAdapter,
 )
-
-
-def test_coding_adapter_maps_patch_report_statuses() -> None:
-    completed = LegacyCodingAdapter.from_result(
-        {"status": "completed", "summary": "ok", "changed_files": ["method.py"]}
-    )
-    assert completed.status == ModuleStatus.COMPLETED
-    assert completed.payload["changed_files"] == ["method.py"]
-
-    assert LegacyCodingAdapter.from_result({"status": "blocked", "summary": "env"}).status == (
-        ModuleStatus.BLOCKED
-    )
-    assert LegacyCodingAdapter.from_result({"status": "failed", "summary": "x"}).status == (
-        ModuleStatus.FAILED
-    )
-    assert LegacyCodingAdapter.from_result(
-        {"status": "needs_user_input", "summary": "clarify"}
-    ).status == ModuleStatus.NEEDS_USER_INPUT
 
 
 def test_experiment_adapter_maps_agent_state_statuses() -> None:

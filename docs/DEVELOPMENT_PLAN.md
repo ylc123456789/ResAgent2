@@ -33,12 +33,12 @@
 | Phase 2 | 最小 shared runtime / Agentic Loop | completed |
 | Phase 3 | ResAgent Workflow Core 与语义对齐 | completed |
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
-| Phase 5 | Coding Agent vNext | not_started |
+| Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | not_started |
 | Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3 已重新验收完成。Phase 4 已完成：Planning Port、三个 legacy adapter、runtime resume、payload 持久化、mock E2E 和服务器真实短闭环均已落地并完成 hardening。Phase 5 尚未开始。
+Phase 3、Phase 4 与 Phase 5 已完成。原生 Coding Agent 已替换 legacy Coding adapter，并在服务器真实闭环中登记 patch、代码、实验和科学结论四类证据。Phase 6 尚未开始。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -266,6 +266,8 @@ ResearchRequest
 - command logs；
 - ArtifactCandidate 输出辅助。
 
+本阶段只抽取已能被 Coding 使用、并且语义上可被 Experiment 复用的机制。runtime 不包含 Coding prompt、编辑完成条件或代码 Artifact 选择策略。
+
 ### Coding 专有能力
 
 - Coding context/prompt；
@@ -274,14 +276,32 @@ ResearchRequest
 - changed/untracked file finalizer；
 - verification policy。
 
+### 已裁定的执行语义
+
+- `code_understand` 是物理只读 profile：不提供写 Tool 或进程 Tool，完成时再次检查 Git 未变化；
+- `code_modify` 要求 WorkspaceGrant 为 read_write，且 workspace 是已有 Git 仓库（不要求干净；预存在改动会一并计入 patch）；
+- 文件读取受 WorkspaceGrant 的 allowed/denied paths 限制，写入还要同时满足 `CodeModifyInput.allowed_paths`；
+- `.git` 与 `.resagent2` 是 runtime 保留目录，LLM 文件 Tool 不可访问；
+- verification command 由调用方在 `CodeModifyInput.verification_commands` 中声明，LLM 只能请求运行整组命令；
+- command 使用 `shlex` 解析为 argv 并以 `shell=False` 执行；管道、重定向、命令替换和复合命令直接拒绝；
+- 每次文件变化递增 edit revision；verification 前后 Git diff 必须一致，且只有绑定最新 diff hash、全部通过的结果才能支持 completed；
+- changed/new/deleted files、patch 和验证结果由 deterministic finalizer 从 Git 与进程结果生成，不信任 finish 文本；
+- 输入 Artifact 只能通过 artifact id 读取，读取前校验 file URI、文件存在性和 sha256；
+- 原生 Coding payload 使用 `CodeUnderstandResult` / `CodeModifyResult`，跨 Task 仍只传播 ArtifactRef；
+- 脏工作区、非 Git workspace、任意 shell、包管理和仓库 materialization 不在 Phase 5 范围。
+
 ### 完成标准
 
-- [ ] read-only 任务不写文件；
-- [ ] 路径、symlink 和复合命令不能绕过权限；
-- [ ] 新文件进入 code Artifact；
-- [ ] verification 失败影响 ModuleStatus；
-- [ ] 通过旧 CodingAgent 黄金用例；
-- [ ] Legacy Coding Adapter 可删除。
+- [x] read-only 任务不写文件；
+- [x] 路径、symlink 和复合命令不能绕过权限；
+- [x] 新文件进入 code Artifact；
+- [x] verification 失败影响 ModuleStatus，且验证期间改变 Git diff 也不得完成；
+- [x] 通过旧 CodingAgent 的 docstring + verification 黄金用例；
+- [x] orchestrator 可登记原生 Coding Agent 的 `code_patch` / `code_change` Artifact；
+- [x] 服务器真实 `code → experiment → analyze` 闭环通过，三个 Task completed、四个 Artifact 冻结、退出码为 0；
+- [x] Legacy Coding Adapter 已删除。
+
+Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 E2E 已恢复严格 code Artifact 要求。
 
 ## 9. Phase 6：Experiment Agent vNext
 
@@ -391,3 +411,4 @@ ResearchRequest
 | 2026-08-26 | Phase 3 v0.1.0 | `d4e23b0` | 当时全仓 50 tests | 后因文档/语义冲突重开 |
 | 2026-08-26 | Phase 3 对齐与收尾 | completed | 全仓测试、Conda package check、文档交叉检查 | 控制面边界、questions、Artifact 传播、payload 策略和 finish gate 已对齐 |
 | 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |
+| 2026-08-27 | Phase 5 Coding Agent vNext | completed（未提交工作树） | 本地/服务器 92 tests；服务器真实闭环 4 Artifacts | 原生 Coding、shared workspace/process/Git/Artifact、legacy Coding adapter 删除 |

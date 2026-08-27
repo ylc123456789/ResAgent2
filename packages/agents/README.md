@@ -9,3 +9,5 @@ experiment = 实验员/操作员
 ```
 
 子 Agent 之间禁止直接调用。跨模块需求通过 ModuleResult 返回给 orchestrator，由 Workflow 创建或调度新的 Task。
+
+当前实现状态：Coding Agent vNext 已完成；Scientific 和 Experiment 尚未原生实现。

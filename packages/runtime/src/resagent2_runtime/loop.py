@@ -30,6 +30,7 @@ from .models import (
     ContextSection,
     FinishCandidate,
     PermissionDecision,
+    ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
 from .tools import Tool, ToolNotFoundError, ToolRegistry
@@ -325,6 +326,14 @@ class AgentLoop:
                     f"unknown tool: {action.tool}",
                     retryable=True,
                 )
+            except PermissionError as error:
+                return self._failure(
+                    state,
+                    ErrorCode.PERMISSION_DENIED,
+                    str(error) or "Tool execution denied",
+                    retryable=False,
+                    details={"tool": action.tool},
+                )
             except Exception as error:
                 return self._failure(
                     state,
@@ -405,6 +414,19 @@ class AgentLoop:
                     warnings=decision.warnings,
                     session=self._session_ref(state),
                 )
+            if decision.summary:
+                feedback = ToolObservation(
+                    summary=decision.summary,
+                    value={"completion_check": "rejected"},
+                )
+                state.last_observation = feedback
+                self._append_event(
+                    state,
+                    event_type="observation",
+                    tool="completion_check",
+                    data=feedback.model_dump(mode="json"),
+                )
+                self._save(state)
 
         return self._failure(
             state,

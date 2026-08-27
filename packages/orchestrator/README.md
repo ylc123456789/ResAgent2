@@ -28,7 +28,7 @@ ResAgent2 的顶层控制模块。
 - finish gate；
 - 内存 RunStore 和原子 JSON RunStore。
 
-当前 ModulePort 只有 ScriptedModulePort 测试实现，不调用 LLM 或三个真实 Agent。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+当前 ModulePort 可以注入原生 Coding Agent；orchestrator 自身仍不 import 具体 Agent。Phase 4 的 Experiment/Scientific legacy adapters 继续作为过渡实现，Coding legacy adapter 已在 Phase 5 删除。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
 ## 最小使用方式
 

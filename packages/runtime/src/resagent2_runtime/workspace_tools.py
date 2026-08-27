@@ -1,0 +1,375 @@
+"""Typed filesystem, Artifact, Git, and verification Tools."""
+
+from __future__ import annotations
+
+import mimetypes
+import hashlib
+import os
+import tempfile
+from pathlib import Path
+from typing import cast
+
+from pydantic import BaseModel, Field
+
+from .artifacts import RegisteredArtifactReader
+from .git import GitWorkspace
+from .models import AgentState, NonEmptyStr, RuntimeModel, ToolObservation
+from .process import ProcessRunner
+from .workspace import WorkspaceBoundary
+
+
+def _remember(state: AgentState, key: str, value: str) -> list[str]:
+    current = state.memory.get(key, [])
+    values = list(current) if isinstance(current, list) else []
+    if value not in values:
+        values.append(value)
+    return values
+
+
+class ListFilesInput(RuntimeModel):
+    """Bounded workspace listing request."""
+
+    path: str = "."
+    max_files: int = Field(default=200, ge=1, le=2000)
+
+
+class ListFilesTool:
+    """List readable files without following escaping symlinks."""
+
+    name = "list_files"
+    input_model = ListFilesInput
+
+    def __init__(self, boundary: WorkspaceBoundary) -> None:
+        self.boundary = boundary
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(ListFilesInput, arguments)
+        files = self.boundary.iter_files(args.path)
+        truncated = len(files) > args.max_files
+        return ToolObservation(
+            summary=f"Listed {min(len(files), args.max_files)} workspace files",
+            value={"paths": files[: args.max_files], "truncated": truncated},
+        )
+
+
+class ReadFileInput(RuntimeModel):
+    """Read one optional line range from a workspace file."""
+
+    path: NonEmptyStr
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+
+
+class ReadFileTool:
+    """Read text through a WorkspaceBoundary."""
+
+    name = "read_file"
+    input_model = ReadFileInput
+
+    def __init__(
+        self,
+        boundary: WorkspaceBoundary,
+        *,
+        max_chars: int = 8_000,
+        max_bytes: int = 1_000_000,
+    ) -> None:
+        self.boundary = boundary
+        self.max_chars = max_chars
+        self.max_bytes = max_bytes
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(ReadFileInput, arguments)
+        if args.start_line and args.end_line and args.end_line < args.start_line:
+            raise ValueError("end_line must be greater than or equal to start_line")
+        path = self.boundary.resolve_read_file(args.path)
+        if path.stat().st_size > self.max_bytes:
+            raise ValueError(f"file is too large to read: {path.stat().st_size} bytes")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines(keepends=True)
+        start = (args.start_line or 1) - 1
+        end = args.end_line or len(lines)
+        selected = "".join(lines[start:end])
+        truncated = len(selected) > self.max_chars
+        if truncated:
+            selected = selected[: self.max_chars]
+        return ToolObservation(
+            summary=f"Read {args.path}",
+            value={"path": args.path, "content": selected, "truncated": truncated},
+            memory_updates={"read_paths": _remember(state, "read_paths", args.path)},
+        )
+
+
+class SearchTextInput(RuntimeModel):
+    """Case-insensitive bounded text search request."""
+
+    query: NonEmptyStr
+    path: str = "."
+    max_results: int = Field(default=20, ge=1, le=50)
+
+
+class SearchTextTool:
+    """Search readable text files without invoking a process."""
+
+    name = "search_text"
+    input_model = SearchTextInput
+
+    def __init__(self, boundary: WorkspaceBoundary) -> None:
+        self.boundary = boundary
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(SearchTextInput, arguments)
+        matches: list[dict] = []
+        observed: list[str] = []
+        for relative in self.boundary.iter_files(args.path):
+            path = self.boundary.resolve_read_file(relative)
+            if path.stat().st_size > 1_000_000:
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            file_matched = False
+            for number, line in enumerate(lines, start=1):
+                if args.query.lower() not in line.lower():
+                    continue
+                matches.append({"path": relative, "line": number, "text": line[:200]})
+                file_matched = True
+                if len(matches) >= args.max_results:
+                    break
+            if file_matched:
+                observed.append(relative)
+            if len(matches) >= args.max_results:
+                break
+        read_paths = list(state.memory.get("read_paths", []))
+        for relative in observed:
+            if relative not in read_paths:
+                read_paths.append(relative)
+        return ToolObservation(
+            summary=f"Found {len(matches)} matches for {args.query!r}",
+            value={"matches": matches, "truncated": len(matches) >= args.max_results},
+            memory_updates={"read_paths": read_paths},
+        )
+
+
+class ReadArtifactInput(RuntimeModel):
+    """Identify one registered ArtifactRef by id."""
+
+    artifact_id: NonEmptyStr
+
+
+class ReadArtifactTool:
+    """Read a provided ArtifactRef after integrity verification."""
+
+    name = "read_artifact"
+    input_model = ReadArtifactInput
+
+    def __init__(self, reader: RegisteredArtifactReader) -> None:
+        self.reader = reader
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(ReadArtifactInput, arguments)
+        value = self.reader.read_text(args.artifact_id)
+        return ToolObservation(
+            summary=f"Read registered Artifact {args.artifact_id}",
+            value=value,
+            memory_updates={
+                "read_artifact_ids": _remember(
+                    state,
+                    "read_artifact_ids",
+                    args.artifact_id,
+                )
+            },
+        )
+
+
+class CreateFileInput(RuntimeModel):
+    """Create one new UTF-8 workspace file."""
+
+    path: NonEmptyStr
+    content: str
+
+
+class CreateFileTool:
+    """Create a file only when its target does not exist."""
+
+    name = "create_file"
+    input_model = CreateFileInput
+
+    def __init__(self, boundary: WorkspaceBoundary) -> None:
+        self.boundary = boundary
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(CreateFileInput, arguments)
+        path = self.boundary.resolve_write_file(args.path, must_be_new=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(args.content)
+        revision = int(state.memory.get("edit_revision", 0)) + 1
+        return ToolObservation(
+            summary=f"Created {args.path}",
+            value={"path": args.path, "bytes": len(args.content.encode("utf-8"))},
+            memory_updates={"edit_revision": revision},
+        )
+
+
+class ReplaceTextInput(RuntimeModel):
+    """Replace one exact text occurrence in an existing file."""
+
+    path: NonEmptyStr
+    old_text: NonEmptyStr
+    new_text: str
+
+
+class ReplaceTextTool:
+    """Atomically apply an exactly-once text replacement."""
+
+    name = "replace_text"
+    input_model = ReplaceTextInput
+
+    def __init__(self, boundary: WorkspaceBoundary, *, max_bytes: int = 1_000_000) -> None:
+        self.boundary = boundary
+        self.max_bytes = max_bytes
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(ReplaceTextInput, arguments)
+        path = self.boundary.resolve_write_file(args.path)
+        if path.stat().st_size > self.max_bytes:
+            raise ValueError(f"file is too large to edit: {path.stat().st_size} bytes")
+        text = path.read_text(encoding="utf-8")
+        count = text.count(args.old_text)
+        if count != 1:
+            raise ValueError(f"old_text must match exactly once; found {count}")
+        updated = text.replace(args.old_text, args.new_text, 1)
+        if updated == text:
+            raise ValueError("replacement does not change the file")
+        mode = path.stat().st_mode
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                delete=False,
+            ) as handle:
+                handle.write(updated)
+                temporary = Path(handle.name)
+            os.chmod(temporary, mode)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+        revision = int(state.memory.get("edit_revision", 0)) + 1
+        return ToolObservation(
+            summary=f"Replaced one exact match in {args.path}",
+            value={"path": args.path},
+            memory_updates={"edit_revision": revision},
+        )
+
+
+class RunVerificationInput(RuntimeModel):
+    """Empty request that runs the complete declared verification set."""
+
+    pass
+
+
+class RunVerificationTool:
+    """Run caller-declared commands and bind results to the edit revision."""
+
+    name = "run_verification"
+    input_model = RunVerificationInput
+
+    def __init__(
+        self,
+        runner: ProcessRunner,
+        repository: GitWorkspace,
+        commands: list[str],
+        *,
+        log_root: str,
+        timeout_seconds: int,
+    ) -> None:
+        self.runner = runner
+        self.repository = repository
+        self.commands = commands
+        self.log_root = log_root
+        self.timeout_seconds = timeout_seconds
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        revision = int(state.memory.get("edit_revision", 0))
+        before_digest = hashlib.sha256(
+            self.repository.diff().encode("utf-8")
+        ).hexdigest()
+        results = [
+            self.runner.run(
+                command,
+                log_dir=f"{self.log_root}/revision_{revision}",
+                index=index,
+                timeout_seconds=self.timeout_seconds,
+            )
+            for index, command in enumerate(self.commands, start=1)
+        ]
+        after_digest = hashlib.sha256(
+            self.repository.diff().encode("utf-8")
+        ).hexdigest()
+        workspace_unchanged = before_digest == after_digest
+        payload = [result.model_dump(mode="json") for result in results]
+        passed = workspace_unchanged and all(
+            result.exit_code == 0 and not result.timed_out for result in results
+        )
+        observations = [
+            {
+                **result.model_dump(mode="json"),
+                "stdout_tail": (
+                    self.runner.boundary.root / result.stdout_path
+                ).read_text(encoding="utf-8", errors="replace")[-2_000:],
+                "stderr_tail": (
+                    self.runner.boundary.root / result.stderr_path
+                ).read_text(encoding="utf-8", errors="replace")[-2_000:],
+            }
+            for result in results
+        ]
+        return ToolObservation(
+            summary=(
+                f"Verification {'passed' if passed else 'failed'} at revision {revision}; "
+                f"workspace_unchanged={workspace_unchanged}"
+            ),
+            value={
+                "passed": passed,
+                "workspace_unchanged": workspace_unchanged,
+                "results": observations,
+            },
+            memory_updates={
+                "verification_revision": revision,
+                "verification_results": payload,
+                "verification_diff_sha256": after_digest,
+                "verification_workspace_unchanged": workspace_unchanged,
+            },
+        )
+
+
+class GitDiffInput(RuntimeModel):
+    """Bound the Git diff returned to the Agent context."""
+
+    max_chars: int = Field(default=8_000, ge=1, le=20_000)
+
+
+class GitDiffTool:
+    """Expose the current read-only Git patch observation."""
+
+    name = "git_diff"
+    input_model = GitDiffInput
+
+    def __init__(self, repository: GitWorkspace) -> None:
+        self.repository = repository
+
+    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(GitDiffInput, arguments)
+        diff = self.repository.diff()
+        truncated = len(diff) > args.max_chars
+        return ToolObservation(
+            summary="Read current Git diff",
+            value={"diff": diff[: args.max_chars], "truncated": truncated},
+        )
+
+
+def media_type_for(path: str) -> str:
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"

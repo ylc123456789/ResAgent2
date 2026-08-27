@@ -9,7 +9,7 @@ tests/
   contracts/       schema、ID、状态和字段不变量
   runtime/         AgentLoop、Tool、权限、Context、持久化
   orchestrator/    DAG、Task/Attempt、retry、Ask User、finish gate
-  agents/          三个 Agent 的领域行为
+  coding/          Phase 5 Coding Agent 的领域行为和包边界
   integration/     Port/Adapter 和 Artifact 传递
   e2e/             黄金科研闭环
 ```

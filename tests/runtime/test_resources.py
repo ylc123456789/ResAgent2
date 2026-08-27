@@ -88,6 +88,75 @@ def test_materialize_copy_into_preexisting_empty_dir(tmp_path) -> None:
     assert materialized.source == "copy_from"
 
 
+def test_copy_from_cannot_reuse_workspace_from_other_source(tmp_path) -> None:
+    source_a = tmp_path / "source_a"
+    source_b = tmp_path / "source_b"
+    _init_repo(source_a)
+    _init_repo(source_b)
+    workspace = tmp_path / "work"
+    RepoMaterializer().materialize(workspace=workspace, copy_from=str(source_a))
+
+    with pytest.raises(RepoMaterializerError, match="does not match"):
+        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source_b))
+
+
+def test_missing_metadata_cannot_pretend_source_match(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_repo(source)
+    workspace = tmp_path / "work"
+    _init_repo(workspace)  # a git repo, but no materialization metadata
+
+    with pytest.raises(RepoMaterializerError, match="metadata"):
+        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+
+
+def test_corrupt_metadata_cannot_pretend_source_match(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_repo(source)
+    workspace = tmp_path / "work"
+    _init_repo(workspace)
+    (workspace / ".resagent2").mkdir()
+    (workspace / ".resagent2" / "materialized_source.json").write_text(
+        "not json", encoding="utf-8"
+    )
+
+    with pytest.raises(RepoMaterializerError, match="metadata"):
+        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+
+
+def test_source_mismatch_is_a_structured_error(tmp_path) -> None:
+    source = tmp_path / "source"
+    _init_repo(source)
+    workspace = tmp_path / "work"
+    RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+
+    try:
+        RepoMaterializer().materialize(
+            workspace=workspace, repo_url="https://example.com/other.git"
+        )
+    except RepoMaterializerError as error:
+        assert "not" in str(error)
+    else:
+        raise AssertionError("expected RepoMaterializerError on source mismatch")
+
+
+def test_materialized_commit_matches_actual_repo(tmp_path) -> None:
+    source = tmp_path / "source"
+    commit = _init_repo(source)
+    materialized = RepoMaterializer().materialize(
+        workspace=tmp_path / "work", copy_from=str(source)
+    )
+
+    actual = subprocess.run(
+        ["git", "-C", str(materialized.repo_path), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+
+    assert materialized.commit == commit == actual
+
+
 def test_materialize_binds_external_repo_in_place(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)

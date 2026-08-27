@@ -19,7 +19,8 @@ from resagent2_runtime import (
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 # Deterministic command classification: never derived from an LLM stage hint.
-# Only executables that cannot run arbitrary code may be "setup" (pre-audit).
+# This is a WORKFLOW classification (provisioning vs experiment), not a security
+# boundary: "setup" commands may still execute build code or cause side effects.
 _SETUP_EXECUTABLES = {
     "pip", "pip3", "apt", "apt-get",
     "ls", "find", "rg", "grep", "sed", "cat", "head", "tail", "wc",
@@ -49,7 +50,7 @@ def classify_command(command: str) -> str:
             return "setup"
         return "experiment"
     if executable in _PACKAGE_MANAGERS:
-        # `conda run` / `poetry run` / `uv run` execute arbitrary code; only the
+        # `conda run` / `poetry run` / `uv run` run the actual experiment; only the
         # package-management subcommands are provisioning (setup).
         if len(argv) >= 2 and argv[1].lower() == "run":
             return "experiment"
@@ -135,6 +136,14 @@ class RunCommandTool:
             extra_env=self.extra_env,
         )
         memory_updates: dict = {"command_count": index}
+        if (
+            classify_command(args.command) == "experiment"
+            and result.exit_code == 0
+            and not result.timed_out
+        ):
+            memory_updates["experiment_success_count"] = (
+                int(state.memory.get("experiment_success_count", 0)) + 1
+            )
         if mutates_environment(args.command) and result.exit_code == 0:
             memory_updates["env_certified"] = False
         return ToolObservation(

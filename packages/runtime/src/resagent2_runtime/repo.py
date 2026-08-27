@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ class MaterializedRepo:
     repo_path: Path
     commit: str
     source: str
+
+
+_METADATA_FILENAME = ".resagent2/materialized_source.json"
 
 
 def _git_commit(repo_path: Path) -> str:
@@ -48,11 +52,47 @@ def _has_content(path: Path) -> bool:
         return True
 
 
+def _normalize_source(source: str) -> str:
+    """Normalize a repo URL or local path for source-identity comparison."""
+    value = (source or "").strip().rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+    if value and "://" not in value:
+        value = str(Path(value).expanduser().resolve())
+    return value
+
+
+def _metadata_path(workspace: Path) -> Path:
+    return workspace / _METADATA_FILENAME
+
+
+def _read_metadata(workspace: Path) -> dict | None:
+    path = _metadata_path(workspace)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_metadata(workspace: Path, source_type: str, source: str, commit: str) -> None:
+    path = _metadata_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"source_type": source_type, "source": source, "commit": commit}),
+        encoding="utf-8",
+    )
+
+
 class RepoMaterializer:
     """Resolve exactly one of repo_url, copy_from, or external_repo_path.
 
     ``workspace`` is the directory that becomes (or already is) the repository
-    root, so a materialized repo can be observed by a single WorkspaceBoundary.
+    root. For clone/copy sources a small runtime metadata file records which
+    source materialized the workspace, so a retry verifies it is reusing the
+    same repository rather than silently adopting a leftover from another one.
     """
 
     def __init__(self, *, clone_timeout_seconds: int = 300) -> None:
@@ -89,8 +129,31 @@ class RepoMaterializer:
             return self._bind(external_repo_path)
         return self._resume(workspace)
 
+    def _verify_source(
+        self, workspace: Path, expected_type: str, expected_source: str
+    ) -> None:
+        metadata = _read_metadata(workspace)
+        if metadata is None:
+            raise RepoMaterializerError(
+                f"workspace at {workspace} has no materialization metadata; "
+                f"cannot verify it came from {expected_source!r}"
+            )
+        actual_type = metadata.get("source_type")
+        if actual_type != expected_type:
+            raise RepoMaterializerError(
+                f"workspace was materialized as {actual_type!r}, not {expected_type!r}"
+            )
+        if _normalize_source(metadata.get("source", "")) != _normalize_source(
+            expected_source
+        ):
+            raise RepoMaterializerError(
+                f"workspace source {metadata.get('source')!r} does not match "
+                f"requested {expected_source!r}"
+            )
+
     def _clone(self, workspace: Path, repo_url: str) -> MaterializedRepo:
-        if _is_git_repo(workspace) and _origin_matches(workspace, repo_url):
+        if _is_git_repo(workspace):
+            self._verify_source(workspace, "repo_url", repo_url)
             return MaterializedRepo(workspace, _git_commit(workspace), "repo_url")
         if _has_content(workspace):
             raise RepoMaterializerError(
@@ -107,14 +170,16 @@ class RepoMaterializer:
             raise RepoMaterializerError(
                 f"git clone failed: {(result.stderr or '').strip() or 'unknown error'}"
             )
-        return MaterializedRepo(workspace, _git_commit(workspace), "repo_url")
+        commit = _git_commit(workspace)
+        _write_metadata(workspace, "repo_url", repo_url, commit)
+        return MaterializedRepo(workspace, commit, "repo_url")
 
     def _copy(self, workspace: Path, source: str) -> MaterializedRepo:
         src = Path(source).expanduser()
         if not _is_git_repo(src):
             raise RepoMaterializerError(f"copy_from is not a usable git worktree: {src}")
         if _is_git_repo(workspace):
-            # Resume/retry: the copy already exists, reuse it.
+            self._verify_source(workspace, "copy_from", source)
             return MaterializedRepo(workspace, _git_commit(workspace), "copy_from")
         if _has_content(workspace):
             raise RepoMaterializerError(
@@ -124,7 +189,9 @@ class RepoMaterializer:
             workspace.rmdir()  # shutil.copytree requires a non-existent destination
         workspace.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(str(src), str(workspace), symlinks=True)
-        return MaterializedRepo(workspace, _git_commit(workspace), "copy_from")
+        commit = _git_commit(workspace)
+        _write_metadata(workspace, "copy_from", source, commit)
+        return MaterializedRepo(workspace, commit, "copy_from")
 
     def _bind(self, source: str) -> MaterializedRepo:
         repo = Path(source).expanduser().resolve()
@@ -141,25 +208,3 @@ class RepoMaterializer:
                 f"{workspace}; provide repo_url, copy_from, or external_repo_path"
             )
         return MaterializedRepo(workspace, _git_commit(workspace), "")
-
-
-def _origin_matches(repo_path: Path, repo_url: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_path), "remote", "get-url", "origin"],
-            text=True,
-            capture_output=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and _normalize_url(result.stdout) == _normalize_url(
-        repo_url
-    )
-
-
-def _normalize_url(url: str) -> str:
-    normalized = url.strip().rstrip("/")
-    if normalized.endswith(".git"):
-        normalized = normalized[:-4]
-    return normalized

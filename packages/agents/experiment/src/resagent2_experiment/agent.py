@@ -45,7 +45,7 @@ from resagent2_runtime import (
     resource_root,
 )
 
-from .completion import ExperimentCompletionCheck
+from .completion import ExperimentCompletionCheck, snapshot_workspace
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
 from .tools import AuditEnvTool, RunCommandTool
@@ -187,6 +187,8 @@ class NativeExperimentAgent:
             "hardware": HardwareAudit().text(),
             "command_count": 0,
             "env_certified": False,
+            "experiment_success_count": 0,
+            "workspace_baseline": snapshot_workspace(boundary),
         }
         return self.loop.run(
             definition,

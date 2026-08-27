@@ -361,6 +361,12 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 - [x] 通过旧 reproagent 的 delivery validation 黄金用例；
 - [x] Legacy Experiment Adapter 可删除。
 
+### 收尾补强（2026-08-28）
+
+- [x] Attempt 证据归属：finalizer 要求至少一次 experiment command 成功，evidence 文件相对本 Attempt 基线（workspace 文件 hash 快照）新建或内容变化，预存未变文件不登记为本 Attempt Artifact；
+- [x] RepoMaterializer source identity：clone/copy 写运行时 metadata 文件（source type + 规范化 source），复用前校验一致，source 不匹配返回 `RepoMaterializerError` 而非静默复用；
+- [x] 已知限制已记录：certification/confirmation 不是安全沙箱（`audit_env` 是正确性检查、`confirm_before_experiment` 只问正式命令、setup 命令可能有副作用、setup/experiment 是工作流分类），见 ARCHITECTURE §8.7 与 ADR-0005。
+
 ## 10. Phase 7：Scientific Agent vNext 与科学闭环
 
 ### 目标

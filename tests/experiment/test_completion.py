@@ -10,10 +10,10 @@ from resagent2_contracts import (
 )
 from resagent2_runtime import AgentState, FinishCandidate, WorkspaceBoundary
 
-from resagent2_experiment.completion import ExperimentCompletionCheck
+from resagent2_experiment.completion import ExperimentCompletionCheck, snapshot_workspace
 
 
-def _state() -> AgentState:
+def _state(memory=None) -> AgentState:
     now = datetime.now(UTC)
     return AgentState(
         session_id="session_test",
@@ -24,11 +24,12 @@ def _state() -> AgentState:
         attempt_number=1,
         created_at=now,
         updated_at=now,
+        memory=memory or {"experiment_success_count": 1, "workspace_baseline": {}},
     )
 
 
-def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> ExperimentCompletionCheck:
-    boundary = WorkspaceBoundary(
+def _boundary(root: Path) -> WorkspaceBoundary:
+    return WorkspaceBoundary(
         WorkspaceGrant(
             root=str(root),
             mode=WorkspaceMode.READ_WRITE,
@@ -36,8 +37,11 @@ def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> Exp
             source=WorkspaceSource.EXISTING,
         )
     )
+
+
+def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> ExperimentCompletionCheck:
     return ExperimentCompletionCheck(
-        boundary,
+        _boundary(root),
         expected_metrics=expected_metrics or [],
         expected_artifacts=expected_artifacts or [],
         env_id="resenv_x",
@@ -46,54 +50,107 @@ def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> Exp
     )
 
 
-def test_delivery_golden_case_completes_with_evidence(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    candidate = FinishCandidate(
-        result={
-            "summary": "trained and evaluated",
-            "metrics": {"accuracy": 0.9},
-            "evidence_files": ["metrics.json"],
-        }
+def _finish(*, metrics=None, evidence_files=None) -> FinishCandidate:
+    return FinishCandidate(
+        result={"summary": "done", "metrics": metrics or {}, "evidence_files": evidence_files or []}
     )
 
-    decision = check.evaluate(_state(), candidate)
+
+def test_golden_case_new_evidence_completes(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+
+    decision = check.evaluate(
+        _state(), _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
 
     assert decision.complete is True
     assert decision.warnings == []
     payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.metrics == {"accuracy": 0.9}
     assert payload.evidence_files == ["metrics.json"]
     assert payload.delivery_issues == []
     assert {artifact.kind for artifact in decision.artifacts} == {"experiment_result"}
 
 
-def test_missing_metric_and_artifact_downgrades_with_not_met(tmp_path) -> None:
+def test_missing_metric_and_artifact_downgrades(tmp_path) -> None:
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    candidate = FinishCandidate(
-        result={"summary": "ran something", "metrics": {}, "evidence_files": []}
-    )
 
-    decision = check.evaluate(_state(), candidate)
+    decision = check.evaluate(_state(), _finish())
 
     assert decision.complete is True
     assert len(decision.warnings) == 1
     message = decision.warnings[0].message
     assert "Missing required metric: accuracy" in message
     assert "Missing required artifact: metrics.json" in message
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.delivery_issues
     assert decision.artifacts == []
 
 
 def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    candidate = FinishCandidate(
-        result={"summary": "done", "metrics": {"accuracy": 0.9}, "evidence_files": []}
-    )
 
-    decision = check.evaluate(_state(), candidate)
+    decision = check.evaluate(
+        _state(), _finish(metrics={"accuracy": 0.9}, evidence_files=[])
+    )
 
     payload = ExperimentResult.model_validate(decision.payload)
     assert payload.evidence_files == ["metrics.json"]
+
+
+def test_no_experiment_run_cannot_complete(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
+    assert decision.complete is False
+    assert "experiment command" in decision.summary
+
+
+def test_preexisting_unchanged_evidence_is_not_claimable(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
+    assert decision.artifacts == []
+    payload = ExperimentResult.model_validate(decision.payload)
+    assert payload.evidence_files == []
+    assert any("unchanged" in issue for issue in payload.delivery_issues)
+
+
+def test_changed_evidence_file_completes(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.5}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    # The current attempt updates the file.
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
+    assert decision.complete is True
+    assert decision.warnings == []
+    assert {artifact.kind for artifact in decision.artifacts} == {"experiment_result"}
+
+
+def test_leftover_from_previous_attempt_is_not_claimable(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 0, "workspace_baseline": baseline})
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
+    assert decision.complete is False

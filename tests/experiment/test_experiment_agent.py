@@ -30,9 +30,10 @@ from resagent2_experiment.tools import AuditEnvTool, RunCommandTool
 
 
 class _FakeRunner:
-    def __init__(self, boundary: WorkspaceBoundary, env_prefix: Path) -> None:
+    def __init__(self, boundary: WorkspaceBoundary, env_prefix: Path, *, fail: bool = False) -> None:
         self.boundary = boundary
         self.env_prefix = env_prefix
+        self.fail = fail
 
     def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
         stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
@@ -41,20 +42,26 @@ class _FakeRunner:
         stderr = self.boundary.resolve_system_write(stderr_rel)
         stdout.parent.mkdir(parents=True, exist_ok=True)
         stderr.parent.mkdir(parents=True, exist_ok=True)
+        exit_code = 0
         if "audit_probe.py" in command:
             stdout.write_text(
                 json.dumps({"sys_prefix": str(self.env_prefix), "python_version": "3.12"}),
                 encoding="utf-8",
             )
+        elif self.fail:
+            stdout.write_text("error", encoding="utf-8")
+            stderr.write_text("boom", encoding="utf-8")
+            exit_code = 1
         else:
             (self.boundary.root / "metrics.json").write_text(
                 '{"accuracy": 0.9}', encoding="utf-8"
             )
             stdout.write_text("accuracy=0.9", encoding="utf-8")
-        stderr.write_text("", encoding="utf-8")
+        if exit_code == 0:
+            stderr.write_text("", encoding="utf-8")
         return VerificationResult(
             command=command,
-            exit_code=0,
+            exit_code=exit_code,
             timed_out=False,
             stdout_path=stdout_rel,
             stderr_path=stderr_rel,
@@ -62,7 +69,7 @@ class _FakeRunner:
         )
 
 
-def test_golden_case_flows_through_the_loop(tmp_path) -> None:
+def _run(tmp_path: Path, actions: list, *, fail: bool = False):
     env_prefix = tmp_path / "envs" / "resenv_x"
     env_prefix.mkdir(parents=True)
     boundary = WorkspaceBoundary(
@@ -73,7 +80,7 @@ def test_golden_case_flows_through_the_loop(tmp_path) -> None:
             source=WorkspaceSource.EXISTING,
         )
     )
-    runner = _FakeRunner(boundary, env_prefix)
+    runner = _FakeRunner(boundary, env_prefix, fail=fail)
     tools = (
         RunCommandTool(
             runner,
@@ -93,25 +100,7 @@ def test_golden_case_flows_through_the_loop(tmp_path) -> None:
         owner=AgentOwner.EXPERIMENT,
         system_prompt=EXPERIMENT_PROMPT,
         tools=tools,
-        llm_client=ScriptedLLMClient(
-            [
-                {"tool": "audit_env", "arguments": {}},
-                {
-                    "tool": "run_command",
-                    "arguments": {"command": "python train.py --epochs 2"},
-                },
-                {
-                    "tool": "finish",
-                    "arguments": {
-                        "result": {
-                            "summary": "trained and evaluated",
-                            "metrics": {"accuracy": 0.9},
-                            "evidence_files": ["metrics.json"],
-                        }
-                    },
-                },
-            ]
-        ),
+        llm_client=ScriptedLLMClient(actions),
         context_builder=build_context,
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(
@@ -137,8 +126,7 @@ def test_golden_case_flows_through_the_loop(tmp_path) -> None:
         ),
         budget=TaskBudget(max_steps=8, max_llm_calls=8, timeout_seconds=30),
     )
-
-    result = AgentLoop(store=InMemorySessionStore()).run(
+    return AgentLoop(store=InMemorySessionStore()).run(
         definition,
         request,
         session_id="session_experiment",
@@ -151,6 +139,52 @@ def test_golden_case_flows_through_the_loop(tmp_path) -> None:
         },
     )
 
+
+_GOLDEN_ACTIONS = [
+    {"tool": "audit_env", "arguments": {}},
+    {"tool": "run_command", "arguments": {"command": "python train.py --epochs 2"}},
+    {
+        "tool": "finish",
+        "arguments": {
+            "result": {
+                "summary": "trained and evaluated",
+                "metrics": {"accuracy": 0.9},
+                "evidence_files": ["metrics.json"],
+            }
+        },
+    },
+]
+
+
+def test_golden_case_flows_through_the_loop(tmp_path) -> None:
+    result = _run(tmp_path, _GOLDEN_ACTIONS)
+
     assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
     assert result.payload["metrics"] == {"accuracy": 0.9}
     assert {artifact.kind for artifact in result.artifacts} == {"experiment_result"}
+
+
+def test_failed_experiment_command_cannot_complete(tmp_path) -> None:
+    result = _run(tmp_path, _GOLDEN_ACTIONS, fail=True)
+
+    assert result.status == ModuleStatus.FAILED
+
+
+def test_direct_finish_without_experiment_cannot_complete(tmp_path) -> None:
+    result = _run(
+        tmp_path,
+        [
+            {
+                "tool": "finish",
+                "arguments": {
+                    "result": {
+                        "summary": "done without running",
+                        "metrics": {"accuracy": 0.9},
+                        "evidence_files": ["metrics.json"],
+                    }
+                },
+            }
+        ],
+    )
+
+    assert result.status == ModuleStatus.FAILED

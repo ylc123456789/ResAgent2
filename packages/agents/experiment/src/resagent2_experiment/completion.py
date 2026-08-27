@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
 from pydantic import ValidationError
 
 from resagent2_contracts import (
@@ -35,8 +38,24 @@ def _metric_is_present(expected: str, metrics: dict) -> bool:
     return False
 
 
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def snapshot_workspace(boundary: WorkspaceBoundary) -> dict[str, str]:
+    """Hash every readable workspace file to form an Attempt baseline."""
+    snapshot: dict[str, str] = {}
+    for relative in boundary.iter_files():
+        try:
+            resolved = boundary.resolve_read_file(relative)
+        except (OSError, PermissionError):
+            continue
+        snapshot[relative] = _sha256_file(resolved)
+    return snapshot
+
+
 class ExperimentCompletionCheck:
-    """Finalize an experiment and downgrade on missing declared deliverables."""
+    """Finalize an experiment, requiring a successful command and fresh evidence."""
 
     def __init__(
         self,
@@ -55,6 +74,14 @@ class ExperimentCompletionCheck:
         self.repo_url = repo_url
         self.commit = commit
 
+    def _is_fresh_evidence(self, path: str, baseline: dict[str, str]) -> bool:
+        """Return whether a file exists and differs from the Attempt baseline."""
+        try:
+            resolved = self.boundary.resolve_read_file(path)
+        except (OSError, PermissionError):
+            return False
+        return _sha256_file(resolved) != baseline.get(path)
+
     def evaluate(
         self,
         state: AgentState,
@@ -70,13 +97,17 @@ class ExperimentCompletionCheck:
                 summary=f"Finish result is invalid: {error.errors()[0]['msg']}",
             )
 
+        if int(state.memory.get("experiment_success_count", 0)) < 1:
+            return CompletionDecision(
+                complete=False,
+                summary="Run at least one successful experiment command before finishing",
+            )
+
+        baseline = state.memory.get("workspace_baseline", {})
+
         evidence: list[str] = []
         for path in finish.evidence_files:
-            try:
-                self.boundary.resolve_read_file(path)
-            except (OSError, PermissionError):
-                continue  # skip evidence the LLM claimed but did not produce
-            if path not in evidence:
+            if self._is_fresh_evidence(path, baseline) and path not in evidence:
                 evidence.append(path)
 
         issues = [
@@ -85,13 +116,15 @@ class ExperimentCompletionCheck:
             if not _metric_is_present(name, finish.metrics)
         ]
         for name in self.expected_artifacts:
-            try:
-                self.boundary.resolve_read_file(name)
-            except (OSError, PermissionError):
-                issues.append(f"Missing required artifact: {name}")
-            else:
+            if self._is_fresh_evidence(name, baseline):
                 if name not in evidence:
                     evidence.append(name)
+                continue
+            try:
+                self.boundary.resolve_read_file(name)
+                issues.append(f"Required artifact {name} is unchanged from this attempt")
+            except (OSError, PermissionError):
+                issues.append(f"Missing required artifact: {name}")
 
         payload = ExperimentResult(
             metrics=finish.metrics,

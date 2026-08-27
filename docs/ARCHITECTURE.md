@@ -287,11 +287,11 @@ ModuleTaskRequest
   → ModuleResult
 ```
 
-`run_command` 只接受 shell-free argv，命令分类（setup/experiment）由可执行文件判定，不依赖 LLM stage 提示；实验命令在 `audit_env` 通过（certification）之前被拒绝，certification 绑定当前 env 前缀（换 env 需重新 audit）。`confirm_before_experiment` 为真时先 `ask_user` 再跑实验。finalizer 校验 `expected_metrics`/`expected_artifacts` 是否满足，缺失则降级 completed_with_warnings，WarningRecord 记录 `[NOT MET]` 缺失项。
+`run_command` 只接受 shell-free argv，命令分类（setup/experiment）由可执行文件判定，不依赖 LLM stage 提示；实验命令在 `audit_env` 通过（certification）之前被拒绝，certification 绑定当前 env 前缀（换 env 需重新 audit）。`confirm_before_experiment` 为真时先 `ask_user` 再跑实验。finalizer 要求至少一次 experiment command 成功，且 evidence 文件相对本 Attempt 基线（workspace 文件 hash 快照）新建或内容变化，预存未变的文件不登记为本 Attempt Artifact；再校验 `expected_metrics`/`expected_artifacts` 是否满足，缺失则降级 completed_with_warnings，WarningRecord 记录 `[NOT MET]` 缺失项。
 
-环境按内容寻址复用，只做简单核心（无 manifest/锁/drift 检测）；repo identity 用 source + commit，不依赖 basename。
+环境按内容寻址复用，只做简单核心（无 manifest/锁/drift 检测）；repo identity 用 source + commit，不依赖 basename。`RepoMaterializer` 在 clone/copy 时写运行时 metadata 文件（source type + 规范化 source），复用前校验一致，source 不匹配返回 `RepoMaterializerError` 而非静默复用。
 
-两条已知限制：(1) `run_command` 在无 OS 沙箱的真实子进程中运行，继承环境变量、可读写 workspace 之外的宿主路径，WorkspaceBoundary 只约束文件 Tool、不约束子进程，安全依赖可信的 command policy 与用户确认（不做 OS 级隔离）；(2) `mutates_environment` 只检测直接的 pip/conda 安装命令，不检测 `conda run ... pip install` 这类包装命令，包装安装后不会使 certification 失效。
+三条已知限制：(1) `run_command` 在无 OS 沙箱的真实子进程中运行，继承环境变量、可读写 workspace 之外的宿主路径，WorkspaceBoundary 只约束文件 Tool、不约束子进程（不做 OS 级隔离）；(2) `audit_env` 是实验流程正确性检查而非安全隔离，`confirm_before_experiment` 只在正式 experiment command 执行前询问用户，setup 命令仍可能执行构建代码或产生副作用，setup/experiment 分类是工作流分类而非安全分类；(3) `mutates_environment` 只检测直接的 pip/conda 安装命令，不检测 `conda run ... pip install` 这类包装命令，包装安装后不会使 certification 失效。
 
 ## 9. 模块通信规则
 

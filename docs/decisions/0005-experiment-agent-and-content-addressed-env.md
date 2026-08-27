@@ -24,4 +24,5 @@ Phase 6 用原生 Experiment Agent 替换 legacy reproagent adapter。Experiment
 
 - schema 1.1 从本阶段起冻结；后续再加字段必须发布 1.2 并提供迁移说明；
 - 环境复用只在内容不变时生效；内容变了会新建环境（无 drift 检测意味着旧环境不会被标记漂移，只会被绕过）；
-- Coding 尚未使用 provisioning 组件，"两个真实使用者"在本阶段靠 Phase 8 计划满足。
+- Coding 尚未使用 provisioning 组件，"两个真实使用者"在本阶段靠 Phase 8 计划满足；
+- certification/confirmation 不是安全沙箱：`audit_env` 是实验流程正确性检查，`confirm_before_experiment` 只在正式 experiment command 前询问用户，setup 命令仍可能执行构建代码或产生副作用，setup/experiment 是工作流分类而非安全分类。

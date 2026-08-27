@@ -7,6 +7,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+from time import monotonic
 from typing import cast
 
 from pydantic import BaseModel, Field
@@ -298,15 +299,20 @@ class RunVerificationTool:
         before_digest = hashlib.sha256(
             self.repository.diff().encode("utf-8")
         ).hexdigest()
-        results = [
-            self.runner.run(
-                command,
-                log_dir=f"{self.log_root}/revision_{revision}",
-                index=index,
-                timeout_seconds=self.timeout_seconds,
+        deadline = monotonic() + self.timeout_seconds
+        results = []
+        for index, command in enumerate(self.commands, start=1):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                break
+            results.append(
+                self.runner.run(
+                    command,
+                    log_dir=f"{self.log_root}/revision_{revision}",
+                    index=index,
+                    timeout_seconds=remaining,
+                )
             )
-            for index, command in enumerate(self.commands, start=1)
-        ]
         after_digest = hashlib.sha256(
             self.repository.diff().encode("utf-8")
         ).hexdigest()

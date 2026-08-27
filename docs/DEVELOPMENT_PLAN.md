@@ -451,4 +451,4 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 | 2026-08-26 | Phase 3 对齐与收尾 | completed | 全仓测试、Conda package check、文档交叉检查 | 控制面边界、questions、Artifact 传播、payload 策略和 finish gate 已对齐 |
 | 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |
 | 2026-08-27 | Phase 5 Coding Agent vNext | completed（未提交工作树） | 本地/服务器 92 tests；服务器真实闭环 4 Artifacts | 原生 Coding、shared workspace/process/Git/Artifact、legacy Coding adapter 删除 |
-| 2026-08-27 | Phase 6 Experiment Agent vNext | completed | 本地 130 tests；delivery 黄金用例 | 原生 Experiment、provisioning 组件、内容寻址环境、schema 1.1、legacy Experiment adapter 删除 |
+| 2026-08-27 | Phase 6 Experiment Agent vNext | completed | 本地 146 tests；delivery 黄金用例 + 服务器真实闭环 | 原生 Experiment、provisioning 组件、内容寻址环境、schema 1.1、legacy Experiment adapter 删除、Attempt 证据归属、source identity |

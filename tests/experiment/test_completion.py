@@ -154,3 +154,32 @@ def test_leftover_from_previous_attempt_is_not_claimable(tmp_path) -> None:
     )
 
     assert decision.complete is False
+
+
+def test_preexisting_evidence_cannot_be_claimed_via_path_alias(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["./metrics.json"])
+    )
+
+    assert decision.artifacts == []
+    payload = ExperimentResult.model_validate(decision.payload)
+    assert payload.evidence_files == []
+    assert any("unchanged" in issue for issue in payload.delivery_issues)
+
+
+def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 1})  # no workspace_baseline key
+
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
+    assert decision.complete is False
+    assert "baseline" in decision.summary

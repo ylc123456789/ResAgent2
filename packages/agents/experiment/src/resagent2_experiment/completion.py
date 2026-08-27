@@ -74,13 +74,13 @@ class ExperimentCompletionCheck:
         self.repo_url = repo_url
         self.commit = commit
 
-    def _is_fresh_evidence(self, path: str, baseline: dict[str, str]) -> bool:
-        """Return whether a file exists and differs from the Attempt baseline."""
+    def _resolve_evidence(self, path: str) -> tuple[str, str] | None:
+        """Return (normalized relative path, sha256) for a readable file, else None."""
         try:
             resolved = self.boundary.resolve_read_file(path)
         except (OSError, PermissionError):
-            return False
-        return _sha256_file(resolved) != baseline.get(path)
+            return None
+        return self.boundary.relative(resolved), _sha256_file(resolved)
 
     def evaluate(
         self,
@@ -103,12 +103,21 @@ class ExperimentCompletionCheck:
                 summary="Run at least one successful experiment command before finishing",
             )
 
-        baseline = state.memory.get("workspace_baseline", {})
+        baseline = state.memory.get("workspace_baseline")
+        if baseline is None:
+            return CompletionDecision(
+                complete=False,
+                summary="Workspace baseline is missing; cannot verify evidence ownership",
+            )
 
         evidence: list[str] = []
         for path in finish.evidence_files:
-            if self._is_fresh_evidence(path, baseline) and path not in evidence:
-                evidence.append(path)
+            info = self._resolve_evidence(path)
+            if info is None:
+                continue
+            normalized, current_hash = info
+            if baseline.get(normalized) != current_hash and normalized not in evidence:
+                evidence.append(normalized)
 
         issues = [
             f"Missing required metric: {name}"
@@ -116,15 +125,16 @@ class ExperimentCompletionCheck:
             if not _metric_is_present(name, finish.metrics)
         ]
         for name in self.expected_artifacts:
-            if self._is_fresh_evidence(name, baseline):
-                if name not in evidence:
-                    evidence.append(name)
-                continue
-            try:
-                self.boundary.resolve_read_file(name)
-                issues.append(f"Required artifact {name} is unchanged from this attempt")
-            except (OSError, PermissionError):
+            info = self._resolve_evidence(name)
+            if info is None:
                 issues.append(f"Missing required artifact: {name}")
+                continue
+            normalized, current_hash = info
+            if baseline.get(normalized) == current_hash:
+                issues.append(f"Required artifact {normalized} is unchanged from this attempt")
+                continue
+            if normalized not in evidence:
+                evidence.append(normalized)
 
         payload = ExperimentResult(
             metrics=finish.metrics,

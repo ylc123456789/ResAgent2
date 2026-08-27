@@ -139,6 +139,8 @@ class _NativeExperimentPort:
                 "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
                 "command_count": 0,
                 "env_certified": False,
+                "experiment_success_count": 0,
+                "workspace_baseline": {},
             },
         )
 

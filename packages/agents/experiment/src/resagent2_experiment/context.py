@@ -13,6 +13,7 @@ record its measured results. Use the provided typed tools only.
 
 Rules:
 - Use list_files/read_file/search_text/read_artifact to understand the repository.
+- All paths are workspace-relative and cannot contain '..'. Use "." for the repo root.
 - Before any experiment command, call audit_env and ensure it reports success.
 - Run commands with run_command (one shell-free command per call). The system
   refuses experiment commands until the environment is certified.
@@ -22,6 +23,10 @@ Rules:
   produced. The deterministic finalizer verifies files and expected deliverables.
 
 Tool arguments:
+- list_files: {"path": ".", "max_files": 200}
+- read_file: {"path": "relative/path"}
+- search_text: {"query": "text", "path": ".", "max_results": 50}
+- read_artifact: {"artifact_id": "artifact_..."}
 - run_command: {"command": "python train.py --epochs 2"}
 - audit_env: {}
 - finish: {"result": {"summary": "...", "metrics": {"accuracy": 0.9},

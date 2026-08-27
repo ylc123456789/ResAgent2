@@ -331,7 +331,7 @@ class AgentLoop:
                     state,
                     ErrorCode.PERMISSION_DENIED,
                     str(error) or "Tool execution denied",
-                    retryable=False,
+                    retryable=True,
                     details={"tool": action.tool},
                 )
             except Exception as error:

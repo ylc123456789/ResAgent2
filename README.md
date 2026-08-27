@@ -16,9 +16,9 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：Phase 5 已完成，Phase 6 尚未开始。**
+**阶段：Phase 6 已完成，Phase 7 尚未开始。**
 
-当前已实现 `resagent2-contracts`、共享 `resagent2-runtime`、确定性的 `resagent2-orchestrator` Workflow Core，以及原生 Coding Agent。Phase 5 已把 workspace、无 shell process、Git、只读 Artifact、真实 LLM client 和 Coding finalizer 接通；真实闭环不再依赖旧 CodingAgent。Experiment 与 Scientific 仍通过 Phase 4 legacy adapter 运行，Phase 6 尚未开始。
+当前已实现 `resagent2-contracts`、共享 `resagent2-runtime`、确定性的 `resagent2-orchestrator` Workflow Core，以及原生 Coding Agent 与原生 Experiment Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、Coding/Experiment finalizer、provisioning 组件和内容寻址环境；真实闭环不再依赖旧 CodingAgent 或旧 reproagent。Scientific 仍通过 Phase 4 legacy adapter 运行。
 
 ## 四个角色
 

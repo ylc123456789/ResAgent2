@@ -2,7 +2,7 @@
 
 **文档角色**：系统概念、职责边界和控制流的最高级事实来源（semantic source of truth）
 
-**当前基线**：contracts、shared runtime、Workflow Core v0.1.0、Phase 4 黄金闭环与 Phase 5 原生 Coding Agent 已实现；Phase 5 已完成
+**当前基线**：contracts、shared runtime、Workflow Core v0.1.0、Phase 4 黄金闭环、Phase 5 原生 Coding Agent、Phase 6 原生 Experiment Agent 已实现；Phase 6 已完成
 
 **更新规则**：任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、计划和代码。
 
@@ -272,6 +272,27 @@ Phase 5 原生 Coding Agent 要求已有且干净的 Git workspace。这个限�
 
 两条已知限制：(1) verification command 在无 OS 沙箱的真实子进程中运行，继承环境变量、可越出 workspace，其安全依赖命令由可信调用方预先声明（不做 OS 级隔离）；(2) finalizer 只判定「存在 Git 变更且验证命令通过」，不判定变更是否满足 instructions——后者由调用方声明的 verification command 承担，命令过弱（如恒真断言）时无法证明目标真正达成。
 
+### 8.7 Phase 6 Experiment 执行边界
+
+原生 Experiment Agent 实现 `experiment_run`，复用同一个 AgentLoop：
+
+```text
+ModuleTaskRequest
+  → 校验 capability 与 read_write WorkspaceGrant
+  → RepoMaterializer 克隆/复制/就地绑定 repo（repo identity = source + commit）
+  → EnvironmentManager 按内容寻址创建/复用 conda env（env_id）
+  → DatasetCache + HardwareAudit 提供缓存与硬件上下文
+  → AgentLoop 执行动作（run_command / audit_env 等）
+  → Experiment finalizer 校验证据并做 delivery check，生成 ExperimentResult / ArtifactCandidate
+  → ModuleResult
+```
+
+`run_command` 只接受 shell-free argv，命令分类（setup/experiment）由可执行文件判定，不依赖 LLM stage 提示；实验命令在 `audit_env` 通过（certification）之前被拒绝，certification 绑定当前 env 前缀（换 env 需重新 audit）。`confirm_before_experiment` 为真时先 `ask_user` 再跑实验。finalizer 校验 `expected_metrics`/`expected_artifacts` 是否满足，缺失则降级 completed_with_warnings，WarningRecord 记录 `[NOT MET]` 缺失项。
+
+环境按内容寻址复用，只做简单核心（无 manifest/锁/drift 检测）；repo identity 用 source + commit，不依赖 basename。
+
+两条已知限制：(1) `run_command` 在无 OS 沙箱的真实子进程中运行，继承环境变量、可读写 workspace 之外的宿主路径，WorkspaceBoundary 只约束文件 Tool、不约束子进程，安全依赖可信的 command policy 与用户确认（不做 OS 级隔离）；(2) `mutates_environment` 只检测直接的 pip/conda 安装命令，不检测 `conda run ... pip install` 这类包装命令，包装安装后不会使 certification 失效。
+
 ## 9. 模块通信规则
 
 专业模块不能直接互调。跨模块只通过：
@@ -373,7 +394,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 
 已实现：
 
-- schema 1.0 的 contracts 包；
+- schema 1.1 的 contracts 包；
 - provider-neutral 的同步 AgentLoop 和内存测试 Tools；
 - 同步单进程 Workflow Scheduler；
 - Task/Attempt 状态映射、retry、question pause/answer；
@@ -381,7 +402,8 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - validator 拒绝 scientific_plan / ask_user 进入 WorkflowTask；
 - Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
 - PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
-- 原生 Coding Agent、Experiment/Scientific 两个剩余 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
+- 原生 Coding Agent 与原生 Experiment Agent、Scientific 剩余 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
+- runtime provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit`）与内容寻址环境；
 - runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
 - 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
 - fake ModulePort 的确定性测试。
@@ -392,8 +414,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - Proposal.questions 的回答后重新规划生命周期（当前仅拒绝非空，回答重规划未实现）；
 - success criteria 求值；
 - 最终科学闭环 gate 和 final summary；
-- 真实 filesystem/process/Git Tools；
-- Experiment 与 Scientific 两个 vNext 专业 Agent。
+- Scientific vNext 专业 Agent。
 
 Coding Agent vNext 已通过 deterministic tests、orchestrator Artifact E2E 和服务器真实闭环；当前 Coding 路径不再使用 legacy adapter。
 

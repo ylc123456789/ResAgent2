@@ -4,7 +4,7 @@
 
 **语义上级**：`ARCHITECTURE.md`；本文件不得改变其中的模块职责和控制流
 
-**当前实现**：`resagent2-contracts 0.1.0`，wire schema `1.0`
+**当前实现**：`resagent2-contracts 0.1.0`，wire schema `1.1`
 
 ## 1. 使用规则
 
@@ -20,7 +20,7 @@
 
 - 继承严格 `ContractModel`；
 - 拒绝未知字段；
-- 序列化 `schema_version: "1.0"`；
+- 序列化 `schema_version: "1.1"`；
 - 以下示意代码省略每个模型继承得到的 `schema_version`，但 wire 数据不能省略其版本语义。
 
 ## 2. 跨模块对象范围
@@ -57,7 +57,7 @@
 pending | running | paused | completed | failed
 ```
 
-由 ResAgent 写入。planning、replanning 和 interrupted 不是 schema 1.0 的 RunStatus。
+由 ResAgent 写入。planning、replanning 和 interrupted 不是 schema 1.1 的 RunStatus。
 
 ### 4.2 TaskStatus
 
@@ -198,7 +198,7 @@ class SuccessCriterion:
     evidence_key: NonEmptyStr | None = None
 ```
 
-automatic criterion 在 schema 层要求 evidence_key。但 schema 1.0 尚未定义 evidence_key 指向哪个 payload/artifact 结构，Scheduler 也不求值 criteria。当前它是持久化的计划意图，Task 是否 completed 仍由模块 finalizer 返回的 ModuleStatus 决定。
+automatic criterion 在 schema 层要求 evidence_key。但 schema 1.1 尚未定义 evidence_key 指向哪个 payload/artifact 结构，Scheduler 也不求值 criteria。当前它是持久化的计划意图，Task 是否 completed 仍由模块 finalizer 返回的 ModuleStatus 决定。
 
 在定义求值器、证据路径和责任方前，不得把 success_criteria 写成已生效的 finish gate。
 
@@ -274,7 +274,7 @@ class ModuleResult[PayloadT]:
 
 ### 10.1 当前 payload 持久化与消费策略
 
-Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：status、artifacts、session、question、error 和 warnings。schema 1.0 的裸 `ModuleResult` 只校验 payload 可以被 Pydantic 接受，不执行 capability 专有结果校验；Scheduler 把 payload 保存到 `Attempt.payload`，不将其提升为独立的 Run 控制状态。
+Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：status、artifacts、session、question、error 和 warnings。schema 1.1 的裸 `ModuleResult` 只校验 payload 可以被 Pydantic 接受，不执行 capability 专有结果校验；Scheduler 把 payload 保存到 `Attempt.payload`，不将其提升为独立的 Run 控制状态。
 
 因此当前稳定规则是：
 
@@ -290,7 +290,7 @@ Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：stat
 | code_understand | CodeUnderstandResult → 调用方 | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
 | code_modify | CodeModifyResult → 调用方；代码变化 → ArtifactRef | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
 | experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无 production binding；模型待定义 | Phase 6 |
-| experiment_run | 实验结构化结果 → Scientific Agent；证据 → ArtifactRef | legacy payload 保存到 Attempt；实验结果另登记 `experiment_result` Artifact | Phase 6 |
+| experiment_run | `ExperimentResult` → Scientific Agent；证据 → ArtifactRef | Phase 6 原生 Experiment Agent 生产并持久化到 Attempt | Phase 6 |
 
 scientific_plan 和 ask_user 不在表中，因为它们不是 task capability。
 
@@ -323,7 +323,7 @@ class CodeModifyResult:
 
 `verification_passed` 必须等于所有 `VerificationResult` 均为 exit_code 0 且未 timeout。没有声明 verification command 时结果列表为空且该字段为 true，但这只表示“没有失败的声明验证”，不等价于更强的测试充分性声明。
 
-这些类型是既有 `ModuleResult.payload` 扩展点的新命名形状，没有改变任何现有模型字段，因此 wire schema 仍为 `1.0`。Coding Agent 用强类型 finalizer 生成它们；Scheduler 仍只原样持久化，不基于 payload 改状态。
+这些类型是既有 `ModuleResult.payload` 扩展点的新命名形状，没有改变任何现有模型字段，因此 Phase 5 引入时未触发 schema 升级（到 Phase 6 给 `ExperimentRunInput` 加字段时才升到 1.1）。Coding Agent 用强类型 finalizer 生成它们；Scheduler 仍只原样持久化，不基于 payload 改状态。
 
 ```python
 class ModuleError:
@@ -334,6 +334,34 @@ class ModuleError:
 ```
 
 ErrorCode 是固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing。
+
+### 10.3 Experiment Agent vNext payload
+
+```python
+class ExperimentResult:
+    metrics: dict[str, JsonValue] = {}
+    parameters: dict[str, JsonValue] = {}
+    evidence_files: list[str] = []
+    repo_url: str = ""
+    commit: str = ""
+    env_id: NonEmptyStr
+    delivery_issues: list[NonEmptyStr] = []
+    residual_risks: list[NonEmptyStr] = []
+```
+
+`evidence_files` 是 workspace 相对路径，指向本 Attempt 实际产生的证据文件；每个文件由 finalizer 校验存在后才进入 payload，并作为 `experiment_result` ArtifactCandidate 登记。`repo_url` + `commit` 是 repo identity（不依赖 basename）；`env_id` 是内容寻址环境 id。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings，其 WarningRecord（code=`delivery_not_met`）的 message 记录 `[NOT MET] Missing required ...`。
+
+`ExperimentRunInput` 在 schema 1.1 新增可选字段：
+
+```python
+repository_url: NonEmptyStr | None = None
+copy_from: NonEmptyStr | None = None
+external_repo_path: NonEmptyStr | None = None
+python_version: str = "3.12"
+confirm_before_experiment: bool = False
+```
+
+三个 repo source 字段互斥，至少给一个或全部留空（resume 语义复用已有 repo）。`ExperimentResult` 是既有 `ModuleResult.payload` 扩展点的新命名形状；给 `ExperimentRunInput` 加字段属于对已冻结 wire 模型的小版本演进，因此 wire schema 从 1.0 升到 1.1（见 §17）。Scheduler 仍只原样持久化 payload，不基于 payload 改状态。
 
 ## 11. Attempt 与 SessionRef
 
@@ -460,7 +488,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前唯一支持版本为 `1.0`，不维护旧格式兼容层。Phase 4 之前 schema 尚未对外冻结，`Attempt.payload` 在冻结前并入 `1.0` 基线，并已有持久化测试；这不是对一个已发布 wire 版本的兼容承诺。从 Phase 4 完成起 `1.0` 冻结，后续增加可选字段必须发布至少 `1.1` 并提供迁移说明和 round-trip 测试。
+当前唯一支持版本为 `1.1`，不维护旧格式兼容层。Phase 4 完成起 `1.0` 冻结；Phase 6 给 `ExperimentRunInput` 增加可选字段时按规则发布 `1.1`（迁移说明见 §10.3 与 ADR-0005），并新增 round-trip 与非法组合测试。从 `1.1` 起，后续增加可选字段必须发布至少 `1.2` 并提供迁移说明和 round-trip 测试。
 
 ## 18. 当前公共导出核对表
 
@@ -476,6 +504,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、CodeUnderstandInput、CodeModifyInput、ExperimentPrepareInput、ExperimentRunInput、AskUserInput、CapabilityInput |
 | Coding payload | VerificationResult、CodeUnderstandResult、CodeModifyResult |
+| Experiment payload | ExperimentResult |
 | 工作流 | SuccessCriterion、TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
 | 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |
@@ -485,7 +514,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 这些是已确认缺口，不是隐含设计：
 
 1. 实现 success_criteria/evidence_key 的正式求值器（方向已裁定：保留可执行语义，求值器留待 Phase 7）；
-2. Experiment/Scientific capability 的强类型 ModuleResult payload model 及其领域消费方仍待对应 vNext 阶段定义；Coding payload 已在 Phase 5 完成；
-3. 在引入下一次字段变化时按 §17 发布新的 schema 版本和迁移说明。
+2. Scientific capability 的强类型 ModuleResult payload model 及其领域消费方仍待 Phase 7 定义；Coding（Phase 5）与 Experiment（Phase 6）payload 已完成；
+3. 在引入下一次字段变化时按 §17 发布 1.2 及迁移说明。
 
 这些工作的阶段、顺序和验收见 `DEVELOPMENT_PLAN.md`。

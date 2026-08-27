@@ -95,7 +95,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "1.0"
+    assert restored.schema_version == "1.1"
 
 
 @pytest.mark.parametrize(

@@ -34,11 +34,11 @@
 | Phase 3 | ResAgent Workflow Core 与语义对齐 | completed |
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
-| Phase 6 | Experiment Agent vNext | not_started |
+| Phase 6 | Experiment Agent vNext | completed |
 | Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3、Phase 4 与 Phase 5 已完成。原生 Coding Agent 已替换 legacy Coding adapter，并在服务器真实闭环中登记 patch、代码、实验和科学结论四类证据。Phase 6 尚未开始。
+Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和科学结论四类证据。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -312,7 +312,7 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 - `VerificationResult` 不记录「验证期间工作区被改动」维度，审计痕迹有损；
 - real_e2e 的 code 验证命令对基线恒真，未真正确认 docstring 目标达成；
 - real_e2e 判据未强制检查 `code_patch` Artifact（只查 code_change/experiment_result/scientific_decision）；
-- wire schema 仍为 1.0，新增 payload 类型的版本判定依据需在 Phase 6/7 前明确；
+- wire schema 版本判定已在 Phase 6 落地为 1.1（见 §9 与 ADR-0005）；
 - `CodeModifyResult.changed_files` 与 code_change ArtifactCandidate 双写同一事实；
 - contracts 非法组合分支（changed/deleted 重叠、空 verification 等）测试覆盖不足。
 
@@ -349,17 +349,17 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 
 - experiment confirmation：`confirm_before_experiment` 为真时先 `ask_user` 再跑实验；
 - certification gate：`audit_env` 通过后才允许实验命令，由代码状态判定，不依赖 LLM 自报 stage；
-- metrics/evidence finalizer：delivery check 判定 `expected_metrics`/`expected_artifacts` 是否全满足，缺则降级 `completed_with_failures` 并写 `[NOT MET] Missing required X`；
+- metrics/evidence finalizer：delivery check 判定 `expected_metrics`/`expected_artifacts` 是否全满足，缺则降级 `completed_with_warnings`，WarningRecord(code=`delivery_not_met`) 记录 `[NOT MET] Missing required X`；
 - structured `ExperimentResult` payload。
 
 ### 完成标准
 
-- [ ] repo identity 不依赖 basename；
-- [ ] timeout 清理完整进程树（顺带修 Phase 5 遗留的 ProcessRunner 进程树 kill）；
-- [ ] command policy 不依赖 LLM 自报 stage；
-- [ ] completed 只绑定当前 Attempt 的合格 evidence；
-- [ ] 通过旧 reproagent 的 delivery validation 黄金用例；
-- [ ] Legacy Experiment Adapter 可删除。
+- [x] repo identity 不依赖 basename；
+- [x] timeout 清理完整进程树（顺带修 Phase 5 遗留的 ProcessRunner 进程树 kill）；
+- [x] command policy 不依赖 LLM 自报 stage；
+- [x] completed 只绑定当前 Attempt 的合格 evidence；
+- [x] 通过旧 reproagent 的 delivery validation 黄金用例；
+- [x] Legacy Experiment Adapter 可删除。
 
 ## 10. Phase 7：Scientific Agent vNext 与科学闭环
 
@@ -445,3 +445,4 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 | 2026-08-26 | Phase 3 对齐与收尾 | completed | 全仓测试、Conda package check、文档交叉检查 | 控制面边界、questions、Artifact 传播、payload 策略和 finish gate 已对齐 |
 | 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |
 | 2026-08-27 | Phase 5 Coding Agent vNext | completed（未提交工作树） | 本地/服务器 92 tests；服务器真实闭环 4 Artifacts | 原生 Coding、shared workspace/process/Git/Artifact、legacy Coding adapter 删除 |
+| 2026-08-27 | Phase 6 Experiment Agent vNext | completed | 本地 130 tests；delivery 黄金用例 | 原生 Experiment、provisioning 组件、内容寻址环境、schema 1.1、legacy Experiment adapter 删除 |

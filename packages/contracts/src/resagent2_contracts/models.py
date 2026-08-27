@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -43,7 +43,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1"] = SCHEMA_VERSION
 
 
 class Capability(StrEnum):
@@ -446,6 +446,47 @@ class ExperimentRunInput(ContractModel):
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
     expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
+    repository_url: NonEmptyStr | None = None
+    copy_from: NonEmptyStr | None = None
+    external_repo_path: NonEmptyStr | None = None
+    python_version: str = "3.12"
+    confirm_before_experiment: bool = False
+
+    @model_validator(mode="after")
+    def validate_single_repository_source(self) -> ExperimentRunInput:
+        """Require at most one repository source for a fresh experiment."""
+        sources = [
+            name
+            for name, value in (
+                ("repository_url", self.repository_url),
+                ("copy_from", self.copy_from),
+                ("external_repo_path", self.external_repo_path),
+            )
+            if value is not None
+        ]
+        if len(sources) > 1:
+            raise ValueError(
+                "repository_url, copy_from, and external_repo_path are mutually exclusive"
+            )
+        return self
+
+
+class ExperimentResult(ContractModel):
+    """Typed payload returned by the native Experiment Agent."""
+
+    metrics: dict[str, JsonValue] = Field(default_factory=dict)
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    evidence_files: list[str] = Field(default_factory=list)
+    repo_url: str = ""
+    commit: str = ""
+    env_id: NonEmptyStr
+    delivery_issues: list[NonEmptyStr] = Field(default_factory=list)
+    residual_risks: list[NonEmptyStr] = Field(default_factory=list)
+
+    @field_validator("evidence_files")
+    @classmethod
+    def validate_evidence_paths(cls, values: list[str]) -> list[str]:
+        return [_validate_relative_path(value) for value in values]
 
 
 class AskUserInput(ContractModel):

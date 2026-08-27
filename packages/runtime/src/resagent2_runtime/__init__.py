@@ -2,7 +2,19 @@
 
 from .context import ContextBudgetExceeded, ContextComposer
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
+from .dataset import DatasetCache, mirror_env_overrides
+from .environment import (
+    EnvironmentManager,
+    EnvironmentManagerError,
+    env_id,
+    env_spec,
+    find_conda,
+    project_slug,
+    resource_root,
+)
 from .git import GitWorkspace, GitWorkspaceError
+from .hardware import HardwareAudit
+from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .llm import (
     LLMClient,
     LLMExhaustedError,
@@ -75,6 +87,19 @@ __all__ = [
     "AskUserToolInput",
     "ArtifactReadError",
     "CompletionCheck",
+    "DatasetCache",
+    "EnvironmentManager",
+    "EnvironmentManagerError",
+    "HardwareAudit",
+    "MaterializedRepo",
+    "RepoMaterializer",
+    "RepoMaterializerError",
+    "env_id",
+    "env_spec",
+    "find_conda",
+    "mirror_env_overrides",
+    "project_slug",
+    "resource_root",
     "CompletionDecision",
     "ComposedContext",
     "ContextBudgetExceeded",

@@ -1,9 +1,10 @@
-"""Real closed-loop test with native Coding and legacy experiment/scientific modules.
+"""Real closed-loop test with native Coding/Experiment agents and legacy scientific.
 
-Unlike mock_e2e, this calls the Phase 5 native Coding Agent plus the old
-reproagent / ExpAgent through their adapters, using the real DeepSeek LLM.
-REPROAGENT_PATH / EXPAGENT_PATH default to the AutoDL layout;
-REPROAGENT_ENV_NAME may point at an existing torch env to skip env creation.
+Unlike mock_e2e, this calls the Phase 5 native Coding Agent, the Phase 6 native
+Experiment Agent, and the old ExpAgent through its adapter, using the real
+DeepSeek LLM. EXPAGENT_PATH defaults to the AutoDL layout. The experiment
+environment is content-addressed; set RESAGENT2_RESOURCE_ROOT to a stable
+directory to reuse conda envs across runs (RESAGENT2_CONDA_EXE overrides conda).
 
 Stages: ``python -m e2e.real_e2e code|experiment|full``.
 """
@@ -35,6 +36,7 @@ from resagent2_contracts import (
     WorkspaceSource,
 )
 from resagent2_coding import NativeCodingAgent
+from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
     DeterministicPlanningPort,
     JsonRunStore,
@@ -42,7 +44,6 @@ from resagent2_orchestrator import (
     WorkflowScheduler,
 )
 from resagent2_orchestrator.adapters import (
-    LegacyExperimentAdapter,
     LegacyScientificAnalyzeAdapter,
 )
 from resagent2_runtime import OpenAICompatibleClient
@@ -120,6 +121,16 @@ def _coding_agent() -> NativeCodingAgent:
     )
 
 
+def _experiment_agent() -> NativeExperimentAgent:
+    return NativeExperimentAgent(
+        OpenAICompatibleClient(
+            model=_MODEL,
+            api_base=_API_BASE,
+            api_key_env=_API_KEY_ENV,
+        )
+    )
+
+
 def _real_e2e_succeeded(run) -> bool:
     """Require completed tasks and task-owned evidence for every golden step."""
     tasks = {task.capability: task for task in run.workflow.tasks}
@@ -180,11 +191,12 @@ def run_experiment(workdir: Path) -> ModuleResult:
             instructions="Run train.py with 2 epochs and record accuracy from metrics.json",
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
+            external_repo_path=str(repo),
         ),
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
     )
-    return LegacyExperimentAdapter().invoke(request)
+    return _experiment_agent().invoke(request)
 
 
 def run_full(workdir: Path) -> bool:
@@ -205,7 +217,7 @@ def run_full(workdir: Path) -> bool:
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=LegacyExperimentAdapter(),
+                port=_experiment_agent(),
                 workspace=_grant(repo),
             ),
             Capability.SCIENTIFIC_ANALYZE: ModuleBinding(

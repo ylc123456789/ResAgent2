@@ -279,7 +279,7 @@ ResearchRequest
 ### 已裁定的执行语义
 
 - `code_understand` 是物理只读 profile：不提供写 Tool 或进程 Tool，完成时再次检查 Git 未变化；
-- `code_modify` 要求 WorkspaceGrant 为 read_write，且 workspace 是已有 Git 仓库（不要求干净；预存在改动会一并计入 patch）；
+- `code_modify` 要求 WorkspaceGrant 为 read_write，且 workspace 是已有、干净的 Git 仓库；
 - 文件读取受 WorkspaceGrant 的 allowed/denied paths 限制，写入还要同时满足 `CodeModifyInput.allowed_paths`；
 - `.git` 与 `.resagent2` 是 runtime 保留目录，LLM 文件 Tool 不可访问；
 - verification command 由调用方在 `CodeModifyInput.verification_commands` 中声明，LLM 只能请求运行整组命令；

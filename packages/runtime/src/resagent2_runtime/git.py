@@ -50,16 +50,27 @@ class GitWorkspace:
         }
         return not ignored_parts.intersection(Path(path).parts)
 
-    def changed_paths(self) -> list[str]:
+    def _all_changed_paths(self) -> list[str]:
         tracked = self._run(["diff", "--name-only", "-z", "HEAD"]).stdout.split("\0")
         untracked = self._run(
             ["ls-files", "--others", "--exclude-standard", "-z"]
         ).stdout.split("\0")
         return sorted(
-            path
-            for path in set([*tracked, *untracked])
-            if path and self._visible(path) and self.boundary.allows_read(path)
+            path for path in set([*tracked, *untracked]) if path and self._visible(path)
         )
+
+    def changed_paths(self) -> list[str]:
+        return [
+            path for path in self._all_changed_paths() if self.boundary.allows_read(path)
+        ]
+
+    def require_clean(self) -> None:
+        changed = self._all_changed_paths()
+        if changed:
+            raise GitWorkspaceError(
+                "native Coding Agent requires a clean Git workspace; changed paths: "
+                + ", ".join(changed[:10])
+            )
 
     def deleted_paths(self) -> list[str]:
         return [

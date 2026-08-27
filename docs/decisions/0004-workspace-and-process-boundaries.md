@@ -27,4 +27,4 @@ Coding 和 Experiment 都需要访问文件、运行命令和收集证据。如�
 
 - Phase 5 不支持管道、重定向、命令替换或复合 verification command；需要时拆成多个声明命令；
 - 无 OS sandbox 时，受信任 verification command 内部程序仍可能产生副作用，因此 read-only profile 完全不提供进程 Tool；
-- 精确隔离脏 Git workspace 的预存在改动需要额外 baseline 契约；当前相对 HEAD 计算变化，预存在改动会一并计入 patch（已知限制，黄金闭环始终从干净仓库开始）。
+- 支持脏 Git workspace 需要额外 baseline 契约，不能通过猜测变化归属实现。

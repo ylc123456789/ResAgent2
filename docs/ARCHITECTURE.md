@@ -259,7 +259,7 @@ Phase 5 开始加入第二类共享机制：`WorkspaceBoundary`、无 shell 的 
 
 ```text
 ModuleTaskRequest
-  → 校验 capability 与 WorkspaceGrant
+  → 校验 capability、WorkspaceGrant 与干净 Git 基线
   → 按 profile 注入只读或可写 Tool
   → AgentLoop 执行动作
   → Coding finalizer 从 Git 状态和真实命令结果生成 payload/ArtifactCandidate
@@ -268,7 +268,7 @@ ModuleTaskRequest
 
 `code_understand` 不注入写文件或进程 Tool，并在完成时再次确认 Git 状态未改变。`code_modify` 只允许精确文本替换和新文件创建；写入范围同时受 WorkspaceGrant 与 `CodeModifyInput.allowed_paths` 限制。LLM 不能提交任意 shell 字符串，只能请求执行调用方预先声明的 verification commands；验证前后 Git diff 必须相同，结果还必须绑定最终 diff hash。
 
-Phase 5 原生 Coding Agent 要求已有 Git workspace，不要求干净：finalizer 相对 HEAD 计算变化。若 workspace 预存在未提交改动，会一并计入 code_patch（已知限制；黄金闭环始终从干净仓库开始）。精确隔离预存在改动需要独立的 baseline 契约，不在本阶段实现。
+Phase 5 原生 Coding Agent 要求已有且干净的 Git workspace。这个限制用于建立 Attempt 级 provenance：finalizer 可以确定哪些变化由本次调用产生。支持脏工作区或非 Git 目录需要先定义独立的 baseline/snapshot 契约，不在本阶段隐式兼容。
 
 两条已知限制：(1) verification command 在无 OS 沙箱的真实子进程中运行，继承环境变量、可越出 workspace，其安全依赖命令由可信调用方预先声明（不做 OS 级隔离）；(2) finalizer 只判定「存在 Git 变更且验证命令通过」，不判定变更是否满足 instructions——后者由调用方声明的 verification command 承担，命令过弱（如恒真断言）时无法证明目标真正达成。
 

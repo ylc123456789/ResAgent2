@@ -93,11 +93,23 @@ class WorkspaceBoundary:
         if not path.is_relative_to(self.root):
             raise WorkspacePermissionError("resolved path escapes workspace root")
 
+    def _check_resolved(self, resolved: Path, *, write: bool = False) -> None:
+        """Re-check a resolved path against the grant scope (catches symlink escape)."""
+        if resolved == self.root:
+            return
+        relative = resolved.relative_to(self.root).as_posix()
+        self._check_lexical(relative)
+        if write and self.write_paths and not _matches(relative, self.write_paths):
+            raise WorkspacePermissionError(
+                "resolved path is outside CodeModifyInput.allowed_paths"
+            )
+
     def resolve_read_file(self, relative_path: str) -> Path:
         relative = _normalize_relative(relative_path)
         self._check_lexical(relative)
         resolved = (self.root / relative).resolve(strict=True)
         self._ensure_contained(resolved)
+        self._check_resolved(resolved)
         if not resolved.is_file():
             raise FileNotFoundError(relative)
         return resolved
@@ -107,6 +119,7 @@ class WorkspaceBoundary:
         self._check_lexical(relative)
         resolved = (self.root / relative).resolve(strict=True)
         self._ensure_contained(resolved)
+        self._check_resolved(resolved)
         if not resolved.is_dir():
             raise NotADirectoryError(relative)
         return resolved
@@ -122,6 +135,7 @@ class WorkspaceBoundary:
         if candidate.exists() or candidate.is_symlink():
             resolved = candidate.resolve(strict=True)
             self._ensure_contained(resolved)
+            self._check_resolved(resolved, write=True)
             if must_be_new:
                 raise FileExistsError(relative)
             if not resolved.is_file():
@@ -132,6 +146,7 @@ class WorkspaceBoundary:
             existing = existing.parent
         parent = existing.resolve(strict=True)
         self._ensure_contained(parent)
+        self._check_resolved(parent, write=True)
         return candidate
 
     def resolve_system_write(self, relative_path: str) -> Path:

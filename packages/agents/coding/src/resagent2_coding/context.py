@@ -19,7 +19,7 @@ Tool arguments:
 - read_file: {"path": "relative/path", "start_line": 1, "end_line": 200}
 - search_text: {"query": "text", "path": ".", "max_results": 50}
 - read_artifact: {"artifact_id": "artifact_..."}
-- git_diff: {"max_chars": 50000}
+- git_diff: {"max_chars": 20000}
 - ask_user: {"text": "...", "requested_fields": [], "reason": "..."}
 - finish: {"result": {"answer": "...", "evidence_files": ["..."],
   "uncertainty": ""}}

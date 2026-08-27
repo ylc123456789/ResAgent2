@@ -90,6 +90,7 @@ class NativeCodingAgent:
         try:
             boundary = WorkspaceBoundary(request.workspace, write_paths=write_paths)
             repository = GitWorkspace(boundary)
+            repository.require_clean()
         except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
             return self._failure(str(error), blocked=True)
 

@@ -17,6 +17,7 @@ from resagent2_runtime import (
     AgentState,
     ArtifactReadError,
     GitWorkspace,
+    GitWorkspaceError,
     ProcessRunner,
     ReadFileTool,
     RegisteredArtifactReader,
@@ -110,13 +111,38 @@ def test_process_runner_marks_timeout_and_stops_process(tmp_path) -> None:
     assert result.exit_code != 0
 
 
-def test_git_workspace_includes_new_files(tmp_path) -> None:
+def test_git_workspace_requires_clean_baseline_and_includes_new_files(tmp_path) -> None:
     init_repo(tmp_path)
     repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
+    repository.require_clean()
     (tmp_path / "new.py").write_text("value = 1\n", encoding="utf-8")
 
     assert repository.changed_paths() == ["new.py"]
     assert "new.py" in repository.diff()
+
+
+def test_require_clean_rejects_dirty_workspace(tmp_path) -> None:
+    init_repo(tmp_path)
+    (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+    repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
+    with pytest.raises(GitWorkspaceError, match="clean"):
+        repository.require_clean()
+
+
+def test_symlink_cannot_bypass_denied_paths(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    init_repo(root)
+    (root / "denied").mkdir()
+    secret = root / "denied" / "secret.txt"
+    secret.write_text("secret\n", encoding="utf-8")
+    (root / "alias.txt").symlink_to(secret)
+    boundary = WorkspaceBoundary(grant(root))
+
+    with pytest.raises(WorkspacePermissionError):
+        boundary.resolve_read_file("alias.txt")
+    with pytest.raises(WorkspacePermissionError):
+        boundary.resolve_write_file("alias.txt")
 
 
 def test_registered_artifact_reader_verifies_hash(tmp_path) -> None:

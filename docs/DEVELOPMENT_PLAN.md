@@ -303,29 +303,62 @@ ResearchRequest
 
 Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 E2E 已恢复严格 code Artifact 要求。
 
+### 已知后续工作（Phase 5 遗留，非阻断）
+
+- 边界违反（保留目录/越界路径）被映射为不可重试失败，而 FileNotFoundError 可重试，健壮性不对称；
+- `read_paths` 记录原始参数、`search_text` 记录规范化路径，`code_understand` 的证据匹配对等价拼写敏感；
+- `resolve_write_file` / `resolve_system_write` 存在 check-then-use 的 TOCTOU 窗口；
+- 进程树终止不完整：daemonize 子进程可逃过 killpg、Windows 只杀直接子进程、killpg 有 ProcessLookupError 竞态；
+- `VerificationResult` 不记录「验证期间工作区被改动」维度，审计痕迹有损；
+- real_e2e 的 code 验证命令对基线恒真，未真正确认 docstring 目标达成；
+- real_e2e 判据未强制检查 `code_patch` Artifact（只查 code_change/experiment_result/scientific_decision）；
+- wire schema 仍为 1.0，新增 payload 类型的版本判定依据需在 Phase 6/7 前明确；
+- `CodeModifyResult.changed_files` 与 code_change ArtifactCandidate 双写同一事实；
+- contracts 非法组合分支（changed/deleted 重叠、空 verification 等）测试覆盖不足。
+
 ## 9. Phase 6：Experiment Agent vNext
 
 ### 目标
 
-复用 Phase 5 已验证的 filesystem/process/Git 机制，实现实验员，不复制一套相似 runtime。
+复用 Phase 5 的 filesystem/process/Git，实现原生 Experiment Agent，替换 LegacyExperimentAdapter；同时把克隆、环境、数据集缓存抽成 runtime 可复用组件，供 Coding 与 Experiment 共享。
+
+### 设计决策（已确认）
+
+- 实验 Agent 自己克隆仓库、自己创建虚拟环境；
+- 环境按内容寻址复用：`env_id = resenv_<project_slug>_<sha256(repo identity + env spec)[:12]>`，内容不变则复用同一环境；暂不做 drift 检测（resolved fingerprint），留待后续；
+- dataset cache 本阶段就做，与共享目录一起做成可配置 + 默认值；
+- experiment confirmation 复用现有 ask_user 机制，开关放 `ExperimentRunInput.confirm_before_experiment`。
+
+### 顺序
+
+1. runtime 抽四个可复用组件：`RepoMaterializer` / `EnvironmentManager` / `DatasetCache` / `HardwareAudit`；
+2. contracts：扩展 `ExperimentRunInput`，新增 `ExperimentResult`；
+3. 原生 Experiment Agent（`packages/agents/experiment/`）；
+4. delivery validation 黄金用例 + 删除 LegacyExperimentAdapter。
+
+### Runtime 新增组件（可复用）
+
+- `RepoMaterializer`：`repo_url` 克隆 / `copy_from` 复制 / `external_repo_path` 就地绑定 → 产出 workspace；repo identity 用 (repo_url + commit hash)，不依赖 basename；
+- `EnvironmentManager`：读 env spec → 创建/绑定 conda env，按 `env_id` 内容寻址复用；
+- `DatasetCache`：共享 torchvision/HF/torch.hub 缓存目录 + 国内镜像 profile；
+- `HardwareAudit`：`nvidia-smi` 等 GPU/硬件信息。
+
+共享目录默认 `.resagent2/resources/`（下分 `envs/` 与 `datasets/`），可用 `RESAGENT2_RESOURCE_ROOT` 覆盖。
 
 ### Experiment 专有能力
 
-- repo materialization policy；
-- environment binding/creation；
-- GPU/hardware audit；
-- dataset cache；
-- experiment confirmation；
-- metrics/evidence finalizer；
-- structured ExperimentResult payload。
+- experiment confirmation：`confirm_before_experiment` 为真时先 `ask_user` 再跑实验；
+- certification gate：`audit_env` 通过后才允许实验命令，由代码状态判定，不依赖 LLM 自报 stage；
+- metrics/evidence finalizer：delivery check 判定 `expected_metrics`/`expected_artifacts` 是否全满足，缺则降级 `completed_with_failures` 并写 `[NOT MET] Missing required X`；
+- structured `ExperimentResult` payload。
 
 ### 完成标准
 
 - [ ] repo identity 不依赖 basename；
-- [ ] timeout 清理完整进程树；
+- [ ] timeout 清理完整进程树（顺带修 Phase 5 遗留的 ProcessRunner 进程树 kill）；
 - [ ] command policy 不依赖 LLM 自报 stage；
 - [ ] completed 只绑定当前 Attempt 的合格 evidence；
-- [ ] 通过旧 reproagent 黄金用例；
+- [ ] 通过旧 reproagent 的 delivery validation 黄金用例；
 - [ ] Legacy Experiment Adapter 可删除。
 
 ## 10. Phase 7：Scientific Agent vNext 与科学闭环

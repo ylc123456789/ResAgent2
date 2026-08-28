@@ -6,11 +6,11 @@
 
 **当前实现**：`resagent2-contracts 0.1.0`，wire schema `2.0`（`SCHEMA_VERSION="2.0"`，Phase 7.1 起）
 
-**Phase 7 目标**：§20 的 7.1—7.6 部分已实现（Scientific control 类型、ArtifactRef 三态 provenance、work_request_id 追溯、ResearchRun 字段、ScientificCompletionValidator 和确定性 final report）；7.7 production 切换后冻结 schema 2.0
+**Phase 7 目标**：§20 的 7.1—7.7 已实现（Scientific control 类型、ArtifactRef 三态 provenance、work_request_id 追溯、ResearchRun 字段、ScientificCompletionValidator、确定性 final report，以及 7.7 删除旧 PlanningPort/deprecated 类型后 production 切到唯一 Scientific 路径）；schema 2.0 在服务器真实 E2E 通过后冻结
 
 ## 1. 使用规则
 
-本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（部分已 deprecated）；§20 描述 Phase 7 的 2.0 目标契约。7.1—7.6 已落地；新路径在 7.7 前仍只由测试/composition fixture 装配。
+本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（其中 scientific/planning 相关类型已在 7.7 删除，仅留历史说明）；§20 描述 Phase 7 的 2.0 目标契约。7.1—7.7 已落地；新路径已切为唯一 production composition root。
 
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
@@ -30,7 +30,7 @@
 | 边界 | 请求 | 响应/状态 |
 |---|---|---|
 | 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、`final_report` ArtifactRef（内容由内部 FinalReportData 确定性渲染） |
-| 当前 Planning Port（Phase 7 删除） | ScientificPlanInput/ResearchRequest | WorkflowProposal、WorkflowPatch |
+| ResAgent → Scientific Agent | ScientificTurnRequest | ScientificTurnResult |
 | Scheduler → 专业模块 | ModuleTaskRequest | ModuleResult |
 | 专业模块 → Artifact Registry | ArtifactCandidate | ArtifactRef |
 | ResAgent 持久化 | Workflow、WorkflowTask、Attempt、PendingQuestion | ResearchRun 属于 orchestrator 内部模型 |
@@ -460,7 +460,7 @@ class WorkspaceGrant:
 
 Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；capabilities 的真实 filesystem 实现做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
 
-## 15. 当前 ScientificConclusion（schema 1.1，Phase 7 将取代）
+## 15. 历史 ScientificConclusion（schema 1.1，已于 Phase 7.7 删除）
 
 ```python
 class ScientificConclusion:
@@ -471,9 +471,7 @@ class ScientificConclusion:
     recommended_next_steps: list[NonEmptyStr] = []
 ```
 
-Scientific verdict 与执行状态独立：一次成功的 scientific_analyze 可以得出 refutes 或 inconclusive。当前 Scheduler 没有把它接入最终 Run gate，属于后续闭环工作。
-
-Phase 7 不再创建 scientific_analyze WorkflowTask；schema 2.0 使用 `ScientificAssessment` / `ScientificOpinion`，并由 `ScientificTurnResult` 区分 request_work、needs_user_input、completed 和 failed。
+该类型连同 `scientific_analyze` task capability 已于 Phase 7.7 原子切换时删除，此处仅保留历史说明。schema 2.0 使用 `ScientificAssessment` / `ScientificOpinion`，并由 `ScientificTurnResult` 区分 request_work、needs_user_input、completed 和 failed。
 
 ## 16. 状态映射
 
@@ -512,12 +510,12 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest |
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
-| capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput（ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput 已 deprecated，7.7 删除） |
+| capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput |
 | Coding payload | VerificationResult、CodeUnderstandResult、CodeModifyResult |
 | Experiment payload | ExperimentResult |
 | 工作流 | TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
-| 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion（deprecated，7.7 删除） |
+| 注册 | CapabilityDefinition、CapabilityRegistry |
 | 科学控制（2.0） | ScientificAssessment、WorkRequestDraft、WorkRequest、WorkTaskOutcome、WorkOutcome、ScientificOpinion、ScientificTurnRequest、ScientificTurnResult |
 
 ## 19. 已知契约对齐项
@@ -983,3 +981,5 @@ class ArtifactRegistrationPort(Protocol):
 7. schema 2.0 loader 明确拒绝 1.1 wire/JsonRunStore，返回版本错误；不做静默字段丢弃；
 8. 如需保留 schema 1.1 历史，只提供独立只读导出脚本，不把双版本迁移逻辑塞进 Scheduler；
 9. 公共导出核对表在 7.7 原子切换后更新为 2.0；任何中间提交都不得留下 import error 或红色全仓测试。
+
+**7.7 状态（2026-08-28）**：第 5 条的原子切换已完成——`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler` 成为唯一 production composition root，PlanningPort/`DeterministicPlanningPort`/`LegacyScientificAnalyzeAdapter` 及全部 deprecated scientific/planning/ask_user/experiment_prepare 类型与 enum 值已删除，公共导出核对表（§18）已更新为 2.0。全仓本地测试通过；schema 2.0 仍待服务器真实 E2E 通过后冻结（第 6 条）。

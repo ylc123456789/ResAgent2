@@ -19,7 +19,7 @@ from resagent2_contracts import (
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSource,
-    ScientificAnalyzeInput,
+    CodeUnderstandInput,
 )
 from resagent2_orchestrator import (
     JsonRunStore,
@@ -132,13 +132,11 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
     analyze = TaskProposal(
         id="task_analyze",
         work_request_id="work_legacy_initial",
-        capability=Capability.SCIENTIFIC_ANALYZE,
+        capability=Capability.CODE_UNDERSTAND,
         goal="Analyze evidence",
         rationale="Close the evidence loop",
         depends_on=["task_experiment"],
-        inputs=ScientificAnalyzeInput(
-            question="What happened?", evidence_artifact_ids=[]
-        ),
+        inputs=CodeUnderstandInput(question="What happened?"),
     )
     engine = WorkflowScheduler(
         bindings={
@@ -152,8 +150,8 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
                     source=WorkspaceSource.EXISTING,
                 ),
             ),
-            Capability.SCIENTIFIC_ANALYZE: ModuleBinding(
-                owner=AgentOwner.SCIENTIFIC,
+            Capability.CODE_UNDERSTAND: ModuleBinding(
+                owner=AgentOwner.CODING,
                 port=analyze_port,
             ),
         },
@@ -218,13 +216,11 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     analyze = TaskProposal(
         id="task_analyze",
         work_request_id="work_legacy_initial",
-        capability=Capability.SCIENTIFIC_ANALYZE,
+        capability=Capability.CODE_UNDERSTAND,
         goal="Analyze evidence",
         rationale="Only verified evidence may cross the boundary",
         depends_on=["task_experiment"],
-        inputs=ScientificAnalyzeInput(
-            question="What happened?", evidence_artifact_ids=[]
-        ),
+        inputs=CodeUnderstandInput(question="What happened?"),
     )
     engine = WorkflowScheduler(
         bindings={
@@ -238,8 +234,8 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
                     source=WorkspaceSource.EXISTING,
                 ),
             ),
-            Capability.SCIENTIFIC_ANALYZE: ModuleBinding(
-                owner=AgentOwner.SCIENTIFIC,
+            Capability.CODE_UNDERSTAND: ModuleBinding(
+                owner=AgentOwner.CODING,
                 port=analyze_port,
             ),
         },

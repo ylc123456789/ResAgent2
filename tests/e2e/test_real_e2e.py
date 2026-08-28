@@ -9,7 +9,6 @@ def _run(*, artifact_kinds: set[str]) -> SimpleNamespace:
     task_for = {
         Capability.CODE_MODIFY: "task_code",
         Capability.EXPERIMENT_RUN: "task_experiment",
-        Capability.SCIENTIFIC_ANALYZE: "task_analyze",
     }
     tasks = [
         SimpleNamespace(
@@ -23,7 +22,6 @@ def _run(*, artifact_kinds: set[str]) -> SimpleNamespace:
     owner_for_kind = {
         "code_change": Capability.CODE_MODIFY,
         "experiment_result": Capability.EXPERIMENT_RUN,
-        "scientific_decision": Capability.SCIENTIFIC_ANALYZE,
     }
     artifacts = {
         f"artifact_{index}": SimpleNamespace(
@@ -34,26 +32,33 @@ def _run(*, artifact_kinds: set[str]) -> SimpleNamespace:
     }
     return SimpleNamespace(
         status=RunStatus.COMPLETED,
+        final_opinion=SimpleNamespace(),
+        final_report_artifact_id="artifact_final_report",
         workflow=SimpleNamespace(tasks=tasks),
         artifacts=artifacts,
     )
 
 
-def test_real_e2e_accepts_registered_artifacts_for_all_three_steps() -> None:
-    run = _run(
-        artifact_kinds={"code_change", "experiment_result", "scientific_decision"}
-    )
+def test_real_e2e_accepts_registered_artifacts_and_opinion() -> None:
+    run = _run(artifact_kinds={"code_change", "experiment_result"})
 
     assert _real_e2e_succeeded(run)
 
 
 def test_real_e2e_requires_registered_code_evidence() -> None:
-    run = _run(artifact_kinds={"experiment_result", "scientific_decision"})
+    run = _run(artifact_kinds={"experiment_result"})
 
     assert not _real_e2e_succeeded(run)
 
 
-def test_real_e2e_never_waives_registered_scientific_evidence() -> None:
-    run = _run(artifact_kinds={"experiment_result"})
+def test_real_e2e_never_waives_registered_experiment_evidence() -> None:
+    run = _run(artifact_kinds={"code_change"})
+
+    assert not _real_e2e_succeeded(run)
+
+
+def test_real_e2e_requires_a_final_opinion() -> None:
+    run = _run(artifact_kinds={"code_change", "experiment_result"})
+    run.final_opinion = None
 
     assert not _real_e2e_succeeded(run)

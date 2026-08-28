@@ -32,9 +32,9 @@ ResAgent2 的顶层控制模块。
 - 内存 RunStore 和原子 JSON RunStore；
 - WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，一次结构化调用）。
 
-当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding 和 Experiment legacy adapter 已分别在 Phase 5/6 删除，只剩 `LegacyScientificAnalyzeAdapter` 作为过渡。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding/Experiment/Scientific 三个 legacy adapter 已分别在 Phase 5/6/7 删除，全部由原生 Agent 取代。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-上面“WorkRequest/Scientific Session”的职责仍是 Phase 7 目标。WorkflowCompiler（§7.2）已实现并测试，但尚未接入 production composition root；当前 production 仍使用 PlanningPort + WorkflowProposal 创建 Run，Scientific 仍走 `LegacyScientificAnalyzeAdapter`；Phase 7 切换后删除旧路径，不长期维护两套总控逻辑。
+Phase 7.7 原子切换后，production composition root 走 `ResearchController`：自然语言 `create_run(request)` 进入科学控制循环，`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 Proposal/Patch，Scheduler 执行 Coding/Experiment 图，`WorkOutcome` 回传后形成最终 `ScientificOpinion` 并经 `ScientificCompletionValidator` 写 completed。旧 PlanningPort 路径已删除，不保留两套总控逻辑。
 
 ## 最小使用方式
 

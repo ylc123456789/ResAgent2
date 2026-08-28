@@ -2,9 +2,9 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）
 
-**当前基线**：Phase 6 已完成；Phase 7 进行中（7.1—7.6 已实现并通过本地测试，新路径尚未接 production）
+**当前基线**：Phase 6 已完成；Phase 7 代码完成（7.1—7.7 已实现并通过本地测试，production composition root 已切到唯一 Scientific 路径）
 
-**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为 production 事实；当前只剩 7.7 原子切换、旧路径删除和真实 E2E 尚未实现
+**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 服务器真实 E2E 验收后才成为已发布事实；当前只剩服务器真实 E2E 与 schema 2.0 冻结尚未完成
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 
@@ -355,7 +355,7 @@ WorkRequest 执行期间 Run 仍为 running；无需增加 planning 或 waiting_
 
 ### 11.3 当前实现与目标差异
 
-Phase 6 当前代码仍是“一个 accepted Workflow 基本对应一个 Run”，`_evaluate_run` 在 required Task 未完成且无 ready work 时可把 Run 置 failed；`create_run` 直接接收 WorkflowProposal，Scientific 仍走 `LegacyScientificAnalyzeAdapter`。这些是 Phase 7 必须修改的现状，不是目标语义已经实现。
+Phase 7.7 原子切换后，production composition root 走 `ResearchController`：`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 WorkflowProposal/Patch，`WorkflowScheduler` 执行 Coding/Experiment 图，`WorkOutcome` 回传 Scientific Session 再形成最终 `ScientificOpinion`，经 `ScientificCompletionValidator` 后写 completed。旧的 PlanningPort 与 `LegacyScientificAnalyzeAdapter` 已删除。Scheduler 仍保留「无 WorkRequest 的 scheduler 驱动 run 走 required-task 完成语义」，供直接驱动 scheduler 的单元测试使用，不走 ResearchController。
 
 ## 12. Artifact 与安全边界
 
@@ -409,7 +409,7 @@ ResearchRun 只有同时满足以下条件才能 completed：
 | 完成条件 | task graph gate | ScientificOpinion + evidence + no active work gate |
 | wire schema | 1.1 | Phase 7 按 CONTRACTS 演进 |
 
-迁移必须遵守：新接口先有 contract tests；新旧路径只可在未发布开发分支短暂共存；production composition root 始终只启用一条；7.7 原子切换后删除 PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability；schema 2.0 中间状态不得发布；目标声明通过测试后才能写成已实现。
+迁移必须遵守：新接口先有 contract tests；新旧路径只可在未发布开发分支短暂共存；production composition root 始终只启用一条；7.7 原子切换已删除 PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability；schema 2.0 中间状态不得发布；目标声明通过测试后才能写成已实现。
 
 ## 15. 不可破坏的架构约束
 

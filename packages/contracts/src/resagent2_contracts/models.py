@@ -52,13 +52,6 @@ class ContractModel(BaseModel):
 class Capability(StrEnum):
     """Stable capability names used for routing, not module names."""
 
-    # Deprecated in schema 2.0: only the old planning/analysis/legacy path uses
-    # these; they are removed at the Phase 7 atomic switch (see CONTRACTS §20.8).
-    SCIENTIFIC_PLAN = "scientific_plan"
-    SCIENTIFIC_ANALYZE = "scientific_analyze"
-    LITERATURE_SEARCH = "literature_search"
-    EXPERIMENT_PREPARE = "experiment_prepare"
-    ASK_USER = "ask_user"
     CODE_UNDERSTAND = "code_understand"
     CODE_MODIFY = "code_modify"
     EXPERIMENT_RUN = "experiment_run"
@@ -342,29 +335,6 @@ class UserAnswer(ContractModel):
     answered_at: datetime
 
 
-class ScientificPlanInput(ContractModel):
-    """Deprecated: legacy planning input, removed at the Phase 7 switch."""
-
-    capability: Literal[Capability.SCIENTIFIC_PLAN] = Capability.SCIENTIFIC_PLAN
-    request: ResearchRequest
-
-
-class ScientificAnalyzeInput(ContractModel):
-    """Deprecated: legacy analysis input, removed at the Phase 7 switch."""
-
-    capability: Literal[Capability.SCIENTIFIC_ANALYZE] = Capability.SCIENTIFIC_ANALYZE
-    question: NonEmptyStr
-    evidence_artifact_ids: list[ArtifactId]
-
-
-class LiteratureSearchInput(ContractModel):
-    """Deprecated: legacy literature task input, removed at the Phase 7 switch."""
-
-    capability: Literal[Capability.LITERATURE_SEARCH] = Capability.LITERATURE_SEARCH
-    query: NonEmptyStr
-    max_results: int = Field(default=10, ge=1)
-
-
 class CodeUnderstandInput(ContractModel):
     """Inputs for read-only code inspection and explanation."""
 
@@ -460,15 +430,6 @@ class CodeModifyResult(ContractModel):
         return self
 
 
-class ExperimentPrepareInput(ContractModel):
-    """Deprecated: merged into experiment_run, removed at the Phase 7 switch."""
-
-    capability: Literal[Capability.EXPERIMENT_PREPARE] = Capability.EXPERIMENT_PREPARE
-    repository_url: NonEmptyStr | None = None
-    source_artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    requirements: list[NonEmptyStr] = Field(default_factory=list)
-
-
 class ExperimentRunInput(ContractModel):
     """Inputs for running an experiment and collecting named evidence."""
 
@@ -520,23 +481,11 @@ class ExperimentResult(ContractModel):
         return [_validate_relative_path(value) for value in values]
 
 
-class AskUserInput(ContractModel):
-    """Deprecated: ask-user is a control signal, removed at the Phase 7 switch."""
-
-    capability: Literal[Capability.ASK_USER] = Capability.ASK_USER
-    question: QuestionDraft
-
-
 CapabilityInput = Annotated[
     Union[
-        ScientificPlanInput,
-        ScientificAnalyzeInput,
-        LiteratureSearchInput,
         CodeUnderstandInput,
         CodeModifyInput,
-        ExperimentPrepareInput,
         ExperimentRunInput,
-        AskUserInput,
     ],
     Field(discriminator="capability"),
 ]
@@ -580,14 +529,6 @@ def _validate_capability_input(capability: Capability, inputs: CapabilityInput) 
         )
 
 
-def _require_task_capability(capability: Capability) -> None:
-    """Reject control-plane capabilities that are never scheduled as tasks."""
-    if capability in {Capability.SCIENTIFIC_PLAN, Capability.ASK_USER}:
-        raise ValueError(
-            f"capability {capability.value!r} is control-plane and cannot be a task"
-        )
-
-
 class TaskProposal(ContractModel):
     """Scientific suggestion for one logical task, before scheduler acceptance."""
 
@@ -603,7 +544,6 @@ class TaskProposal(ContractModel):
     @model_validator(mode="after")
     def validate_input_type(self) -> TaskProposal:
         _validate_capability_input(self.capability, self.inputs)
-        _require_task_capability(self.capability)
         return self
 
 
@@ -625,7 +565,6 @@ class WorkflowTask(ContractModel):
     @model_validator(mode="after")
     def validate_task(self) -> WorkflowTask:
         _validate_capability_input(self.capability, self.inputs)
-        _require_task_capability(self.capability)
         numbers = [attempt.number for attempt in self.attempts]
         if numbers != list(range(1, len(numbers) + 1)):
             raise ValueError("attempt numbers must be contiguous and start at 1")
@@ -858,16 +797,6 @@ class CapabilityRegistry(ContractModel):
         if len(capabilities) != len(set(capabilities)):
             raise ValueError("duplicate capability definition")
         return self
-
-
-class ScientificConclusion(ContractModel):
-    """Deprecated: superseded by ScientificOpinion, removed at the Phase 7 switch."""
-
-    verdict: ScientificVerdict
-    summary: NonEmptyStr
-    evidence_artifact_ids: list[ArtifactId]
-    limitations: list[NonEmptyStr] = Field(default_factory=list)
-    recommended_next_steps: list[NonEmptyStr] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

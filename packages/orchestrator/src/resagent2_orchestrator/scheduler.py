@@ -441,8 +441,9 @@ class WorkflowScheduler:
         # Execution graph is stable. With an active work request, freeze a
         # WorkOutcome and mark it stable so the controller can resume the
         # Scientific Session. A work request already stable is left for the
-        # controller. Without any (legacy PlanningPort path), keep the
-        # pre-Phase-7 completion semantics.
+        # controller. Without any work request (a scheduler-driven run that
+        # never went through the ResearchController), fall back to required-task
+        # completion semantics.
         active = self._active_work_request(run)
         if active is not None and active.status == WorkRequestStatus.EXECUTING:
             active.workflow_revision = run.workflow.revision

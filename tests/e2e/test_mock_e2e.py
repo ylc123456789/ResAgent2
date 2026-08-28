@@ -10,7 +10,7 @@ def test_mock_e2e_runs_the_golden_loop_to_completion(tmp_path) -> None:
     assert [task.capability for task in run.workflow.tasks] == [
         Capability.CODE_MODIFY,
         Capability.EXPERIMENT_RUN,
-        Capability.SCIENTIFIC_ANALYZE,
     ]
-    assert len(run.artifacts) == 3
+    assert run.final_opinion is not None
+    assert run.final_report_artifact_id == "artifact_final_report"
     assert all(task.attempts for task in run.workflow.tasks)

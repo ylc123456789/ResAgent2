@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     ArtifactCandidate,
     ArtifactRef,
-    AskUserInput,
     Attempt,
     AttemptStatus,
     Capability,
@@ -18,7 +17,6 @@ from resagent2_contracts import (
     PendingQuestion,
     QuestionDraft,
     RunBudget,
-    ScientificPlanInput,
     TaskBudget,
     TaskProposal,
     TaskStatus,
@@ -49,10 +47,6 @@ def research_request() -> ResearchRequest:
             timeout_seconds=3600,
         ),
     )
-
-
-def plan_input() -> ScientificPlanInput:
-    return ScientificPlanInput(request=research_request())
 
 
 def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
@@ -171,40 +165,6 @@ def test_module_request_input_must_match_capability() -> None:
             goal="Modify",
             inputs=CodeUnderstandInput(question="Where is the entry point?"),
             budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=300),
-        )
-
-
-@pytest.mark.parametrize(
-    "capability",
-    [Capability.SCIENTIFIC_PLAN, Capability.ASK_USER],
-)
-def test_task_rejects_control_plane_capabilities(capability: Capability) -> None:
-    if capability == Capability.SCIENTIFIC_PLAN:
-        inputs = plan_input()
-    else:
-        inputs = AskUserInput(
-            question=QuestionDraft(
-                text="Which one?",
-                requested_fields=["choice"],
-                reason="need input",
-            )
-        )
-    with pytest.raises(ValidationError, match="control-plane"):
-        TaskProposal(
-            id="task_control",
-            work_request_id="work_test",
-            capability=capability,
-            goal="Control-plane",
-            rationale="Control-plane operations do not belong in a workflow",
-            inputs=inputs,
-        )
-    with pytest.raises(ValidationError, match="control-plane"):
-        WorkflowTask(
-            id="task_control",
-            work_request_id="work_test",
-            capability=capability,
-            goal="Control-plane",
-            inputs=inputs,
         )
 
 

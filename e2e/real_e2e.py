@@ -1,10 +1,10 @@
-"""Real closed-loop test with native Coding/Experiment agents and legacy scientific.
+"""Real closed-loop test with native Coding/Experiment/Scientific agents.
 
-Unlike mock_e2e, this calls the Phase 5 native Coding Agent, the Phase 6 native
-Experiment Agent, and the old ExpAgent through its adapter, using the real
-DeepSeek LLM. EXPAGENT_PATH defaults to the AutoDL layout. The experiment
-environment is content-addressed; set RESAGENT2_RESOURCE_ROOT to a stable
-directory to reuse conda envs across runs (RESAGENT2_CONDA_EXE overrides conda).
+Calls the Phase 5 native Coding Agent, the Phase 6 native Experiment Agent and
+the Phase 7 native Scientific Agent through the ResearchController, using the
+real DeepSeek LLM. The experiment environment is content-addressed; set
+RESAGENT2_RESOURCE_ROOT to a stable directory to reuse conda envs across runs
+(RESAGENT2_CONDA_EXE overrides conda).
 
 Stages: ``python -m e2e.real_e2e code|experiment|full``.
 """
@@ -20,6 +20,8 @@ from pathlib import Path
 from resagent2_contracts import (
     AgentOwner,
     Capability,
+    CapabilityDefinition,
+    CapabilityRegistry,
     CodeModifyInput,
     ExperimentRunInput,
     ModuleResult,
@@ -28,7 +30,6 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
-    ScientificAnalyzeInput,
     TaskBudget,
     TaskStatus,
     WorkspaceGrant,
@@ -38,15 +39,17 @@ from resagent2_contracts import (
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
-    DeterministicPlanningPort,
     JsonRunStore,
+    LLMWorkflowCompiler,
     ModuleBinding,
+    ResearchController,
     WorkflowScheduler,
 )
-from resagent2_orchestrator.adapters import (
-    LegacyScientificAnalyzeAdapter,
+from resagent2_runtime import (
+    ComposedContext,
+    OpenAICompatibleClient,
 )
-from resagent2_runtime import OpenAICompatibleClient
+from resagent2_scientific import ScientificAgent
 
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
@@ -80,7 +83,6 @@ if __name__ == "__main__":
 _EXPECTED_TASK_CAPABILITIES = {
     Capability.CODE_MODIFY,
     Capability.EXPERIMENT_RUN,
-    Capability.SCIENTIFIC_ANALYZE,
 }
 
 _MODEL = "deepseek-chat"
@@ -131,15 +133,72 @@ def _experiment_agent() -> NativeExperimentAgent:
     )
 
 
+def _scientific_agent() -> ScientificAgent:
+    return ScientificAgent(
+        OpenAICompatibleClient(
+            model=_MODEL,
+            api_base=_API_BASE,
+            api_key_env=_API_KEY_ENV,
+        )
+    )
+
+
+class _CompilerClient:
+    """Adapt the runtime OpenAI client to the orchestrator CompilerLLM seam.
+
+    The runtime client consumes a ``ComposedContext``; the compiler supplies a
+    plain prompt string. This adapter bridges the two without importing the
+    runtime into the orchestrator.
+    """
+
+    def __init__(self, *, model: str, api_base: str, api_key_env: str) -> None:
+        self._client = OpenAICompatibleClient(
+            model=model, api_base=api_base, api_key_env=api_key_env
+        )
+
+    def next_action(self, prompt: str, action_type):
+        context = ComposedContext(
+            text=prompt, included_sections=[], omitted_sections=[]
+        )
+        return self._client.next_action(context, action_type)
+
+
+def _registry() -> CapabilityRegistry:
+    return CapabilityRegistry(
+        definitions=[
+            CapabilityDefinition(
+                capability=Capability.CODE_MODIFY,
+                owner=AgentOwner.CODING,
+                request_model="CodeModifyInput",
+                result_model="CodeModifyResult",
+                permission_policy="read_write_workspace",
+                completion_evidence=["code_change"],
+            ),
+            CapabilityDefinition(
+                capability=Capability.EXPERIMENT_RUN,
+                owner=AgentOwner.EXPERIMENT,
+                request_model="ExperimentRunInput",
+                result_model="ExperimentResult",
+                permission_policy="read_write_workspace",
+                completion_evidence=["experiment_result"],
+            ),
+        ]
+    )
+
+
 def _real_e2e_succeeded(run) -> bool:
-    """Require completed tasks and task-owned evidence for every golden step."""
+    """Require completed tasks, task-owned evidence and a final scientific opinion."""
+    if run.status != RunStatus.COMPLETED or run.final_opinion is None:
+        return False
+    if run.final_report_artifact_id is None:
+        return False
     tasks = {task.capability: task for task in run.workflow.tasks}
     if (
         len(run.workflow.tasks) != len(_EXPECTED_TASK_CAPABILITIES)
         or set(tasks) != _EXPECTED_TASK_CAPABILITIES
     ):
         return False
-    if run.status != RunStatus.COMPLETED or any(
+    if any(
         task.status != TaskStatus.COMPLETED or not task.attempts
         for task in tasks.values()
     ):
@@ -155,8 +214,6 @@ def _real_e2e_succeeded(run) -> bool:
         )
 
     if not has_artifact(Capability.EXPERIMENT_RUN, "experiment_result"):
-        return False
-    if not has_artifact(Capability.SCIENTIFIC_ANALYZE, "scientific_decision"):
         return False
     return has_artifact(Capability.CODE_MODIFY, "code_change")
 
@@ -207,7 +264,6 @@ def run_full(workdir: Path) -> bool:
             max_tasks=6, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
-    proposal = DeterministicPlanningPort().propose(request)
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
@@ -220,17 +276,19 @@ def run_full(workdir: Path) -> bool:
                 port=_experiment_agent(),
                 workspace=_grant(repo),
             ),
-            Capability.SCIENTIFIC_ANALYZE: ModuleBinding(
-                owner=AgentOwner.SCIENTIFIC,
-                port=LegacyScientificAnalyzeAdapter(),
-                workspace=_grant(repo),
-            ),
         },
         store=JsonRunStore(workdir / "state"),
         artifact_root=workdir / "artifacts",
     )
-    run = scheduler.create_run("run_full_real", request, proposal)
-    run = scheduler.run_until_stable("run_full_real")
+    controller = ResearchController(
+        scientific_port=_scientific_agent(),
+        compiler=LLMWorkflowCompiler(
+            _CompilerClient(model=_MODEL, api_base=_API_BASE, api_key_env=_API_KEY_ENV)
+        ),
+        scheduler=scheduler,
+        registry=_registry(),
+    )
+    run = controller.create_run("run_full_real", request)
     for task in run.workflow.tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")

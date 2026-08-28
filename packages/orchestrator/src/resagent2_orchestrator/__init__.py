@@ -17,7 +17,6 @@ from .completion import (
 )
 from .controller import ResearchController, ScientificGate, ScientificPort
 from .models import CompletionViolation, CompletionViolationCode, ResearchRun
-from .planning import DeterministicPlanningPort, PlanningPort
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
 from .scheduler import OrchestrationError, WorkflowScheduler
 from .store import InMemoryRunStore, JsonRunStore, RunStore
@@ -30,7 +29,6 @@ __all__ = [
     "CompletionViolation",
     "CompletionViolationCode",
     "CompilerLLM",
-    "DeterministicPlanningPort",
     "DeterministicWorkflowCompiler",
     "FinalReportData",
     "FinalReportRenderer",
@@ -40,7 +38,6 @@ __all__ = [
     "ModuleBinding",
     "ModulePort",
     "OrchestrationError",
-    "PlanningPort",
     "ResearchController",
     "ResearchRun",
     "RenderedFinalReport",

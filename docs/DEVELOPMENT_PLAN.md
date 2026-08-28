@@ -35,10 +35,10 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1—7.6 完成；7.7 production 原子切换待做） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | 代码完成（7.1—7.7 全部落地并通过本地测试；服务器真实 E2E 待跑） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据。Phase 7 ScientificOpinion gate 已在 7.6 代码路径实现，但 production 仍未切换，不能把 Phase 6 服务器结果当作 7.7 验收。
+Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据。Phase 7 已通过 7.7 原子切换把 production composition root 切到唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`），删除旧 PlanningPort/`LegacyScientificAnalyzeAdapter` 及全部 deprecated 类型；schema 2.0 仍待服务器真实 E2E 通过后冻结。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -586,6 +586,8 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 7.7 是 schema 2.0 的原子发布切换：同一个变更先切 production composition root，再删除旧入口和所有 deprecated symbol，更新调用者/tests/E2E；变更结束前不得发布或合并部分状态。
 
+**状态：切换与删除已完成（2026-08-28，未提交）。** 已删除 PlanningPort/`DeterministicPlanningPort`、`LegacyScientificAnalyzeAdapter` 及 `ScientificPlanInput`/`ScientificAnalyzeInput`/`LiteratureSearchInput`/`ExperimentPrepareInput`/`AskUserInput`/`ScientificConclusion` 与旧 `scientific_plan`/`scientific_analyze`/`literature_search`/`experiment_prepare`/`ask_user` capability enum 值；`CapabilityInput` 收缩为 `CodeUnderstandInput`/`CodeModifyInput`/`ExperimentRunInput`。`mock_e2e.py` 与 `real_e2e.py` 重写为唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `WorkflowCompiler`），`real_e2e.py` 新增 `_CompilerClient` 把 runtime client 适配到 orchestrator `CompilerLLM`。受影响的 scheduler 测试把 `scientific_analyze` 下游节点改写为 `code_understand`。全仓本地 227 passed、1 skipped，mock E2E 一条命令跑通；服务器真实 E2E 未执行。
+
 切换时删除：
 
 - PlanningPort / DeterministicPlanningPort；
@@ -691,4 +693,5 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.5 ResearchController | `a1562fe` | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |
 | 2026-08-28 | Phase 7.5 hardening 收尾 | `36c4d8b` | 本地 213 tests | 修 resume 幂等（work_outcome/answers 键）、consumed 时机、answers 只传新增、WorkOutcome 按 work_request_id 隔离、unresolved 从整个 workflow 派生、observed 复核、Run 总预算；补 6 类负例测试 |
 | 2026-08-28 | Phase 7.5 hardening 收尾（二） | `f870bc3` | 本地 215 tests | JsonSessionStore 持久化 + 真实重启恢复、run_until_stable 按 WorkRequest 状态分派、预算 remaining + 事后复核、observed 复核失败即 failed；补真实重启/预算超限负例 |
-| 2026-08-28 | Phase 7.6 finish gate + final report | 未提交 | 本地 230 passed、1 skipped | 结构化完成复核与 violation 持久化、typed deterministic report、orchestrator Artifact 登记、7.5 acceptance crash-window 恢复；未接 production |
+| 2026-08-28 | Phase 7.6 finish gate + final report | `c9fc5f3` | 本地 230 passed、1 skipped | 结构化完成复核与 violation 持久化、typed deterministic report、orchestrator Artifact 登记、7.5 acceptance crash-window 恢复；未接 production |
+| 2026-08-28 | Phase 7.7 原子切换 | 未提交 | 本地 227 passed、1 skipped | 删除 PlanningPort/DeterministicPlanningPort/LegacyScientificAnalyzeAdapter 及全部 deprecated 类型与 enum 值；production 切到唯一 Scientific 路径；e2e 重写；scheduler 测试下游节点改写 code_understand；服务器真实 E2E 未跑 |

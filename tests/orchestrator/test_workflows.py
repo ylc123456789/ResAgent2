@@ -6,6 +6,7 @@ from resagent2_contracts import (
     AgentOwner,
     Capability,
     CodeModifyInput,
+    CodeUnderstandInput,
     ExperimentRunInput,
     ModuleError,
     ModuleResult,
@@ -13,7 +14,6 @@ from resagent2_contracts import (
     QuestionDraft,
     RunBudget,
     RunStatus,
-    ScientificAnalyzeInput,
     SessionRef,
     SessionStatus,
     TaskProposal,
@@ -56,11 +56,8 @@ def task(
     required: bool = True,
     work_request_id: str = "work_legacy_initial",
 ) -> TaskProposal:
-    if capability == Capability.SCIENTIFIC_ANALYZE:
-        inputs = ScientificAnalyzeInput(
-            question="What does the evidence show?",
-            evidence_artifact_ids=[],
-        )
+    if capability == Capability.CODE_UNDERSTAND:
+        inputs = CodeUnderstandInput(question="What does the evidence show?")
     elif capability == Capability.CODE_MODIFY:
         inputs = CodeModifyInput(instructions="Apply the required repair")
     else:
@@ -83,7 +80,7 @@ def completed(summary="done") -> ModuleResult:
 
 def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowScheduler:
     owners = {
-        Capability.SCIENTIFIC_ANALYZE: AgentOwner.SCIENTIFIC,
+        Capability.CODE_UNDERSTAND: AgentOwner.CODING,
         Capability.CODE_MODIFY: AgentOwner.CODING,
         Capability.EXPERIMENT_RUN: AgentOwner.EXPERIMENT,
     }
@@ -105,14 +102,14 @@ def test_linear_workflow_runs_to_completion() -> None:
         tasks=[
             task("task_code", Capability.CODE_MODIFY),
             task("task_experiment", Capability.EXPERIMENT_RUN, ["task_code"]),
-            task("task_analyze", Capability.SCIENTIFIC_ANALYZE, ["task_experiment"]),
+            task("task_analyze", Capability.CODE_UNDERSTAND, ["task_experiment"]),
         ],
     )
     engine = scheduler(
         {
             Capability.CODE_MODIFY: [completed()],
             Capability.EXPERIMENT_RUN: [completed()],
-            Capability.SCIENTIFIC_ANALYZE: [completed()],
+            Capability.CODE_UNDERSTAND: [completed()],
         }
     )
 
@@ -138,7 +135,7 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
             task("task_treatment", Capability.EXPERIMENT_RUN),
             task(
                 "task_analyze",
-                Capability.SCIENTIFIC_ANALYZE,
+                Capability.CODE_UNDERSTAND,
                 ["task_baseline", "task_treatment"],
             ),
         ],
@@ -146,7 +143,7 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     engine = scheduler(
         {
             Capability.EXPERIMENT_RUN: [completed("baseline"), completed("treatment")],
-            Capability.SCIENTIFIC_ANALYZE: [completed()],
+            Capability.CODE_UNDERSTAND: [completed()],
         }
     )
     engine.create_run("run_parallel", research_request(), proposal)

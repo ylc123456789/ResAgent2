@@ -202,6 +202,30 @@ def test_llm_compiler_rejects_invalid_json() -> None:
         )
 
 
+def test_llm_compiler_rejects_undeclared_capability() -> None:
+    # The LLM invents code_understand, which the registry does not declare.
+    raw = {
+        "work_request_id": "work_round1",
+        "summary": "compiled",
+        "compilation_rationale": "semantic",
+        "tasks": [
+            {
+                "id": "task_understand",
+                "work_request_id": "work_round1",
+                "capability": "code_understand",
+                "goal": "Inspect",
+                "rationale": "evidence",
+                "inputs": {"capability": "code_understand", "question": "Where?"},
+            }
+        ],
+    }
+    compiler = LLMWorkflowCompiler(_FakeCompilerLLM(raw))
+    with pytest.raises(CompilationError, match="undeclared"):
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget()
+        )
+
+
 def test_llm_compiler_rejects_cyclic_graph() -> None:
     raw = {
         "work_request_id": "work_round1",

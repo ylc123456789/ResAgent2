@@ -98,6 +98,7 @@ def _compile_prompt(
         f"Expected evidence: {', '.join(request.request.expected_evidence)}",
         f"Constraints: {', '.join(request.request.constraints) or '(none)'}",
         f"Available capabilities: {capabilities or '(none)'}",
+        "Use only capabilities from the list above; do not invent new ones.",
         f"Max tasks: {budget.max_tasks}",
     ]
     if current is not None:
@@ -122,6 +123,27 @@ def _bind_work_request_id(raw: dict, request: WorkRequest) -> dict:
     return bound
 
 
+def _reject_undeclared_capabilities(
+    proposal: WorkflowProposal | WorkflowPatch,
+    registry: CapabilityRegistry,
+) -> None:
+    """Reject any task whose capability the registry does not declare.
+
+    The LLM may invent a capability not bound by the composition root. That is
+    a code guarantee, not a prompt suggestion: compilation fails loudly instead
+    of surfacing a confusing "no ModulePort binding" at scheduler acceptance.
+    """
+    declared = {definition.capability for definition in registry.definitions}
+    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
+    undeclared = sorted(
+        {task.capability.value for task in tasks if task.capability not in declared}
+    )
+    if undeclared:
+        raise CompilationError(
+            "compiler selected undeclared capabilities: " + ", ".join(undeclared)
+        )
+
+
 class LLMWorkflowCompiler:
     """Compile via one bounded structured LLM call, then schema-validate."""
 
@@ -144,8 +166,10 @@ class LLMWorkflowCompiler:
         raw = self._client.next_action(prompt, action_type)
         raw = _bind_work_request_id(raw, request)
         try:
-            return action_type.model_validate(raw)
+            proposal = action_type.model_validate(raw)
         except ValidationError as error:
             raise CompilationError(
                 f"compiler produced an invalid {action_type.__name__}: {error}"
             ) from error
+        _reject_undeclared_capabilities(proposal, registry)
+        return proposal

@@ -192,7 +192,10 @@ class _CompilerClient:
 
     def next_action(self, prompt: str, action_type):
         context = ComposedContext(
-            text=prompt, included_sections=[], omitted_sections=[]
+            text=prompt,
+            included_sections=[],
+            omitted_sections=[],
+            estimated_tokens=0,
         )
         return self._client.next_action(context, action_type)
 

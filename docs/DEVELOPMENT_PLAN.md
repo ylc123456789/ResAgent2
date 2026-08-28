@@ -35,10 +35,10 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent、7.5 ResearchController 完成） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1—7.6 完成；7.7 production 原子切换待做） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
+Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据。Phase 7 ScientificOpinion gate 已在 7.6 代码路径实现，但 production 仍未切换，不能把 Phase 6 服务器结果当作 7.7 验收。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -564,7 +564,7 @@ ResearchRun 内部字段以 CONTRACTS §20.10.1 为准。work_requests 列表是
 
 #### 7.6 scientific finish gate 与 final report
 
-实现 `ScientificCompletionValidator`，输入同一个不可变 ResearchRun snapshot、ScientificCompletedResult 和 Registry 只读视图。它逐条实现 ARCHITECTURE §13 的七项 gate：
+实现 `ScientificCompletionValidator`，输入同一个不可变 ResearchRun snapshot 和 ScientificCompletedResult；`run.artifacts` 作为 Artifact Registry 已持久化的只读索引，构造时注入 CapabilityRegistry 复核 owner。它逐条实现 ARCHITECTURE §13 的七项 gate：
 
 1. completed result/session/run 绑定合法；
 2. 无 active WorkRequest、running Task、PendingQuestion；
@@ -579,6 +579,8 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 通过时 Validator 构造 CONTRACTS §20.10.2 的 FinalReportData。final report 使用只接受该模型的确定性 renderer，不再调用 LLM 二次“润色”。Validator 通过后 renderer 才运行；报告以 kind=final_report、media_type=text/markdown、orchestrator/final_report provenance 登记为 Artifact，final_opinion、final_report_artifact_id 全部持久化成功后才能写 Run completed。
 
 测试覆盖 supports、refutes、inconclusive/not_applicable；缺 evidence、跨 Run Artifact、未观察 Artifact、伪造 observed trace、active work、未确认 failed/blocked Task、completed Task 无合法 finalizer result 均拒绝完成。
+
+**状态：已完成（2026-08-28，未提交）。** 新增 `orchestrator/completion.py`：ScientificCompletionValidator 按 CONTRACTS §20.10.2 固定顺序验证 Session/control state/opinion/evidence/failed Task/completed Attempt/ID，输出结构化 violations 或 FinalReportData；失败 violations 持久化在 ResearchRun，FinalReportRenderer 只消费 FinalReportData，确定性生成 Markdown ArtifactCandidate。ArtifactRegistry 新增同内容幂等、原子落盘的 orchestrator final report 登记；ResearchController 默认替换 `_MinimalGate`，只有报告 Artifact、final_opinion 和 final_report_artifact_id 全部形成后才写 completed。同时补齐 7.5 的“workflow 已接受、WorkRequest 仍停在 compiling”恢复窗口和 compiled workflow 拒绝处理。全仓 230 passed、1 skipped；尚未接 production，7.7 真实 E2E 未执行。
 
 #### 7.7 切换、删除和真实 E2E
 
@@ -621,6 +623,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [ ] final report 是确定性渲染且只引用 typed facts；
 - [ ] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
 - [ ] production composition root 只有一条 Scientific 路径；
+- [ ] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
 - [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；
 - [ ] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
@@ -652,7 +655,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；未接 production |
 | WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；未接 production |
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
-| final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 目标已裁定，代码未实现 |
+| final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 接 production |
 
 ## 13. 文档同步检查
 
@@ -687,4 +690,5 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | `5cbfaec` | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |
 | 2026-08-28 | Phase 7.5 ResearchController | `a1562fe` | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |
 | 2026-08-28 | Phase 7.5 hardening 收尾 | `36c4d8b` | 本地 213 tests | 修 resume 幂等（work_outcome/answers 键）、consumed 时机、answers 只传新增、WorkOutcome 按 work_request_id 隔离、unresolved 从整个 workflow 派生、observed 复核、Run 总预算；补 6 类负例测试 |
-| 2026-08-28 | Phase 7.5 hardening 收尾（二） | 未提交 | 本地 215 tests | JsonSessionStore 持久化 + 真实重启恢复、run_until_stable 按 WorkRequest 状态分派、预算 remaining + 事后复核、observed 复核失败即 failed；补真实重启/预算超限负例 |
+| 2026-08-28 | Phase 7.5 hardening 收尾（二） | `f870bc3` | 本地 215 tests | JsonSessionStore 持久化 + 真实重启恢复、run_until_stable 按 WorkRequest 状态分派、预算 remaining + 事后复核、observed 复核失败即 failed；补真实重启/预算超限负例 |
+| 2026-08-28 | Phase 7.6 finish gate + final report | 未提交 | 本地 230 passed、1 skipped | 结构化完成复核与 violation 持久化、typed deterministic report、orchestrator Artifact 登记、7.5 acceptance crash-window 恢复；未接 production |

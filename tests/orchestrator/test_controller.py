@@ -18,9 +18,16 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
+    ScientificCompletedResult,
+    ScientificOpinion,
     ScientificVerdict,
+    SessionRef,
+    SessionStatus,
     TaskProposal,
     UserAnswer,
+    WorkRequest,
+    WorkRequestDraft,
+    WorkRequestStatus,
     WorkflowPatch,
     WorkflowProposal,
 )
@@ -30,6 +37,7 @@ from resagent2_orchestrator import (
     JsonRunStore,
     ModuleBinding,
     ResearchController,
+    ResearchRun,
     ScriptedModulePort,
     WorkflowScheduler,
 )
@@ -150,6 +158,47 @@ def test_direct_conclusion_without_work() -> None:
     assert run.status == RunStatus.COMPLETED
     assert run.final_opinion is not None
     assert run.work_requests == []
+    assert run.final_report_artifact_id == "artifact_final_report"
+    report = run.artifacts[run.final_report_artifact_id]
+    assert report.producer == AgentOwner.ORCHESTRATOR
+    assert report.metadata == {"source_type": "final_report"}
+
+
+def test_completion_gate_violations_are_persisted() -> None:
+    invalid_session = SessionRef(
+        id="session_wrong_owner",
+        module=AgentOwner.EXPERIMENT,
+        state_uri="memory://session_wrong_owner",
+        status=SessionStatus.COMPLETED,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    class _InvalidCompletionPort:
+        def run(self, request):
+            return ScientificCompletedResult(
+                status="completed",
+                opinion=ScientificOpinion(
+                    verdict=ScientificVerdict.INCONCLUSIVE,
+                    statement="No decisive evidence.",
+                ),
+                session=invalid_session,
+            )
+
+    scheduler = WorkflowScheduler(bindings={}, store=InMemoryRunStore())
+    controller = ResearchController(
+        scientific_port=_InvalidCompletionPort(),
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_invalid_gate", research_request())
+
+    assert run.status == RunStatus.FAILED
+    assert [item.code.value for item in run.completion_violations] == [
+        "invalid_session"
+    ]
 
 
 def test_single_work_cycle_completes() -> None:
@@ -326,6 +375,88 @@ def test_compilation_failure_fails_run() -> None:
 
     assert run.status == RunStatus.FAILED
     assert run.work_requests[0].status.value == "failed"
+
+
+def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> None:
+    """Do not compile/apply a second graph after the acceptance crash window."""
+
+    class _MustNotCompile:
+        def compile(self, request, *, current, registry, budget):
+            raise AssertionError("accepted workflow must not be compiled again")
+
+    completed_session = SessionRef(
+        id="session_recovery",
+        module=AgentOwner.SCIENTIFIC,
+        state_uri="memory://session_recovery",
+        status=SessionStatus.COMPLETED,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    class _FinishingPort:
+        def run(self, request):
+            assert request.work_outcome is not None
+            return ScientificCompletedResult(
+                status="completed",
+                opinion=ScientificOpinion(
+                    verdict=ScientificVerdict.INCONCLUSIVE,
+                    statement="Execution completed without decisive evidence.",
+                ),
+                session=completed_session,
+                llm_calls=1,
+            )
+
+    store = InMemoryRunStore()
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=store,
+        artifact_root=tmp_path / "artifacts",
+    )
+    compiling = WorkRequest(
+        id="work_1",
+        run_id="run_accept_recovery",
+        scientific_session_id=completed_session.id,
+        request=WorkRequestDraft(
+            objective="Run the experiment",
+            expected_evidence=["metric"],
+        ),
+        status=WorkRequestStatus.COMPILING,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    store.save(
+        ResearchRun(
+            run_id="run_accept_recovery",
+            request=research_request(),
+            status=RunStatus.RUNNING,
+            work_requests=[compiling],
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    # Simulate the crash: scheduler acceptance is durable, but the controller
+    # has not yet persisted compiling -> executing.
+    scheduler.accept_proposal(
+        "run_accept_recovery",
+        proposal("work_1"),
+    )
+    controller = ResearchController(
+        scientific_port=_FinishingPort(),
+        compiler=_MustNotCompile(),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.run_until_stable("run_accept_recovery")
+
+    assert run.status == RunStatus.COMPLETED
+    assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
+    assert run.workflow.revision == 1
 
 
 def test_second_work_outcome_contains_only_second_round_tasks() -> None:

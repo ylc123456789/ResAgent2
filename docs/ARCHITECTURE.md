@@ -2,9 +2,9 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）
 
-**当前基线**：Phase 6 已完成；Phase 7 进行中（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 原生 Scientific Agent 已实现）
+**当前基线**：Phase 6 已完成；Phase 7 进行中（7.1—7.6 已实现并通过本地测试，新路径尚未接 production）
 
-**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为运行事实；7.6（finish gate + final report）与 7.7（原子切换）仍未实现
+**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为 production 事实；当前只剩 7.7 原子切换、旧路径删除和真实 E2E 尚未实现
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 
@@ -374,11 +374,11 @@ observation history 的所有者是 runtime SessionStore；ResAgent 不读取原
 
 ## 13. 完成判定
 
-### 13.1 Phase 6 当前 gate
+### 13.1 Phase 6 当前 production gate
 
-当前代码只检查：无 PendingQuestion、无 ready/running Task、所有 required 非-superseded Task completed。`SuccessCriterion` / `evidence_key` 当前只持久化，不求值；Artifact 路径、hash 和 provenance 在登记时验证。
+当前 production 路径仍只检查：无 PendingQuestion、无 ready/running Task、所有 required 非-superseded Task completed。schema 1.1 的 `SuccessCriterion` / `evidence_key` 历史上从未求值，现已从 schema 2.0 代码删除；Artifact 路径、hash 和 provenance 继续在登记时验证。
 
-### 13.2 Phase 7 目标 scientific gate
+### 13.2 Phase 7 scientific gate（7.6 代码已实现，7.7 切 production）
 
 schema 2.0 删除通用 `SuccessCriterion` / `evidence_key`，不实现中心求值器。Coding、Experiment、Scientific 各自的确定性 finalizer 是领域完成证据的唯一判断者；ResAgent 不从 summary 或任意 payload 猜测完成状态。
 

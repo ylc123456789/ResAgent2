@@ -33,6 +33,11 @@ from resagent2_contracts import (
 )
 
 from .compiler import WorkflowCompiler
+from .completion import (
+    CompletionValidation,
+    FinalReportRenderer,
+    ScientificCompletionValidator,
+)
 from .models import ResearchRun
 from .scheduler import WorkflowScheduler
 
@@ -44,18 +49,13 @@ class ScientificPort(Protocol):
 
 
 class ScientificGate(Protocol):
-    """Validate a completed Scientific turn against the run state.
-
-    Phase 7.5 wires a minimal gate; Phase 7.6 replaces it with the full
-    ScientificCompletionValidator (CONTRACTS §20.10.2).
-    """
+    """Validate a completed Scientific turn against the run state."""
 
     def validate(
         self,
         run: ResearchRun,
         result: ScientificCompletedResult,
-    ) -> list[str]:
-        """Return an empty list on success, else human-readable violations."""
+    ) -> CompletionValidation: ...
 
 
 class ResearchController:
@@ -69,12 +69,14 @@ class ResearchController:
         scheduler: WorkflowScheduler,
         registry: CapabilityRegistry,
         gate: ScientificGate | None = None,
+        report_renderer: FinalReportRenderer | None = None,
     ) -> None:
         self.scientific_port = scientific_port
         self.compiler = compiler
         self.scheduler = scheduler
         self.registry = registry
-        self.gate = gate or _MinimalGate()
+        self.gate = gate or ScientificCompletionValidator(registry)
+        self.report_renderer = report_renderer or FinalReportRenderer()
 
     def create_run(
         self,
@@ -219,13 +221,29 @@ class ResearchController:
             return run
 
         if isinstance(result, ScientificCompletedResult):
-            violations = self.gate.validate(run, result)
-            if violations:
+            validation = self.gate.validate(run, result)
+            run.scientific_session = result.session
+            if not validation.ok:
+                run.completion_violations = list(validation.violations)
                 run.status = RunStatus.FAILED
                 self._save(run)
                 return run
+            assert validation.report is not None
+            try:
+                rendered = self.report_renderer.render(validation.report)
+                report = self.scheduler.artifact_registry.register_final_report(
+                    rendered.candidate,
+                    rendered.content,
+                    run_id=run.run_id,
+                )
+            except Exception:
+                run.status = RunStatus.FAILED
+                self._save(run)
+                return run
+            run.artifacts[report.id] = report
+            run.completion_violations = []
             run.final_opinion = result.opinion
-            run.scientific_session = result.session
+            run.final_report_artifact_id = report.id
             run.status = RunStatus.COMPLETED
             self._save(run)
             return run
@@ -250,6 +268,18 @@ class ResearchController:
             # The workflow was already accepted; resume scheduler execution.
             return self.scheduler.run_until_stable(run_id)
 
+        if active.status == WorkRequestStatus.COMPILING and run.workflow is not None:
+            accepted = run.workflow.created_from == active.id or any(
+                task.work_request_id == active.id for task in run.workflow.tasks
+            )
+            if accepted:
+                # Recovery window: the graph was durably accepted immediately
+                # before the WorkRequest transition was saved.
+                active.status = WorkRequestStatus.EXECUTING
+                active.workflow_revision = run.workflow.revision
+                self._save(run)
+                return self.scheduler.run_until_stable(run_id)
+
         # REQUESTED or COMPILING: the compiler is stateless, so a crash after
         # marking COMPILING is safely retried (CONTRACTS §20.3).
         active.status = WorkRequestStatus.COMPILING
@@ -273,12 +303,30 @@ class ResearchController:
             self._save(run)
             return run
 
-        if run.workflow is None:
-            self.scheduler.accept_proposal(run_id, compiled)
-        else:
-            self.scheduler.apply_patch(run_id, compiled)
+        try:
+            if run.workflow is None:
+                self.scheduler.accept_proposal(run_id, compiled)
+            else:
+                self.scheduler.apply_patch(run_id, compiled)
+        except Exception as error:
+            run = self.scheduler.store.load(run_id)
+            active = self._active_work_request(run)
+            if active is not None:
+                active.status = WorkRequestStatus.FAILED
+                active.error = ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message=f"compiled workflow was rejected: {error}",
+                    retryable=False,
+                )
+            run.status = RunStatus.FAILED
+            self._save(run)
+            return run
         run = self.scheduler.store.load(run_id)
         active = self._active_work_request(run)
+        if active is None:
+            run.status = RunStatus.FAILED
+            self._save(run)
+            return run
         active.status = WorkRequestStatus.EXECUTING
         active.workflow_revision = run.workflow.revision
         self._save(run)
@@ -347,10 +395,3 @@ class ResearchController:
     def _save(self, run: ResearchRun) -> None:
         run.updated_at = datetime.now(UTC)
         self.scheduler.store.save(ResearchRun.model_validate(run.model_dump()))
-
-
-class _MinimalGate:
-    """Phase 7.5 placeholder: accept any field-valid completed opinion."""
-
-    def validate(self, run: ResearchRun, result: ScientificCompletedResult) -> list[str]:
-        return []

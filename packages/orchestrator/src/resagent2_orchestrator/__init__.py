@@ -8,8 +8,15 @@ from .compiler import (
     LLMWorkflowCompiler,
     WorkflowCompiler,
 )
+from .completion import (
+    CompletionValidation,
+    FinalReportData,
+    FinalReportRenderer,
+    RenderedFinalReport,
+    ScientificCompletionValidator,
+)
 from .controller import ResearchController, ScientificGate, ScientificPort
-from .models import ResearchRun
+from .models import CompletionViolation, CompletionViolationCode, ResearchRun
 from .planning import DeterministicPlanningPort, PlanningPort
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
 from .scheduler import OrchestrationError, WorkflowScheduler
@@ -19,9 +26,14 @@ __all__ = [
     "ArtifactRegistrationError",
     "ArtifactRegistry",
     "CompilationError",
+    "CompletionValidation",
+    "CompletionViolation",
+    "CompletionViolationCode",
     "CompilerLLM",
     "DeterministicPlanningPort",
     "DeterministicWorkflowCompiler",
+    "FinalReportData",
+    "FinalReportRenderer",
     "InMemoryRunStore",
     "JsonRunStore",
     "LLMWorkflowCompiler",
@@ -31,8 +43,10 @@ __all__ = [
     "PlanningPort",
     "ResearchController",
     "ResearchRun",
+    "RenderedFinalReport",
     "RunStore",
     "ScientificGate",
+    "ScientificCompletionValidator",
     "ScientificPort",
     "ScriptedModulePort",
     "WorkflowCompiler",

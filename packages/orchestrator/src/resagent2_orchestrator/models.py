@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,6 +31,27 @@ class OrchestratorModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CompletionViolationCode(StrEnum):
+    """Stable categories for deterministic completion failures."""
+
+    INVALID_SESSION = "invalid_session"
+    ACTIVE_CONTROL_STATE = "active_control_state"
+    INVALID_OPINION = "invalid_opinion"
+    UNKNOWN_EVIDENCE = "unknown_evidence"
+    UNOBSERVED_EVIDENCE = "unobserved_evidence"
+    UNACKNOWLEDGED_TASK = "unacknowledged_task"
+    MISSING_LIMITATIONS = "missing_limitations"
+    INCONSISTENT_TASK_RESULT = "inconsistent_task_result"
+
+
+class CompletionViolation(OrchestratorModel):
+    """One persisted machine-labelled reason a Run cannot complete."""
+
+    code: CompletionViolationCode
+    message: str = Field(min_length=1)
+    related_ids: list[str] = Field(default_factory=list)
+
+
 class ResearchRun(OrchestratorModel):
     """Complete persisted state owned by the Research Orchestrator."""
 
@@ -50,5 +72,6 @@ class ResearchRun(OrchestratorModel):
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
     llm_calls_used: int = Field(default=0, ge=0)
+    completion_violations: list[CompletionViolation] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

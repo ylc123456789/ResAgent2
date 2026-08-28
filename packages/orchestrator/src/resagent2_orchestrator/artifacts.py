@@ -34,7 +34,7 @@ class ArtifactRegistry:
     """Copy validated workspace files into an immutable run artifact directory."""
 
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def register(
@@ -98,3 +98,58 @@ class ArtifactRegistry:
             summary=candidate.summary,
             metadata=candidate.metadata,
         )
+
+    def register_final_report(
+        self,
+        candidate: ArtifactCandidate,
+        content: str,
+        *,
+        run_id: RunId,
+    ) -> ArtifactRef:
+        """Atomically freeze one deterministic orchestrator final report.
+
+        The stable id and content check make a retry safe if the file was
+        written immediately before a process crash but the Run was not saved.
+        """
+        if (
+            candidate.kind != "final_report"
+            or candidate.media_type != "text/markdown"
+            or candidate.metadata.get("source_type") != "final_report"
+            or candidate.path != "final_report.md"
+        ):
+            raise ArtifactRegistrationError("invalid final report candidate")
+
+        artifact_id = "artifact_final_report"
+        destination_dir = self.root / run_id / artifact_id
+        destination = destination_dir / candidate.path
+        encoded = content.encode("utf-8")
+        expected_digest = hashlib.sha256(encoded).hexdigest()
+
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            if not destination.is_file() or _sha256(destination) != expected_digest:
+                raise ArtifactRegistrationError("final report path already has other content")
+        else:
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(encoded)
+                os.replace(temporary, destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                raise
+
+        artifact = ArtifactRef(
+            id=artifact_id,
+            kind=candidate.kind,
+            producer=AgentOwner.ORCHESTRATOR,
+            run_id=run_id,
+            uri=destination.as_uri(),
+            sha256=expected_digest,
+            media_type=candidate.media_type,
+            summary=candidate.summary,
+            metadata=candidate.metadata,
+        )
+        return artifact

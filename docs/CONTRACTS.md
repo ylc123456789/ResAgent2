@@ -6,11 +6,11 @@
 
 **当前实现**：`resagent2-contracts 0.1.0`，wire schema `2.0`（`SCHEMA_VERSION="2.0"`，Phase 7.1 起）
 
-**Phase 7 目标**：§20 已实现大部分（ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型、ArtifactRef 三态 provenance、work_request_id 追溯）；§20.10.1（ResearchRun 字段）已随 7.5 落地，§20.10.2（ScientificCompletionValidator）随 7.6 落地
+**Phase 7 目标**：§20 的 7.1—7.6 部分已实现（Scientific control 类型、ArtifactRef 三态 provenance、work_request_id 追溯、ResearchRun 字段、ScientificCompletionValidator 和确定性 final report）；7.7 production 切换后冻结 schema 2.0
 
 ## 1. 使用规则
 
-本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（部分已 deprecated）；§20 描述 Phase 7 的 2.0 目标契约，其中 7.1 已落地并在 `models.py` 导出，7.6 待实现的部分以“尚未实现”标注。
+本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（部分已 deprecated）；§20 描述 Phase 7 的 2.0 目标契约。7.1—7.6 已落地；新路径在 7.7 前仍只由测试/composition fixture 装配。
 
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
@@ -22,14 +22,14 @@
 
 - 继承严格 `ContractModel`；
 - 拒绝未知字段；
-- 序列化 `schema_version: "1.1"`；
+- 序列化 `schema_version: "2.0"`；
 - 以下示意代码省略每个模型继承得到的 `schema_version`，但 wire 数据不能省略其版本语义。
 
 ## 2. 跨模块对象范围
 
 | 边界 | 请求 | 响应/状态 |
 |---|---|---|
-| 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、最终报告（尚未建模） |
+| 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、`final_report` ArtifactRef（内容由内部 FinalReportData 确定性渲染） |
 | 当前 Planning Port（Phase 7 删除） | ScientificPlanInput/ResearchRequest | WorkflowProposal、WorkflowPatch |
 | Scheduler → 专业模块 | ModuleTaskRequest | ModuleResult |
 | 专业模块 → Artifact Registry | ArtifactCandidate | ArtifactRef |
@@ -532,7 +532,7 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 
 ## 20. Phase 7 目标契约（schema 2.0）
 
-7.1 已把本节大部分类型落入 `models.py` 并导出（`SCHEMA_VERSION="2.0"`）；§20.10.1（ResearchRun 内部字段）已随 7.5 落地，§20.10.2（ScientificCompletionValidator/FinalReportData）是 orchestrator 内部模型，随 7.6 落地。尚未实现的类型会在相应小节明确标注「尚未实现」，不得当作当前公共导出。
+7.1 已把公共类型落入 `models.py` 并导出（`SCHEMA_VERSION="2.0"`）；§20.10.1（ResearchRun 内部字段）已随 7.5 落地，§20.10.2（ScientificCompletionValidator/FinalReportData）已随 7.6 落入 orchestrator 内部并从 orchestrator 包导出。它们不是 contracts wire 公共类型。
 
 ### 20.1 新 ID
 
@@ -702,6 +702,7 @@ class ScientificWorkRequestResult:
     work_request: WorkRequestDraft
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = []
+    llm_calls: int = 0
 
 class ScientificQuestionResult:
     status: Literal["needs_user_input"]
@@ -709,18 +710,21 @@ class ScientificQuestionResult:
     question: QuestionDraft
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = []
+    llm_calls: int = 0
 
 class ScientificCompletedResult:
     status: Literal["completed"]
     opinion: ScientificOpinion
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = []
+    llm_calls: int = 0
 
 class ScientificFailedResult:
     status: Literal["failed"]
     error: ModuleError
     session: SessionRef | None = None
     observed_artifact_ids: list[ArtifactId] = []
+    llm_calls: int = 0
 
 ScientificTurnResult = Annotated[
     ScientificWorkRequestResult
@@ -733,6 +737,8 @@ ScientificTurnResult = Annotated[
 class ScientificPort(Protocol):
     def run(self, request: ScientificTurnRequest) -> ScientificTurnResult: ...
 ```
+
+`llm_calls` 是本轮 ScientificPort 实际新增的 LLM 调用数，必须为非负整数。ResearchController 只传剩余预算并把每轮该值累计到 `ResearchRun.llm_calls_used`；累计超过 RunBudget 时不能写 completed。该字段不统计 Coding/Experiment 子 Agent 调用，Phase 7 不在此处扩建跨 Agent 统一计费系统。
 
 组合约束：
 
@@ -841,15 +847,22 @@ class ResearchRun:
     scientific_observed_artifact_ids: list[ArtifactId] = []
     final_opinion: ScientificOpinion | None = None
     final_report_artifact_id: ArtifactId | None = None
+    delivered_answer_ids: list[QuestionId] = []
+    llm_calls_used: int = 0
+    completion_violations: list[CompletionViolation] = []
 ```
 
 `scientific_observed_artifact_ids` 是 ResearchController 对每次 ScientificTurnResult.observed_artifact_ids 做 Registry/run 复核后的稳定去重并集，不是原始 Session event 副本。active WorkRequest 从 work_requests 中唯一的 requested/compiling/executing/stable 项派生，不另存第二个可漂移字段。
+
+`delivered_answer_ids` 只记录已成功投递给 ScientificPort 的 question_id，恢复时仅发送新增 UserAnswer，避免重启后重复注入历史回答。`llm_calls_used` 只累计 ScientificTurnResult.llm_calls；字段语义和不覆盖其他子 Agent 的限制见 §20.7。
+
+`completion_violations` 仅在 ResAgent 复核 ScientificCompletedResult 失败时写入，保留结构化 contract_error 证据；验证通过时必须为空。它不保存 Session 私有 event，也不作为下一次 LLM 输入。
 
 final_opinion 只在 ScientificCompletionValidator 通过后写入；final report 随后由 deterministic renderer 产生并以 producer=orchestrator、metadata.source_type=final_report 登记，最后写 final_report_artifact_id。RunStatus 只有在上述写入全部成功后才改 completed。
 
 ### 20.10.2 ScientificCompletionValidator
 
-它是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入是同一个不可变 ResearchRun snapshot、ScientificCompletedResult 和 Artifact Registry 的只读视图；输出为空表示通过，否则返回结构化 violations 并视为 contract_error。
+它是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。`validate` 输入同一个不可变 ResearchRun snapshot 和 ScientificCompletedResult；snapshot 中的 `run.artifacts` 就是 Artifact Registry 已持久化的只读索引，CapabilityRegistry 在构造 Validator 时注入以复核 capability owner。输出 CompletionValidation：有 report 且 violations 为空表示通过，否则按 contract_error 处理。
 
 ```python
 class CompletionViolationCode(StrEnum):
@@ -873,6 +886,10 @@ class FinalReportData:
     opinion: ScientificOpinion
     evidence: list[ArtifactRef]
     execution_issues: list[WorkTaskOutcome] = []
+
+class CompletionValidation:
+    violations: tuple[CompletionViolation, ...] = ()
+    report: FinalReportData | None = None
 ```
 
 验证顺序固定为：
@@ -889,7 +906,11 @@ class FinalReportData:
 
 Validator 不重跑 Coding/Experiment finalizer，也不解释其领域 payload。Scheduler 只有在已绑定原生 ModulePort 的 finalizer 返回并通过 ModuleResult 外层校验后才能写 Task completed；finalizer 自身正确性由对应 Agent 单元/E2E 测试保证。Validator 这里只复核持久化 Task/Attempt/Artifact 没有绕过该状态路径。
 
+**owner 单一来源约束**：gate 6 的「producer 与 binding owner 一致」中，`binding owner` 由 Validator 从 `CapabilityRegistry.definitions[capability].owner` 读取；而 Artifact 的 `producer` 由 Scheduler 从 `ModuleBinding.owner` 写入。两者目前没有机制保证一致——若 composition root 把 Registry 的 owner 与 ModuleBinding 的 owner 配成不同值，合法 completed Task 会被误判为 `inconsistent_task_result`。7.7 切 production 时，ModuleBinding.owner 必须从同一个 CapabilityRegistry 派生（单一来源），否则验收会因此产生假失败。
+
 Validator 也不判断 statement 是否科学正确，或证据语义上是否足以支持 verdict。那属于 Scientific Agent 能力与离线/在线 eval，而不是 Run 状态机。
+
+**实现状态（7.6）**：`orchestrator/completion.py` 已实现结构化 violation、固定顺序复核、FinalReportData 和纯 Markdown renderer；`ArtifactRegistry.register_final_report` 使用稳定 ArtifactId、内容 hash 与原子替换，支持“文件已落盘但 Run 尚未保存”后的同内容幂等重试。幂等仅依赖磁盘内容 hash 一致（`destination.exists() 且 _sha256 == expected_digest` 时复用），不接受调用方传入“上次结果”引用——controller 注册前 `run.artifacts` 尚未含 final_report，故不设 `existing` 参数，避免一个恒为 None 的死参数及其跨进程 URI 相等比较的隐患。ResearchController 只有在验证、渲染、Artifact 登记和 Run 字段写入全部成功后才写 completed。production composition root 的切换仍属于 7.7。
 
 ### 20.11 ScientificTurnResult → RunStatus 映射
 

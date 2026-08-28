@@ -188,9 +188,39 @@ def test_git_baseline_detects_untracked_file_content_change(tmp_path) -> None:
     # Task B modifies that same untracked file (name unchanged, content changed).
     (tmp_path / "helper.py").write_text("H=2\n", encoding="utf-8")
 
+    patch = repository.diff_since(baseline)
     changed = repository.changed_paths_since(baseline)
     assert changed == ["helper.py"]
-    assert "H=2" in repository.diff_since(baseline)
+    assert "-H=1" in patch
+    assert "+H=2" in patch
+    assert "new file mode" not in patch
+
+    # The incremental patch must replay against Task A's workspace state.
+    (tmp_path / "helper.py").write_text("H=1\n", encoding="utf-8")
+    check = subprocess.run(
+        ["git", "apply", "--check", "-"],
+        cwd=tmp_path,
+        input=patch,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert check.returncode == 0, check.stderr
+
+
+def test_git_baseline_detects_untracked_file_deletion(tmp_path) -> None:
+    init_repo(tmp_path)
+    repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
+    (tmp_path / "helper.py").write_text("H=1\n", encoding="utf-8")
+    baseline = repository.snapshot()
+
+    (tmp_path / "helper.py").unlink()
+
+    assert repository.changed_paths_since(baseline) == ["helper.py"]
+    assert repository.deleted_paths_since(baseline) == ["helper.py"]
+    patch = repository.diff_since(baseline)
+    assert "deleted file mode" in patch
+    assert "-H=1" in patch
 
 
 def test_require_clean_rejects_dirty_workspace(tmp_path) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import tempfile
@@ -20,16 +19,13 @@ class GitWorkspaceError(ValueError):
 class GitBaseline:
     """A content snapshot of the working directory at the start of one Attempt.
 
-    ``tree_hash`` is a tree object capturing the tracked working-directory
-    state; ``untracked`` maps each untracked path to its content hash at that
-    moment (so a later edit to an untracked file is detected, not just its
-    first appearance). Comparing later work against this baseline yields only
-    the increment produced by the current Attempt, without committing, touching
-    the real index, or rolling anything back.
+    ``tree_hash`` captures the complete visible working-directory state,
+    including tracked and untracked files. Comparing it with a second tree
+    snapshot yields only the increment produced by the current Attempt, without
+    committing, touching the real index, or rolling anything back.
     """
 
     tree_hash: str
-    untracked: dict[str, str]
 
 
 class GitWorkspace:
@@ -85,12 +81,11 @@ class GitWorkspace:
         )
 
     def _write_tree(self) -> str:
-        """Return a tree hash of the tracked working-directory state.
+        """Return a tree hash of the complete visible working-directory state.
 
         Uses a temporary index (``GIT_INDEX_FILE``) seeded from HEAD, then
-        updates only tracked files (``git add -u``); untracked files are kept
-        out of the tree and captured separately as ``baseline.untracked``. The
-        real index, branch and working tree are untouched.
+        updates tracked files and adds visible untracked files. The real index,
+        branch and working tree are untouched.
         """
         fd, tmp_index = tempfile.mkstemp(prefix="resagent2-index-")
         os.close(fd)
@@ -104,28 +99,31 @@ class GitWorkspace:
                 env=index_env,
             )
             self._run(["add", "-u"], env=index_env)
+            snapshot_paths = self._run(
+                ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+                env=index_env,
+            ).stdout.split("\0")
+            visible_files = [
+                path
+                for path in snapshot_paths
+                if path
+                and self._visible(path)
+                and self.boundary.allows_read(path)
+                and (self.boundary.root / path).is_file()
+            ]
+            for offset in range(0, len(visible_files), 256):
+                literal_paths = [
+                    f":(literal){path}"
+                    for path in visible_files[offset : offset + 256]
+                ]
+                self._run(["add", "--", *literal_paths], env=index_env)
             return self._run(["write-tree"], env=index_env).stdout.strip()
         finally:
             os.unlink(tmp_index)
 
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-
     def snapshot(self) -> GitBaseline:
         """Capture the current working-directory content as an Attempt baseline."""
-        untracked: dict[str, str] = {}
-        for path in self._untracked_paths():
-            if not path or not self._visible(path):
-                continue
-            full = self.boundary.root / path
-            if full.is_file():
-                untracked[path] = self._sha256(full)
-        return GitBaseline(tree_hash=self._write_tree(), untracked=untracked)
+        return GitBaseline(tree_hash=self._write_tree())
 
     # ── HEAD-relative observations (legacy; retain for direct callers/tests) ──
 
@@ -169,18 +167,10 @@ class GitWorkspace:
 
     def changed_paths_since(self, baseline: GitBaseline) -> list[str]:
         """Return paths whose content differs from ``baseline`` (this Attempt)."""
-        tracked = self._run(
-            ["diff", "--name-only", "-z", baseline.tree_hash]
+        current_tree = self._write_tree()
+        changed = self._run(
+            ["diff", "--name-only", "-z", baseline.tree_hash, current_tree]
         ).stdout.split("\0")
-        changed = {path for path in tracked if path}
-        for path in self._untracked_paths():
-            if not path:
-                continue
-            full = self.boundary.root / path
-            if path not in baseline.untracked:
-                changed.add(path)  # newly created untracked file
-            elif not full.is_file() or self._sha256(full) != baseline.untracked[path]:
-                changed.add(path)  # deleted or modified untracked file
         return sorted(
             path
             for path in changed
@@ -196,29 +186,26 @@ class GitWorkspace:
 
     def diff_since(self, baseline: GitBaseline) -> str:
         """Return the patch produced since ``baseline`` (this Attempt only)."""
-        changed = self.changed_paths_since(baseline)
-        tracked_in_baseline = set(
-            self._run(
-                ["ls-tree", "-r", "--name-only", "-z", baseline.tree_hash]
-            ).stdout.split("\0")
-        )
-        tracked = [path for path in changed if path in tracked_in_baseline]
-        chunks: list[str] = []
-        if tracked:
-            chunks.append(
-                self._run(["diff", "--binary", baseline.tree_hash, "--", *tracked]).stdout
+        current_tree = self._write_tree()
+        changed = self._run(
+            ["diff", "--name-only", "-z", baseline.tree_hash, current_tree]
+        ).stdout.split("\0")
+        visible = [
+            path
+            for path in changed
+            if path and self._visible(path) and self.boundary.allows_read(path)
+        ]
+        patches: list[str] = []
+        for offset in range(0, len(visible), 256):
+            literal_paths = [
+                f":(literal){path}" for path in visible[offset : offset + 256]
+            ]
+            patches.append(
+                self._run(
+                    ["diff", "--binary", baseline.tree_hash, current_tree, "--", *literal_paths]
+                ).stdout
             )
-        for relative in changed:
-            if relative in tracked_in_baseline:
-                continue
-            if not (self.boundary.root / relative).is_file():
-                continue
-            result = self._run(
-                ["diff", "--no-index", "--binary", "--", os.devnull, relative],
-                accepted=(0, 1),
-            )
-            chunks.append(result.stdout)
-        return "".join(chunks)
+        return "".join(patches)
 
     def write_patch(self, path: Path) -> str:
         """Write the current HEAD-relative diff to an absolute ``path``."""

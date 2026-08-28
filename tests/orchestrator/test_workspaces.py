@@ -5,9 +5,13 @@ import pytest
 from resagent2_contracts import (
     AgentOwner,
     Capability,
+    CodeModifyInput,
     ExperimentRunInput,
+    ModuleResult,
+    ModuleStatus,
     ResearchRequest,
     RunBudget,
+    RunStatus,
     TaskProposal,
     WorkflowProposal,
     WorkspaceSourceKind,
@@ -129,6 +133,69 @@ def test_two_workspaces_resolve_to_distinct_roots(tmp_path) -> None:
     assert run.workspaces["ws_b"].root == str(repo_b.resolve())
     assert run.workspaces["ws_a"].managed is False
     assert run.workspaces["ws_b"].managed is False
+
+
+def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    coding_port = ScriptedModulePort(
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="code")]
+    )
+    experiment_port = ScriptedModulePort(
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="exp")]
+    )
+    engine = WorkflowScheduler(
+        bindings={
+            Capability.CODE_MODIFY: ModuleBinding(
+                owner=AgentOwner.CODING, port=coding_port
+            ),
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT, port=experiment_port
+            ),
+        },
+        store=InMemoryRunStore(),
+        data_root=tmp_path / "data",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(repo),
+            )
+        },
+    )
+    proposal = WorkflowProposal(
+        work_request_id="work_1",
+        summary="code then experiment",
+        compilation_rationale="shared workspace",
+        tasks=[
+            TaskProposal(
+                id="task_code",
+                work_request_id="work_1",
+                capability=Capability.CODE_MODIFY,
+                goal="Code",
+                rationale="x",
+                workspace_id="ws_main",
+                inputs=CodeModifyInput(instructions="i"),
+            ),
+            TaskProposal(
+                id="task_exp",
+                work_request_id="work_1",
+                capability=Capability.EXPERIMENT_RUN,
+                goal="Exp",
+                rationale="x",
+                workspace_id="ws_main",
+                depends_on=["task_code"],
+                inputs=ExperimentRunInput(instructions="i"),
+            ),
+        ],
+    )
+
+    engine.create_run("run_x", _request(), proposal)
+    run = engine.run_until_stable("run_x")
+
+    assert run.status == RunStatus.COMPLETED
+    assert coding_port.requests[0].workspace.root == str(repo.resolve())
+    assert experiment_port.requests[0].workspace.root == str(repo.resolve())
 
 
 def test_managed_workspace_defaults_to_data_root_env(tmp_path, monkeypatch) -> None:

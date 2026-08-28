@@ -33,7 +33,7 @@ from .models import (
     PermissionDecision,
     ToolObservation,
 )
-from .store import InMemorySessionStore, SessionStore
+from .store import InMemorySessionStore, JsonSessionStore, SessionStore
 from .tools import (
     AskUserTool,
     AskUserToolInput,
@@ -68,6 +68,7 @@ __all__ = [
     "FinishInput",
     "FinishTool",
     "InMemorySessionStore",
+    "JsonSessionStore",
     "LLMClient",
     "LLMExhaustedError",
     "OpenAICompatibleClient",

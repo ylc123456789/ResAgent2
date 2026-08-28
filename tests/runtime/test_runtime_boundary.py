@@ -14,6 +14,8 @@ ALLOWED_IMPORT_ROOTS = {
     "json",
     "math",
     "os",
+    "pathlib",
+    "tempfile",
     "time",
     "typing",
     "urllib",

@@ -33,7 +33,7 @@ from resagent2_orchestrator import (
     ScriptedModulePort,
     WorkflowScheduler,
 )
-from resagent2_runtime import InMemorySessionStore, ScriptedLLMClient
+from resagent2_runtime import InMemorySessionStore, JsonSessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
@@ -437,7 +437,7 @@ def test_forged_observed_artifact_is_rejected() -> None:
 
     run = controller.create_run("run_forged", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.FAILED
     assert run.scientific_observed_artifact_ids == []
 
 
@@ -515,3 +515,96 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
 
     assert run.status == RunStatus.COMPLETED
     assert run.final_opinion is not None
+
+
+def _build_recoverable_controller(
+    run_store, session_store, actions
+) -> ResearchController:
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=run_store,
+    )
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=session_store)
+    return ResearchController(
+        scientific_port=scientific,
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+
+def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
+    run_store = JsonRunStore(tmp_path / "runs")
+    session_store = JsonSessionStore(tmp_path / "sessions")
+    ask_action = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "need dataset"},
+            "text": "Which dataset?",
+            "requested_fields": ["dataset"],
+            "reason": "missing",
+        },
+    }
+    controller = _build_recoverable_controller(
+        run_store, session_store, [ask_action, finish_action()]
+    )
+    paused = controller.create_run("run_restart", research_request())
+    assert paused.status == RunStatus.PAUSED
+
+    # Rebuild everything from disk: a fresh controller and a fresh Scientific
+    # Agent that share the same persistent stores.
+    rebuilt = _build_recoverable_controller(
+        JsonRunStore(tmp_path / "runs"),
+        JsonSessionStore(tmp_path / "sessions"),
+        [finish_action()],
+    )
+    answer = UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset": "demo"},
+        answered_at=NOW,
+    )
+    run = rebuilt.answer_question("run_restart", answer)
+
+    assert run.status == RunStatus.COMPLETED
+    assert run.final_opinion is not None
+
+
+def test_budget_overrun_does_not_complete(tmp_path) -> None:
+    """A final turn that pushes llm_calls past the budget must not complete."""
+    tiny = ResearchRequest(
+        goal="Evaluate",
+        budget=RunBudget(
+            max_tasks=5,
+            max_attempts_per_task=2,
+            max_llm_calls=1,
+            timeout_seconds=60,
+        ),
+    )
+    # First request_work consumes 1 LLM call; a second turn would overrun.
+    actions = [request_work_action(), finish_action()]
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_overrun", tiny)
+
+    assert run.status == RunStatus.FAILED
+    assert run.llm_calls_used >= tiny.budget.max_llm_calls

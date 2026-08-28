@@ -119,6 +119,15 @@ class ResearchController:
                 self._save(run)
                 return run
 
+            active = self._active_work_request(run)
+            if active is not None and active.status != WorkRequestStatus.STABLE:
+                # A work request is still being compiled or executed; resume
+                # that before running another Scientific turn.
+                run = self._execute_work_request(run_id)
+                if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
+                    return run
+                continue
+
             turn_result = self._scientific_turn(run)
             run = self._apply_turn(run_id, turn_result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
@@ -131,6 +140,9 @@ class ResearchController:
         if active is not None and active.status == WorkRequestStatus.STABLE:
             work_outcome = active.outcome
             parent_session_id = active.scientific_session_id
+        remaining = max(
+            1, run.request.budget.max_llm_calls - run.llm_calls_used
+        )
         return self.scientific_port.run(
             ScientificTurnRequest(
                 run_id=run.run_id,
@@ -140,8 +152,8 @@ class ResearchController:
                 unresolved_task_outcomes=self._unresolved_tasks(run),
                 answers=self._pending_answers(run),
                 budget=TaskBudget(
-                    max_steps=run.request.budget.max_llm_calls,
-                    max_llm_calls=run.request.budget.max_llm_calls,
+                    max_steps=remaining,
+                    max_llm_calls=remaining,
                     timeout_seconds=run.request.budget.timeout_seconds,
                 ),
                 parent_session_id=parent_session_id,
@@ -159,9 +171,20 @@ class ResearchController:
             if work_request.status == WorkRequestStatus.STABLE:
                 work_request.status = WorkRequestStatus.CONSUMED
 
+        violations = self._review_observed(run, result.observed_artifact_ids)
+        if violations:
+            run.status = RunStatus.FAILED
+            self._save(run)
+            return run
+
         self._merge_observed(run, result.observed_artifact_ids)
         self._accumulate_llm_calls(run, result.llm_calls)
         self._mark_answers_delivered(run)
+
+        if run.llm_calls_used > run.request.budget.max_llm_calls:
+            run.status = RunStatus.FAILED
+            self._save(run)
+            return run
 
         if isinstance(result, ScientificWorkRequestResult):
             run.latest_scientific_assessment = result.assessment
@@ -223,6 +246,12 @@ class ResearchController:
             self._save(run)
             return run
 
+        if active.status == WorkRequestStatus.EXECUTING:
+            # The workflow was already accepted; resume scheduler execution.
+            return self.scheduler.run_until_stable(run_id)
+
+        # REQUESTED or COMPILING: the compiler is stateless, so a crash after
+        # marking COMPILING is safely retried (CONTRACTS §20.3).
         active.status = WorkRequestStatus.COMPILING
         self._save(run)
 
@@ -267,15 +296,20 @@ class ResearchController:
                 return work_request
         return None
 
+    def _review_observed(self, run: ResearchRun, observed: list[str]) -> list[str]:
+        """Return the observed ids that are not registered artifacts of this run."""
+        violations: list[str] = []
+        for artifact_id in observed:
+            artifact = run.artifacts.get(artifact_id)
+            if artifact is None or artifact.run_id != run.run_id:
+                violations.append(artifact_id)
+        return violations
+
     def _merge_observed(self, run: ResearchRun, observed: list[str]) -> None:
         current = set(run.scientific_observed_artifact_ids)
         for artifact_id in observed:
-            artifact = run.artifacts.get(artifact_id)
-            if artifact is None:
-                continue
-            if artifact.run_id != run.run_id:
-                continue
-            current.add(artifact_id)
+            if artifact_id in run.artifacts:
+                current.add(artifact_id)
         run.scientific_observed_artifact_ids = sorted(current)
 
     def _pending_answers(self, run: ResearchRun) -> list[UserAnswer]:

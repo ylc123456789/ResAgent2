@@ -176,6 +176,7 @@ class ScientificAgent:
                 opinion=opinion,
                 session=result.session,
                 observed_artifact_ids=observed,
+                llm_calls=llm_calls,
             )
 
         if result.status == ModuleStatus.REQUEST_WORK:
@@ -211,6 +212,7 @@ class ScientificAgent:
                 work_request=work_request,
                 session=result.session,
                 observed_artifact_ids=observed,
+                llm_calls=llm_calls,
             )
 
         if result.status == ModuleStatus.NEEDS_USER_INPUT:
@@ -236,6 +238,7 @@ class ScientificAgent:
                 question=question,
                 session=result.session,
                 observed_artifact_ids=observed,
+                llm_calls=llm_calls,
             )
 
         error = result.error or ModuleError(
@@ -248,6 +251,7 @@ class ScientificAgent:
             error=error,
             session=result.session,
             observed_artifact_ids=observed,
+            llm_calls=llm_calls,
         )
 
     def _observed(self, session_id: str) -> list[str]:

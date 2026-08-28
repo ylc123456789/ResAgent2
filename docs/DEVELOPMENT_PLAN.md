@@ -686,4 +686,5 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.4 Scientific Agent | `445bb6d` | 本地 190 tests | 原生 Scientific Agent 四态，复用 AgentLoop，未接 production |
 | 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | `5cbfaec` | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |
 | 2026-08-28 | Phase 7.5 ResearchController | `a1562fe` | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |
-| 2026-08-28 | Phase 7.5 hardening 收尾 | 未提交 | 本地 213 tests | 修 resume 幂等（work_outcome/answers 键）、consumed 时机、answers 只传新增、WorkOutcome 按 work_request_id 隔离、unresolved 从整个 workflow 派生、observed 复核、Run 总预算；补 6 类负例测试 |
+| 2026-08-28 | Phase 7.5 hardening 收尾 | `36c4d8b` | 本地 213 tests | 修 resume 幂等（work_outcome/answers 键）、consumed 时机、answers 只传新增、WorkOutcome 按 work_request_id 隔离、unresolved 从整个 workflow 派生、observed 复核、Run 总预算；补 6 类负例测试 |
+| 2026-08-28 | Phase 7.5 hardening 收尾（二） | 未提交 | 本地 215 tests | JsonSessionStore 持久化 + 真实重启恢复、run_until_stable 按 WorkRequest 状态分派、预算 remaining + 事后复核、observed 复核失败即 failed；补真实重启/预算超限负例 |

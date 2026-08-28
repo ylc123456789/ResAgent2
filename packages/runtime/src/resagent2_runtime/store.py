@@ -1,7 +1,10 @@
-"""Session persistence protocol and in-memory implementation."""
+"""Session persistence protocol, in-memory and atomic JSON implementations."""
 
 from __future__ import annotations
 
+import os
+import tempfile
+from pathlib import Path
 from typing import Protocol
 
 from resagent2_contracts import SessionId
@@ -44,3 +47,43 @@ class InMemorySessionStore:
         """Return independent snapshots for persistence assertions and debugging."""
 
         return [state.model_copy(deep=True) for state in self._history[session_id]]
+
+
+class JsonSessionStore:
+    """Atomic one-file-per-session JSON persistence for local recovery."""
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, session_id: SessionId) -> Path:
+        return self.root / f"{session_id}.json"
+
+    def save(self, state: AgentState) -> None:
+        destination = self._path(state.session_id)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.root,
+                prefix=f".{state.session_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(state.model_dump_json(indent=2))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+
+    def load(self, session_id: SessionId) -> AgentState:
+        return AgentState.model_validate_json(
+            self._path(session_id).read_text(encoding="utf-8")
+        )
+
+    def exists(self, session_id: SessionId) -> bool:
+        return self._path(session_id).is_file()

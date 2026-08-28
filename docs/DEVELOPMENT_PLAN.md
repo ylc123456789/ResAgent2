@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent 完成） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent、7.5 ResearchController 完成） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
@@ -560,6 +560,8 @@ ResearchRun 内部字段以 CONTRACTS §20.10.1 为准。work_requests 列表是
 
 退出条件：JsonRunStore 重启后可从 ResearchRun 边界恢复；不要求从一个正在执行的子进程中间恢复。
 
+**状态：已完成（2026-08-28）。** 新增 `orchestrator/controller.py`：`ScientificPort` Protocol + `ResearchController`（编排 ScientificPort + WorkflowCompiler + WorkflowScheduler）。`create_run(request)` 自然语言入口；ScientificTurnResult 四态按 §20.11 映射；WorkRequest 状态机 requested→compiling→executing→stable→consumed；compiler→accept_proposal/apply_patch→scheduler 执行→`_evaluate_run` 图稳定生成 WorkOutcome→resume 同一 Scientific Session（work_request_id 幂等）；ask_user 复用 PendingQuestion/UserAnswer；completed 调用 `ScientificGate`（7.5 用 `_MinimalGate` 占位，7.6 替换为 ScientificCompletionValidator）。`ResearchRun` 加 §20.10.1 六字段，`workflow` 改 Optional。`_evaluate_run` 兼容旧路径：有 active WorkRequest 时图稳定生成 WorkOutcome 保持 running，无则旧完成语义。本地 207 tests 通过。文献真实冻结 adapter（register_scientific）留待 7.7 接 composition root。
+
 #### 7.6 scientific finish gate 与 final report
 
 实现 `ScientificCompletionValidator`，输入同一个不可变 ResearchRun snapshot、ScientificCompletedResult 和 Registry 只读视图。它逐条实现 ARCHITECTURE §13 的七项 gate：
@@ -648,7 +650,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 领域完成证据 | capability input/payload/finalizer | Phase 5-7 | Coding/Experiment/Scientific 已实现；schema 2.0 删除未使用的通用 success_criteria |
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
 | 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；未接 production |
-| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | requested→compiling→executing→stable→consumed/failed 已落地（7.1）；Controller 驱动待 7.5 |
+| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；未接 production |
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生已实现（7.4）；RunStore 复核并集待 7.5 |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 目标已裁定，代码未实现 |
 
@@ -682,4 +684,5 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.2 WorkflowCompiler | `44f7cd8` | 本地 173 tests | WorkflowCompiler Protocol + Deterministic/LLM 实现，未接 production |
 | 2026-08-28 | Phase 7.3 literature capability | `59265c6` | 本地 181 tests | ArxivLiteratureBackend + LiteratureSearchTool + ArtifactRegistrationPort |
 | 2026-08-28 | Phase 7.4 Scientific Agent | `445bb6d` | 本地 190 tests | 原生 Scientific Agent 四态，复用 AgentLoop，未接 production |
-| 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | 未提交 | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |
+| 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | `5cbfaec` | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |
+| 2026-08-28 | Phase 7.5 ResearchController | 未提交 | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |

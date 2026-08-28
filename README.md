@@ -17,11 +17,11 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：Phase 6 已完成；Phase 7 进行中（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent 已完成）。**
+**阶段：Phase 6 已完成；Phase 7 进行中（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent、7.5 ResearchController 已完成）。**
 
 当前已实现 `resagent2-contracts` schema 2.0（`SCHEMA_VERSION="2.0"`）、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding/Experiment/Scientific Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和内容寻址环境；真实执行不再依赖旧 CodingAgent 或旧 reproagent。
 
-Phase 7 已落地：7.1 契约切 2.0（新增 ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型，删除 SuccessCriterion/evidence_key，ArtifactRef 三态 provenance，work_request_id 追溯）；7.2 WorkflowCompiler；7.3 literature capability；7.4 原生 Scientific Agent（实现 ScientificPort 四态，复用 AgentLoop，未接 production）。后续：ResAgent 用 WorkflowCompiler 把语义化 WorkRequest 转成可执行 Workflow（7.5 ResearchController）；旧 PlanningPort 和 `LegacyScientificAnalyzeAdapter` 在 7.7 切换后删除。
+Phase 7 已落地：7.1 契约切 2.0（新增 ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型，删除 SuccessCriterion/evidence_key，ArtifactRef 三态 provenance，work_request_id 追溯）；7.2 WorkflowCompiler；7.3 literature capability；7.4 原生 Scientific Agent（实现 ScientificPort 四态，复用 AgentLoop）；7.5 ResearchController（自然语言入口，编排 ScientificPort + WorkflowCompiler + WorkflowScheduler，WorkRequest 状态机，未接 production）。后续：7.6 scientific finish gate + final report；旧 PlanningPort 和 `LegacyScientificAnalyzeAdapter` 在 7.7 切换后删除。
 
 ## 四个角色
 

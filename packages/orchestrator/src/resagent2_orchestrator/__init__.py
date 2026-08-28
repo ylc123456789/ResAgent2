@@ -8,6 +8,7 @@ from .compiler import (
     LLMWorkflowCompiler,
     WorkflowCompiler,
 )
+from .controller import ResearchController, ScientificGate, ScientificPort
 from .models import ResearchRun
 from .planning import DeterministicPlanningPort, PlanningPort
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
@@ -28,8 +29,11 @@ __all__ = [
     "ModulePort",
     "OrchestrationError",
     "PlanningPort",
+    "ResearchController",
     "ResearchRun",
     "RunStore",
+    "ScientificGate",
+    "ScientificPort",
     "ScriptedModulePort",
     "WorkflowCompiler",
     "WorkflowScheduler",

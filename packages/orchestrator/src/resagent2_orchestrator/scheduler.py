@@ -26,6 +26,9 @@ from resagent2_contracts import (
     WorkflowPatch,
     WorkflowProposal,
     WorkflowTask,
+    WorkOutcome,
+    WorkRequestStatus,
+    WorkTaskOutcome,
 )
 
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
@@ -63,18 +66,7 @@ class WorkflowScheduler:
         if len(proposal.tasks) > request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
         self._require_bindings(task.capability for task in proposal.tasks)
-        tasks = [
-            WorkflowTask(
-                id=item.id,
-                work_request_id=item.work_request_id,
-                capability=item.capability,
-                goal=item.goal,
-                inputs=item.inputs,
-                depends_on=item.depends_on,
-                required=item.required,
-            )
-            for item in proposal.tasks
-        ]
+        tasks = self._tasks_from_proposal(proposal)
         now = datetime.now(UTC)
         run = ResearchRun(
             run_id=run_id,
@@ -91,6 +83,42 @@ class WorkflowScheduler:
         )
         self._save(run)
         return run.model_copy(deep=True)
+
+    def accept_proposal(
+        self,
+        run_id: str,
+        proposal: WorkflowProposal,
+    ) -> ResearchRun:
+        """Attach a compiled proposal as the initial workflow of an existing run."""
+        run = self.store.load(run_id)
+        if run.workflow is not None:
+            raise OrchestrationError("run already has an accepted workflow")
+        if len(proposal.tasks) > run.request.budget.max_tasks:
+            raise OrchestrationError("workflow exceeds run max_tasks budget")
+        self._require_bindings(task.capability for task in proposal.tasks)
+        run.workflow = Workflow(
+            run_id=run_id,
+            revision=1,
+            tasks=self._tasks_from_proposal(proposal),
+            created_from=proposal.work_request_id,
+        )
+        self._save(run)
+        return run.model_copy(deep=True)
+
+    @staticmethod
+    def _tasks_from_proposal(proposal: WorkflowProposal) -> list[WorkflowTask]:
+        return [
+            WorkflowTask(
+                id=item.id,
+                work_request_id=item.work_request_id,
+                capability=item.capability,
+                goal=item.goal,
+                inputs=item.inputs,
+                depends_on=item.depends_on,
+                required=item.required,
+            )
+            for item in proposal.tasks
+        ]
 
     def load(self, run_id: str) -> ResearchRun:
         """Load the current validated run state."""
@@ -401,11 +429,31 @@ class WorkflowScheduler:
         if run.pending_question is not None:
             run.status = RunStatus.PAUSED
             return
+        if run.workflow is None:
+            run.status = RunStatus.RUNNING
+            return
         if self._ready_task_ids(run) or any(
             task.status == TaskStatus.RUNNING for task in run.workflow.tasks
         ):
             run.status = RunStatus.RUNNING
             return
+
+        # Execution graph is stable. With an active work request, freeze a
+        # WorkOutcome and mark it stable so the controller can resume the
+        # Scientific Session. A work request already stable is left for the
+        # controller. Without any (legacy PlanningPort path), keep the
+        # pre-Phase-7 completion semantics.
+        active = self._active_work_request(run)
+        if active is not None and active.status == WorkRequestStatus.EXECUTING:
+            active.workflow_revision = run.workflow.revision
+            active.outcome = self._build_work_outcome(run, active.id)
+            active.status = WorkRequestStatus.STABLE
+            run.status = RunStatus.RUNNING
+            return
+        if active is not None and active.status == WorkRequestStatus.STABLE:
+            run.status = RunStatus.RUNNING
+            return
+
         required = [
             task
             for task in run.workflow.tasks
@@ -415,6 +463,47 @@ class WorkflowScheduler:
             run.status = RunStatus.COMPLETED
         else:
             run.status = RunStatus.FAILED
+
+    @staticmethod
+    def _active_work_request(run: ResearchRun):
+        for work_request in run.work_requests:
+            if work_request.status in {
+                WorkRequestStatus.EXECUTING,
+                WorkRequestStatus.STABLE,
+            }:
+                return work_request
+        return None
+
+    @staticmethod
+    def _build_work_outcome(run: ResearchRun, work_request_id: str) -> WorkOutcome:
+        status_by_task = {
+            TaskStatus.COMPLETED: "completed",
+            TaskStatus.FAILED: "failed",
+            TaskStatus.BLOCKED: "blocked",
+            TaskStatus.SUPERSEDED: "superseded",
+        }
+        tasks: list[WorkTaskOutcome] = []
+        for task in run.workflow.tasks:
+            outcome_status = status_by_task.get(task.status)
+            if outcome_status is None:
+                continue
+            last = task.attempts[-1] if task.attempts else None
+            tasks.append(
+                WorkTaskOutcome(
+                    task_id=task.id,
+                    status=outcome_status,
+                    summary=task.goal,
+                    artifact_ids=list(last.artifact_ids) if last else [],
+                    error=last.error if last else None,
+                    warnings=list(task.warnings),
+                )
+            )
+        return WorkOutcome(
+            work_request_id=work_request_id,
+            workflow_revision=run.workflow.revision,
+            summary="execution stable",
+            tasks=tasks,
+        )
 
     def _save(self, run: ResearchRun) -> None:
         run.updated_at = datetime.now(UTC)

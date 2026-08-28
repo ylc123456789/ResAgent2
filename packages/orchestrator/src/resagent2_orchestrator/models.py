@@ -14,8 +14,12 @@ from resagent2_contracts import (
     ResearchRequest,
     RunId,
     RunStatus,
+    ScientificAssessment,
+    ScientificOpinion,
+    SessionRef,
     UserAnswer,
     Workflow,
+    WorkRequest,
     TaskId,
 )
 
@@ -32,11 +36,17 @@ class ResearchRun(OrchestratorModel):
     run_id: RunId
     request: ResearchRequest
     status: RunStatus
-    workflow: Workflow
+    workflow: Workflow | None = None
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
     answers: list[UserAnswer] = Field(default_factory=list)
     answer_task_ids: dict[QuestionId, TaskId | None] = Field(default_factory=dict)
     workflow_history: list[Workflow] = Field(default_factory=list)
+    scientific_session: SessionRef | None = None
+    latest_scientific_assessment: ScientificAssessment | None = None
+    work_requests: list[WorkRequest] = Field(default_factory=list)
+    scientific_observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    final_opinion: ScientificOpinion | None = None
+    final_report_artifact_id: ArtifactId | None = None
     created_at: datetime
     updated_at: datetime

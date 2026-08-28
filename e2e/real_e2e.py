@@ -36,9 +36,11 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSource,
 )
+from resagent2_capabilities import ArxivLiteratureBackend
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
+    ArtifactRegistry,
     JsonRunStore,
     LLMWorkflowCompiler,
     ModuleBinding,
@@ -47,6 +49,7 @@ from resagent2_orchestrator import (
 )
 from resagent2_runtime import (
     ComposedContext,
+    JsonSessionStore,
     OpenAICompatibleClient,
 )
 from resagent2_scientific import ScientificAgent
@@ -133,14 +136,45 @@ def _experiment_agent() -> NativeExperimentAgent:
     )
 
 
-def _scientific_agent() -> ScientificAgent:
+def _scientific_agent(
+    registration_port,
+    session_store: JsonSessionStore,
+) -> ScientificAgent:
     return ScientificAgent(
         OpenAICompatibleClient(
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
-        )
+        ),
+        literature_backend=ArxivLiteratureBackend(),
+        registration_port=registration_port,
+        store=session_store,
     )
+
+
+class _ScientificArtifactRegistration:
+    """Record a Scientific Tool artifact into the run's artifact index.
+
+    ``ScientificAgent`` calls ``register_scientific(candidate, run_id,
+    session_id)`` on the injected ``ArtifactRegistrationPort`` (CONTRACTS
+    §20.12); ``ArtifactRegistry.register_scientific`` only freezes the file. The
+    controller's observed-review reads ``run.artifacts``, so this adapter also
+    stores the returned ArtifactRef in the run snapshot, otherwise the
+    literature artifact would be rejected as unknown.
+    """
+
+    def __init__(self, registry: ArtifactRegistry, store) -> None:
+        self._registry = registry
+        self._store = store
+
+    def register_scientific(self, candidate, *, run_id, session_id):
+        artifact = self._registry.register_scientific(
+            candidate, run_id=run_id, session_id=session_id
+        )
+        run = self._store.load(run_id)
+        run.artifacts[artifact.id] = artifact
+        self._store.save(run)
+        return artifact
 
 
 class _CompilerClient:
@@ -186,11 +220,21 @@ def _registry() -> CapabilityRegistry:
     )
 
 
+def _owner_for(registry: CapabilityRegistry, capability: Capability) -> AgentOwner:
+    """Single source of truth for capability ownership (CONTRACTS §20.10.2)."""
+    for definition in registry.definitions:
+        if definition.capability == capability:
+            return definition.owner
+    raise KeyError(f"no owner registered for capability {capability.value}")
+
+
 def _real_e2e_succeeded(run) -> bool:
     """Require completed tasks, task-owned evidence and a final scientific opinion."""
     if run.status != RunStatus.COMPLETED or run.final_opinion is None:
         return False
     if run.final_report_artifact_id is None:
+        return False
+    if run.workflow is None:
         return False
     tasks = {task.capability: task for task in run.workflow.tasks}
     if (
@@ -264,32 +308,38 @@ def run_full(workdir: Path) -> bool:
             max_tasks=6, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
+    registry = _registry()
+    run_store = JsonRunStore(workdir / "state")
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
-                owner=AgentOwner.CODING,
+                owner=_owner_for(registry, Capability.CODE_MODIFY),
                 port=_coding_agent(),
                 workspace=_grant(repo),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
+                owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
                 port=_experiment_agent(),
                 workspace=_grant(repo),
             ),
         },
-        store=JsonRunStore(workdir / "state"),
+        store=run_store,
         artifact_root=workdir / "artifacts",
     )
     controller = ResearchController(
-        scientific_port=_scientific_agent(),
+        scientific_port=_scientific_agent(
+            _ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
+            JsonSessionStore(workdir / "scientific_sessions"),
+        ),
         compiler=LLMWorkflowCompiler(
             _CompilerClient(model=_MODEL, api_base=_API_BASE, api_key_env=_API_KEY_ENV)
         ),
         scheduler=scheduler,
-        registry=_registry(),
+        registry=registry,
     )
     run = controller.create_run("run_full_real", request)
-    for task in run.workflow.tasks:
+    tasks = run.workflow.tasks if run.workflow is not None else []
+    for task in tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")

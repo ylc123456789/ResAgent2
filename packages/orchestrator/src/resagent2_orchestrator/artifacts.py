@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -13,6 +14,7 @@ from resagent2_contracts import (
     ArtifactCandidate,
     ArtifactRef,
     RunId,
+    SessionId,
     TaskId,
     WorkspaceGrant,
 )
@@ -92,6 +94,59 @@ class ArtifactRegistry:
             run_id=run_id,
             task_id=task_id,
             attempt_number=attempt_number,
+            uri=destination.as_uri(),
+            sha256=digest,
+            media_type=candidate.media_type,
+            summary=candidate.summary,
+            metadata=candidate.metadata,
+        )
+
+    def register_scientific(
+        self,
+        candidate: ArtifactCandidate,
+        *,
+        run_id: RunId,
+        session_id: SessionId,
+    ) -> ArtifactRef:
+        """Freeze one session-bound Scientific artifact (e.g. literature search).
+
+        Unlike task artifacts, the content is not a workspace file: the
+        Scientific Tool already produced a normalized result and carries it in
+        ``candidate.metadata``. The content is serialized, hashed and written
+        atomically. The id is content-derived, so registering the same content
+        again is idempotent.
+        """
+        if candidate.kind != "literature_search":
+            raise ArtifactRegistrationError(
+                f"unsupported scientific artifact kind: {candidate.kind}"
+            )
+        encoded = json.dumps(
+            candidate.metadata, sort_keys=True, ensure_ascii=False
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        artifact_id = f"artifact_sci_{digest[:16]}"
+
+        destination_dir = self.root / run_id / artifact_id
+        destination = destination_dir / candidate.path
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(encoded)
+                os.replace(temporary, destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                raise
+
+        return ArtifactRef(
+            id=artifact_id,
+            kind=candidate.kind,
+            producer=AgentOwner.SCIENTIFIC,
+            run_id=run_id,
+            session_id=session_id,
             uri=destination.as_uri(),
             sha256=digest,
             media_type=candidate.media_type,

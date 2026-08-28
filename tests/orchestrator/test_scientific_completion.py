@@ -6,6 +6,7 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner,
+    ArtifactCandidate,
     ArtifactRef,
     Attempt,
     AttemptStatus,
@@ -357,3 +358,31 @@ def test_final_report_registration_is_idempotent_after_file_write(tmp_path) -> N
 
     assert retried == first
     assert len(first.sha256) == 64
+
+
+def test_register_scientific_freezes_with_session_provenance(tmp_path) -> None:
+    artifact_registry = ArtifactRegistry(tmp_path / "artifacts")
+    candidate = ArtifactCandidate(
+        kind="literature_search",
+        path="literature_search.json",
+        media_type="application/json",
+        summary="literature results",
+        metadata={"papers": [{"paper_id": "2301.00001", "title": "T"}]},
+    )
+
+    first = artifact_registry.register_scientific(
+        candidate, run_id="run_gate", session_id="session_scientific"
+    )
+
+    assert first.producer == AgentOwner.SCIENTIFIC
+    assert first.session_id == "session_scientific"
+    assert first.task_id is None
+    assert first.attempt_number is None
+    assert first.kind == "literature_search"
+    assert len(first.sha256) == 64
+
+    # Same content -> same id and file, idempotent.
+    retried = artifact_registry.register_scientific(
+        candidate, run_id="run_gate", session_id="session_scientific"
+    )
+    assert retried == first

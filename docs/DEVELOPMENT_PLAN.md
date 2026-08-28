@@ -586,7 +586,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 7.7 是 schema 2.0 的原子发布切换：同一个变更先切 production composition root，再删除旧入口和所有 deprecated symbol，更新调用者/tests/E2E；变更结束前不得发布或合并部分状态。
 
-**状态：切换与删除已完成（2026-08-28，未提交）。** 已删除 PlanningPort/`DeterministicPlanningPort`、`LegacyScientificAnalyzeAdapter` 及 `ScientificPlanInput`/`ScientificAnalyzeInput`/`LiteratureSearchInput`/`ExperimentPrepareInput`/`AskUserInput`/`ScientificConclusion` 与旧 `scientific_plan`/`scientific_analyze`/`literature_search`/`experiment_prepare`/`ask_user` capability enum 值；`CapabilityInput` 收缩为 `CodeUnderstandInput`/`CodeModifyInput`/`ExperimentRunInput`。`mock_e2e.py` 与 `real_e2e.py` 重写为唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `WorkflowCompiler`），`real_e2e.py` 新增 `_CompilerClient` 把 runtime client 适配到 orchestrator `CompilerLLM`。受影响的 scheduler 测试把 `scientific_analyze` 下游节点改写为 `code_understand`。全仓本地 227 passed、1 skipped，mock E2E 一条命令跑通；服务器真实 E2E 未执行。
+**状态：切换与删除已完成（2026-08-28）。** 已删除 PlanningPort/`DeterministicPlanningPort`、`LegacyScientificAnalyzeAdapter` 及 `ScientificPlanInput`/`ScientificAnalyzeInput`/`LiteratureSearchInput`/`ExperimentPrepareInput`/`AskUserInput`/`ScientificConclusion` 与旧 `scientific_plan`/`scientific_analyze`/`literature_search`/`experiment_prepare`/`ask_user` capability enum 值；`CapabilityInput` 收缩为 `CodeUnderstandInput`/`CodeModifyInput`/`ExperimentRunInput`。`mock_e2e.py` 与 `real_e2e.py` 重写为唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `WorkflowCompiler`），`real_e2e.py` 新增 `_CompilerClient` 把 runtime client 适配到 orchestrator `CompilerLLM`，并注入 `ArxivLiteratureBackend` + `_ScientificArtifactRegistration`（把 Scientific Tool 登记的 artifact 写回 run 索引）+ `JsonSessionStore`（跨进程恢复 Scientific Session），`ArtifactRegistry` 新增 `register_scientific`。受影响的 scheduler 测试把 `scientific_analyze` 下游节点改写为 `code_understand`。全仓本地测试通过，mock E2E 一条命令跑通；服务器真实 E2E 未执行。
 
 切换时删除：
 
@@ -645,7 +645,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 | 架构概念/约束 | contract/接口 | 实现阶段 | 当前状态 |
 |---|---|---|---|
-| 科学判断与任务图编译分离 | ScientificTurnResult、WorkRequest、WorkflowProposal/Patch | Phase 7 | 契约已落地（7.1）；WorkflowCompiler 已实现（7.2）；未接 production |
+| 科学判断与任务图编译分离 | ScientificTurnResult、WorkRequest、WorkflowProposal/Patch | Phase 7 | 契约已落地（7.1）；WorkflowCompiler 已实现（7.2）；7.7 已接 production |
 | 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
 | ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
@@ -654,10 +654,10 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
 | 领域完成证据 | capability input/payload/finalizer | Phase 5-7 | Coding/Experiment/Scientific 已实现；schema 2.0 删除未使用的通用 success_criteria |
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
-| 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；未接 production |
-| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；未接 production |
+| 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；7.7 已接 production |
+| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；7.7 已接 production |
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
-| final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 接 production |
+| final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 已接 production |
 
 ## 13. 文档同步检查
 

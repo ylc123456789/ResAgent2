@@ -629,6 +629,32 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；
 - [ ] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
+### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理
+
+解决真实 E2E 暴露的根因：Compiler 不应决定代码文件/验证命令，CodingAgent 应自主处理代码细节；一个 Run 可有多个工作区，Coding 与 Experiment 复用同一 `workspace_id`；Run 产物与共享缓存分离；不在源码仓库写内部运行文件。详见 ADR-0008 与 CONTRACTS §21。
+
+实施顺序（每步测试通过）：
+
+1. 新增 ADR，明确 Compiler/CodingAgent/工作区/缓存职责；
+2. 同步 ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN；
+3. 改 workspace contracts（WorkspaceSourceKind/WorkspaceSpec/WorkspaceRecord，Task 加 workspace_id）；
+4. 增 RunLayout/ResourceLayout；
+5. 改 RepoMaterializer 元数据位置（写入 run 目录，不污染仓库）；
+6. ResearchRun 加工作区注册表；
+7. Task 加 workspace_id；
+8. 改 Scheduler 工作区解析（workspace_id→WorkspaceRecord→WorkspaceGrant）；
+9. 简化 CodeModifyInput（删 allowed_paths/verification_commands）；
+10. CodingAgent 直接复用 RepoMaterializer；
+11. CodingAgent 动态验证 + 命令权限检查；
+12. ExperimentAgent 用统一工作区（删 repo source 字段）；
+13. 缩减 Compiler 输入与职责（workspace_id 校验，不输出文件/命令）；
+14. 迁移 mock/real E2E；
+15. 本地测试通过后再到服务器跑真实场景。
+
+必测项：Git clone 后可改可验证；外部本地仓库不复制；copy 不污染源目录；同源 materialize 复用；来源不一致拒绝复用；一个 Run 两个 workspace_id 不串目录；Coding 改后 Experiment 同工作区可见；Attempt 产物隔离；脏工作区不自动重试；Compiler 编造 workspace_id 被拒；Compiler 输出不含文件/命令；Coding 自选验证命令；验证失败可继续修复；completion 拒绝不无限 finish；目标仓库不生成 `.resagent2/runs`；dataset_root 独立时不进 data_root。
+
+明确不做：GitHub push/PR、自动 commit、每 Attempt 一个 Git worktree、自动回滚、跨 Run 仓库缓存、分布式工作区、通用 DAG 调度器、复杂 WorkspaceManager 基类体系。
+
 ## 11. Phase 8：稳定化与按需高级能力
 
 只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证、内容寻址环境与镜像加速（国内网络下复用 conda 环境、减少重复下载）。
@@ -658,6 +684,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；7.7 已接 production |
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 已接 production |
+| 统一工作区与 Coding 自主 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、workspace_id、RunLayout/ResourceLayout | Phase 7.7 | ADR-0008 已裁定；契约/实现进行中 |
 
 ## 13. 文档同步检查
 

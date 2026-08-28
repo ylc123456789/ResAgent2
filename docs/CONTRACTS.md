@@ -240,6 +240,8 @@ class ModuleTaskRequest:
     answers: list[UserAnswer] = []
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
+    workspace_id: str | None = None
+    workspace_spec: WorkspaceSpec | None = None
     parent_session_id: SessionId | None = None
 ```
 
@@ -249,7 +251,9 @@ class ModuleTaskRequest:
 | capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
 | answers | 只包含属于本 Task 的已持久化回答 |
-| workspace | 此 Attempt 的最大物理访问范围 |
+| workspace | 此 Attempt 的最大物理访问范围（由 WorkspaceRecord 派生） |
+| workspace_id | 此 Attempt 操作的逻辑工作区 id，指向 `ResearchRun.workspaces` |
+| workspace_spec | 该工作区的来源声明（source_kind + location），供 Agent 在 loop 前确定性 materialize |
 | parent_session_id | 仅显式 resume 使用；普通 retry 为空 |
 
 当前 orchestrator 在 ask-user 后的新 Attempt 产生 `parent_session_id`；runtime AgentLoop 在 resume 时加载该 Session 并校验 run/task/agent/owner/paused 一致，端到端 resume 已接通。普通 retry 不复用 Session。
@@ -357,17 +361,14 @@ class ExperimentResult:
 
 `evidence_files` 是 workspace 相对路径，指向本 Attempt 实际产生的证据文件；每个文件由 finalizer 校验存在后才进入 payload，并作为 `experiment_result` ArtifactCandidate 登记。`repo_url` + `commit` 是 repo identity（不依赖 basename）；`env_id` 是内容寻址环境 id。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings，其 WarningRecord（code=`delivery_not_met`）的 message 记录 `[NOT MET] Missing required ...`。
 
-`ExperimentRunInput` 在 schema 1.1 新增可选字段：
+`ExperimentRunInput` 在 7.7 Hardening 后只保留实验本身所需的输入字段：
 
 ```python
-repository_url: NonEmptyStr | None = None
-copy_from: NonEmptyStr | None = None
-external_repo_path: NonEmptyStr | None = None
 python_version: str = "3.12"
 confirm_before_experiment: bool = False
 ```
 
-三个 repo source 字段互斥，至少给一个或全部留空（resume 语义复用已有 repo）。`ExperimentResult` 是既有 `ModuleResult.payload` 扩展点的新命名形状；给 `ExperimentRunInput` 加字段属于对已冻结 wire 模型的小版本演进，因此 wire schema 从 1.0 升到 1.1（见 §17）。Scheduler 仍只原样持久化 payload，不基于 payload 改状态。
+仓库来源（`repository_url`/`copy_from`/`external_repo_path`）已删除，改由统一工作区上下文（`ModuleTaskRequest.workspace_spec`）提供，`RepoMaterializer` 在 Agent loop 前确定性 materialize；数据集/环境目录来自 `ResourceLayout`，实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。`ExperimentResult` 是既有 `ModuleResult.payload` 扩展点的新命名形状。Scheduler 仍只原样持久化 payload，不基于 payload 改状态。
 
 ## 11. Attempt 与 SessionRef
 
@@ -455,10 +456,10 @@ class WorkspaceGrant:
     mode: WorkspaceMode
     allowed_paths: list[str] = []
     denied_paths: list[str] = []
-    source: WorkspaceSource
+    source: WorkspaceSourceKind
 ```
 
-Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；capabilities 的真实 filesystem 实现做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
+Grant 表示授权，不表示 repo identity 或 Artifact。它由 `WorkspaceRecord` 派生（见 §21），不再由 `ModuleBinding` 固定携带。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；capabilities 的真实 filesystem 实现做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
 
 ## 15. 历史 ScientificConclusion（schema 1.1，已于 Phase 7.7 删除）
 
@@ -504,7 +505,7 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 |---|---|
 | ID/版本 | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId、WorkRequestId |
 | 状态/路由 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus、WorkRequestStatus |
-| 错误/授权 | ErrorCode、WorkspaceMode、WorkspaceSource、SessionStatus |
+| 错误/授权 | ErrorCode、WorkspaceMode、SessionStatus |
 | 科学枚举 | ScientificVerdict |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest |
@@ -515,6 +516,7 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 | Experiment payload | ExperimentResult |
 | 工作流 | TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
+| 工作区 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord |
 | 注册 | CapabilityDefinition、CapabilityRegistry |
 | 科学控制（2.0） | ScientificAssessment、WorkRequestDraft、WorkRequest、WorkTaskOutcome、WorkOutcome、ScientificOpinion、ScientificTurnRequest、ScientificTurnResult |
 
@@ -983,3 +985,52 @@ class ArtifactRegistrationPort(Protocol):
 9. 公共导出核对表在 7.7 原子切换后更新为 2.0；任何中间提交都不得留下 import error 或红色全仓测试。
 
 **7.7 状态（2026-08-28）**：第 5 条的原子切换已完成——`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler` 成为唯一 production composition root，PlanningPort/`DeterministicPlanningPort`/`LegacyScientificAnalyzeAdapter` 及全部 deprecated scientific/planning/ask_user/experiment_prepare 类型与 enum 值已删除，公共导出核对表（§18）已更新为 2.0。全仓本地测试通过；schema 2.0 仍待服务器真实 E2E 通过后冻结（第 6 条）。
+
+## 21. 工作区与缓存契约（7.7 Hardening）
+
+本阶段把「代码细节归 CodingAgent」与「统一工作区」落为契约，见 ADR-0008。
+
+### 21.1 工作区来源与记录
+
+```python
+class WorkspaceSourceKind(StrEnum):
+    GIT = "git"              # location 是 Git URL，clone 到受管目录
+    LOCAL = "local"          # 直接绑定已有本地目录，managed=False，不搬运
+    COPY = "copy"            # 复制已有本地 Git 工作树到受管目录
+    GENERATED = "generated"  # 创建空的受管工作区
+
+class WorkspaceSpec(ContractModel):
+    workspace_id: str
+    source_kind: WorkspaceSourceKind
+    location: str | None = None
+
+class WorkspaceRecord(ContractModel):
+    workspace_id: str
+    root: NonEmptyStr                # 已解析的物理目录
+    source: WorkspaceSpec
+    managed: bool                    # True = ResAgent2 创建并管理
+    initial_commit: str | None = None
+```
+
+`WorkspaceSource`（EXISTING/CLONE）废弃，其语义并入 LOCAL/GIT。`WorkspaceSpec` 是逻辑来源声明，不保存物理路径；`WorkspaceRecord` 是解析后的记录。一个 Run 可以有多个工作区，同一个 `workspace_id` 可被多个 Task/Attempt 复用。
+
+### 21.2 Task 的工作区归属
+
+`TaskProposal` 与 `WorkflowTask` 各增加 `workspace_id: str`（在 TaskProposal 中允许 Compiler 省略，由确定性校验层在单一工作区时自动填入）。Compiler 只能从给定的逻辑 `workspace_id` 集合中选择，不能编造；validator 检查 workspace_id 是否存在于 `ResearchRun.workspaces`。
+
+### 21.3 CodeModifyInput 简化
+
+```python
+class CodeModifyInput(ContractModel):
+    capability: Literal[Capability.CODE_MODIFY]
+    instructions: NonEmptyStr
+    suggested_paths: list[str] = []   # 仅提示，不是权限
+```
+
+删除 `allowed_paths`（与 `WorkspaceGrant.allowed_paths` 重复）和 `verification_commands`（与 Compiler 职责重叠）。最终权限以 `WorkspaceGrant` 为准。Coding Agent 根据项目实际自行选择 shell-free 验证命令，经 `ProcessRunner` 的结构化解析执行。
+
+### 21.4 Run 数据与共享缓存目录
+
+`RunLayout` 只负责根据 `data_root` + `run_id` 返回标准目录（`runs/{run_id}/state`、`runs/{run_id}/workspaces/{ws}/`、`runs/{run_id}/attempts/{task}/attempt_{n}/`、`scientific/sessions/`、`artifacts/`）；`ResourceLayout` 负责共享缓存目录（`resource_root`、`dataset_root`、`env_root`，`models/` 预留）。它们不承载调度逻辑，RunLayout 不管数据集，ResourceLayout 不管 Run 状态。
+
+`RepoMaterializer` 的来源元数据不再写进目标源码仓库（删除 `.resagent2/materialized_source.json`），改写到 `runs/{run_id}/workspaces/{workspace_id}/workspace.json`。

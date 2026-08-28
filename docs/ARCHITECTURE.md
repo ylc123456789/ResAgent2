@@ -79,6 +79,9 @@
 | Workflow | ResAgent 接受并持久化的有版本任务图 | ResAgent |
 | WorkflowTask | 调度器调用一次专业执行能力的顶层工作单元 | ResAgent |
 | Attempt | 某个 WorkflowTask 的一次真实模块调用边界 | ResAgent |
+| WorkspaceSpec | 一个逻辑工作区的来源声明（source_kind + location），不保存物理路径 | ResAgent 的 composition root 声明 |
+| WorkspaceRecord | 一个工作区解析后的记录（root、source、managed、initial_commit） | ResAgent |
+| WorkspaceGrant | 某次 Attempt 的最大物理授权边界，由 WorkspaceRecord 派生 | ResAgent |
 | WorkOutcome | 一次 WorkRequest 执行稳定后，成功、失败、警告和 Artifact 的汇总 | ResAgent |
 | ScientificOpinion | Scientific Agent 对用户目标给出的最终自然语言观点及证据引用 | Scientific Agent |
 | ScientificCompletionValidator | 验证科学闭环结构、证据 provenance 和控制状态；不判断科学观点真假 | ResAgent |
@@ -206,7 +209,7 @@ WorkRequest + 当前能力注册表 + 当前 Workflow 摘要 + Run 约束
   → WorkflowProposal（尚无图）或 WorkflowPatch（已有图）
 ```
 
-允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态、保留 work_request_id，并把结果交给确定性 validator。测试中可由 `DeterministicWorkflowCompiler` 替代。
+允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态、保留 work_request_id，并把结果交给确定性 validator。它只选择任务类型、目标、依赖和逻辑 `workspace_id`；不扫描源码、不指定文件、不生成 import、不生成验证命令、不决定物理目录、不执行 `git clone`。测试中可由 `DeterministicWorkflowCompiler` 替代。
 
 ## 7. 完整工作流
 
@@ -265,7 +268,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 8.1 ResAgent / Research Orchestrator
 
-负责自然语言入口、ResearchRun/ScientificSession 引用、WorkRequest 生命周期、WorkflowCompiler、Proposal/Patch 校验、Task/Attempt 调度、retry、问题协调、Artifact、预算、WorkOutcome 和 ScientificCompletionValidator。
+负责自然语言入口、ResearchRun/ScientificSession 引用、WorkRequest 生命周期、WorkflowCompiler、Proposal/Patch 校验、Task/Attempt 调度、retry、问题协调、Artifact、预算、WorkOutcome 和 ScientificCompletionValidator。它还管理 Run 中的逻辑工作区（`ResearchRun.workspaces`），把 `workspace_id` 解析为物理 `WorkspaceRecord` 并为每个 Attempt 派生 `WorkspaceGrant`，同时用 `RunLayout`/`ResourceLayout` 分开 Run 数据目录与共享资源目录。
 
 它不形成科学观点，不修改代码或运行实验，不读取/篡改子 Agent 内部 Session，也不让 LLM 直接决定状态转换。
 
@@ -277,17 +280,17 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 8.3 Coding Agent
 
-负责理解代码、在授权范围内修改、运行调用方声明的验证并交付代码 Artifact。它不作科学结论，不直接调用其他 Agent，不扩大 workspace 授权。
+负责准备或复用代码仓库、自己读项目结构、在授权范围内修改代码、根据项目实际选择验证命令、执行验证并按错误修复，最后交付 patch/变更文件/验证结果。它不作科学结论，不直接调用其他 Agent，不扩大 workspace 授权。
 
 ### 8.4 Experiment Agent
 
-负责准备仓库/环境、运行实验、采集参数/日志/指标/环境证据并形成结构化结果。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
+负责在指定逻辑工作区运行实验（复用 Coding 已改过的代码）、管理实验环境和数据集、登记指标/日志和实验结果。它通过同一个 `workspace_id` 操作与 Coding 相同的 `WorkspaceRecord`，仓库来源来自统一工作区上下文而非 `ExperimentRunInput`。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
 
 ### 8.5 runtime 与 capabilities
 
 `runtime` 只回答“Agent 怎样运行”：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。
 
-`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
+`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它们还提供 `RunLayout`/`ResourceLayout`（Run 数据目录与共享资源目录的路径约定）。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
 
 代码依赖为两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root 同时依赖 orchestrator 与具体 Agent，并通过 Port 注入。orchestrator 不 import 具体 Agent；runtime 不依赖 capabilities；capabilities 不依赖具体 Agent。
 
@@ -295,13 +298,13 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 9.1 Coding
 
-原生 Coding Agent 的 `code_understand` 与 `code_modify` 复用同一 AgentLoop。`code_understand` 不注入写/进程 Tool并在结束时验证 Git 未改变；`code_modify` 的写入同时受 WorkspaceGrant 和 allowed_paths 限制，只执行调用方预先声明的 shell-free verification command。finalizer 以真实 Git diff 和命令结果生成 payload/ArtifactCandidate。
+原生 Coding Agent 的 `code_understand` 与 `code_modify` 复用同一 AgentLoop，并在 loop 前确定性复用 `RepoMaterializer` 准备/复用仓库。`code_understand` 不注入写/进程 Tool并在结束时验证 Git 未改变；`code_modify` 的写入受 WorkspaceGrant 限制，验证命令由 Agent 根据项目实际自行选择（shell-free，经 ProcessRunner 的结构化解析与权限检查）。finalizer 以真实 Git diff 和命令结果生成 payload/ArtifactCandidate。
 
 当前要求已有且干净的 Git workspace，以建立 Attempt provenance。ProcessRunner 不是 OS 沙箱；可信调用方若提供过弱验证命令，系统不能证明代码真正满足自然语言目标。这些限制不会因 Phase 7 改变。
 
 ### 9.2 Experiment
 
-原生 Experiment Agent 实现 `experiment_run`：RepoMaterializer 确认 source+commit，EnvironmentManager 使用内容寻址环境，DatasetCache/HardwareAudit 提供上下文；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且 Artifact 必须相对本 Attempt 基线新增或改变。
+原生 Experiment Agent 实现 `experiment_run`：在统一工作区上由 RepoMaterializer 确认 source+commit，EnvironmentManager 使用内容寻址环境（env 目录来自 `ResourceLayout.env_root`），DatasetCache/HardwareAudit 提供上下文（dataset 目录来自 `ResourceLayout.dataset_root`）；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且 Artifact 必须相对本 Attempt 基线新增或改变。实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
 
 ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检查而非安全隔离；setup/experiment 分类也不是安全分类。详细约束见 ADR-0004、ADR-0005 和 contracts。
 
@@ -413,7 +416,7 @@ ResearchRun 只有同时满足以下条件才能 completed：
 
 ## 15. 不可破坏的架构约束
 
-1. Scientific Agent 不输出执行图字段；WorkflowCompiler 不形成科学结论；
+1. Scientific Agent 不输出执行图字段；WorkflowCompiler 不形成科学结论、不决定代码文件/验证命令/物理目录；
 2. ResAgent 可以使用 LLM 编译图，但状态转换只由代码执行；
 3. 专业 Agent 不直接互调；
 4. WorkflowTask、Attempt、Session、AgentAction 不得混为同一层；

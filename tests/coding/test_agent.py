@@ -250,6 +250,37 @@ def test_two_coding_tasks_share_workspace_and_isolate_artifacts(tmp_path) -> Non
     assert res_b.payload["changed_files"] == ["helper.py"]
 
 
+def test_read_only_profile_works_on_shared_dirty_workspace(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    # A previous coding task left the workspace dirty (uncommitted change).
+    (repo / "util.py").write_text(
+        "def add(a, b):\n    return a + b + 0\n", encoding="utf-8"
+    )
+
+    agent = NativeCodingAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "read_file", "arguments": {"path": "util.py"}},
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "result": {
+                            "answer": "add is in util.py",
+                            "evidence_files": ["util.py"],
+                        }
+                    },
+                },
+            ]
+        )
+    )
+
+    result = agent.invoke(request(repo, capability=Capability.CODE_UNDERSTAND))
+
+    assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
+
+
 def test_disallowed_verification_command_cannot_complete(tmp_path) -> None:
     init_repo(tmp_path)
     agent = NativeCodingAgent(

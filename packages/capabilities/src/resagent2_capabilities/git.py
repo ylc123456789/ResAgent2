@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -19,15 +20,16 @@ class GitWorkspaceError(ValueError):
 class GitBaseline:
     """A content snapshot of the working directory at the start of one Attempt.
 
-    ``tree_hash`` is a tree object capturing the full working-directory state
-    (tracked and untracked, minus ignored/reserved files); ``untracked`` is the
-    set of untracked paths at that moment. Comparing later work against this
-    baseline yields only the increment produced by the current Attempt, without
-    committing, touching the real index, or rolling anything back.
+    ``tree_hash`` is a tree object capturing the tracked working-directory
+    state; ``untracked`` maps each untracked path to its content hash at that
+    moment (so a later edit to an untracked file is detected, not just its
+    first appearance). Comparing later work against this baseline yields only
+    the increment produced by the current Attempt, without committing, touching
+    the real index, or rolling anything back.
     """
 
     tree_hash: str
-    untracked: frozenset[str]
+    untracked: dict[str, str]
 
 
 class GitWorkspace:
@@ -106,12 +108,24 @@ class GitWorkspace:
         finally:
             os.unlink(tmp_index)
 
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
     def snapshot(self) -> GitBaseline:
         """Capture the current working-directory content as an Attempt baseline."""
-        return GitBaseline(
-            tree_hash=self._write_tree(),
-            untracked=frozenset(path for path in self._untracked_paths() if path),
-        )
+        untracked: dict[str, str] = {}
+        for path in self._untracked_paths():
+            if not path or not self._visible(path):
+                continue
+            full = self.boundary.root / path
+            if full.is_file():
+                untracked[path] = self._sha256(full)
+        return GitBaseline(tree_hash=self._write_tree(), untracked=untracked)
 
     # ── HEAD-relative observations (legacy; retain for direct callers/tests) ──
 
@@ -158,10 +172,18 @@ class GitWorkspace:
         tracked = self._run(
             ["diff", "--name-only", "-z", baseline.tree_hash]
         ).stdout.split("\0")
-        new_untracked = set(self._untracked_paths()) - set(baseline.untracked)
+        changed = {path for path in tracked if path}
+        for path in self._untracked_paths():
+            if not path:
+                continue
+            full = self.boundary.root / path
+            if path not in baseline.untracked:
+                changed.add(path)  # newly created untracked file
+            elif not full.is_file() or self._sha256(full) != baseline.untracked[path]:
+                changed.add(path)  # deleted or modified untracked file
         return sorted(
             path
-            for path in set([*tracked, *new_untracked])
+            for path in changed
             if path and self._visible(path) and self.boundary.allows_read(path)
         )
 

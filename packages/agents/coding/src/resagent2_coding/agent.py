@@ -111,6 +111,10 @@ class NativeCodingAgent:
         except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
             return self._failure(str(error), blocked=True)
 
+        # Capture this Attempt's baseline: previous tasks' accepted changes are
+        # the starting state, and only this Attempt's increment counts.
+        baseline = repository.snapshot()
+
         common_tools = (
             ListFilesTool(boundary),
             ReadFileTool(boundary),
@@ -131,7 +135,7 @@ class NativeCodingAgent:
                 permission_policy=AllowListPermissionPolicy(
                     {tool.name for tool in common_tools}
                 ),
-                completion_check=CodeUnderstandCompletionCheck(repository),
+                completion_check=CodeUnderstandCompletionCheck(repository, baseline),
                 action_type=CodeUnderstandAction,
                 result_type=CodeUnderstandResult,
             )
@@ -139,9 +143,6 @@ class NativeCodingAgent:
             if request.output_dir is None:
                 return self._failure("CodingAgent requires an output_dir", blocked=True)
             output_root = Path(request.output_dir)
-            # Capture this Attempt's baseline: previous tasks' accepted changes
-            # are the starting state, and only this Attempt's increment counts.
-            baseline = repository.snapshot()
             write_tools = (
                 CreateFileTool(boundary),
                 ReplaceTextTool(boundary),

@@ -37,7 +37,7 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_capabilities import ArxivLiteratureBackend
+from resagent2_capabilities import ArxivLiteratureBackend, ResourceLayout
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
@@ -299,7 +299,9 @@ def _coding_agent(session_store) -> NativeCodingAgent:
     )
 
 
-def _experiment_agent(session_store) -> NativeExperimentAgent:
+def _experiment_agent(
+    session_store, resource_layout: ResourceLayout
+) -> NativeExperimentAgent:
     return NativeExperimentAgent(
         OpenAICompatibleClient(
             model=_MODEL,
@@ -307,6 +309,7 @@ def _experiment_agent(session_store) -> NativeExperimentAgent:
             api_key_env=_API_KEY_ENV,
         ),
         store=session_store,
+        resource_layout=resource_layout,
     )
 
 
@@ -459,6 +462,7 @@ def run_code(workdir: Path) -> ModuleResult:
 
 def run_experiment(workdir: Path) -> ModuleResult:
     repo = _repo(workdir)
+    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
     request = ModuleTaskRequest(
         run_id="run_real",
         task_id="task_experiment",
@@ -478,7 +482,9 @@ def run_experiment(workdir: Path) -> ModuleResult:
         workspace=_grant(repo),
         output_dir=str(workdir / "out"),
     )
-    return _experiment_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
+    return _experiment_agent(
+        JsonSessionStore(workdir / "sessions"), resource_layout
+    ).invoke(request)
 
 
 def run_full(workdir: Path) -> bool:
@@ -508,6 +514,7 @@ def run_full(workdir: Path) -> bool:
     run_store = JsonRunStore(workdir / "state")
     coding_store = JsonSessionStore(workdir / "coding_sessions")
     experiment_store = JsonSessionStore(workdir / "experiment_sessions")
+    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
@@ -516,7 +523,7 @@ def run_full(workdir: Path) -> bool:
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
-                port=_experiment_agent(experiment_store),
+                port=_experiment_agent(experiment_store, resource_layout),
             ),
         },
         store=run_store,

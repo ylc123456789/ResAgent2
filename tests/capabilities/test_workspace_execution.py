@@ -177,6 +177,22 @@ def test_git_baseline_isolates_attempt_increment(tmp_path) -> None:
     assert "a.py" not in diff
 
 
+def test_git_baseline_detects_untracked_file_content_change(tmp_path) -> None:
+    init_repo(tmp_path)
+    repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
+
+    # Task A creates an untracked file.
+    (tmp_path / "helper.py").write_text("H=1\n", encoding="utf-8")
+    baseline = repository.snapshot()
+
+    # Task B modifies that same untracked file (name unchanged, content changed).
+    (tmp_path / "helper.py").write_text("H=2\n", encoding="utf-8")
+
+    changed = repository.changed_paths_since(baseline)
+    assert changed == ["helper.py"]
+    assert "H=2" in repository.diff_since(baseline)
+
+
 def test_require_clean_rejects_dirty_workspace(tmp_path) -> None:
     init_repo(tmp_path)
     (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")

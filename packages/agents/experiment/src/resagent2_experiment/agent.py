@@ -73,9 +73,11 @@ class NativeExperimentAgent:
         llm_client: LLMClient,
         *,
         store: SessionStore | None = None,
+        resource_layout: ResourceLayout | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.loop = AgentLoop(store=store or InMemorySessionStore())
+        self.resource_layout = resource_layout or ResourceLayout.from_env()
 
     @staticmethod
     def _failure(message: str, *, blocked: bool = False) -> ModuleResult:
@@ -126,7 +128,7 @@ class NativeExperimentAgent:
         source_ref = (
             spec.location if spec.location else str(materialized.repo_path)
         )
-        resource_layout = ResourceLayout.from_env()
+        resource_layout = self.resource_layout
         env_spec_dict = env_spec(materialized.repo_path, inputs.python_version)
         identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", env_spec_dict)
         try:

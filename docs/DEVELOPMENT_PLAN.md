@@ -340,12 +340,12 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 
 ### Runtime 新增组件（可复用）
 
-- `RepoMaterializer`：`repo_url` 克隆 / `copy_from` 复制 / `external_repo_path` 就地绑定 → 产出 workspace；repo identity 用 (repo_url + commit hash)，不依赖 basename；
+- `RepoMaterializer`：按 `WorkspaceSpec`（GIT 克隆 / COPY 复制 / LOCAL 就地绑定 / GENERATED 空受管）产出 workspace；repo identity 用 (source + commit hash)，不依赖 basename；
 - `EnvironmentManager`：读 env spec → 创建/绑定 conda env，按 `env_id` 内容寻址复用；
 - `DatasetCache`：共享 torchvision/HF/torch.hub 缓存目录 + 国内镜像 profile；
 - `HardwareAudit`：`nvidia-smi` 等 GPU/硬件信息。
 
-共享目录默认 `.resagent2/resources/`（下分 `envs/` 与 `datasets/`），可用 `RESAGENT2_RESOURCE_ROOT` 覆盖。
+共享目录默认 `.resagent2/data/resources/`（下分 `envs/` 与 `datasets/`），可用 `RESAGENT2_RESOURCE_ROOT` 覆盖；`data_root` 用 `RESAGENT2_DATA_ROOT` 覆盖。
 
 ### Experiment 专有能力
 

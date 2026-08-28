@@ -29,8 +29,9 @@ from .models import CodeModifyFinish
 
 
 class CodeUnderstandCompletionCheck:
-    def __init__(self, repository: GitWorkspace) -> None:
+    def __init__(self, repository: GitWorkspace, baseline: GitBaseline) -> None:
         self.repository = repository
+        self.baseline = baseline
 
     def evaluate(
         self,
@@ -54,10 +55,10 @@ class CodeUnderstandCompletionCheck:
                 summary="Read the claimed evidence files before finishing: "
                 + ", ".join(missing),
             )
-        if self.repository.changed_paths():
+        if self.repository.changed_paths_since(self.baseline):
             return CompletionDecision(
                 complete=False,
-                summary="Read-only Coding profile detected workspace changes",
+                summary="Read-only Coding profile detected workspace changes in this Attempt",
             )
         return CompletionDecision(
             complete=True,

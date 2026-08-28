@@ -118,7 +118,7 @@ python -m pytest tests/contracts
 - 每个模块有独立输入输出；
 - 不读取其他模块内部 state；
 - 不直接调用其他子 Agent；
-- 只依赖 `contracts` 和需要的 `runtime` 公共能力；
+- 只依赖 `contracts`、`runtime` 和需要的 `capabilities`；
 - 可以独立测试；
 - 以后确有独立用户和发布需求时再拆包或拆仓。
 

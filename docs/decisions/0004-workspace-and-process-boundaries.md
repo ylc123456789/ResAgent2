@@ -1,5 +1,7 @@
 # ADR-0004：Workspace 与进程执行边界
 
+> 部分被 [ADR-0006](0006-runtime-capabilities-boundary.md) 取代：安全规则不变，具体实现从 runtime 迁移到 capabilities。
+
 **状态**：accepted
 **日期**：2026-08-27
 

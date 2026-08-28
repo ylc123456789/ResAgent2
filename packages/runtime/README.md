@@ -17,16 +17,12 @@ Phase 4 已实现：
 
 runtime 提供机制，不包含科研、代码修改或实验策略，也不包含 ResAgent Workflow Scheduler。
 
-Phase 5 已增加：
+Phase 5 曾在本包内孵化 workspace、process、Git、Artifact 读取等可复用实现；
+Phase 6.5 已将这些具体能力迁移到 `resagent2_capabilities`。runtime 当前只保留
+Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool。
 
-- WorkspaceGrant 驱动的物理路径边界与 symlink containment；
-- list/read/search、create/replace 文件 Tool；
-- `shell=False` 的安全进程执行和命令日志；
-- Git clean/status/diff 观察；
-- 已登记 ArtifactRef 的只读、hash 校验访问；
-- OpenAI-compatible 的最小真实 LLM client。
-
-持久化数据库、环境创建、仓库 materialization 和领域策略仍不属于本阶段 runtime。
+文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略
+均不属于 runtime。
 
 ## 关键控制顺序
 

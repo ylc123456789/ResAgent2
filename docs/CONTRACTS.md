@@ -319,7 +319,7 @@ class CodeModifyResult:
     residual_risks: list[NonEmptyStr] = []
 ```
 
-`CodeUnderstandResult.evidence_files` 至少包含一个实际通过 Coding read/search Tool 观察过的 workspace 相对路径。`CodeModifyResult.changed_files` 包含本 Attempt 新增或内容改变且仍存在的文件；`deleted_files` 单独记录删除；二者不能重叠。`patch_path` 指向 runtime 生成的 Attempt patch。
+`CodeUnderstandResult.evidence_files` 至少包含一个实际通过 Coding read/search Tool 观察过的 workspace 相对路径。`CodeModifyResult.changed_files` 包含本 Attempt 新增或内容改变且仍存在的文件；`deleted_files` 单独记录删除；二者不能重叠。`patch_path` 指向 Coding finalizer 通过 capabilities Git 能力生成的 Attempt patch。
 
 `verification_passed` 必须等于所有 `VerificationResult` 均为 exit_code 0 且未 timeout。没有声明 verification command 时结果列表为空且该字段为 true，但这只表示“没有失败的声明验证”，不等价于更强的测试充分性声明。
 
@@ -439,7 +439,7 @@ class ArtifactRef:
 
 Candidate 的 path 必须是 workspace root 下无 `..` 的相对路径。Candidate 故意没有 id、URI、hash 或 provenance；这些只能由 ResAgent 登记时产生。
 
-runtime 负责 Tool 访问时的路径/权限检查；ResAgent 在登记时独立复核存在、containment、symlink、hash 和 Attempt 绑定。ArtifactRef 是冻结证据，不能被后续 Attempt 覆盖。
+capabilities 中的 Tool 负责访问时的路径/权限检查；ResAgent 在登记时独立复核存在、containment、symlink、hash 和 Attempt 绑定。ArtifactRef 是冻结证据，不能被后续 Attempt 覆盖。
 
 ## 14. WorkspaceGrant
 
@@ -452,7 +452,7 @@ class WorkspaceGrant:
     source: WorkspaceSource
 ```
 
-Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；真实 filesystem runtime 做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
+Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；capabilities 的真实 filesystem 实现做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
 
 ## 15. ScientificConclusion
 

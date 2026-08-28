@@ -374,7 +374,7 @@ Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三�
 - `runtime` 只保留运行引擎：Agentic Loop、Agent 状态、上下文、LLM、Session、Tool 接口与 finish/ask_user；
 - 新建 `capabilities` 包承接具体能力：workspace / process / artifacts / git / repo / environment / dataset / hardware / workspace_tools（Phase 7 再加 literature）。
 
-依赖方向：`contracts ← runtime ← capabilities ← agents ← orchestrator`；runtime 不依赖 capabilities，capabilities 不依赖任何具体 Agent；各 Agent 只通过 Tool Profile 装配自己需要的能力，依赖 capabilities 不等于自动获得全部能力。
+代码依赖分成两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`；composition root（CLI/E2E）负责把具体 Agent 注入 orchestrator。runtime 不依赖 capabilities，capabilities 不依赖任何具体 Agent；各 Agent 只通过 Tool Profile 装配自己需要的能力，依赖 capabilities 不等于自动获得全部能力。
 
 ## 10. Phase 7：Scientific Agent vNext 与科学闭环
 
@@ -429,7 +429,7 @@ Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三�
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
 | ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
 | retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | 已实现：retry 新 Attempt、ask-user resume 复用并校验 Session、repair 使用 WorkflowPatch |
-| Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5 | 登记复核已有，runtime 访问层待实现 |
+| Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5/6.5 | capabilities 访问检查与 orchestrator 登记复核均已实现 |
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
 | success criterion 求值 | SuccessCriterion | Phase 3/7 | 仅存储，方向已裁定为可执行语义，求值器待 Phase 7 |
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |

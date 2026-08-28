@@ -1,5 +1,7 @@
 # ADR-0005：Experiment Agent vNext 与内容寻址环境
 
+> 部分被 [ADR-0006](0006-runtime-capabilities-boundary.md) 取代：provisioning 语义不变，具体组件从 runtime 迁移到 capabilities。
+
 **状态**：accepted
 **日期**：2026-08-27
 

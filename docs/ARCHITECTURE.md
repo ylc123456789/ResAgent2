@@ -253,7 +253,7 @@ sequenceDiagram
 
 `capabilities` 提供可装配的具体能力：`WorkspaceBoundary`、无 shell 的 `ProcessRunner`、只读 Git 观察、已登记 Artifact 读取、仓库 materialization、内容寻址环境、数据集缓存和硬件审计。这些对象只提供物理边界和可审计执行，不决定“应该改什么代码”或“验证是否足以完成 Coding Task”。Coding 的编辑策略和 finalizer 仍属于 Coding Agent。
 
-依赖方向：`contracts ← runtime ← capabilities ← agents ← orchestrator`。runtime 不依赖 capabilities；capabilities 不依赖任何具体 Agent。各 Agent 通过 Tool Profile 只装配自己需要的能力——依赖 capabilities 不等于自动获得全部能力。Capability（能做什么）与 Skill（怎样组合能力完成一类任务）目前不分离：Skill 暂由各 Agent 的 Prompt + Tool Profile + CompletionCheck 承担，待出现跨 Agent 复用的操作流程再抽象正式 Skill 框架。
+代码依赖分成两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root（CLI/E2E）同时依赖 orchestrator 与具体 Agents，并通过 ModulePort 注入绑定；orchestrator 不 import 具体 Agent。runtime 不依赖 capabilities；capabilities 不依赖任何具体 Agent。各 Agent 通过 Tool Profile 只装配自己需要的能力——依赖 capabilities 不等于自动获得全部能力。Capability（能做什么）与 Skill（怎样组合能力完成一类任务）目前不分离：Skill 暂由各 Agent 的 Prompt + Tool Profile + CompletionCheck 承担，待出现跨 Agent 复用的操作流程再抽象正式 Skill 框架。
 
 ### 8.6 Phase 5 Coding 执行边界
 
@@ -358,7 +358,7 @@ stateDiagram-v2
 
 Artifact 采用两道职责不同的检查：
 
-1. **runtime/Tool 执行前**：根据 WorkspaceGrant 做访问授权、路径 resolve、symlink 边界和读写权限检查，防止越权访问；
+1. **capabilities/Tool 执行前**：根据 WorkspaceGrant 做访问授权、路径 resolve、symlink 边界和读写权限检查，防止越权访问；
 2. **ResAgent 登记时**：不信任子模块返回的 ArtifactCandidate，重新检查文件存在、相对路径、workspace containment、symlink escape，计算 hash，绑定 run/task/attempt，并复制到冻结位置。
 
 第一道检查保护执行过程，第二道检查保护证据库。两者是纵深防御，不是重复所有权。

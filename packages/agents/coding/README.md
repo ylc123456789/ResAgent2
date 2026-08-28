@@ -5,7 +5,7 @@
 输入：代码任务、WorkspaceGrant、constraints、input Artifact。
 输出：完整代码变化、验证结果、风险和 ArtifactCandidate。
 
-复用 runtime 的 filesystem、process、Git、permission、context 和 AgentLoop。代码策略、编辑工具、验证策略和 patch finalizer 属于本模块。
+复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Git 与 Artifact 能力。代码策略、验证策略和 patch finalizer 属于本模块。
 
 本模块是第一个完成重写的专业 Agent。Phase 5 的原生实现提供两个 profile：
 

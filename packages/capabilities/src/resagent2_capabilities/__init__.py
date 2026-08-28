@@ -19,6 +19,15 @@ from .environment import (
 )
 from .git import GitWorkspace, GitWorkspaceError
 from .hardware import HardwareAudit
+from .literature import (
+    ArtifactRegistrationPort,
+    ArxivLiteratureBackend,
+    LiteraturePaper,
+    LiteratureSearchBackend,
+    LiteratureSearchError,
+    LiteratureSearchTool,
+    LiteratureSearchToolInput,
+)
 from .process import ProcessRunner, UnsafeCommandError, parse_command
 from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
@@ -44,6 +53,8 @@ from .workspace_tools import (
 
 __all__ = [
     "ArtifactReadError",
+    "ArtifactRegistrationPort",
+    "ArxivLiteratureBackend",
     "CreateFileInput",
     "CreateFileTool",
     "DatasetCache",
@@ -56,6 +67,11 @@ __all__ = [
     "HardwareAudit",
     "ListFilesInput",
     "ListFilesTool",
+    "LiteraturePaper",
+    "LiteratureSearchBackend",
+    "LiteratureSearchError",
+    "LiteratureSearchTool",
+    "LiteratureSearchToolInput",
     "MaterializedRepo",
     "ProcessRunner",
     "ReadArtifactInput",

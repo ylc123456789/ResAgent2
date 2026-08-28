@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 contracts schema 2.0、7.2 WorkflowCompiler 完成） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability 完成） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
@@ -506,6 +506,8 @@ Compiler 只翻译，不持久化、不执行 Tool、不调用 Agent、不修改
 测试使用 fake HTTP/backend；只做一个受环境变量控制的非默认网络 smoke test，避免 CI 依赖外部服务。
 
 退出条件：Scientific Tool 可在无网络 fake backend 下确定性测试；真实 smoke test 能处理限流/超时而不伪造成功；检索结果带 session provenance 且 Tool 自己不能分配 ArtifactId/hash。
+
+**状态：已完成（2026-08-28）。** `capabilities/literature.py` 落地 `LiteratureSearchBackend` Protocol + `ArxivLiteratureBackend`（stdlib urllib + defusedxml，https，timeout/有限重试/指数退避，规范化/去重/截断，网络异常抛 `LiteratureSearchError` 不伪装成空结果）+ `LiteraturePaper` + `ArtifactRegistrationPort` Protocol + `LiteratureSearchTool`（从 `AgentState` 取 run_id/session_id 做 provenance，Tool 不分配 ArtifactId/hash）。backend 由 composition root 注入。新增依赖 `defusedxml`（安全解析不可信 XML）。本地 181 tests + 1 opt-in smoke skip 通过。
 
 #### 7.4 Scientific Agent vNext
 

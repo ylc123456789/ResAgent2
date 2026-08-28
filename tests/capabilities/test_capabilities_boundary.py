@@ -9,6 +9,8 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "capabilities" / "src"
 ALLOWED_IMPORT_ROOTS = {
     "__future__",
     "dataclasses",
+    "datetime",
+    "defusedxml",
     "hashlib",
     "json",
     "mimetypes",

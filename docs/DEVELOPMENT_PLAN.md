@@ -35,10 +35,10 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext 与科学闭环 gate | not_started |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（架构/契约阶段；代码未开始） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
-Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和科学结论四类证据。
+Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -90,7 +90,7 @@ Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原�
 
 ### 已知后续工作
 
-contracts 包“代码已实现”不等于所有字段“运行语义已接通”。Phase 3 已强制控制面 capability 边界并拒绝带未解决 questions 的 Proposal；success_criteria 求值、生产 payload 模型/消费方、完整 pre-run 问答和 schema 演进仍按后续阶段推进。
+contracts 包“代码已实现”不等于所有字段“运行语义已接通”。Phase 3 已强制控制面 capability 边界并拒绝带未解决 questions 的 Proposal。历史上曾把 success_criteria 求值留给后续阶段；ADR-0007/Phase 7 已改为在 schema 2.0 删除这套未使用的通用字段，改由 capability finalizer 验证领域完成证据。
 
 ## 5. Phase 2：最小 shared runtime
 
@@ -169,7 +169,7 @@ contracts 包“代码已实现”不等于所有字段“运行语义已接通�
 - [x] validator 禁止 scientific_plan 和 ask_user 进入 WorkflowTask；
 - [x] create_run 拒绝 questions 非空的 WorkflowProposal；
 - [x] 为上述两条增加负向测试；
-- [x] 裁定 success_criteria 方向：保留可执行语义，不降级为纯说明字段。AUTOMATIC 表示任务完成后由机器基于已登记 Artifact 自动判定，MANUAL 表示需人工确认；evidence_key 的解析目标与求值器留待 evidence 求值阶段（Phase 7）定义，本阶段只锁定方向；
+- [x] Phase 3 当时裁定 success_criteria 保留可执行语义；该历史决定在 Phase 7 设计中被 ADR-0007 后续裁定取代：schema 2.0 删除未运行的通用 SuccessCriterion/evidence_key，完成证据归各 capability finalizer；
 - [x] 记录 Phase 3 当时的 payload 策略；Phase 4 随后增加 `Attempt.payload` 持久化，但 Scheduler 仍不解释 payload，跨任务数据仍必须成为 Artifact；每个原生 capability 的强类型 payload model 和领域消费方在对应 Agent 阶段定义；
 - [x] 将 `.resagent2/` 加入 `.gitignore`；
 - [x] 清除 src/build 误读风险：正式验证只针对 `packages/*/src`，构建产物不得作为源码；
@@ -197,6 +197,8 @@ contracts 包“代码已实现”不等于所有字段“运行语义已接通�
 - 不为了未来并行执行改写同步 Scheduler。
 
 ## 7. Phase 4：Planning Port、Adapters 与最小黄金闭环
+
+本节是已完成 Phase 4 的历史实现记录，其中 Planning Port、scientific_analyze 和 ScientificConclusion 不代表 Phase 7 目标接口；目标架构与删除时序只以 §10、ARCHITECTURE 和 ADR-0007 为准。
 
 ### 目标
 
@@ -376,37 +378,241 @@ Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三�
 
 代码依赖分成两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`；composition root（CLI/E2E）负责把具体 Agent 注入 orchestrator。runtime 不依赖 capabilities，capabilities 不依赖任何具体 Agent；各 Agent 只通过 Tool Profile 装配自己需要的能力，依赖 capabilities 不等于自动获得全部能力。
 
-## 10. Phase 7：Scientific Agent vNext 与科学闭环
+## 10. Phase 7：Scientific Agent vNext、科学控制循环与闭环 gate
 
-### 目标
+### 10.1 本阶段解决什么
 
-在稳定 Planning/Analyze Ports 后重写科学顾问，并把“工程执行完成”提升为“可解释的科研闭环完成”。
+Phase 7 不只是“把 `LegacyScientificAnalyzeAdapter` 换成原生 Agent”。它要把顶层控制流从“一张任务图执行完就结束”改成真正的研究闭环：
 
-### 范围
+```text
+自然语言目标
+  → Scientific Agent 形成当前科学判断
+  → 证据不足时提出 WorkRequest
+  → ResAgent 编译、校验和执行 Workflow
+  → WorkOutcome/Artifact 返回同一 Scientific Session
+  → Scientific Agent 更新判断并继续
+  → ScientificOpinion 通过 gate 后结束
+```
 
-- Scientific context 和只读 Artifact allowlist；
-- literature tools；
-- WorkflowProposal/WorkflowPatch；
-- ScientificConclusion；
-- evidence/risk/confidence 语义；
-- required scientific analysis closure；
-- final summary 只引用已登记事实。
+ADR-0007 已裁定：Scientific Agent 只负责科学判断；WorkflowProposal/Patch 由 ResAgent 内部 WorkflowCompiler 生成。总控模块允许修改，不把 Phase 6 的 `create_run(request, proposal)` 和 `_evaluate_run` 当作冻结接口。
 
-### 进入代码前必须先裁定
+### 10.2 已裁定的设计，不再留给实现临时决定
 
-- success_criteria/evidence_key 是否由模块 finalizer、独立 validator 或 Scheduler 求值；
-- 哪些 Artifact kind 强制需要 scientific_analyze；
-- final report 的最小契约；
-- “inconclusive” 与运行失败如何分别呈现。
+1. Scientific Agent 只有一套可恢复 Agentic Loop，不提供 plan/analyze 等公开模式；
+2. 对外输入始终是目标 + 当前状态 + 授权证据 + 新 WorkOutcome/回答；
+3. Scientific Agent 对外控制结果只有 request_work、needs_user_input、completed、failed；
+4. request_work 必须包含当前 ScientificAssessment 和语义化 WorkRequestDraft；
+5. WorkRequest 不含 capability、依赖、路径、环境、状态或重试字段；
+6. WorkflowCompiler 属于 ResAgent，可使用一次结构化 LLM 调用，但无 Session、无 Tool、无科学结论；
+7. Workflow 仍由 deterministic validator/scheduler 执行；
+8. literature_search 是 Scientific Tool，不是 WorkflowTask；Phase 7 首个 backend 使用 arXiv 元数据/摘要检索，保留一个小型 backend Protocol，但不同时建设多源聚合、自动 fallback 或全文 PDF 管线；
+9. schema 1.1 的通用 success_criteria/evidence_key 在 schema 2.0 删除，不再开发万能求值器；Coding/Experiment/Scientific 各自由强类型 finalizer 验证领域完成证据；
+10. `inconclusive` 是合法 ScientificVerdict，可对应 completed Run；运行 failed 表示没有形成可靠闭环；
+11. 一个 Run 同时只允许一个 active WorkRequest，先做串行闭环；
+12. 新旧 Scientific 生产路径在最终 composition root 中不能共存；
+13. 顶层模块叫 Research Orchestrator/ResAgent，内部控制组件叫 ResearchController，Scientific Agent 边界只叫 ScientificPort；
+14. ScientificCompletionValidator 只验证结构、provenance 和闭环状态，不宣称验证科学观点真假；
+15. Phase 7 是未发布的原子迁移单元，每个阶段退出点必须可导入、全仓测试可运行。
 
-### 完成标准
+### 10.3 明确不在 Phase 7 范围
 
-- [ ] Scientific Agent 不输出 executor/path/env/status；
-- [ ] Proposal/Patch 通过统一 validator；
-- [ ] 执行成功与 ScientificVerdict 分离；
-- [ ] 只读取授权 ArtifactRef；
-- [ ] 最终 gate 的每个科学条件有模型和测试；
-- [ ] Legacy Scientific Adapter 可删除。
+- 多科学 Agent 辩论、角色人格、投票或树搜索；
+- 并行 WorkRequest、多 Workflow 并发或分布式 scheduler；
+- 长期 Conversation 产品、通用聊天 UI；
+- 多论文平台聚合、推荐排序研究、全文下载/解析、引文图；
+- 自动选择任意第三方插件；
+- OS 沙箱、云端 durable execution；
+- 为 schema 1.1 RunStore 快照提供通用原地迁移框架；
+- 同时重构已经稳定的 Coding/Experiment 内部 Agentic Loop。
+
+如果上述能力出现真实需求，进入 Phase 8 单独立项，不能在 Phase 7 审查中顺手扩 scope。
+
+### 10.4 实施顺序
+
+#### 7.0 文档与 ADR（当前工作）
+
+- [x] ADR-0007 裁定科学判断与任务图编译的所有权；
+- [x] ARCHITECTURE 写明目标闭环、失败语义、状态和迁移边界；
+- [x] CONTRACTS 同时保留当前 schema 1.1 事实和 schema 2.0 目标，不能混写；
+- [x] 本计划给出阶段顺序、测试和删除项；
+- [x] README 与包级 README 同步派生摘要。
+- [x] success_criteria 删除、completion validator、WorkRequest 状态和 schema 2.0 原子切换已获得 ADR/Architecture/Contract 锚点。
+
+验收：全文搜索不存在“Scientific Agent 在 Phase 7 直接输出 Proposal/Patch”“literature_search 是目标 WorkflowTask”“success_criteria 求值器仍待决定”等并存说法。
+
+#### 7.1 schema 2.0 基础与 success_criteria 原子清理
+
+本小节结束时必须保持全仓可导入、测试可运行；禁止先删 contract symbol，再留给 7.2/7.7 修消费者。
+
+在同一个原子变更中：
+
+1. 将 `SCHEMA_VERSION` 切到 `"2.0"`，新增 WorkRequestId、WorkRequestStatus、ScientificAssessment、WorkRequestDraft/WorkRequest、WorkTaskOutcome/WorkOutcome、ScientificOpinion、ScientificTurnRequest/ScientificTurnResult、FinalReportData，以及 ArtifactRef 的 Task/Attempt、Scientific Session、Orchestrator 三种 provenance 和 work_request_id traceability；
+2. 删除 `SuccessCriterion`、`VerificationMode`、TaskProposal/WorkflowTask.success_criteria 和 WorkflowProposal.questions；同时把 `scientific_rationale` 改为 `compilation_rationale`、`Workflow.created_from` 改为 WorkRequestId，并同步修改 planning.py、scheduler.py、create_run 的旧 questions 分支和全部 fixture/tests；
+3. 新增 ResearchRun 的 Phase 7 字段与 model validation，但不接入 production composition root；
+4. 暂时保留并标为 deprecated：ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput、ScientificConclusion，以及旧 scientific/ask_user/experiment_prepare capability。它们只服务当前唯一旧 production 路径，7.7 原子切换时删除。
+
+旧 PlanningPort 在该未发布迁移期为 Proposal/Task 填入 Run 内固定的 `work_legacy_initial`，repair fixture 使用显式 `work_legacy_repair_<n>`；Scheduler 不再从 summary/reason 生成 Workflow.created_from。legacy ID 只保证旧测试路径可运行，不创建虚假的 WorkRequest，也不得进入新 ResearchController。
+
+2.0 在 7.7 完成前是未发布开发版本，不对外承诺临时 deprecated symbol。
+
+测试：
+
+- 每个新模型 round-trip；
+- discriminated union 每种合法结果和互斥字段负例；
+- WorkRequest 禁止执行字段，并验证合法状态转换、字段组合、active 唯一性和 stable→consumed 幂等；
+- supports/refutes 无 evidence 非法，inconclusive/not_applicable 空 evidence 合法；
+- WorkOutcome 重复/未知 Task、未知 Artifact、status/error 非法组合被拒绝；
+- ArtifactRef 的 task/attempt/session/orchestrator provenance 非法组合被拒绝；
+- Proposal/Patch/Task 缺失或错绑 work_request_id 被拒绝；
+- WorkflowProposal 要求 compilation_rationale，拒绝 scientific_rationale/questions，Workflow.created_from 只接受 WorkRequestId；
+- schema 1.1 wire/JsonRunStore 被 2.0 loader 明确拒绝；
+- planning.py、scheduler.py、全仓 fixtures 不再引用 SuccessCriterion/VerificationMode/success_criteria，不再把 summary/reason 写入 Workflow.created_from；
+- contracts 包依然不依赖 runtime/orchestrator/agents。
+
+退出条件：contracts 与全仓测试全绿，所有 production import 可解析；CONTRACTS §20 与 models.py/exports 对已实现部分一致；旧 production Scientific 路径仍是唯一启用路径。
+
+#### 7.2 WorkflowCompiler
+
+新增最小 Port：输入 WorkRequest、CapabilityRegistry、Run 约束和当前 Workflow 摘要；输出 WorkflowProposal 或 WorkflowPatch。
+
+实现两种注入对象：
+
+- `LLMWorkflowCompiler`：production 用的一次结构化调用；
+- `DeterministicWorkflowCompiler`：测试 fixture，不承担 production 规划语义。
+
+Compiler 只翻译，不持久化、不执行 Tool、不调用 Agent、不修改状态。Validator 负责 DAG、capability、预算、revision、pending-only patch 和 work_request_id。
+
+测试至少覆盖：初始 proposal、已有图 patch、未知 capability、循环依赖、超预算、错误 revision、修改 running/completed Task、编译器返回非法 JSON。测试必须证明同一 WorkRequest 可追溯到 Workflow.created_from。
+
+退出条件：新 Compiler Port 的测试路径完整；PlanningPort/DeterministicPlanningPort 继续仅服务旧 production 路径，到 7.7 一次性删除，不能同时接入 production composition root。
+
+#### 7.3 literature capability
+
+在 `packages/capabilities` 增加小型 `LiteratureSearchBackend` Protocol 和 arXiv 实现，只提供 Scientific Agent 真正需要的字段：paper id、title、authors、published_at、abstract、source_url。
+
+边界：
+
+- query、max_results、可选时间范围有 schema 和上限；
+- 请求 timeout、有限重试、指数退避和清晰错误；
+- 不把 API key/网络异常写成空结果；
+- 原始响应不直接进入 prompt，先规范化、截断和去重；
+- 每次成功检索先规范化结果，经注入的 registration port 交给 ResAgent Artifact Registry 冻结，再把 ArtifactRef 返回 Scientific Agent；
+- backend 由 composition root 注入，Scientific Agent 不 import arXiv SDK 细节。
+
+测试使用 fake HTTP/backend；只做一个受环境变量控制的非默认网络 smoke test，避免 CI 依赖外部服务。
+
+退出条件：Scientific Tool 可在无网络 fake backend 下确定性测试；真实 smoke test 能处理限流/超时而不伪造成功；检索结果带 session provenance 且 Tool 自己不能分配 ArtifactId/hash。
+
+#### 7.4 Scientific Agent vNext
+
+复用现有 AgentLoop，新增一个 Scientific definition/profile，不复制 loop。最小 Tool 集：
+
+- `read_artifact`：只读 allowlist；
+- `literature_search`：调用注入的 backend；
+- `request_work`：验证 ScientificAssessment + WorkRequestDraft 并暂停 Session；
+- `ask_user`：复用现有问题机制；
+- `finish`：验证 ScientificOpinion 候选。
+
+Context 固定分区：ResearchRequest、当前 Run 摘要、authorized Artifact 清单、最新 WorkOutcome/回答、已通过 Tool 观察的证据摘要、预算。Prompt 只描述科学职责和证据纪律，不塞 capability 名和任务图格式。
+
+Scientific finalizer 必须：
+
+- 交叉检查 evidence_artifact_ids 与 Tool observation history；
+- 由代码派生并返回整个 Session 累计的 observed_artifact_ids，LLM action 不能填写该字段；
+- 根据 unresolved_task_outcomes 验证 opinion.acknowledged_task_ids；
+- 保留 limitations/unresolved_questions；
+- request_work 时确保 assessment 和 expected_evidence 非空；
+- finish 时执行 verdict/evidence 组合约束；
+- 预算耗尽、工具错误和契约错误返回结构化 failed，不用 summary 掩盖。
+
+测试覆盖：已有证据直接 finish、先检索再 finish、request_work pause、WorkOutcome resume、ask-user resume、越权 Artifact、伪造 evidence id、step/LLM budget exhaustion。
+
+退出条件：Scientific Agent 可在不认识 WorkflowProposal/TaskProposal 的情况下通过唯一 ScientificPort 完成 scripted loop；新 Port 只在 tests/composition fixture 装配，production 仍未双路由。
+
+#### 7.5 Research Controller 与 Run 生命周期
+
+在 orchestrator 增加轻量 `ResearchController`，只编排已有组件，不把 Scheduler 重写成巨型类：
+
+1. `create_run(request)` 创建 running Run 和 Scientific Session；
+2. 处理 ScientificTurnResult；
+3. request_work 时持久化唯一 active WorkRequest；
+4. 调用 Compiler + Validator，交给现有 Scheduler 执行；
+5. 图稳定后生成 WorkOutcome 并恢复同一 Scientific Session；
+6. needs_user_input 时复用 PendingQuestion/UserAnswer；
+7. completed 时调用 scientific gate；
+8. fatal error/预算耗尽时才进入 Run failed。
+
+ScientificTurnResult 到 RunStatus 的唯一映射采用 CONTRACTS §20.11；不得在 Controller 中新增另一套隐式状态规则。
+
+ResearchRun 内部字段以 CONTRACTS §20.10.1 为准。work_requests 列表是事实源，active WorkRequest 由 status 派生；ResearchController 负责 requested→compiling→executing→stable→consumed，使用 work_request_id 幂等恢复 Scientific Session。runtime SessionStore 拥有原始 observation history，ResearchRun 只保存 Registry 复核后的 scientific_observed_artifact_ids 并集，不复制 Session 私有内容。
+
+调整 `_evaluate_run`：它只判断一次执行图是否稳定并生成 WorkOutcome，不再因为一个 required Task 终止就直接结束整个 ResearchRun。Scheduler 的 Task/Attempt 映射保持不变。
+
+测试覆盖：零任务直接结论、一个 work cycle、多个串行 work cycle、Task failure 后请求替代工作、paused/restart/resume、Compiler/contract fatal error、总预算耗尽。
+
+退出条件：JsonRunStore 重启后可从 ResearchRun 边界恢复；不要求从一个正在执行的子进程中间恢复。
+
+#### 7.6 scientific finish gate 与 final report
+
+实现 `ScientificCompletionValidator`，输入同一个不可变 ResearchRun snapshot、ScientificCompletedResult 和 Registry 只读视图。它逐条实现 ARCHITECTURE §13 的七项 gate：
+
+1. completed result/session/run 绑定合法；
+2. 无 active WorkRequest、running Task、PendingQuestion；
+3. opinion evidence 属于本 Run、Registry 可查，并同时存在于 result 和 Run 的 observed trace；
+4. opinion 的 statement、verdict、evidence、limitations、unresolved_questions 字段组合合法；
+5. final report 只从 typed Run state、ArtifactRef 和 ScientificOpinion 渲染；
+6. completed Task 的最后 Attempt 状态/error/Artifact producer 与 Scheduler 的合法 ModuleResult 映射一致；gate 不重跑领域 finalizer，也不从 summary 推断；
+7. 所有 failed/blocked TaskId 都被 opinion.acknowledged_task_ids 覆盖，且 limitations 非空。
+
+Validator 不判断科学观点真假或证据语义是否充分。ScientificPort completion check 应先验证同一 snapshot；ResAgent 复核失败属于 contract_error，不得把 invalid candidate 写成 completed。
+
+通过时 Validator 构造 CONTRACTS §20.10.2 的 FinalReportData。final report 使用只接受该模型的确定性 renderer，不再调用 LLM 二次“润色”。Validator 通过后 renderer 才运行；报告以 kind=final_report、media_type=text/markdown、orchestrator/final_report provenance 登记为 Artifact，final_opinion、final_report_artifact_id 全部持久化成功后才能写 Run completed。
+
+测试覆盖 supports、refutes、inconclusive/not_applicable；缺 evidence、跨 Run Artifact、未观察 Artifact、伪造 observed trace、active work、未确认 failed/blocked Task、completed Task 无合法 finalizer result 均拒绝完成。
+
+#### 7.7 切换、删除和真实 E2E
+
+7.7 是 schema 2.0 的原子发布切换：同一个变更先切 production composition root，再删除旧入口和所有 deprecated symbol，更新调用者/tests/E2E；变更结束前不得发布或合并部分状态。
+
+切换时删除：
+
+- PlanningPort / DeterministicPlanningPort；
+- `LegacyScientificAnalyzeAdapter` 及其旧 ExpAgent 路径；
+- 旧 scientific capability binding/payload translation；
+- 7.1 暂留的 ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput、ScientificConclusion 和旧 capability enum value；
+- 只服务旧路径的测试和文档。
+
+`experiment_prepare` 的删除依据 ADR-0007 §8：原生 Experiment Agent 已把准备/审计纳入 experiment_run，且旧 capability 没有 production binding，不保留第二入口。
+
+保留的核心：WorkflowProposal/Patch、Validator、Scheduler、ModulePort、ArtifactRegistry、Coding/Experiment vNext。
+
+真实 E2E 至少包含：
+
+1. goal → direct inconclusive/answer（无需执行图）；
+2. goal → code_modify → experiment_run → evidence → final opinion；
+3. 实验失败 → WorkOutcome → Scientific 请求修复/替代实验 → 最终 opinion；
+4. Scientific ask_user → 进程退出 → answer/resume；
+5. literature search → literature Artifact → opinion 引用。
+
+服务器验收必须保存 Run JSON、Scientific Session、每个 Workflow revision、WorkRequest/WorkOutcome、冻结 Artifact 和最终报告；命令退出码由直接 shell/script 捕获，不使用会吞 `$?` 的嵌套引号验证。
+
+### 10.5 Phase 7 总完成标准
+
+- [ ] schema 2.0 代码/导出/文档/测试一致；
+- [ ] Scientific Agent 只有一套 Agentic Loop 和一个 Port；
+- [ ] Scientific Agent 不输出 capability/task/path/env/status 等执行字段；
+- [ ] WorkflowCompiler 不形成科学结论，所有输出经过统一 validator；
+- [ ] 自然语言 ResearchRequest 可在无预建 Workflow 时启动 Run；
+- [ ] WorkRequest → Workflow → WorkOutcome → 同一 Scientific Session 的闭环可恢复；
+- [ ] Task 失败不会被掩盖，也不会在仍可科学恢复时过早结束 Run；
+- [ ] literature 是可注入 capability，限流/超时不会伪装为空结果；
+- [ ] ScientificOpinion 只引用已授权、已通过 trusted Tool observation、已登记 Artifact；
+- [ ] inconclusive 与 failed 的语义和测试分离；
+- [ ] final report 是确定性渲染且只引用 typed facts；
+- [ ] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
+- [ ] production composition root 只有一条 Scientific 路径；
+- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；
+- [ ] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ## 11. Phase 8：稳定化与按需高级能力
 
@@ -424,17 +630,19 @@ Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三�
 
 | 架构概念/约束 | contract/接口 | 实现阶段 | 当前状态 |
 |---|---|---|---|
-| planning 在控制面 | ScientificPlanInput、WorkflowProposal | Phase 3/4 | 已实现：validator 拒绝控制面 task |
+| 科学判断与任务图编译分离 | ScientificTurnResult、WorkRequest、WorkflowProposal/Patch | Phase 7 | 目标契约已裁定，代码未实现 |
 | 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
 | ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
 | retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | 已实现：retry 新 Attempt、ask-user resume 复用并校验 Session、repair 使用 WorkflowPatch |
 | Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5/6.5 | capabilities 访问检查与 orchestrator 登记复核均已实现 |
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
-| success criterion 求值 | SuccessCriterion | Phase 3/7 | 仅存储，方向已裁定为可执行语义，求值器待 Phase 7 |
+| 领域完成证据 | capability input/payload/finalizer | Phase 5-7 | Coding/Experiment 已实现；schema 2.0 删除未使用的通用 success_criteria |
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
-| 科学分析闭环 | ScientificConclusion | Phase 7 | 未实现 |
-| final summary 事实约束 | 最终报告契约待定 | Phase 7 | 未实现 |
+| 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 目标契约已裁定，代码未实现 |
+| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | requested→compiling→executing→stable→consumed/failed 已裁定，代码未实现 |
+| Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | SessionStore 派生、RunStore 复核并集已裁定，代码未实现 |
+| final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 目标已裁定，代码未实现 |
 
 ## 13. 文档同步检查
 
@@ -461,3 +669,4 @@ Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三�
 | 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |
 | 2026-08-27 | Phase 5 Coding Agent vNext | completed（未提交工作树） | 本地/服务器 92 tests；服务器真实闭环 4 Artifacts | 原生 Coding、shared workspace/process/Git/Artifact、legacy Coding adapter 删除 |
 | 2026-08-27 | Phase 6 Experiment Agent vNext | completed | 本地 146 tests；delivery 黄金用例 + 服务器真实闭环 | 原生 Experiment、provisioning 组件、内容寻址环境、schema 1.1、legacy Experiment adapter 删除、Attempt 证据归属、source identity |
+| 2026-08-28 | Phase 7 架构/契约 | in_progress（代码未开始） | ADR-0007、三份核心文档交叉检查 | Scientific 只作科学判断；WorkflowCompiler 归 ResAgent；schema 2.0 草案 |

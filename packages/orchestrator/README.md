@@ -5,14 +5,17 @@ ResAgent2 的顶层控制模块。
 负责：
 
 - ResearchRun；
+- Scientific Session 引用、WorkRequest 与 WorkOutcome；
+- WorkRequest → WorkflowProposal/Patch 的 WorkflowCompiler；
 - Workflow validation/revision；
 - Task/Attempt 状态；
 - capability 路由；
 - Module Port/Adapter；
 - retry、Ask User 和 finish gate；
+- ScientificCompletionValidator 与 deterministic final report renderer（Phase 7 目标）；
 - Artifact index。
 
-它不直接实现科学分析、代码修改和实验执行。普通调度必须由确定性代码完成；LLM 只用于计划提出/修订及需要智能判断的有界任务。
+它不直接实现科学判断、代码修改和实验执行。普通调度必须由确定性代码完成；Phase 7 允许内部 WorkflowCompiler 用一次有界结构化 LLM 调用把语义工作请求翻译成任务图，但 LLM 不直接修改状态。
 
 ## 当前已实现
 
@@ -28,7 +31,9 @@ ResAgent2 的顶层控制模块。
 - finish gate；
 - 内存 RunStore 和原子 JSON RunStore。
 
-当前 ModulePort 可以注入原生 Coding Agent；orchestrator 自身仍不 import 具体 Agent。Phase 4 的 Experiment/Scientific legacy adapters 继续作为过渡实现，Coding legacy adapter 已在 Phase 5 删除。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding 和 Experiment legacy adapter 已分别在 Phase 5/6 删除，只剩 `LegacyScientificAnalyzeAdapter` 作为过渡。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+
+上面“WorkRequest/WorkflowCompiler/Scientific Session”的职责是 Phase 7 目标，当前代码尚未实现。当前 production 仍使用 PlanningPort + WorkflowProposal 创建 Run，Scientific 仍走 `LegacyScientificAnalyzeAdapter`；Phase 7 切换后删除旧路径，不长期维护两套总控逻辑。
 
 ## 最小使用方式
 
@@ -38,4 +43,4 @@ scheduler.create_run("run_demo", request, proposal)
 run = scheduler.run_until_stable("run_demo")
 ```
 
-`run_until_stable` 只执行确定性的 ready Task。科学计划仍必须通过 WorkflowProposal 或 WorkflowPatch 显式进入，Scheduler 不调用 LLM 决定普通状态转换。
+`run_until_stable` 只执行确定性的 ready Task。这是 schema 1.1 的当前用法。Phase 7 目标入口改为自然语言 `create_run(request)`：ResearchController 调用 Scientific Agent，接收 WorkRequest，再由 WorkflowCompiler 产生 Proposal/Patch；Scheduler 仍不调用 LLM 决定普通状态转换。

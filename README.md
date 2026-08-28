@@ -6,26 +6,29 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ```text
 研究目标
-  → 科学顾问提出任务图
-  → ResAgent 校验并调度任务
+  → 科学顾问形成当前科学判断
+  → 证据不足时提出“还需要什么工作/证据”
+  → ResAgent 把工作请求编译成任务图并调度
   → 程序员修改和验证代码
   → 实验员运行实验并冻结证据
-  → 科学顾问分析结果
-  → ResAgent 检查闭环并结束 Run
+  → 证据返回同一个科学会话，更新判断
+  → 最终科学意见通过闭环 gate 后结束 Run
 ```
 
 ## 当前状态
 
-**阶段：Phase 6 已完成，Phase 7 尚未开始。**
+**阶段：Phase 6 已完成；Phase 7 正在做架构/契约工作，代码尚未开始。**
 
-当前已实现 `resagent2-contracts`、共享 `resagent2-runtime`、确定性的 `resagent2-orchestrator` Workflow Core，以及原生 Coding Agent 与原生 Experiment Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、Coding/Experiment finalizer、provisioning 组件和内容寻址环境；真实闭环不再依赖旧 CodingAgent 或旧 reproagent。Scientific 仍通过 Phase 4 legacy adapter 运行。
+当前已实现 `resagent2-contracts` schema 1.1、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding Agent 与原生 Experiment Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和内容寻址环境；真实执行不再依赖旧 CodingAgent 或旧 reproagent。Scientific 当前仍通过 Phase 4 `LegacyScientificAnalyzeAdapter` 运行。
+
+Phase 7 的目标架构已经裁定，但尚不是当前代码事实：Scientific Agent 将只负责科学判断；ResAgent 新增 WorkflowCompiler，把语义化 WorkRequest 转成可执行 Workflow；旧 PlanningPort 和 `LegacyScientificAnalyzeAdapter` 在切换后删除。
 
 ## 四个角色
 
 | 角色 | 简单理解 | 负责 | 不负责 |
 |---|---|---|---|
-| ResAgent / Research Orchestrator | 总管 | 工作流、状态、依赖、Attempt、Artifact、暂停恢复、完成判定 | 自己改代码、跑实验、形成科学结论 |
-| Scientific Agent | 科学顾问 | 实验设计、文献分析、结果解释、科学结论 | 决定物理路径、环境和运行状态 |
+| ResAgent / Research Orchestrator | 神经系统/总管 | 自然语言入口、工作请求转任务图、状态、Attempt、Artifact、暂停恢复、完成判定 | 自己改代码、跑实验、形成科学观点 |
+| Scientific Agent | 科学大脑 | 根据目标和证据形成当前判断，说明还缺什么，给出最终科学意见 | 输出 capability/依赖/路径/环境，直接调其他 Agent |
 | Coding Agent | 程序员 | 阅读、修改、验证代码 | 判断实验是否支持假设 |
 | Experiment Agent | 实验员/操作员 | 准备环境、运行实验、采集指标和证据 | 形成最终科学结论 |
 
@@ -55,14 +58,17 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 - result schema；
 - completion check。
 
-## LLM 计划与确定性调度
+## 科学推理与确定性执行
 
-Workflow 任务图仍由 LLM/Scientific Agent 提出。所谓“确定性 ResAgent”是指：
+Phase 7 目标中有两种不同的 LLM 工作，但状态仍由代码控制：
 
 ```text
-LLM 负责提出：做什么、为什么做、任务之间如何依赖。
-代码负责决定：图是否合法、哪个任务已就绪、状态如何变化、何时重试或结束。
+Scientific Agent：开放地判断证据意味着什么，以及还需要什么证据。
+WorkflowCompiler：有界地把 WorkRequest 翻译成 Proposal/Patch。
+确定性代码：校验图、计算 ready Task、转换状态、登记 Artifact、执行 gate。
 ```
+
+Scientific Agent 不需要 plan/analyze 等公开模式。它只有一套可恢复 Agentic Loop，对外通过 request_work、ask_user 或 finish 表达下一步；WorkflowCompiler 属于 ResAgent，不是第二个科学 Agent。
 
 LLM 不能直接：
 
@@ -74,7 +80,7 @@ LLM 不能直接：
 - 绕过 Artifact 登记阶段已实现的 workspace 边界、hash 和 provenance 检查；
 - 把尚未实现的科学闭环条件伪装成已经通过。
 
-完整的 ScientificConclusion/final-summary 完成门槛计划在 Phase 7 实现，目前不是生效中的 finish gate。
+完整的 ScientificOpinion/final-report 完成门槛计划在 Phase 7 实现，目前不是生效中的 finish gate。当前代码仍使用 PlanningPort、schema 1.1 和 task graph gate；不要根据目标架构误读现状。
 
 详细说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

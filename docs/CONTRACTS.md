@@ -6,15 +6,17 @@
 
 **当前实现**：`resagent2-contracts 0.1.0`，wire schema `1.1`
 
+**Phase 7 目标**：wire schema `2.0` 草案见 §20；尚未实现，不能作为当前代码说明
+
 ## 1. 使用规则
 
-本文件回答“模块之间传什么、字段准确表示什么”。
+本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述当前 schema 1.1；§20 单独描述 Phase 7 的不兼容目标 schema。目标类型只有实现、测试和版本切换完成后才进入“当前公共导出”。
 
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
 - 代码与本文字段不一致时，视为 contract bug；
 - 本文写了目标语义但代码尚未强制时，必须明确标为“未实现约束”；
-- runtime 内部的 `AgentDefinition`、`AgentAction`、`FinishCandidate`、Tool 和 Context 类型不属于跨模块 wire contract，不在本文件定义。
+- runtime 内部的 `AgentDefinition`、`AgentAction`、`FinishCandidate`、Tool 和 Context 类型不属于跨模块 wire contract，通常不在本文件定义；§20.12 只锁定 Phase 7 evidence Tool 与 Artifact/observation 边界的最小实现形状，不把它们加入 contracts 公共导出。
 
 所有公共模型：
 
@@ -28,10 +30,12 @@
 | 边界 | 请求 | 响应/状态 |
 |---|---|---|
 | 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、最终报告（尚未建模） |
-| Planning Port | ScientificPlanInput/ResearchRequest | WorkflowProposal、WorkflowPatch |
+| 当前 Planning Port（Phase 7 删除） | ScientificPlanInput/ResearchRequest | WorkflowProposal、WorkflowPatch |
 | Scheduler → 专业模块 | ModuleTaskRequest | ModuleResult |
 | 专业模块 → Artifact Registry | ArtifactCandidate | ArtifactRef |
 | ResAgent 持久化 | Workflow、WorkflowTask、Attempt、PendingQuestion | ResearchRun 属于 orchestrator 内部模型 |
+
+Phase 7 目标边界改为：ResAgent ↔ Scientific Agent 使用 `ScientificTurnRequest` / `ScientificTurnResult`；Scientific Agent 只提出 `WorkRequestDraft`，WorkflowProposal/Patch 改由 ResAgent 内部 WorkflowCompiler 产生。准确字段见 §20。
 
 禁止跨模块读取另一个模块的内部 Session state、私有目录或 prompt；禁止从 summary 文本推断机器状态；禁止把任意 dict 作为长期接口。
 
@@ -98,7 +102,7 @@ class ResearchRequest:
 | input_artifacts | 用户明确授权的已登记输入 |
 | budget | max_tasks、max_attempts_per_task、max_llm_calls、timeout_seconds |
 
-## 6. Planning Port 契约
+## 6. 当前 Planning Port 契约（schema 1.1，Phase 7 将取代）
 
 ### 6.1 WorkflowProposal
 
@@ -122,7 +126,7 @@ class TaskProposal:
 
 Proposal 已在 schema 层检查重复 ID、未知依赖和环，也由 validator 拒绝控制面 capability；仍需 ResAgent 做架构级校验：是否存在唯一 binding、预算和系统约束是否满足。
 
-`questions` 的唯一语义是“在创建 Workflow 前仍需用户澄清”。非空 Proposal 不能执行，回答后重新规划。`create_run` 会拒绝非空 questions。
+schema 1.1 中 `questions` 的唯一语义是“在创建 Workflow 前仍需用户澄清”。非空 Proposal 不能执行，回答后重新规划。`create_run` 会拒绝非空 questions。schema 2.0 由 Scientific control loop 统一提出用户问题，WorkflowCompiler 不再产出 questions。
 
 ### 6.2 WorkflowPatch
 
@@ -200,9 +204,9 @@ class SuccessCriterion:
 
 automatic criterion 在 schema 层要求 evidence_key。但 schema 1.1 尚未定义 evidence_key 指向哪个 payload/artifact 结构，Scheduler 也不求值 criteria。当前它是持久化的计划意图，Task 是否 completed 仍由模块 finalizer 返回的 ModuleStatus 决定。
 
-在定义求值器、证据路径和责任方前，不得把 success_criteria 写成已生效的 finish gate。
+以上只描述 schema 1.1 现状。ADR-0007 已裁定 schema 2.0 删除 SuccessCriterion/evidence_key，不再定义通用求值器；目标完成证据归 capability finalizer，见 §20.10。
 
-## 8. Capability 与路由
+## 8. 当前 Capability 与路由（schema 1.1）
 
 | capability | owner | 架构位置 | 当前说明 |
 |---|---|---|---|
@@ -215,7 +219,9 @@ automatic criterion 在 schema 层要求 evidence_key。但 schema 1.1 尚未定
 | experiment_run | Experiment | 任务面 | 执行实验并收集证据 |
 | ask_user | Orchestrator | 控制信号 | schema 过渡保留；不得成为 WorkflowTask |
 
-`Capability` / `CapabilityInput` 联合类型仍保留这两个控制面类型作为过渡，但 Workflow validator 已拒绝 `scientific_plan` 与 `ask_user` 作为 Task。是否在下个 schema 版本移除这两个 task input 类型另行决定。
+schema 1.1 的 `Capability` / `CapabilityInput` 联合类型仍保留这两个控制面类型作为过渡，Workflow validator 已拒绝 `scientific_plan` 与 `ask_user` 作为 Task。它们是否移除的历史问题已由 ADR-0007 解决：schema 2.0 最终切换时删除，见 §20.8 与 §20.13。
+
+Phase 7 已裁定在 schema 2.0 移除 `scientific_plan`、`scientific_analyze`、`literature_search`、`experiment_prepare` 和 `ask_user` 的顶层 task capability。前三者转入 Scientific control loop / Tool，`experiment_prepare` 合并在 `experiment_run` 内，ask-user 始终是控制信号。目标注册表见 §20.8。
 
 `CapabilityDefinition` / `CapabilityRegistry` 描述 owner、request/result model、side effects、permission policy 和 completion evidence。Registry 拒绝同一 capability 出现两次，从而保证每个 capability 恰有一个 owner；同一个 owner 可以拥有多个不同 capability。它是注册表数据，不改变架构中的控制面/任务面区分。
 
@@ -285,8 +291,8 @@ Workflow Core 只对 ModuleResult 的外层控制字段执行调度语义：stat
 
 | task capability | 目标 payload/消费方 | 当前行为 | 原生模型定义阶段 |
 |---|---|---|---|
-| scientific_analyze | ScientificConclusion → 科学闭环/final report | legacy payload 保存到 Attempt；结论另登记 `scientific_decision` Artifact | Phase 7 |
-| literature_search | 有界文献结果 → Scientific Agent | 无 production binding；持久结果必须登记 Artifact | Phase 7 |
+| scientific_analyze | ScientificConclusion → 科学闭环/final report | legacy payload 保存到 Attempt；Phase 7 由 ScientificTurnResult 取代 | Phase 7 删除 task capability |
+| literature_search | 有界文献结果 → Scientific Agent | 无 production binding；Phase 7 改为 Scientific Tool | Phase 7 删除 task capability |
 | code_understand | CodeUnderstandResult → 调用方 | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
 | code_modify | CodeModifyResult → 调用方；代码变化 → ArtifactRef | Phase 5 原生 Coding Agent 生产并持久化到 Attempt | Phase 5 |
 | experiment_prepare | 环境/仓库准备结果 → Experiment 流程 | 无 production binding；模型待定义 | Phase 6 |
@@ -454,7 +460,7 @@ class WorkspaceGrant:
 
 Grant 表示授权，不表示 repo identity 或 Artifact。allowed/denied path 只接受相对 root 的路径。contracts 做词法约束；capabilities 的真实 filesystem 实现做 resolve/symlink/物理边界检查；Artifact Registry 登记时再次复核输出。
 
-## 15. ScientificConclusion
+## 15. 当前 ScientificConclusion（schema 1.1，Phase 7 将取代）
 
 ```python
 class ScientificConclusion:
@@ -466,6 +472,8 @@ class ScientificConclusion:
 ```
 
 Scientific verdict 与执行状态独立：一次成功的 scientific_analyze 可以得出 refutes 或 inconclusive。当前 Scheduler 没有把它接入最终 Run gate，属于后续闭环工作。
+
+Phase 7 不再创建 scientific_analyze WorkflowTask；schema 2.0 使用 `ScientificAssessment` / `ScientificOpinion`，并由 `ScientificTurnResult` 区分 request_work、needs_user_input、completed 和 failed。
 
 ## 16. 状态映射
 
@@ -488,7 +496,7 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前唯一支持版本为 `1.1`，不维护旧格式兼容层。Phase 4 完成起 `1.0` 冻结；Phase 6 给 `ExperimentRunInput` 增加可选字段时按规则发布 `1.1`（迁移说明见 §10.3 与 ADR-0005），并新增 round-trip 与非法组合测试。从 `1.1` 起，后续增加可选字段必须发布至少 `1.2` 并提供迁移说明和 round-trip 测试。
+当前唯一支持版本为 `1.1`，不维护旧格式兼容层。Phase 4 完成起 `1.0` 冻结；Phase 6 给 `ExperimentRunInput` 增加可选字段时按规则发布 `1.1`（迁移说明见 §10.3 与 ADR-0005），并新增 round-trip 与非法组合测试。Phase 7 会删除旧 capability/input、改变 Proposal 所有权并新增科学控制对象，因此目标版本定为不兼容的 `2.0`，而不是伪装成只加可选字段的 `1.2`。
 
 ## 18. 当前公共导出核对表
 
@@ -513,8 +521,441 @@ Scientific verdict 与执行状态独立：一次成功的 scientific_analyze �
 
 这些是已确认缺口，不是隐含设计：
 
-1. 实现 success_criteria/evidence_key 的正式求值器（方向已裁定：保留可执行语义，求值器留待 Phase 7）；
-2. Scientific capability 的强类型 ModuleResult payload model 及其领域消费方仍待 Phase 7 定义；Coding（Phase 5）与 Experiment（Phase 6）payload 已完成；
-3. 在引入下一次字段变化时按 §17 发布 1.2 及迁移说明。
+1. schema 1.1 的 `success_criteria/evidence_key` 仍未求值；Phase 7 不再扩建通用求值语言，而是在 schema 2.0 删除该字段，由 capability finalizer 判断任务完成证据；
+2. Scientific capability 的 legacy payload 将由 §20 的 Scientific control contract 整体取代；
+3. Phase 7 按 §17 发布 2.0，不维护 1.1/2.0 双生产路径。
 
 这些工作的阶段、顺序和验收见 `DEVELOPMENT_PLAN.md`。
+
+## 20. Phase 7 目标契约（schema 2.0 草案，尚未实现）
+
+本节是 Phase 7 的实现目标，不是当前 Python 公共导出。实现时必须逐个落入 `models.py`、公共导出、round-trip/非法组合测试和迁移测试；在此之前，代码仍只接受 schema 1.1。
+
+### 20.1 新 ID
+
+```python
+WorkRequestId = Annotated[str, StringConstraints(pattern=r"^work_[A-Za-z0-9][A-Za-z0-9_-]*$")]
+```
+
+WorkRequestId 在一个 Run 内唯一。它只标识“为什么需要这一轮执行”，不能当作 TaskId、Workflow revision 或 SessionId。
+
+### 20.2 ScientificAssessment
+
+```python
+class ScientificAssessment:
+    statement: NonEmptyStr
+    evidence_artifact_ids: list[ArtifactId] = []
+    limitations: list[NonEmptyStr] = []
+    unresolved_questions: list[NonEmptyStr] = []
+```
+
+`statement` 是当前科学观点，不是执行摘要。每次 `request_work` 都必须携带 assessment，确保 Scientific Agent 先说明已有判断，再说明缺少什么。`evidence_artifact_ids` 只能引用本 Run 中已授权且 Scientific Session 确实通过 `read_artifact` 或 `literature_search` Tool 观察过的 Artifact；finalizer 和 ResAgent gate 都要复核。
+
+### 20.3 WorkRequestDraft 与 WorkRequest
+
+```python
+class WorkRequestStatus(StrEnum):
+    REQUESTED = "requested"
+    COMPILING = "compiling"
+    EXECUTING = "executing"
+    STABLE = "stable"
+    CONSUMED = "consumed"
+    FAILED = "failed"
+
+class WorkRequestDraft:
+    objective: NonEmptyStr
+    expected_evidence: list[NonEmptyStr]
+    constraints: list[NonEmptyStr] = []
+
+class WorkRequest:
+    id: WorkRequestId
+    run_id: RunId
+    scientific_session_id: SessionId
+    request: WorkRequestDraft
+    status: WorkRequestStatus = WorkRequestStatus.REQUESTED
+    workflow_revision: int | None = None
+    outcome: WorkOutcome | None = None
+    error: ModuleError | None = None
+    created_at: datetime
+    updated_at: datetime
+```
+
+`objective` 描述需要完成的工作目的；`expected_evidence` 描述 Scientific Agent 希望随后观察到的证据。它们都是自然语言语义，不是任务图。
+
+WorkRequestDraft 严禁包含 capability、owner、task_id、depends_on、workspace、path、env、retry、status 或 Attempt 字段。持久化 WorkRequest 只增加本节列出的 ID、绑定、生命周期、outcome/error 和时间字段，仍不能携带任务图或物理执行字段。
+
+`expected_evidence` 至少一项。ResAgent 分配 ID、绑定 run/session 并持久化后，Draft 才成为 status=requested 的 WorkRequest。一个 Run 同时最多有一个 active WorkRequest；active 指 requested/compiling/executing/stable，consumed/failed 为终态。
+
+状态和字段组合：
+
+| status | 含义 | 必须字段 | 禁止字段 |
+|---|---|---|---|
+| requested | Draft 已持久化，尚未调用 Compiler | 无附加字段 | workflow_revision/outcome/error |
+| compiling | Compiler 调用已开始；崩溃后可按同一 work_request_id 重试 | 无附加字段 | workflow_revision/outcome/error |
+| executing | Proposal/Patch 已接受，Scheduler 正在执行 | workflow_revision | outcome/error |
+| stable | 对应任务已经稳定，WorkOutcome 已持久化，等待恢复 Scientific Session | workflow_revision、outcome | error |
+| consumed | ScientificPort 已按 work_request_id 幂等接收 WorkOutcome | workflow_revision、outcome | error |
+| failed | 编译/控制契约发生不可恢复错误；Task failed/blocked 不进入此状态 | error | 无；已有 workflow_revision/outcome 必须保留 |
+
+唯一合法转换是 `requested → compiling → executing → stable → consumed`，任一步可在不可恢复控制错误时进入 failed。failed 若带 outcome 必须同时带 workflow_revision，不能删除已形成的执行历史。普通 Task failed/blocked 仍产生 stable WorkOutcome。stable→consumed 的 Scientific resume 使用 work_request_id 作为幂等键：重复投递返回同一已持久化结果，不能把同一 observation 追加两次。
+
+### 20.3.1 Scientific Artifact provenance
+
+schema 2.0 的 ArtifactRef 将生产边界改为互斥 union：
+
+```python
+class ArtifactRef:
+    id: ArtifactId
+    kind: NonEmptyStr
+    producer: AgentOwner
+    run_id: RunId
+    task_id: TaskId | None = None
+    attempt_number: int | None = None
+    session_id: SessionId | None = None
+    uri: NonEmptyStr
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    media_type: NonEmptyStr
+    summary: NonEmptyStr
+    metadata: dict[str, JsonValue] = {}
+```
+
+合法 provenance 只有三种：
+
+- 执行 Artifact：producer 为 coding/experiment，task_id 与正整数 attempt_number 同时存在，session_id 为空；
+- Scientific Tool Artifact：producer 为 scientific，session_id 存在，task_id 与 attempt_number 同时为空；
+- Orchestrator Artifact：producer 为 orchestrator，三者都为空；metadata.source_type 必须是 `import` 或 `final_report`。import 的原始来源由 Registry 校验后记录，final_report 只允许 deterministic renderer 产生。
+
+model validator 必须按 producer 选择上述唯一分支；混合字段、缺半个 task/attempt、非正 attempt、scientific 带 task、orchestrator 带 session 等全部拒绝。所有 Artifact 仍必须有当前 run_id、Registry 计算的 sha256 和冻结 uri。
+
+`ArtifactCandidate` 仍不含 id/hash/provenance。Scientific `literature_search` Tool 将规范化结果作为 Candidate，连同当前 run/session 的 registration context 交给 ResAgent Artifact Registry；Registry 复核、冻结并返回 ArtifactRef。Tool/Agent 不得自行分配 ID 或 hash。该 registration port 由 composition root 注入，capabilities 不 import orchestrator。
+
+### 20.4 WorkTaskOutcome 与 WorkOutcome
+
+```python
+class WorkTaskOutcome:
+    task_id: TaskId
+    status: Literal["completed", "failed", "blocked", "superseded"]
+    summary: NonEmptyStr
+    artifact_ids: list[ArtifactId] = []
+    error: ModuleError | None = None
+    warnings: list[WarningRecord] = []
+
+class WorkOutcome:
+    work_request_id: WorkRequestId
+    workflow_revision: int
+    summary: NonEmptyStr
+    tasks: list[WorkTaskOutcome]
+```
+
+tasks 至少一项且 TaskId 不重复。每个 Task 必须属于对应 Workflow revision，且 Task 的 `work_request_id` 等于本 WorkOutcome 的 work_request_id。failed/blocked 必须有 error；completed/superseded 不能有 error。artifact_ids 只能包含该 Task Attempt 已登记的 Artifact，包括成功证据和明确标记的诊断证据；失败 Task 不能因为产出诊断 Artifact 就被写成 completed。
+
+WorkOutcome 是执行事实摘要，不判断实验是否支持假设。`summary` 不能覆盖结构化 status/error/warnings。即使含 failed/blocked Task，也可以返回 Scientific Agent；由 Scientific Agent 决定请求替代工作、修改观点或以局限形式结束。
+
+### 20.5 ScientificOpinion
+
+```python
+class ScientificOpinion:
+    verdict: ScientificVerdict
+    statement: NonEmptyStr
+    evidence_artifact_ids: list[ArtifactId]
+    limitations: list[NonEmptyStr] = []
+    unresolved_questions: list[NonEmptyStr] = []
+    recommended_next_steps: list[NonEmptyStr] = []
+    acknowledged_task_ids: list[TaskId] = []
+```
+
+`statement` 是面向用户的最终科学观点。verdict 与 RunStatus 独立：`inconclusive` 可以是一个成功完成的科学闭环；Run failed 表示系统未能形成符合 gate 的可靠意见。
+
+最终 evidence 可以为空，只允许观点明确说明当前没有可用证据且 verdict 为 inconclusive 或 not_applicable；任何 supports/refutes 意见必须至少引用一个 ArtifactId。
+
+`acknowledged_task_ids` 不是“已成功任务”列表，而是 Scientific Agent 已明确纳入判断的 failed/blocked Task。最终 gate 要求 Run 中所有仍 failed/blocked 的 TaskId 都出现在该列表；列表非空时 limitations 也必须非空。completed/superseded Task 不得出现在该列表。
+
+### 20.6 ScientificTurnRequest
+
+```python
+class ScientificTurnRequest:
+    run_id: RunId
+    research: ResearchRequest
+    authorized_artifacts: list[ArtifactRef] = []
+    work_outcome: WorkOutcome | None = None
+    unresolved_task_outcomes: list[WorkTaskOutcome] = []
+    answers: list[UserAnswer] = []
+    budget: TaskBudget
+    parent_session_id: SessionId | None = None
+```
+
+首次调用 `parent_session_id=None` 且 `work_outcome=None`。恢复必须给出同一 Run 的 paused Scientific Session；WorkOutcome 和 answers 只包含自上次暂停后新增的 observation。`unresolved_task_outcomes` 是截至本轮仍 failed/blocked 的结构化事实，供 completion check 验证 acknowledged_task_ids。`authorized_artifacts` 是本轮可读 allowlist，不表示 Agent 已经读取。
+
+组合约束：首次调用必须同时没有 parent_session_id/work_outcome/answers；恢复调用必须有 parent_session_id，并且 work_outcome 与 answers 至多一种非空。work_outcome.work_request_id 必须属于该 Run，且对应 WorkRequest.status=stable；answers 必须全部匹配该 Run 的 PendingQuestion。authorized_artifacts 的 ID 不重复且 run_id 全部匹配；unresolved_task_outcomes 只允许 failed/blocked 且 TaskId 不重复。
+
+### 20.7 ScientificTurnResult
+
+结果使用 discriminated union，外部只有一个 Scientific port，不是四套 Agent 模式：
+
+```python
+class ScientificWorkRequestResult:
+    status: Literal["request_work"]
+    assessment: ScientificAssessment
+    work_request: WorkRequestDraft
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = []
+
+class ScientificQuestionResult:
+    status: Literal["needs_user_input"]
+    assessment: ScientificAssessment
+    question: QuestionDraft
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = []
+
+class ScientificCompletedResult:
+    status: Literal["completed"]
+    opinion: ScientificOpinion
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = []
+
+class ScientificFailedResult:
+    status: Literal["failed"]
+    error: ModuleError
+    session: SessionRef | None = None
+    observed_artifact_ids: list[ArtifactId] = []
+
+ScientificTurnResult = Annotated[
+    ScientificWorkRequestResult
+    | ScientificQuestionResult
+    | ScientificCompletedResult
+    | ScientificFailedResult,
+    Field(discriminator="status"),
+]
+
+class ScientificPort(Protocol):
+    def run(self, request: ScientificTurnRequest) -> ScientificTurnResult: ...
+```
+
+组合约束：
+
+- request_work 必须同时有 assessment、work_request 和 paused session；
+- needs_user_input 必须有 assessment、question 和 paused session；
+- completed 必须有 opinion 和 completed session，且 Scientific deterministic completion check 已通过；
+- failed 必须有 error，不能附带 opinion/work_request/question；session 若存在必须是 failed；
+- `observed_artifact_ids` 由 ScientificPort finalizer 从整个 Session 的成功 Tool observation 累积派生，不能来自 LLM action payload；
+- assessment/opinion 的 evidence_artifact_ids 必须是 observed_artifact_ids 的子集；
+- failed 无 session 时 observed_artifact_ids 必须为空；
+- 这些 status 是一次 agent turn 的控制结果，不是 RunStatus 或 TaskStatus。
+
+ScientificPort 是唯一 Scientific Agent 边界。首次 request 创建 Session；parent_session_id 恢复 Session。work_outcome 按 work_request_id、answers 按 question_id 幂等，重复 request 必须返回已持久化结果，不能重复追加 observation 或重复调用 LLM。
+
+### 20.8 schema 2.0 的 Workflow capability
+
+顶层 WorkflowTask 只保留真正由 Scheduler 执行的能力：
+
+| capability | owner | 说明 |
+|---|---|---|
+| code_understand | Coding | 授权范围内只读理解代码 |
+| code_modify | Coding | 授权范围内修改并验证代码 |
+| experiment_run | Experiment | 准备环境、执行实验、冻结结果证据 |
+
+最终 schema 2.0 删除 `scientific_plan`、`scientific_analyze`、`literature_search`、`experiment_prepare`、`ask_user` 及对应 CapabilityInput。Literature Search 是 Scientific Agent 的 Tool；ask-user 是 control signal；实验准备属于 experiment_run 内部流程。原子迁移期间的临时保留规则见 §20.13。
+
+### 20.9 WorkflowCompiler 边界
+
+WorkflowCompiler 的输入是 `WorkRequest`、CapabilityRegistry、Run 约束和当前 Workflow 摘要；输出只有 `WorkflowProposal` 或 `WorkflowPatch`。它是 orchestrator 内部 Port，不另造跨包“第三套任务模型”。schema 2.0 的完整目标形状为：
+
+```python
+class TaskProposal:
+    id: TaskId
+    work_request_id: WorkRequestId
+    capability: Capability
+    goal: NonEmptyStr
+    rationale: NonEmptyStr
+    depends_on: list[TaskId] = []
+    required: bool = True
+    inputs: CapabilityInput
+
+class WorkflowProposal:
+    work_request_id: WorkRequestId
+    summary: NonEmptyStr
+    tasks: list[TaskProposal]
+    compilation_rationale: NonEmptyStr
+
+class PendingTaskUpdate:
+    task_id: TaskId
+    inputs: CapabilityInput | None = None
+    depends_on: list[TaskId] | None = None
+
+class WorkflowPatch:
+    work_request_id: WorkRequestId
+    based_on_revision: int
+    reason: NonEmptyStr
+    add_tasks: list[TaskProposal] = []
+    supersede_task_ids: list[TaskId] = []
+    pending_task_updates: list[PendingTaskUpdate] = []
+
+class WorkflowTask:
+    id: TaskId
+    work_request_id: WorkRequestId
+    capability: Capability
+    goal: NonEmptyStr
+    inputs: CapabilityInput
+    depends_on: list[TaskId] = []
+    required: bool = True
+    status: TaskStatus = TaskStatus.PENDING
+    input_artifacts: list[ArtifactId] = []
+    attempts: list[Attempt] = []
+    warnings: list[WarningRecord] = []
+
+class Workflow:
+    run_id: RunId
+    revision: int
+    tasks: list[WorkflowTask]
+    created_from: WorkRequestId
+```
+
+WorkflowProposal 不再有 questions，`scientific_rationale` 改名为 `compilation_rationale`，因为图由 WorkflowCompiler 而不是 Scientific Agent 产生。TaskProposal/WorkflowTask 不再有 success_criteria。
+
+Proposal 中每个 Task 的 work_request_id 必须等于 Proposal.work_request_id。Patch 新增/更新/supersede 的 Task 必须是 pending 且属于 Patch.work_request_id；旧 revision 中未被修改的历史 Task 保持原 work_request_id。Workflow.created_from 等于创建当前 revision 的 Proposal/Patch.work_request_id。编译器不得产生 §20.8 以外的 capability；validator 必须检查 run、revision、work_request_id、DAG、能力注册表、预算和 inputs discriminator。
+
+### 20.10 为什么删除 success_criteria/evidence_key
+
+schema 1.1 的通用 `SuccessCriterion` 与 `evidence_key` 从未被运行期求值，并且与 Coding/Experiment 已有的强类型输入、payload 和 finalizer 重复。Phase 7 不再设计一个通用路径表达式求值器：
+
+- Coding 完成证据由 Coding finalizer 检查 Git diff 和 verification result；
+- Experiment 完成证据由 Experiment finalizer 检查命令、metrics 和 expected_artifacts；
+- Scientific 完成证据由 Scientific finalizer + ResAgent gate 检查 opinion 和 Artifact provenance；
+- 需要人工确认时使用 QuestionDraft/PendingQuestion/UserAnswer。
+
+因此规则变成“谁产生领域结果，谁按强类型语义验证结果”；ResAgent 只消费统一外层状态和 Artifact，不解释任意领域 payload。
+
+### 20.10.1 ResearchRun 的 Phase 7 内部字段
+
+ResearchRun 仍是 orchestrator 内部模型，不加入 contracts 公共导出；但为避免实现自行裁决，目标增量固定为：
+
+```python
+class ResearchRun:
+    # 既有 request/workflow/history/status/pending_question 等字段保持
+    scientific_session: SessionRef | None = None
+    latest_scientific_assessment: ScientificAssessment | None = None
+    work_requests: list[WorkRequest] = []
+    scientific_observed_artifact_ids: list[ArtifactId] = []
+    final_opinion: ScientificOpinion | None = None
+    final_report_artifact_id: ArtifactId | None = None
+```
+
+`scientific_observed_artifact_ids` 是 ResearchController 对每次 ScientificTurnResult.observed_artifact_ids 做 Registry/run 复核后的稳定去重并集，不是原始 Session event 副本。active WorkRequest 从 work_requests 中唯一的 requested/compiling/executing/stable 项派生，不另存第二个可漂移字段。
+
+final_opinion 只在 ScientificCompletionValidator 通过后写入；final report 随后由 deterministic renderer 产生并以 producer=orchestrator、metadata.source_type=final_report 登记，最后写 final_report_artifact_id。RunStatus 只有在上述写入全部成功后才改 completed。
+
+### 20.10.2 ScientificCompletionValidator
+
+它是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入是同一个不可变 ResearchRun snapshot、ScientificCompletedResult 和 Artifact Registry 的只读视图；输出为空表示通过，否则返回结构化 violations 并视为 contract_error。
+
+```python
+class CompletionViolationCode(StrEnum):
+    INVALID_SESSION = "invalid_session"
+    ACTIVE_CONTROL_STATE = "active_control_state"
+    INVALID_OPINION = "invalid_opinion"
+    UNKNOWN_EVIDENCE = "unknown_evidence"
+    UNOBSERVED_EVIDENCE = "unobserved_evidence"
+    UNACKNOWLEDGED_TASK = "unacknowledged_task"
+    MISSING_LIMITATIONS = "missing_limitations"
+    INCONSISTENT_TASK_RESULT = "inconsistent_task_result"
+
+class CompletionViolation:
+    code: CompletionViolationCode
+    message: NonEmptyStr
+    related_ids: list[NonEmptyStr] = []
+
+class FinalReportData:
+    run_id: RunId
+    goal: NonEmptyStr
+    opinion: ScientificOpinion
+    evidence: list[ArtifactRef]
+    execution_issues: list[WorkTaskOutcome] = []
+```
+
+验证顺序固定为：
+
+1. completed result/session/run 绑定正确，SessionStatus=completed；
+2. 无 active WorkRequest、PendingQuestion、running Task；
+3. opinion 通过 verdict/evidence/acknowledged_task_ids 组合约束；
+4. 每个 evidence Artifact 属于本 Run、Registry 可查，并同时出现在 result.observed_artifact_ids 与 run.scientific_observed_artifact_ids；
+5. 所有 failed/blocked Task 被 acknowledged，且存在 limitations；
+6. 每个 completed Task 都有最后一个 completed/completed-with-warnings Attempt、无 error，Attempt.artifact_ids 全部可在 Registry 查到且 producer 与 binding owner 一致；
+7. 不接受未知、重复或跨 Run 的 ID。
+
+通过时 Validator 产出 FinalReportData；evidence 顺序与 opinion.evidence_artifact_ids 一致，execution_issues 只含仍 failed/blocked 且已 acknowledged 的 Task。纯 renderer 只消费 FinalReportData，生成 `kind=final_report`、`media_type=text/markdown` 的 ArtifactCandidate，不接受额外自由文本输入。
+
+Validator 不重跑 Coding/Experiment finalizer，也不解释其领域 payload。Scheduler 只有在已绑定原生 ModulePort 的 finalizer 返回并通过 ModuleResult 外层校验后才能写 Task completed；finalizer 自身正确性由对应 Agent 单元/E2E 测试保证。Validator 这里只复核持久化 Task/Attempt/Artifact 没有绕过该状态路径。
+
+Validator 也不判断 statement 是否科学正确，或证据语义上是否足以支持 verdict。那属于 Scientific Agent 能力与离线/在线 eval，而不是 Run 状态机。
+
+### 20.11 ScientificTurnResult → RunStatus 映射
+
+| ScientificTurnResult.status | SessionStatus | ResearchController 行为 | RunStatus |
+|---|---|---|---|
+| request_work | paused | 复核 observed trace，持久化 assessment，创建 status=requested 的 WorkRequest | running |
+| needs_user_input | paused | 复核 observed trace，持久化 assessment/PendingQuestion | paused |
+| completed | completed | 复核并合并 observed trace，调用 ScientificCompletionValidator；通过后保存 opinion/报告 | completed |
+| failed | failed 或空 | 复核可用 observed trace，保存 ModuleError；AgentLoop 内部可恢复机会已耗尽 | failed |
+
+completed 若未通过 ScientificCompletionValidator，不得写 Run completed。因为 ScientificPort completion check 应先检查同一 snapshot，这种不一致属于 `contract_error`，Run failed 并保留两层验证证据；不允许从 completed Session 静默继续。
+
+WorkRequest status 不映射为新的 RunStatus：requested/compiling/executing/stable/consumed 期间 Run 都是 running。只有 PendingQuestion 使 Run paused。
+
+### 20.12 Scientific Tool 与 observation trace（非 wire 公共模型）
+
+这些类型属于 capabilities/Scientific Tool 实现，不进入 `resagent2_contracts` 公共导出；写在这里是为了锁定跨边界语义，避免实现自行裁决。
+
+```python
+class ReadArtifactToolInput:
+    artifact_id: ArtifactId
+
+class ReadArtifactToolResult:
+    artifact_id: ArtifactId
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    media_type: NonEmptyStr
+    content: str
+    truncated: bool
+
+class LiteratureSearchToolInput:
+    query: NonEmptyStr
+    max_results: int  # 1..20
+    start_year: int | None = None
+    end_year: int | None = None
+
+class LiteraturePaper:
+    paper_id: NonEmptyStr
+    title: NonEmptyStr
+    authors: list[NonEmptyStr]
+    published_at: date | None
+    abstract: str
+    source_url: NonEmptyStr
+
+class LiteratureSearchToolResult:
+    artifact: ArtifactRef
+    papers: list[LiteraturePaper]
+
+class ArtifactRegistrationPort(Protocol):
+    def register_scientific(
+        self,
+        candidate: ArtifactCandidate,
+        *,
+        run_id: RunId,
+        session_id: SessionId,
+    ) -> ArtifactRef: ...
+```
+
+`read_artifact` 只能读取 ScientificTurnRequest.authorized_artifacts，读取前按 Registry 记录复核 run_id/hash；只支持配置允许的 text/json 媒体类型，二进制或超限内容返回明确 Tool error，不能返回空字符串冒充成功。截断上限由 composition root 配置，不由 LLM 扩大。
+
+`literature_search` 成功时将规范化 papers JSON 作为 ArtifactCandidate，经注入的 ArtifactRegistrationPort 以当前 run/session 登记，再返回 ArtifactRef；网络错误、限流和注册失败都返回 Tool error。该 Protocol 只依赖 contracts 类型，capabilities 不 import orchestrator；composition root 注入由 ArtifactRegistry 实现的 adapter。成功的 ReadArtifactToolResult.artifact_id 与 LiteratureSearchToolResult.artifact.id 被 runtime 记录在 trusted Tool observation；ScientificPort finalizer 只从这两种成功结果生成 observed_artifact_ids。
+
+### 20.13 schema 2.0 原子迁移规则
+
+1. Phase 7 是一个未发布迁移单元；7.1—7.6 的中间包不得发布或合并到对外稳定分支；
+2. 7.1 的同一个原子变更先增加 2.0 新类型，再删除 success_criteria、改名 compilation_rationale、收紧 Workflow.created_from，并同步修改 planning.py、scheduler.py、所有 fixture/tests；旧 PlanningPort 临时填 `work_legacy_initial`，repair fixture 使用 `work_legacy_repair_<n>`，这些 ID 不对应 WorkRequest、不得进入新 ResearchController；该提交结束时全仓必须可导入、测试可运行；
+3. ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput、ScientificConclusion 和旧 capability enum value 在 7.1 只标记 deprecated，保留给唯一旧 production 路径；WorkflowProposal.questions 在 7.1 与旧 create_run questions 分支同步删除；
+4. 7.2—7.6 的新组件只能由测试/composition fixture 装配，production composition root 仍只走旧路径，不能同时路由新旧 Scientific；
+5. 7.7 在一个原子切换中启用新 ResearchController/ScientificPort，删除 PlanningPort、DeterministicPlanningPort、`LegacyScientificAnalyzeAdapter`、上述 deprecated 类型/枚举/字段和旧 binding，并更新所有调用者；
+6. `SCHEMA_VERSION` 在 7.1 原子提交中切到 `"2.0"`，但 2.0 只有在 7.7 删除临时兼容符号、全仓/E2E 通过后才冻结并可发布；
+7. schema 2.0 loader 明确拒绝 1.1 wire/JsonRunStore，返回版本错误；不做静默字段丢弃；
+8. 如需保留 schema 1.1 历史，只提供独立只读导出脚本，不把双版本迁移逻辑塞进 Scheduler；
+9. 公共导出核对表在 7.7 原子切换后更新为 2.0；任何中间提交都不得留下 import error 或红色全仓测试。

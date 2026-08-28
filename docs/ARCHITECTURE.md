@@ -1,14 +1,14 @@
 # ResAgent2 系统架构
 
-**文档角色**：系统概念、职责边界和控制流的最高级事实来源（semantic source of truth）
+**文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）
 
-**当前基线**：contracts、shared runtime、Workflow Core v0.1.0、Phase 4 黄金闭环、Phase 5 原生 Coding Agent、Phase 6 原生 Experiment Agent 已实现；Phase 6 已完成
+**当前基线**：Phase 6 已完成；Phase 7 架构已裁定但代码尚未开始
 
-**更新规则**：任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、计划和代码。
+**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为运行事实
+
+任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 
 ## 1. 文档权威关系
-
-三份核心文档各自只有一个职责，不能互相复制并改写同一规则。
 
 | 问题 | 唯一权威来源 |
 |---|---|
@@ -18,310 +18,311 @@
 | 已经运行的代码到底做了什么 | 代码和自动化测试 |
 | 难以逆转的架构决定及其理由 | `docs/decisions/` |
 
-`README.md` 是面向新读者的派生摘要，不是另一个权威来源；它必须同步本文件和开发计划的当前状态。
+`README.md` 是派生摘要，不是另一个事实来源。发生冲突时：先由本文件裁定概念，再由 `CONTRACTS.md` 表达数据，由 `DEVELOPMENT_PLAN.md` 安排实现；代码尚未达到目标时必须明确写成缺口，不能把计划描述成现状。
 
-冲突处理顺序：
+## 2. 一句话架构
 
-1. 先按本文件裁定概念和职责；
-2. `CONTRACTS.md` 据此表达跨模块数据，不得发明新控制流；
-3. `DEVELOPMENT_PLAN.md` 只安排实现和验收，不得重新定义架构；
-4. 如果代码尚未符合文档，必须在开发计划中列为明确缺口，不能把目标写成“已实现”。
+**Scientific Agent 是科学大脑，ResAgent 是执行神经系统。**
 
-## 2. 目标与非目标
+- Scientific Agent 负责回答：当前证据意味着什么，还缺什么证据，最终能形成什么科学观点；
+- ResAgent 负责回答：怎样把“还缺什么”转换成合法任务图，怎样调度、恢复、登记证据和结束 Run；
+- Coding Agent 是程序员；Experiment Agent 是实验员；
+- Workflow 是 ResAgent 的内部执行表示，不是 Scientific Agent 的公开产物。
 
-ResAgent2 是科研工作流控制系统，不是通用聊天机器人。
+最重要的闭环是：
 
-系统目标：
+```text
+自然语言目标
+  → 科学判断
+  → 若证据不足，提出语义化工作请求
+  → ResAgent 编译并执行任务图
+  → 冻结新证据并恢复同一个科学会话
+  → 更新科学判断
+  → 直到形成最终科学意见或需要用户输入
+```
 
-1. Scientific Agent 可以根据研究问题提出和修订计划；
-2. 确定性代码约束依赖、状态、安全、证据和完成条件；
-3. Coding、Experiment、Scientific 三个专业 Agent 复用同一套 Agentic Loop；
-4. 模块通过稳定契约协作，不读取彼此的内部状态；
-5. 用户能通过 Run state、Artifact 和报告理解系统做了什么。
+## 3. 目标与非目标
 
-当前不追求：
+### 3.1 系统目标
 
-- 用复杂框架替代清晰的 Python 控制流；
+1. 用户可以直接用自然语言描述研究目标和约束；
+2. Scientific Agent 以一套长期、可恢复的 Agentic Loop 持续形成科学判断，不需要外部选择 plan/analyze 模式；
+3. 证据不足时，Scientific Agent 只说明需要什么工作和证据，不承担执行图字段；
+4. ResAgent 可以用 LLM 理解工作请求，但必须用确定性代码校验图、状态、预算、安全和 provenance；
+5. Coding、Experiment、Scientific 复用同一个 runtime，不复制三套 Agent 框架；
+6. 所有跨模块事实通过契约、Run state 和不可变 Artifact 传递；
+7. 用户可以解释一次 Run 为什么发起任务、任务产生什么证据、最终观点依据什么。
+
+### 3.2 当前不追求
+
+- 多科学人格辩论、树搜索或 supervisor swarm；
+- 给 Scientific Agent 设计 plan/analyze/review 等多套公开模式；
 - 让子 Agent 彼此直接调用；
-- 把所有未来能力提前抽象进 runtime；
-- 把聊天记录当作系统状态；
-- 让 LLM 直接决定关键状态转换。
+- 让 LLM 直接写 RunStatus、TaskStatus 或历史 Attempt；
+- 把聊天记录当作唯一系统状态；
+- 分布式调度、并行 worker、插件市场或通用聊天产品；
+- 为可能出现的需求提前建设复杂抽象。
 
-## 3. 核心概念
+## 4. 核心概念与所有权
 
 | 概念 | 准确含义 | 所有者 |
 |---|---|---|
-| ResearchRequest | 用户确认的研究目标、上下文、约束和总预算 | ResAgent |
-| ResearchRun | 一次研究执行的完整持久化状态 | ResAgent |
-| WorkflowProposal | Scientific Agent 对“应该做哪些执行任务”的建议，尚不可执行 | Scientific Agent 产生，ResAgent 校验 |
+| ResearchRequest | 用户确认的自然语言目标、上下文、约束和总预算 | ResAgent |
+| ResearchRun | 一次研究从目标到最终意见的完整持久化状态 | ResAgent |
+| ScientificSession | Scientific Agent 对同一 ResearchRun 的长期可恢复推理状态 | Scientific Agent/runtime；ResAgent 只持有引用 |
+| ScientificAssessment | Scientific Agent 在某一时点对目标、证据、局限和未解问题的当前观点 | Scientific Agent |
+| WorkRequestDraft | Scientific Agent 对“还需要得到什么证据”的语义请求，不含执行字段 | Scientific Agent |
+| WorkRequest | ResAgent 分配 ID 并持久化后的工作请求 | ResAgent |
+| WorkflowCompiler | 把 WorkRequest 翻译为 WorkflowProposal/Patch 的无状态有界组件 | ResAgent |
+| WorkflowProposal | 尚未被接受的初始执行图候选 | WorkflowCompiler 产生，ResAgent 校验 |
+| WorkflowPatch | 对已接受执行图的受限修订候选 | WorkflowCompiler 产生，ResAgent 校验 |
 | Workflow | ResAgent 接受并持久化的有版本任务图 | ResAgent |
-| WorkflowTask | 调度器可调用一次专业能力的顶层工作单元 | ResAgent |
+| WorkflowTask | 调度器调用一次专业执行能力的顶层工作单元 | ResAgent |
 | Attempt | 某个 WorkflowTask 的一次真实模块调用边界 | ResAgent |
-| Session | 子 Agent 内部可恢复的 Agentic Loop 状态 | 子 Agent/runtime |
-| AgentAction | Session 内的一次 Tool 调用或 finish 候选 | runtime |
-| ModuleTaskRequest | ResAgent 发给一个专业模块的一次调用请求 | ResAgent |
-| ModuleResult | 专业模块返回的一次调用结果 | 专业模块 |
-| ArtifactCandidate | 模块声明的待登记文件 | 专业模块 |
+| WorkOutcome | 一次 WorkRequest 执行稳定后，成功、失败、警告和 Artifact 的汇总 | ResAgent |
+| ScientificOpinion | Scientific Agent 对用户目标给出的最终自然语言观点及证据引用 | Scientific Agent |
+| ScientificCompletionValidator | 验证科学闭环结构、证据 provenance 和控制状态；不判断科学观点真假 | ResAgent |
+| ArtifactCandidate | 模块声明的待登记文件 | 生产它的模块 |
 | ArtifactRef | ResAgent 验证、冻结并登记后的不可变证据引用 | ResAgent |
 | PendingQuestion | 已持久化、会暂停 Run 的用户问题 | ResAgent |
 
-必须始终区分三层身份：
+`ScientificAssessment` 与 `ScientificOpinion` 的正文是自然语言；小型结构化外壳只服务于控制、证据引用和验证，不把科学推理固定成枚举流程。
+
+必须始终区分执行身份：
 
 ```text
-WorkflowTask（研究工作单元）
-  └─ Attempt（一次模块调用）
-       └─ Session（模块内部 Agentic Loop，可被显式恢复）
-            └─ AgentAction（单步工具动作）
+WorkRequest（为什么需要执行）
+  └─ Workflow revision（ResAgent 怎样安排执行）
+       └─ WorkflowTask（一个顶层工作单元）
+            └─ Attempt（一次模块调用）
+                 └─ Session（模块内部 Agentic Loop）
+                      └─ AgentAction（单步 Tool 动作）
 ```
 
-## 4. 总体架构
+ScientificSession 不属于某个 WorkflowTask；它属于整个 ResearchRun，可以跨越多个 WorkRequest 和 Workflow revision。Coding/Experiment Session 仍属于具体 Attempt。
+
+## 5. Phase 7 目标架构
 
 ```mermaid
 flowchart TB
     User([用户])
-
-    subgraph ResAgent[Research Orchestrator / ResAgent]
+    subgraph Res[ResAgent / Research Orchestrator]
         Entry[CLI / API / Conversation Adapter]
-        Planning[Scientific Planning Port]
+        Controller[Research Controller]
+        Compiler[Workflow Compiler]
         Validator[Workflow Validator]
         Scheduler[Workflow Scheduler]
+        Outcome[WorkOutcome Builder]
+        Gate[Scientific Completion Validator]
         RunStore[(Run Store)]
-        ArtifactRegistry[(Artifact Registry)]
-        Approval[Question / Answer Coordinator]
+        Registry[(Artifact Registry)]
+        QA[Question / Answer Coordinator]
     end
-
-    subgraph Modules[专业模块]
-        Scientific[Scientific Agent]
-        Coding[Coding Agent]
-        Experiment[Experiment Agent]
+    subgraph Agents[专业 Agent]
+        Sci[Scientific Agent\n一个长期 Agentic Loop]
+        Code[Coding Agent]
+        Exp[Experiment Agent]
     end
-
-    subgraph Runtime[Shared Agent Runtime]
-        Loop[Agentic Loop]
-        LLM[LLM Client]
-        Context[Context Composer]
-        Tools[Tool Registry]
-        Permission[Permission Policy]
-        SessionStore[(Session Store)]
+    subgraph Caps[可装配 Capabilities]
+        Lit[Literature Search]
+        ReadArt[Registered Artifact Reader]
+        Exec[Workspace / Git / Process / Env / Dataset]
     end
-
     User <--> Entry
-    Entry --> Planning
-    Planning --> Scientific
-    Scientific -->|WorkflowProposal / WorkflowPatch| Validator
+    Entry --> Controller
+    Controller -->|goal + state + authorized evidence| Sci
+    Sci -->|ScientificTurnResult| Controller
+    Controller -->|completed opinion| Gate
+    Gate --> Entry
+    Controller -->|active WorkRequest| Compiler
+    Compiler -->|WorkflowProposal / WorkflowPatch| Validator
     Validator --> Scheduler
+    Scheduler -->|code tasks| Code
+    Scheduler -->|experiment tasks| Exp
+    Code --> Scheduler
+    Exp --> Scheduler
+    Scheduler --> Outcome
+    Outcome -->|WorkOutcome + ArtifactRefs| Controller
+    Controller -->|resume same ScientificSession| Sci
+    Sci <--> Lit
+    Sci <--> ReadArt
+    Lit -->|normalized ArtifactCandidate| Registry
+    Registry -->|ArtifactRef| Lit
+    Code <--> Exec
+    Exp <--> Exec
+    Controller <--> QA
+    Controller <--> RunStore
     Scheduler <--> RunStore
-    Scheduler <--> ArtifactRegistry
-    Scheduler <--> Approval
-    Scheduler -->|scientific_analyze / literature_search| Scientific
-    Scheduler -->|code_*| Coding
-    Scheduler -->|experiment_*| Experiment
-
-    Scientific --> Loop
-    Coding --> Loop
-    Experiment --> Loop
-    Loop --> LLM
-    Loop --> Context
-    Loop --> Tools
-    Tools --> Permission
-    Loop --> SessionStore
+    Scheduler <--> Registry
 ```
 
-## 5. 控制面与任务面
+图中的 LLM 职责只有两处：Scientific Agent 做开放科学推理；WorkflowCompiler 做有界的语义到执行图翻译。Validator、Scheduler、Artifact Registry、状态转换和 gate 都由代码控制。
 
-### 5.1 控制面
+## 6. 两种循环和一个编译步骤
 
-控制面决定“Workflow 是什么”，包括：
+### 6.1 科学控制循环
 
-- 从 ResearchRequest 生成 WorkflowProposal；
-- 校验 Proposal 并创建 Workflow；
-- 根据新证据生成 WorkflowPatch；
-- 处理用户问题、批准和恢复；
-- 判断 Run 是否结束。
-
-`scientific_plan` 属于控制面的 Planning Port。它不是 Workflow 中的 Task，否则会出现“必须先执行一个 WorkflowTask 才能生成这个 Workflow”的递归。
-
-### 5.2 任务面
-
-任务面执行已经接受的 WorkflowTask，包括：
-
-- `scientific_analyze`；
-- `literature_search`；
-- `code_understand`；
-- `code_modify`；
-- `experiment_prepare`；
-- `experiment_run`。
-
-`ask_user` 也不是普通 WorkflowTask。它是模块通过 `ModuleResult(status=needs_user_input)` 发出的控制信号，由 ResAgent 持久化问题并暂停 Run。
-
-当前 contracts 仍保留 `scientific_plan` 和 `ask_user` 的 capability/input 类型作为过渡接口，但 Workflow validator 会拒绝它们作为 WorkflowTask 进入任务图。它们仅供控制面（Planning Port 与 ask-user 信号）使用，不改变上述架构语义。
-
-## 6. 两种循环
-
-系统只有两种不同层级的循环。
-
-### 6.1 Workflow Scheduler
-
-属于 ResAgent，由确定性代码驱动：
+它跨越整个 ResearchRun：
 
 ```text
-读取 ResearchRun
-  → 计算 ready Task
+加载或创建 ScientificSession
+  → 注入目标、当前 Run 摘要、授权 Artifact、上次 WorkOutcome/用户回答
+  → Agentic Loop 自主读取 Artifact、检索文献和推理
+  → request_work：保存当前 ScientificAssessment 和 WorkRequestDraft
+     或 ask_user：保存问题并暂停
+     或 finish：提交 ScientificOpinion 候选
+  → 有新证据/回答后恢复同一 Session
+```
+
+Scientific Agent 没有显式 plan/analyze 模式。`request_work`、`ask_user` 和 `finish` 是控制信号，不是三种 Agent 实现。
+
+每次 `request_work` 必须同时给出当前科学观点，禁止只派工作、不说明科学理由。它对 Scientific Agent 类似一个异步 Tool：调用后暂停，ResAgent 完成工作后把 `WorkOutcome` 作为 observation 返回。
+
+runtime SessionStore 持有完整 Tool event history。ScientificPort 的确定性 finalizer 只从成功的 `read_artifact` / `literature_search` Tool observation 中提取 `observed_artifact_ids`，LLM 不能直接填写这组 trace；ResearchController 在 Registry 复核后把并集持久化进 ResearchRun，不读取或复制 Session 私有内容。
+
+### 6.2 Workflow 执行循环
+
+它由 ResAgent 的确定性代码驱动：
+
+```text
+读取已接受 Workflow
+  → 稳定计算 ready Task
   → 创建并保存 running Attempt
   → 通过 capability 对应的 ModulePort 发出 ModuleTaskRequest
   → 接收并校验 ModuleResult
   → 登记 Artifact、结束 Attempt、更新 Task
-  → 处理 retry / blocked / question / WorkflowPatch
-  → 执行 finish gate
+  → 处理 retry / blocked / question / patch
+  → 图稳定后生成 WorkOutcome
 ```
 
-### 6.2 Agentic Loop
+Scheduler 不选择 Agent 内部 Tool；Agentic Loop 不修改顶层 TaskStatus。
 
-属于共享 runtime，在单个模块调用内部运行：
+### 6.3 WorkflowCompiler
+
+WorkflowCompiler 不是第三种循环。它只做一次转换：
 
 ```text
-加载或创建 Session
-  → 构建本轮上下文
-  → LLM 返回类型化 AgentAction
-  → schema 与权限检查
-  → 执行 Tool 并记录 Observation
-  → completion check 生成 ModuleResult
+WorkRequest + 当前能力注册表 + 当前 Workflow 摘要 + Run 约束
+  → WorkflowProposal（尚无图）或 WorkflowPatch（已有图）
 ```
 
-Workflow Scheduler 不选择模块内部 Tool；Agentic Loop 不修改顶层 TaskStatus。
+允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态、保留 work_request_id，并把结果交给确定性 validator。测试中可由 `DeterministicWorkflowCompiler` 替代。
 
-## 7. 计划、执行与修订工作流
+## 7. 完整工作流
+
+### 7.1 新 Run
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Res as ResAgent
-    participant Sci as Scientific Planning Port
-    participant Val as Workflow Validator
-    participant Sch as Workflow Scheduler
-    participant Mod as Professional Module
-
-    User->>Res: confirmed ResearchRequest
-    Res->>Sci: planning request
-    Sci-->>Res: WorkflowProposal
-    alt proposal contains questions
-        Res-->>User: persist and ask question
+    participant Sci as Scientific Agent
+    participant Comp as WorkflowCompiler
+    participant Sch as Scheduler
+    participant Exec as Coding / Experiment
+    User->>Res: natural-language ResearchRequest
+    Res->>Sci: start(goal, state, authorized artifacts)
+    alt evidence is already sufficient
+        Sci-->>Res: finish(ScientificOpinion)
+        Res-->>User: validated final opinion
+    else user information is missing
+        Sci-->>Res: ask_user(QuestionDraft)
+        Res-->>User: PendingQuestion
         User->>Res: UserAnswer
-        Res->>Sci: regenerate proposal with answer
-    else proposal has no questions
-        Res->>Val: validate proposal
-        Val-->>Sch: accepted Workflow
-        loop until stable
-            Sch->>Mod: ModuleTaskRequest
-            Mod-->>Sch: ModuleResult
+        Res->>Sci: resume(answer)
+    else more execution evidence is required
+        Sci-->>Res: ScientificAssessment + WorkRequestDraft
+        Res->>Comp: persisted WorkRequest + execution context
+        Comp-->>Res: WorkflowProposal / WorkflowPatch
+        Res->>Sch: validated Workflow
+        loop until execution graph is stable
+            Sch->>Exec: ModuleTaskRequest
+            Exec-->>Sch: ModuleResult
         end
+        Sch-->>Res: WorkOutcome + registered ArtifactRefs
+        Res->>Sci: resume same session with outcome
     end
 ```
 
-`WorkflowProposal.questions` 只表示创建 Workflow 前仍需澄清的问题。只要列表非空，Proposal 就不能被接受为 Workflow；回答后应重新规划。`create_run` 会拒绝 questions 非空的 Proposal。
+### 7.2 工作失败与修复
 
-运行中修订使用 `WorkflowPatch`。允许：增加任务、supersede 尚未开始的任务、更新 pending 任务输入或依赖。禁止：修改已经执行的历史、删除 Attempt、把失败直接改成功、修改 running Task 输入、修改已登记 Artifact 内容。
+Task failure 是执行事实，不等于科学 Run 立即失败：
+
+```text
+Experiment Task failed/blocked
+  → Scheduler 先按 retry policy 处理
+  → 图稳定后 WorkOutcome 记录失败、警告、诊断 Artifact
+  → Scientific Agent 根据失败原因更新判断
+  → 可 request_work 请求代码修复、替代实验或更多诊断
+  → ResAgent 编译为 WorkflowPatch 后继续
+```
+
+### 7.3 用户问题
+
+Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent 分配 QuestionId，持久化 PendingQuestion 并把 Run 置为 paused。回答必须匹配 run/task/session；恢复时复用对应 Session，普通 retry 不复用 Session。
 
 ## 8. 模块职责
 
-### 8.1 Research Orchestrator
+### 8.1 ResAgent / Research Orchestrator
 
-负责 ResearchRun、Workflow revision、Task/Attempt 状态、capability 路由、重试策略、问题协调、Artifact 登记、Run 预算和 finish gate。
+负责自然语言入口、ResearchRun/ScientificSession 引用、WorkRequest 生命周期、WorkflowCompiler、Proposal/Patch 校验、Task/Attempt 调度、retry、问题协调、Artifact、预算、WorkOutcome 和 ScientificCompletionValidator。
 
-不直接修改代码、运行实验或形成科学结论；不读取和修改子 Agent 的内部 Session。
+它不形成科学观点，不修改代码或运行实验，不读取/篡改子 Agent 内部 Session，也不让 LLM 直接决定状态转换。
 
 ### 8.2 Scientific Agent
 
-通过两类端口工作：
+唯一职责是科学判断。输入是目标、当前 Run 摘要、授权证据、WorkOutcome 和用户回答；对外动作只有 `request_work`、`ask_user` 和 `finish`。
 
-- 控制面：提出 WorkflowProposal / WorkflowPatch；
-- 任务面：检索文献、分析登记证据、形成 ScientificConclusion。
-
-它不选择物理 workspace，不修改 TaskStatus，也不直接调用 Coding 或 Experiment Agent。
+它可以直接使用只读 `read_artifact` 和 `literature_search` Tool。它不输出 WorkflowProposal/Patch，不选择 capability、workspace、环境或执行器，不修改 Task/Run 状态，也不直接调用 Coding/Experiment Agent。
 
 ### 8.3 Coding Agent
 
-负责理解代码、在授权范围内修改、验证变化并交付代码 Artifact。它不作科学结论，不直接调用其他子 Agent，不扩大 workspace 授权。
+负责理解代码、在授权范围内修改、运行调用方声明的验证并交付代码 Artifact。它不作科学结论，不直接调用其他 Agent，不扩大 workspace 授权。
 
 ### 8.4 Experiment Agent
 
-负责准备仓库和环境、运行实验、收集参数/日志/指标/环境证据并形成结构化结果。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
+负责准备仓库/环境、运行实验、采集参数/日志/指标/环境证据并形成结构化结果。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
 
-### 8.5 Shared Runtime 与 Capabilities
+### 8.5 runtime 与 capabilities
 
-`runtime` 只提供运行引擎：Agentic Loop、LLM client、上下文组合、Tool 接口与分发、权限协议、Session/event 持久化和统一错误映射。领域 prompt、领域 Tool、结果 finalizer 和 Workflow Scheduler 不属于 runtime。
+`runtime` 只回答“Agent 怎样运行”：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。
 
-`capabilities` 提供可装配的具体能力：`WorkspaceBoundary`、无 shell 的 `ProcessRunner`、只读 Git 观察、已登记 Artifact 读取、仓库 materialization、内容寻址环境、数据集缓存和硬件审计。这些对象只提供物理边界和可审计执行，不决定“应该改什么代码”或“验证是否足以完成 Coding Task”。Coding 的编辑策略和 finalizer 仍属于 Coding Agent。
+`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
 
-代码依赖分成两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root（CLI/E2E）同时依赖 orchestrator 与具体 Agents，并通过 ModulePort 注入绑定；orchestrator 不 import 具体 Agent。runtime 不依赖 capabilities；capabilities 不依赖任何具体 Agent。各 Agent 通过 Tool Profile 只装配自己需要的能力——依赖 capabilities 不等于自动获得全部能力。Capability（能做什么）与 Skill（怎样组合能力完成一类任务）目前不分离：Skill 暂由各 Agent 的 Prompt + Tool Profile + CompletionCheck 承担，待出现跨 Agent 复用的操作流程再抽象正式 Skill 框架。
+代码依赖为两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root 同时依赖 orchestrator 与具体 Agent，并通过 Port 注入。orchestrator 不 import 具体 Agent；runtime 不依赖 capabilities；capabilities 不依赖具体 Agent。
 
-### 8.6 Phase 5 Coding 执行边界
+## 9. 已实现的执行边界（Phase 5/6）
 
-原生 Coding Agent 同时拥有 `code_understand` 和 `code_modify` 两个 profile，但复用同一个 AgentLoop：
+### 9.1 Coding
 
-```text
-ModuleTaskRequest
-  → 校验 capability、WorkspaceGrant 与干净 Git 基线
-  → 按 profile 注入只读或可写 Tool
-  → AgentLoop 执行动作
-  → Coding finalizer 从 Git 状态和真实命令结果生成 payload/ArtifactCandidate
-  → ModuleResult
-```
+原生 Coding Agent 的 `code_understand` 与 `code_modify` 复用同一 AgentLoop。`code_understand` 不注入写/进程 Tool并在结束时验证 Git 未改变；`code_modify` 的写入同时受 WorkspaceGrant 和 allowed_paths 限制，只执行调用方预先声明的 shell-free verification command。finalizer 以真实 Git diff 和命令结果生成 payload/ArtifactCandidate。
 
-`code_understand` 不注入写文件或进程 Tool，并在完成时再次确认 Git 状态未改变。`code_modify` 只允许精确文本替换和新文件创建；写入范围同时受 WorkspaceGrant 与 `CodeModifyInput.allowed_paths` 限制。LLM 不能提交任意 shell 字符串，只能请求执行调用方预先声明的 verification commands；验证前后 Git diff 必须相同，结果还必须绑定最终 diff hash。
+当前要求已有且干净的 Git workspace，以建立 Attempt provenance。ProcessRunner 不是 OS 沙箱；可信调用方若提供过弱验证命令，系统不能证明代码真正满足自然语言目标。这些限制不会因 Phase 7 改变。
 
-Phase 5 原生 Coding Agent 要求已有且干净的 Git workspace。这个限制用于建立 Attempt 级 provenance：finalizer 可以确定哪些变化由本次调用产生。支持脏工作区或非 Git 目录需要先定义独立的 baseline/snapshot 契约，不在本阶段隐式兼容。
+### 9.2 Experiment
 
-两条已知限制：(1) verification command 在无 OS 沙箱的真实子进程中运行，继承环境变量、可越出 workspace，其安全依赖命令由可信调用方预先声明（不做 OS 级隔离）；(2) finalizer 只判定「存在 Git 变更且验证命令通过」，不判定变更是否满足 instructions——后者由调用方声明的 verification command 承担，命令过弱（如恒真断言）时无法证明目标真正达成。
+原生 Experiment Agent 实现 `experiment_run`：RepoMaterializer 确认 source+commit，EnvironmentManager 使用内容寻址环境，DatasetCache/HardwareAudit 提供上下文；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且 Artifact 必须相对本 Attempt 基线新增或改变。
 
-### 8.7 Phase 6 Experiment 执行边界
+ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检查而非安全隔离；setup/experiment 分类也不是安全分类。详细约束见 ADR-0004、ADR-0005 和 contracts。
 
-原生 Experiment Agent 实现 `experiment_run`，复用同一个 AgentLoop：
+## 10. 模块通信规则
 
-```text
-ModuleTaskRequest
-  → 校验 capability 与 read_write WorkspaceGrant
-  → RepoMaterializer 克隆/复制/就地绑定 repo（repo identity = source + commit）
-  → EnvironmentManager 按内容寻址创建/复用 conda env（env_id）
-  → DatasetCache + HardwareAudit 提供缓存与硬件上下文
-  → AgentLoop 执行动作（run_command / audit_env 等）
-  → Experiment finalizer 校验证据并做 delivery check，生成 ExperimentResult / ArtifactCandidate
-  → ModuleResult
-```
+专业 Agent 不能直接互调。Phase 7 目标边界只有：
 
-`run_command` 只接受 shell-free argv，命令分类（setup/experiment）由可执行文件判定，不依赖 LLM stage 提示；实验命令在 `audit_env` 通过（certification）之前被拒绝，certification 绑定当前 env 前缀（换 env 需重新 audit）。`confirm_before_experiment` 为真时先 `ask_user` 再跑实验。finalizer 要求至少一次 experiment command 成功，且 evidence 文件相对本 Attempt 基线（workspace 文件 hash 快照）新建或内容变化，预存未变的文件不登记为本 Attempt Artifact；再校验 `expected_metrics`/`expected_artifacts` 是否满足，缺失则降级 completed_with_warnings，WarningRecord 记录 `[NOT MET]` 缺失项。
+- ResAgent → Scientific：`ScientificTurnRequest`；
+- Scientific → ResAgent：`ScientificTurnResult`；
+- ResAgent 内部：`WorkRequest` → WorkflowCompiler → `WorkflowProposal | WorkflowPatch`；
+- Scheduler ↔ Coding/Experiment：`ModuleTaskRequest` → `ModuleResult`；
+- ResAgent → Scientific：`WorkOutcome` + 已授权 `ArtifactRef`；
+- Agent → ResAgent：`QuestionDraft`；ResAgent ↔ User：`PendingQuestion` / `UserAnswer`。
 
-环境按内容寻址复用，只做简单核心（无 manifest/锁/drift 检测）；repo identity 用 source + commit，不依赖 basename。`RepoMaterializer` 在 clone/copy 时写运行时 metadata 文件（source type + 规范化 source），复用前校验一致，source 不匹配返回 `RepoMaterializerError` 而非静默复用。
+命名固定为：`Research Orchestrator / ResAgent` 是顶层模块，`ResearchController` 是该模块内驱动研究闭环的实现组件，`ScientificPort` 是 ResearchController 调用 Scientific Agent 的唯一边界。不得再使用 `ScientificControlPort` 指代另一套组件。
 
-三条已知限制：(1) `run_command` 在无 OS 沙箱的真实子进程中运行，继承环境变量、可读写 workspace 之外的宿主路径，WorkspaceBoundary 只约束文件 Tool、不约束子进程（不做 OS 级隔离）；(2) `audit_env` 是实验流程正确性检查而非安全隔离，`confirm_before_experiment` 只在正式 experiment command 执行前询问用户，setup 命令仍可能执行构建代码或产生副作用，setup/experiment 分类是工作流分类而非安全分类；(3) `mutates_environment` 只检测直接的 pip/conda 安装命令，不检测 `conda run ... pip install` 这类包装命令，包装安装后不会使 certification 失效。
+`WorkflowProposal` / `WorkflowPatch` 仍是 typed boundary，但不再跨 Scientific Agent 边界。`scientific_plan`、`scientific_analyze` 和 `literature_search` 的旧 task capability 是迁移对象，不是 Phase 7 目标生产接口。
 
-## 9. 模块通信规则
+## 11. 状态与生命周期
 
-专业模块不能直接互调。跨模块只通过：
-
-- Planning Port 的 ResearchRequest → WorkflowProposal / WorkflowPatch；
-- Scheduler 的 ModuleTaskRequest → ModuleResult；
-- 已登记 ArtifactRef；
-- QuestionDraft → PendingQuestion → UserAnswer。
-
-典型 repair 路径：
-
-```mermaid
-flowchart LR
-    Exp[Experiment returns blocked]
-    Res[ResAgent]
-    Patch[WorkflowPatch adds code repair]
-    Code[Coding Task]
-    Retry[Explicit retry of experiment]
-
-    Exp --> Res --> Patch --> Code --> Res --> Retry
-```
-
-## 10. 状态机
-
-状态名以 contracts 中的枚举为准。planning、replanning 是活动，不是持久化 RunStatus；外部进程中断是恢复事件，当前也没有 `interrupted` 状态。
-
-### 10.1 TaskStatus
+### 11.1 TaskStatus
 
 ```mermaid
 stateDiagram-v2
@@ -332,106 +333,91 @@ stateDiagram-v2
     running --> failed: terminal failed result
     running --> blocked: blocked result
     running --> needs_user_input: question result
-    failed --> pending: explicit/automatic retry allowed
-    blocked --> pending: explicit retry after recovery
+    failed --> pending: explicit/automatic retry
+    blocked --> pending: explicit recovery + retry
     needs_user_input --> pending: matching answer persisted
 ```
 
-### 10.2 RunStatus
+### 11.2 ResearchRun
+
+`planning`、`analyzing`、`replanning` 都是活动，不是 RunStatus：
 
 ```mermaid
 stateDiagram-v2
-    state "pending" as pending
-    note right of pending
-      schema 保留；当前 create_run 不进入此状态
-    end note
-    [*] --> running: current create_run
+    [*] --> running: create ResearchRun
     running --> paused: PendingQuestion exists
     paused --> running: matching answer persisted
-    running --> completed: current finish gate passes
-    running --> failed: no ready work and required tasks incomplete
+    running --> completed: ScientificOpinion passes final gate
+    running --> failed: unrecoverable system/contract failure or exhausted budget without valid opinion
 ```
 
-当前 `create_run` 直接创建 `running`，尚未实际使用 `pending`。崩溃恢复依赖持久化的 ResearchRun；是否增加专门的 `interrupted` 状态必须另立 ADR，不能只改图。
+WorkRequest 执行期间 Run 仍为 running；无需增加 planning 或 waiting_for_work 状态。单个 required Task 失败先进入 WorkOutcome，而不是直接把 Run 置为 failed。
 
-## 11. Artifact 与安全边界
+### 11.3 当前实现与目标差异
 
-Artifact 采用两道职责不同的检查：
+Phase 6 当前代码仍是“一个 accepted Workflow 基本对应一个 Run”，`_evaluate_run` 在 required Task 未完成且无 ready work 时可把 Run 置 failed；`create_run` 直接接收 WorkflowProposal，Scientific 仍走 `LegacyScientificAnalyzeAdapter`。这些是 Phase 7 必须修改的现状，不是目标语义已经实现。
 
-1. **capabilities/Tool 执行前**：根据 WorkspaceGrant 做访问授权、路径 resolve、symlink 边界和读写权限检查，防止越权访问；
-2. **ResAgent 登记时**：不信任子模块返回的 ArtifactCandidate，重新检查文件存在、相对路径、workspace containment、symlink escape，计算 hash，绑定 run/task/attempt，并复制到冻结位置。
+## 12. Artifact 与安全边界
 
-第一道检查保护执行过程，第二道检查保护证据库。两者是纵深防御，不是重复所有权。
+Artifact 保持两道检查：
 
-只有成功或 completed-with-warnings Attempt 的 ArtifactRef 自动传给依赖任务；失败/blocked Attempt 的诊断 Artifact 可以登记，但不得作为下游成功证据自动传播。
+1. capabilities/Tool 执行前按 WorkspaceGrant 做 resolve、symlink 和读写授权检查；
+2. ResAgent 登记时重新检查文件存在、相对路径、containment、symlink escape，计算 hash，绑定 run/task/attempt 并冻结复制。
 
-## 12. 完成判定
+只有 completed/completed-with-warnings Attempt 的 Artifact 自动作为成功证据传播；失败/blocked Attempt 的诊断 Artifact 可以登记并进入 WorkOutcome，但必须保留失败语义。
 
-模块返回的 finish 只是候选。模块自己的确定性 finalizer 负责生成可信 ModuleResult；ResAgent 再依据顶层状态执行 finish gate。
+Scientific Agent 只能通过 ArtifactRef allowlist 读取已有证据。它输出的 evidence_artifact_ids 必须来自本 Run 且确实通过 `read_artifact` 或 `literature_search` Tool 观察过。
 
-### 12.1 Phase 3 当前已实现 gate
+schema 1.1 的 ArtifactRef 只能绑定 Task/Attempt；Phase 7 schema 2.0 增加 Scientific Session provenance。`literature_search` 成功后先规范化结果，通过 composition root 注入的 Artifact registration port 交给同一个 ResAgent Artifact Registry，以当前 run/session 冻结登记，再把 ArtifactRef 返回 Agent。Scientific Tool 不能自行分配 ArtifactId、hash 或伪造 provenance。
 
-当前 `_evaluate_run` 只检查：
+observation history 的所有者是 runtime SessionStore；ResAgent 不读取原始 prompt、reasoning 或任意 Session event。跨边界只传 ScientificPort finalizer 从 trusted Tool result 派生的 `observed_artifact_ids`，ResearchRun 持久化其已复核并集用于最终审计。
 
-1. 没有 PendingQuestion；
-2. 没有 ready 或 running Task；
-3. 所有 required、非-superseded Task 都是 completed。
+## 13. 完成判定
 
-Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不是在 finish gate 末尾重新检查。
+### 13.1 Phase 6 当前 gate
 
-### 12.2 系统最终目标 gate
+当前代码只检查：无 PendingQuestion、无 ready/running Task、所有 required 非-superseded Task completed。`SuccessCriterion` / `evidence_key` 当前只持久化，不求值；Artifact 路径、hash 和 provenance 在登记时验证。
 
-最终系统还需要：
+### 13.2 Phase 7 目标 scientific gate
 
-- required output/evidence 已明确建模且存在；
-- 需要科学分析的实验结果已经进入 ScientificConclusion；
-- 没有未解决的 required failure；
-- final summary 只引用已登记事实。
+schema 2.0 删除通用 `SuccessCriterion` / `evidence_key`，不实现中心求值器。Coding、Experiment、Scientific 各自的确定性 finalizer 是领域完成证据的唯一判断者；ResAgent 不从 summary 或任意 payload 猜测完成状态。
 
-这些条件目前缺少完整模型和代码，不属于当前 finish gate。Phase 4 的 legacy 黄金闭环只证明任务执行、证据冻结和科学分析链路已经连通，不等于最终科学闭环 gate 已实现；后者在 Phase 7 逐项落到 contracts、代码和测试。
+ResearchRun 只有同时满足以下条件才能 completed：
 
-`SuccessCriterion` 当前只被持久化，不被 Scheduler 求值；`evidence_key` 也没有运行期解析器。Task 完成仍由模块 finalizer 的 ModuleStatus 决定。是否让 criterion 进入机器 gate，必须先定义 evidence_key 指向和求值责任，再改契约。
+1. Scientific Agent 已通过 `finish` 返回合法 ScientificOpinion；
+2. 没有 active WorkRequest、running Task 或 PendingQuestion；
+3. opinion 引用的 ArtifactId 都属于本 Run、已登记，且包含在 ScientificTurnResult 的 code-derived observed_artifact_ids 和 ResearchRun 已复核 trace 中；
+4. opinion 明确写出观点、证据、局限和未解决问题；
+5. final report 只展示 ResearchRequest、Run state、registered Artifact 和 ScientificOpinion 中可追踪事实；
+6. 每个执行 Task 的领域完成证据已经由所属 capability finalizer 验证，不能由 summary 冒充；
+7. 所有仍 failed/blocked 的 TaskId 都出现在 opinion.acknowledged_task_ids，且 limitations 非空，不能静默丢失。
 
-## 13. 当前实现边界
+`inconclusive` 是合法科学观点，不等于运行失败。若系统忠实完成了可执行工作、证据可追踪且 opinion 说明为何不能下结论，Run 可以 completed。运行失败表示系统没有形成可靠闭环，例如预算耗尽且无合法 opinion、状态损坏或不可恢复契约错误。
 
-已实现：
+这里的“验证”是闭环一致性验证，不是科学真理验证。Scientific Agent 的 deterministic completion check 使用同一不可变 Run snapshot 在 Session 完成前检查候选；ResAgent 的 ScientificCompletionValidator 再独立复核。若两者不一致，按 `contract_error` 处理，不能把无效候选写成 completed。观点是否在语义上正确属于模型质量与评测，不属于确定性状态机能够证明的事项。
 
-- schema 1.1 的 contracts 包；
-- provider-neutral 的同步 AgentLoop 和内存测试 Tools；
-- 同步单进程 Workflow Scheduler；
-- Task/Attempt 状态映射、retry、question pause/answer；
-- WorkflowPatch、RunStore、Artifact 冻结登记；
-- validator 拒绝 scientific_plan / ask_user 进入 WorkflowTask；
-- Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
-- PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
-- 原生 Coding Agent 与原生 Experiment Agent、Scientific 剩余 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
-- 独立 `capabilities` 包（`WorkspaceBoundary`/`ProcessRunner`/`GitWorkspace`/`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit` 等可装配能力）与内容寻址环境；
-- runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
-- 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
-- fake ModulePort 的确定性测试。
+## 14. 当前实现、目标和迁移原则
 
-尚未实现或尚未对齐：
+| 项目 | Phase 6 当前实现 | Phase 7 目标 |
+|---|---|---|
+| 入口 | `create_run(request, proposal)` | `create_run(request)`，自然语言目标进入科学控制循环 |
+| Scientific | legacy planning/analyze adapter | 一个长期 Scientific Agentic Loop |
+| 图产生者 | PlanningPort/Scientific 语义 | ResAgent 内部 WorkflowCompiler |
+| 文献检索 | task capability 占位 | Scientific 直接使用 capabilities Tool |
+| 科学会话 | 绑定 task Attempt | 绑定 ResearchRun，跨多个工作周期恢复 |
+| task failure | 可能直接导致 Run failed | 先形成 WorkOutcome，再由 Scientific 决定下一步 |
+| 完成条件 | task graph gate | ScientificOpinion + evidence + no active work gate |
+| wire schema | 1.1 | Phase 7 按 CONTRACTS 演进 |
 
-- Planning Port 的真实 Scientific Agent 实现（当前只有 DeterministicPlanningPort）；
-- Proposal.questions 的回答后重新规划生命周期（当前仅拒绝非空，回答重规划未实现）；
-- success criteria 求值；
-- 最终科学闭环 gate 和 final summary；
-- Scientific vNext 专业 Agent。
+迁移必须遵守：新接口先有 contract tests；新旧路径只可在未发布开发分支短暂共存；production composition root 始终只启用一条；7.7 原子切换后删除 PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability；schema 2.0 中间状态不得发布；目标声明通过测试后才能写成已实现。
 
-Coding Agent vNext 已通过 deterministic tests、orchestrator Artifact E2E 和服务器真实闭环；当前 Coding 路径不再使用 legacy adapter。
+## 15. 不可破坏的架构约束
 
-历史说明：Phase 4 的旧 CodingAgent 曾允许“失败 Attempt 已改工作区、成功 retry 却缺少 `code_change` Artifact”的有界兼容例外。Phase 5 删除 legacy Coding adapter 后该例外不再属于当前执行路径；原生 Coding Task 必须登记 `code_patch` 和至少一个当前文件 `code_change` Artifact。
-
-具体阶段和验收状态只见 `DEVELOPMENT_PLAN.md`；字段定义只见 `CONTRACTS.md`。
-
-## 14. 不可破坏的架构约束
-
-1. 顶层只有 WorkflowTask；模块内部只有 AgentAction，不再增加平行的“任务/动作”模型。
-2. LLM 可以提出计划和动作，不能直接写 TaskStatus、RunStatus 或 ArtifactRef。
-3. `scientific_plan` 在控制面，`ask_user` 是控制信号，二者不作为普通 WorkflowTask 调度。
-4. 子 Agent 不直接互调，也不读取另一个 Agent 的 Session。
-5. summary、prompt 文本和 metadata 都不能替代机器字段。
-6. retry 创建新 Attempt；resume 可以引用旧 Session；repair 是新的 WorkflowTask。
-7. ArtifactCandidate 不是证据，只有登记后的 ArtifactRef 才是。
-8. 共享 runtime 只抽取至少两个模块语义一致的机制，领域策略留在模块内。
-9. 文档必须明确区分目标、当前实现和已知缺口。
+1. Scientific Agent 不输出执行图字段；WorkflowCompiler 不形成科学结论；
+2. ResAgent 可以使用 LLM 编译图，但状态转换只由代码执行；
+3. 专业 Agent 不直接互调；
+4. WorkflowTask、Attempt、Session、AgentAction 不得混为同一层；
+5. 跨模块持久事实必须成为 contract 字段或 Artifact，不能只藏在 prompt/summary；
+6. runtime 不包含领域 Tool，capabilities 不包含 Agent 策略，Agent 不包含顶层调度器；
+7. 失败、警告和不确定性必须保留，不能通过自然语言包装成成功；
+8. 每次扩展先证明简单方案不足，禁止为未来假设过度设计。

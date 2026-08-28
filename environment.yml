@@ -14,5 +14,6 @@ dependencies:
       - -e ./packages/orchestrator
       - -e ./packages/agents/coding
       - -e ./packages/agents/experiment
+      - -e ./packages/agents/scientific
 variables:
   PYTHONNOUSERSITE: "1"

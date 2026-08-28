@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -16,8 +16,12 @@ from resagent2_contracts import (
     ModuleResult,
     ModuleStatus,
     ModuleTaskRequest,
+    RunId,
+    SessionId,
     SessionRef,
     SessionStatus,
+    TaskBudget,
+    TaskId,
 )
 
 from .context import ContextBudgetExceeded, ContextComposer
@@ -41,10 +45,26 @@ class ContextBuilder(Protocol):
 
     def __call__(
         self,
-        request: ModuleTaskRequest,
+        request: Any,
         state: AgentState,
     ) -> list[ContextSection]:
         """Return named sections without composing the final prompt."""
+
+
+class LoopRequest(Protocol):
+    """The request surface the AgentLoop reads directly.
+
+    ModuleTaskRequest satisfies this for task-scoped Agents; the run-scoped
+    Scientific Agent supplies its own adapter with ``task_id``/``attempt_number``
+    left ``None``. The loop never inspects capability-specific fields (goal,
+    inputs, workspace); those stay the injected context builder's concern.
+    """
+
+    run_id: RunId
+    task_id: TaskId | None
+    attempt_number: int | None
+    budget: TaskBudget
+    parent_session_id: SessionId | None
 
 
 class CompletionCheck(Protocol):
@@ -65,7 +85,7 @@ class PermissionPolicy(Protocol):
         self,
         action: AgentAction,
         state: AgentState,
-        request: ModuleTaskRequest,
+        request: Any,
     ) -> PermissionDecision:
         """Return a structured allow or deny decision."""
 
@@ -124,7 +144,7 @@ class AgentLoop:
     def run(
         self,
         definition: AgentDefinition,
-        request: ModuleTaskRequest,
+        request: LoopRequest,
         *,
         session_id: str,
         initial_memory: dict | None = None,
@@ -368,6 +388,16 @@ class AgentLoop:
                     status=ModuleStatus.NEEDS_USER_INPUT,
                     summary=observation.summary,
                     question=observation.question,
+                    session=self._session_ref(state),
+                )
+
+            if observation.request_work is not None:
+                state.status = SessionStatus.PAUSED
+                self._save(state)
+                return ModuleResult(
+                    status=ModuleStatus.REQUEST_WORK,
+                    summary=observation.summary,
+                    request_work=observation.request_work,
                     session=self._session_ref(state),
                 )
 

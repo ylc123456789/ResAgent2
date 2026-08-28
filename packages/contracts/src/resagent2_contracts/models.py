@@ -114,6 +114,7 @@ class ModuleStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     NEEDS_USER_INPUT = "needs_user_input"
+    REQUEST_WORK = "request_work"
 
 
 class ErrorCode(StrEnum):
@@ -787,6 +788,7 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
     artifacts: list[ArtifactCandidate] = Field(default_factory=list)
     session: SessionRef | None = None
     question: QuestionDraft | None = None
+    request_work: JsonValue | None = None
     error: ModuleError | None = None
     warnings: list[WarningRecord] = Field(default_factory=list)
 
@@ -796,6 +798,11 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
             if self.question is None or self.error is not None:
                 raise ValueError(
                     "needs_user_input result requires question and cannot have error"
+                )
+        elif self.status == ModuleStatus.REQUEST_WORK:
+            if self.request_work is None or self.error is not None:
+                raise ValueError(
+                    "request_work result requires request_work and cannot have error"
                 )
         elif self.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
             if self.error is None or self.question is not None:
@@ -1007,11 +1014,7 @@ class ScientificTurnRequest(ContractModel):
     @model_validator(mode="after")
     def validate_turn(self) -> ScientificTurnRequest:
         if self.parent_session_id is None:
-            if (
-                self.work_outcome is not None
-                or self.unresolved_task_outcomes
-                or self.answers
-            ):
+            if self.work_outcome is not None or self.answers:
                 raise ValueError("first call cannot carry work_outcome or answers")
         elif self.work_outcome is not None and self.answers:
             raise ValueError("resume cannot carry both work_outcome and answers")

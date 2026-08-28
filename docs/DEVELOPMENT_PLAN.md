@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability 完成） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 Scientific Agent 完成） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
@@ -534,6 +534,8 @@ Scientific finalizer 必须：
 测试覆盖：已有证据直接 finish、先检索再 finish、request_work pause、WorkOutcome resume、ask-user resume、越权 Artifact、伪造 evidence id、step/LLM budget exhaustion。
 
 退出条件：Scientific Agent 可在不认识 WorkflowProposal/TaskProposal 的情况下通过唯一 ScientificPort 完成 scripted loop；新 Port 只在 tests/composition fixture 装配，production 仍未双路由。
+
+**状态：已完成（2026-08-28）。** 新建 `packages/agents/scientific`，`ScientificAgent` 实现 ScientificPort（`run(ScientificTurnRequest) -> ScientificTurnResult` 四态）。复用 AgentLoop：放宽 `AgentState.task_id/attempt_number` 为可选、`AgentLoop.run` 的 request 参数放宽为 `LoopRequest` Protocol（ContextBuilder/PermissionPolicy 的 request 参数放宽为 `Any`）、`ToolObservation`/`ModuleResult`/`ModuleStatus` 加 `request_work` 暂停通道。Tool 集：read_artifact（allowlist）+ literature_search（注入 backend/registration port）+ request_work + ask_user（带 assessment）+ finish（ScientificFinish）。finalizer 交叉检查 evidence、派生 observed_artifact_ids、验证 acknowledged_task_ids。修一个 7.1 落地 bug：`ScientificTurnRequest` 首次调用不应禁止 `unresolved_task_outcomes`（契约 §20.6 只禁 work_outcome/answers）。本地 190 tests 通过。未接 production composition root。
 
 #### 7.5 Research Controller 与 Run 生命周期
 

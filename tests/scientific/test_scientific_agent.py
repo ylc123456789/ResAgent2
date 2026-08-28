@@ -1,0 +1,337 @@
+"""Tests for the native Scientific Agent (DEVELOPMENT_PLAN §7.4)."""
+
+import hashlib
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from resagent2_contracts import (
+    AgentOwner,
+    ArtifactRef,
+    ErrorCode,
+    ModuleError,
+    ResearchRequest,
+    RunBudget,
+    ScientificOpinion,
+    ScientificTurnRequest,
+    ScientificVerdict,
+    TaskBudget,
+    WorkOutcome,
+    WorkTaskOutcome,
+)
+from resagent2_scientific import ScientificAgent
+from resagent2_runtime import ScriptedLLMClient
+
+NOW = datetime(2026, 8, 28, tzinfo=UTC)
+
+
+def research_request() -> ResearchRequest:
+    return ResearchRequest(
+        goal="Evaluate the method",
+        budget=RunBudget(
+            max_tasks=5,
+            max_attempts_per_task=2,
+            max_llm_calls=20,
+            timeout_seconds=60,
+        ),
+    )
+
+
+def turn(*, work_outcome=None, unresolved=(), parent=None, artifacts=()) -> ScientificTurnRequest:
+    return ScientificTurnRequest(
+        run_id="run_example",
+        research=research_request(),
+        authorized_artifacts=list(artifacts),
+        work_outcome=work_outcome,
+        unresolved_task_outcomes=list(unresolved),
+        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+        parent_session_id=parent,
+    )
+
+
+def artifact(artifact_id: str, tmp_path: Path) -> ArtifactRef:
+    content = b'{"value": 1}'
+    path = tmp_path / f"{artifact_id}.json"
+    path.write_bytes(content)
+    return ArtifactRef(
+        id=artifact_id,
+        kind="experiment_result",
+        producer=AgentOwner.EXPERIMENT,
+        run_id="run_example",
+        task_id="task_experiment",
+        attempt_number=1,
+        uri=path.as_uri(),
+        sha256=hashlib.sha256(content).hexdigest(),
+        media_type="application/json",
+        summary="evidence",
+    )
+
+
+def opinion(verdict=ScientificVerdict.INCONCLUSIVE, evidence=()) -> dict:
+    return {
+        "verdict": verdict.value,
+        "statement": "A statement",
+        "evidence_artifact_ids": list(evidence),
+    }
+
+
+def test_finish_with_existing_evidence_completes(tmp_path: Path) -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_1"}},
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(
+                            ScientificVerdict.SUPPORTS, evidence=["artifact_1"]
+                        ),
+                        "summary": "supported",
+                    },
+                },
+            ]
+        )
+    )
+    result = agent.run(turn(artifacts=[artifact("artifact_1", tmp_path)]))
+
+    assert result.status == "completed"
+    assert result.opinion.verdict == ScientificVerdict.SUPPORTS
+    assert result.observed_artifact_ids == ["artifact_1"]
+
+
+def test_request_work_pauses_with_assessment_and_draft() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "request_work",
+                    "arguments": {
+                        "assessment": {"statement": "need more evidence"},
+                        "work_request": {
+                            "objective": "Run the experiment",
+                            "expected_evidence": ["accuracy"],
+                        },
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn())
+
+    assert result.status == "request_work"
+    assert result.assessment.statement == "need more evidence"
+    assert result.work_request.expected_evidence == ["accuracy"]
+
+
+def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
+    from resagent2_capabilities import LiteraturePaper
+
+    class _Backend:
+        def search(self, query, *, max_results, start_year=None, end_year=None):
+            return [
+                LiteraturePaper(
+                    paper_id="2301.00001",
+                    title="T",
+                    authors=["A"],
+                    abstract="abs",
+                    source_url="https://arxiv.org/abs/2301.00001",
+                )
+            ]
+
+    class _Register:
+        def register_scientific(self, candidate, *, run_id, session_id):
+            content = b"{}"
+            path = tmp_path / "lit.json"
+            path.write_bytes(content)
+            return ArtifactRef(
+                id="artifact_lit",
+                kind="literature_search",
+                producer=AgentOwner.SCIENTIFIC,
+                run_id=run_id,
+                session_id=session_id,
+                uri=path.as_uri(),
+                sha256=hashlib.sha256(content).hexdigest(),
+                media_type="application/json",
+                summary="literature",
+            )
+
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "literature_search",
+                    "arguments": {"query": "graph networks", "max_results": 5},
+                },
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(
+                            ScientificVerdict.INCONCLUSIVE,
+                            evidence=["artifact_lit"],
+                        ),
+                        "summary": "reviewed literature",
+                    },
+                },
+            ]
+        ),
+        literature_backend=_Backend(),
+        registration_port=_Register(),
+    )
+    result = agent.run(turn())
+
+    assert result.status == "completed"
+    assert result.observed_artifact_ids == ["artifact_lit"]
+
+
+def test_ask_user_pauses_with_question_and_assessment() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "ask_user",
+                    "arguments": {
+                        "assessment": {"statement": "need dataset choice"},
+                        "text": "Which dataset?",
+                        "requested_fields": ["dataset"],
+                        "reason": "no dataset selected",
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn())
+
+    assert result.status == "needs_user_input"
+    assert result.question.text == "Which dataset?"
+    assert result.assessment.statement == "need dataset choice"
+
+
+def test_resume_with_work_outcome_reuses_session() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "request_work", "arguments": {
+                    "assessment": {"statement": "need evidence"},
+                    "work_request": {
+                        "objective": "Run experiment",
+                        "expected_evidence": ["accuracy"],
+                    },
+                }},
+                {"tool": "finish", "arguments": {
+                    "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
+                    "summary": "done",
+                }},
+            ]
+        )
+    )
+    first = agent.run(turn())
+    assert first.status == "request_work"
+    session_id = first.session.id
+
+    outcome = WorkOutcome(
+        work_request_id="work_round1",
+        workflow_revision=1,
+        summary="ran experiment",
+        tasks=[
+            WorkTaskOutcome(
+                task_id="task_experiment", status="completed", summary="ran"
+            )
+        ],
+    )
+    second = agent.run(turn(work_outcome=outcome, parent=session_id))
+
+    assert second.status == "completed"
+    assert second.session.id == session_id
+
+
+def test_ask_user_resume_reuses_session() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "ask_user", "arguments": {
+                    "assessment": {"statement": "need input"},
+                    "text": "Which?",
+                    "requested_fields": ["x"],
+                    "reason": "need",
+                }},
+                {"tool": "finish", "arguments": {
+                    "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
+                    "summary": "done",
+                }},
+            ]
+        )
+    )
+    first = agent.run(turn())
+    assert first.status == "needs_user_input"
+
+    second = agent.run(turn(parent=first.session.id))
+    assert second.status == "completed"
+    assert second.session.id == first.session.id
+
+
+def test_unobserved_evidence_is_rejected(tmp_path: Path) -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(
+                            ScientificVerdict.SUPPORTS, evidence=["artifact_fake"]
+                        ),
+                        "summary": "fabricated",
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn(artifacts=[artifact("artifact_1", tmp_path)]))
+
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.TOOL_FAILED
+
+
+def test_unacknowledged_task_is_rejected() -> None:
+    unresolved = [
+        WorkTaskOutcome(
+            task_id="task_experiment",
+            status="failed",
+            summary="crashed",
+            error=ModuleError(
+                code=ErrorCode.TOOL_FAILED, message="crashed", retryable=False
+            ),
+        )
+    ]
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
+                        "summary": "ignored failure",
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn(unresolved=unresolved))
+
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.TOOL_FAILED
+
+
+def test_budget_exhaustion_returns_failed(tmp_path: Path) -> None:
+    # A scripted client that keeps reading the same artifact past the LLM budget.
+    actions = [
+        {
+            "tool": "read_artifact",
+            "arguments": {"artifact_id": "artifact_1"},
+        }
+    ] * 20
+    agent = ScientificAgent(ScriptedLLMClient(actions))
+    result = agent.run(turn(artifacts=[artifact("artifact_1", tmp_path)]))
+
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED

@@ -12,9 +12,11 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
+from resagent2_runtime import AgentState, ToolObservation
+from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+
 from .artifacts import RegisteredArtifactReader
 from .git import GitWorkspace
-from .models import AgentState, NonEmptyStr, RuntimeModel, ToolObservation
 from .process import ProcessRunner
 from .workspace import WorkspaceBoundary
 

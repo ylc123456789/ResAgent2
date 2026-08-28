@@ -12,13 +12,15 @@ from resagent2_contracts import (
     CodeUnderstandResult,
     VerificationResult,
 )
+from resagent2_capabilities import (
+    GitWorkspace,
+    WorkspaceBoundary,
+    media_type_for,
+)
 from resagent2_runtime import (
     AgentState,
     CompletionDecision,
     FinishCandidate,
-    GitWorkspace,
-    WorkspaceBoundary,
-    media_type_for,
 )
 
 from .models import CodeModifyFinish

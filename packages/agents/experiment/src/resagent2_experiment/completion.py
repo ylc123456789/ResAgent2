@@ -12,12 +12,14 @@ from resagent2_contracts import (
     ExperimentResult,
     WarningRecord,
 )
+from resagent2_capabilities import (
+    WorkspaceBoundary,
+    media_type_for,
+)
 from resagent2_runtime import (
     AgentState,
     CompletionDecision,
     FinishCandidate,
-    WorkspaceBoundary,
-    media_type_for,
 )
 
 from .models import ExperimentFinish

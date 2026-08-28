@@ -83,7 +83,8 @@ LLM 不能直接：
 ```text
 packages/
   contracts/                  跨包类型和接口语义
-  runtime/                    共享 Agentic Loop 与通用运行能力
+  runtime/                    共享 Agentic Loop（运行引擎）
+  capabilities/               可装配的具体能力（Git/文件/进程/环境/仓库/数据集/硬件）
   orchestrator/               ResAgent 工作流与状态机
   agents/
     scientific/               科学顾问

@@ -3,13 +3,12 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "resagent2-experiment"
+name = "resagent2-capabilities"
 version = "0.1.0"
-description = "Native Experiment Agent for ResAgent2"
+description = "Concrete capabilities (Git, env, files, process, artifacts) for ResAgent2"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.12,<3",
-  "resagent2-capabilities>=0.1,<0.2",
   "resagent2-contracts>=0.1,<0.2",
   "resagent2-runtime>=0.1,<0.2",
 ]

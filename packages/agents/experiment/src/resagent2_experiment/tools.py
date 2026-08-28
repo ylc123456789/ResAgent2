@@ -9,12 +9,14 @@ from typing import cast
 from pydantic import BaseModel
 
 from resagent2_contracts import QuestionDraft
-from resagent2_runtime import (
-    AgentState,
+from resagent2_capabilities import (
     ProcessRunner,
-    ToolObservation,
     WorkspaceBoundary,
     parse_command,
+)
+from resagent2_runtime import (
+    AgentState,
+    ToolObservation,
 )
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 

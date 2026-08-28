@@ -9,6 +9,7 @@ dependencies:
   - pip:
       - -e ./packages/contracts
       - -e ./packages/runtime
+      - -e ./packages/capabilities
       - -e ./packages/orchestrator
       - -e ./packages/agents/coding
       - -e ./packages/agents/experiment

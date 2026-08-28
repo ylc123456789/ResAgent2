@@ -247,11 +247,13 @@ sequenceDiagram
 
 负责准备仓库和环境、运行实验、收集参数/日志/指标/环境证据并形成结构化结果。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
 
-### 8.5 Shared Runtime
+### 8.5 Shared Runtime 与 Capabilities
 
-只提供模块通用机制：Agentic Loop、LLM client、上下文组合、Tool 分发、权限协议、Session/event 持久化和统一错误映射。领域 prompt、领域 Tool、结果 finalizer 和 Workflow Scheduler 不属于共享 runtime。
+`runtime` 只提供运行引擎：Agentic Loop、LLM client、上下文组合、Tool 接口与分发、权限协议、Session/event 持久化和统一错误映射。领域 prompt、领域 Tool、结果 finalizer 和 Workflow Scheduler 不属于 runtime。
 
-Phase 5 开始加入第二类共享机制：`WorkspaceBoundary`、无 shell 的 `ProcessRunner`、只读 Git 观察和已登记 Artifact 的只读访问。这些对象只提供物理边界和可审计执行，不决定“应该改什么代码”或“验证是否足以完成 Coding Task”。Coding 的编辑策略和 finalizer 仍属于 Coding Agent。
+`capabilities` 提供可装配的具体能力：`WorkspaceBoundary`、无 shell 的 `ProcessRunner`、只读 Git 观察、已登记 Artifact 读取、仓库 materialization、内容寻址环境、数据集缓存和硬件审计。这些对象只提供物理边界和可审计执行，不决定“应该改什么代码”或“验证是否足以完成 Coding Task”。Coding 的编辑策略和 finalizer 仍属于 Coding Agent。
+
+依赖方向：`contracts ← runtime ← capabilities ← agents ← orchestrator`。runtime 不依赖 capabilities；capabilities 不依赖任何具体 Agent。各 Agent 通过 Tool Profile 只装配自己需要的能力——依赖 capabilities 不等于自动获得全部能力。Capability（能做什么）与 Skill（怎样组合能力完成一类任务）目前不分离：Skill 暂由各 Agent 的 Prompt + Tool Profile + CompletionCheck 承担，待出现跨 Agent 复用的操作流程再抽象正式 Skill 框架。
 
 ### 8.6 Phase 5 Coding 执行边界
 
@@ -403,7 +405,7 @@ Artifact 的存在、边界、hash 和 provenance 在“登记时”检查，不
 - Scheduler 只消费 ModuleResult 外层状态、Artifact、Session、Question、Error 和 Warning，并把 payload 持久化到 Attempt；跨任务信息仍必须登记为 Artifact；
 - PlanningPort 协议与 DeterministicPlanningPort（控制面，不进入任务图）；
 - 原生 Coding Agent 与原生 Experiment Agent、Scientific 剩余 legacy adapter，以及不依赖外部模块的 mock E2E 和服务器真实短闭环；
-- runtime provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit`）与内容寻址环境；
+- 独立 `capabilities` 包（`WorkspaceBoundary`/`ProcessRunner`/`GitWorkspace`/`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit` 等可装配能力）与内容寻址环境；
 - runtime AgentLoop 消费 parent_session_id 完成 ask-user resume；
 - 只有 completed/completed-with-warnings Attempt 的 Artifact 自动传给依赖任务，失败/blocked Attempt 的诊断 Artifact 不自动传播；
 - fake ModulePort 的确定性测试。

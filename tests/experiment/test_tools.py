@@ -8,7 +8,8 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSource,
 )
-from resagent2_runtime import AgentState, WorkspaceBoundary
+from resagent2_capabilities import WorkspaceBoundary
+from resagent2_runtime import AgentState
 
 from resagent2_experiment.tools import (
     AuditEnvTool,

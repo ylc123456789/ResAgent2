@@ -18,6 +18,7 @@ from resagent2_contracts import (
     WorkspaceSource,
 )
 from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowScheduler
+from resagent2_capabilities import WorkspaceBoundary
 from resagent2_runtime import (
     AgentDefinition,
     AgentLoop,
@@ -25,7 +26,6 @@ from resagent2_runtime import (
     FinishTool,
     InMemorySessionStore,
     ScriptedLLMClient,
-    WorkspaceBoundary,
 )
 
 from resagent2_experiment.completion import ExperimentCompletionCheck

@@ -367,6 +367,15 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 - [x] RepoMaterializer source identity：clone/copy 写运行时 metadata 文件（source type + 规范化 source），复用前校验一致，source 不匹配返回 `RepoMaterializerError` 而非静默复用；
 - [x] 已知限制已记录：certification/confirmation 不是安全沙箱（`audit_env` 是正确性检查、`confirm_before_experiment` 只问正式命令、setup 命令可能有副作用、setup/experiment 是工作流分类），见 ARCHITECTURE §8.7 与 ADR-0005。
 
+### 运行时整理：runtime / capabilities 拆分（2026-08-28）
+
+Phase 6 把 Git/环境/数据集等能力抽进 runtime 后，runtime 内部三层（Agentic Loop / 物理执行边界 / provisioning）平铺、抽象层级不一致。按「runtime = Agent 怎么运行，capabilities = Agent 能做什么」重新划分：
+
+- `runtime` 只保留运行引擎：Agentic Loop、Agent 状态、上下文、LLM、Session、Tool 接口与 finish/ask_user；
+- 新建 `capabilities` 包承接具体能力：workspace / process / artifacts / git / repo / environment / dataset / hardware / workspace_tools（Phase 7 再加 literature）。
+
+依赖方向：`contracts ← runtime ← capabilities ← agents ← orchestrator`；runtime 不依赖 capabilities，capabilities 不依赖任何具体 Agent；各 Agent 只通过 Tool Profile 装配自己需要的能力，依赖 capabilities 不等于自动获得全部能力。
+
 ## 10. Phase 7：Scientific Agent vNext 与科学闭环
 
 ### 目标

@@ -16,18 +16,11 @@ from resagent2_contracts import (
     ModuleTaskRequest,
     WorkspaceMode,
 )
-from resagent2_runtime import (
-    AgentDefinition,
-    AgentLoop,
-    AllowListPermissionPolicy,
-    AskUserTool,
+from resagent2_capabilities import (
     CreateFileTool,
-    FinishTool,
     GitDiffTool,
     GitWorkspace,
     GitWorkspaceError,
-    InMemorySessionStore,
-    LLMClient,
     ListFilesTool,
     ProcessRunner,
     ReadArtifactTool,
@@ -36,9 +29,18 @@ from resagent2_runtime import (
     ReplaceTextTool,
     RunVerificationTool,
     SearchTextTool,
-    SessionStore,
     WorkspaceBoundary,
     WorkspacePermissionError,
+)
+from resagent2_runtime import (
+    AgentDefinition,
+    AgentLoop,
+    AllowListPermissionPolicy,
+    AskUserTool,
+    FinishTool,
+    InMemorySessionStore,
+    LLMClient,
+    SessionStore,
 )
 
 from .completion import CodeModifyCompletionCheck, CodeUnderstandCompletionCheck

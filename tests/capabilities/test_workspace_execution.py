@@ -13,8 +13,7 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSource,
 )
-from resagent2_runtime import (
-    AgentState,
+from resagent2_capabilities import (
     ArtifactReadError,
     GitWorkspace,
     GitWorkspaceError,
@@ -26,6 +25,7 @@ from resagent2_runtime import (
     WorkspacePermissionError,
     parse_command,
 )
+from resagent2_runtime import AgentState
 
 
 def grant(root: Path, *, mode: WorkspaceMode = WorkspaceMode.READ_WRITE) -> WorkspaceGrant:

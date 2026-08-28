@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from resagent2_runtime import (
+from resagent2_capabilities import (
     DatasetCache,
     EnvironmentManager,
     HardwareAudit,
@@ -17,7 +17,7 @@ from resagent2_runtime import (
     project_slug,
     resource_root,
 )
-from resagent2_runtime.process import _descendant_pids
+from resagent2_capabilities.process import _descendant_pids
 
 
 def _init_repo(root: Path, *, commit_file: str = "tracked.txt") -> str:

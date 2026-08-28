@@ -12,6 +12,7 @@ ALLOWED_IMPORT_ROOTS = {
     "json",
     "pathlib",
     "pydantic",
+    "resagent2_capabilities",
     "resagent2_contracts",
     "resagent2_runtime",
     "typing",

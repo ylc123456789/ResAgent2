@@ -1,20 +1,13 @@
-"""Stable public imports for the ResAgent2 shared runtime."""
+"""The ResAgent2 shared Agentic Loop runtime (how an Agent runs).
+
+This package owns the execution engine only: the Agentic Loop, Agent state,
+context composition, LLM calls, session persistence and the Tool protocol plus
+the loop's own finish/ask_user tools. Concrete abilities (filesystem, Git,
+process, repository, environment, dataset, hardware) live in
+``resagent2_capabilities``, which Agents assemble through their Tool Profile.
+"""
 
 from .context import ContextBudgetExceeded, ContextComposer
-from .artifacts import ArtifactReadError, RegisteredArtifactReader
-from .dataset import DatasetCache, mirror_env_overrides
-from .environment import (
-    EnvironmentManager,
-    EnvironmentManagerError,
-    env_id,
-    env_spec,
-    find_conda,
-    project_slug,
-    resource_root,
-)
-from .git import GitWorkspace, GitWorkspaceError
-from .hardware import HardwareAudit
-from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .llm import (
     LLMClient,
     LLMExhaustedError,
@@ -41,7 +34,6 @@ from .models import (
     ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
-from .process import ProcessRunner, UnsafeCommandError, parse_command
 from .tools import (
     AskUserTool,
     AskUserToolInput,
@@ -55,26 +47,6 @@ from .tools import (
     WriteValueInput,
     WriteValueTool,
 )
-from .workspace import WorkspaceBoundary, WorkspacePermissionError
-from .workspace_tools import (
-    CreateFileInput,
-    CreateFileTool,
-    GitDiffInput,
-    GitDiffTool,
-    ListFilesInput,
-    ListFilesTool,
-    ReadArtifactInput,
-    ReadArtifactTool,
-    ReadFileInput,
-    ReadFileTool,
-    ReplaceTextInput,
-    ReplaceTextTool,
-    RunVerificationInput,
-    RunVerificationTool,
-    SearchTextInput,
-    SearchTextTool,
-    media_type_for,
-)
 
 __all__ = [
     "AgentAction",
@@ -85,21 +57,7 @@ __all__ = [
     "AllowListPermissionPolicy",
     "AskUserTool",
     "AskUserToolInput",
-    "ArtifactReadError",
     "CompletionCheck",
-    "DatasetCache",
-    "EnvironmentManager",
-    "EnvironmentManagerError",
-    "HardwareAudit",
-    "MaterializedRepo",
-    "RepoMaterializer",
-    "RepoMaterializerError",
-    "env_id",
-    "env_spec",
-    "find_conda",
-    "mirror_env_overrides",
-    "project_slug",
-    "resource_root",
     "CompletionDecision",
     "ComposedContext",
     "ContextBudgetExceeded",
@@ -109,45 +67,20 @@ __all__ = [
     "FinishCandidate",
     "FinishInput",
     "FinishTool",
-    "GitDiffInput",
-    "GitDiffTool",
-    "GitWorkspace",
-    "GitWorkspaceError",
     "InMemorySessionStore",
     "LLMClient",
     "LLMExhaustedError",
-    "ListFilesInput",
-    "ListFilesTool",
     "OpenAICompatibleClient",
     "PermissionDecision",
     "PermissionPolicy",
     "ReadValueInput",
     "ReadValueTool",
-    "ReadArtifactInput",
-    "ReadArtifactTool",
-    "ReadFileInput",
-    "ReadFileTool",
-    "RegisteredArtifactReader",
-    "ReplaceTextInput",
-    "ReplaceTextTool",
-    "RunVerificationInput",
-    "RunVerificationTool",
-    "SearchTextInput",
-    "SearchTextTool",
     "ScriptedLLMClient",
     "SessionStore",
     "Tool",
     "ToolNotFoundError",
     "ToolObservation",
     "ToolRegistry",
-    "ProcessRunner",
-    "UnsafeCommandError",
-    "WorkspaceBoundary",
-    "WorkspacePermissionError",
     "WriteValueInput",
     "WriteValueTool",
-    "CreateFileInput",
-    "CreateFileTool",
-    "media_type_for",
-    "parse_command",
 ]

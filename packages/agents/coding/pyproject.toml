@@ -9,6 +9,7 @@ description = "Native Coding Agent for ResAgent2"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.12,<3",
+  "resagent2-capabilities>=0.1,<0.2",
   "resagent2-contracts>=0.1,<0.2",
   "resagent2-runtime>=0.1,<0.2",
 ]

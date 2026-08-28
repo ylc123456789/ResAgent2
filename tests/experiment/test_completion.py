@@ -8,7 +8,8 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSource,
 )
-from resagent2_runtime import AgentState, FinishCandidate, WorkspaceBoundary
+from resagent2_capabilities import WorkspaceBoundary
+from resagent2_runtime import AgentState, FinishCandidate
 
 from resagent2_experiment.completion import ExperimentCompletionCheck, snapshot_workspace
 

@@ -11,6 +11,7 @@ ALLOWED_IMPORT_ROOTS = {
     "hashlib",
     "json",
     "pydantic",
+    "resagent2_capabilities",
     "resagent2_contracts",
     "resagent2_runtime",
     "typing",

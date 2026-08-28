@@ -16,18 +16,11 @@ from resagent2_contracts import (
     ModuleTaskRequest,
     WorkspaceMode,
 )
-from resagent2_runtime import (
-    AgentDefinition,
-    AgentLoop,
-    AllowListPermissionPolicy,
-    AskUserTool,
+from resagent2_capabilities import (
     DatasetCache,
     EnvironmentManager,
     EnvironmentManagerError,
-    FinishTool,
     HardwareAudit,
-    InMemorySessionStore,
-    LLMClient,
     ListFilesTool,
     ProcessRunner,
     ReadArtifactTool,
@@ -36,13 +29,22 @@ from resagent2_runtime import (
     RepoMaterializer,
     RepoMaterializerError,
     SearchTextTool,
-    SessionStore,
     WorkspaceBoundary,
     WorkspacePermissionError,
     env_id,
     env_spec,
     find_conda,
     resource_root,
+)
+from resagent2_runtime import (
+    AgentDefinition,
+    AgentLoop,
+    AllowListPermissionPolicy,
+    AskUserTool,
+    FinishTool,
+    InMemorySessionStore,
+    LLMClient,
+    SessionStore,
 )
 
 from .completion import ExperimentCompletionCheck, snapshot_workspace

@@ -2,27 +2,34 @@ import ast
 import inspect
 from pathlib import Path
 
-import resagent2_runtime
+import resagent2_capabilities
 
 
-PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "runtime" / "src"
+PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "capabilities" / "src"
 ALLOWED_IMPORT_ROOTS = {
     "__future__",
-    "collections",
     "dataclasses",
-    "datetime",
+    "hashlib",
     "json",
-    "math",
+    "mimetypes",
     "os",
+    "pathlib",
+    "platform",
+    "shlex",
+    "shutil",
+    "signal",
+    "subprocess",
+    "tempfile",
     "time",
     "typing",
     "urllib",
     "pydantic",
     "resagent2_contracts",
+    "resagent2_runtime",
 }
 
 
-def test_runtime_does_not_import_capabilities_orchestrator_or_agents() -> None:
+def test_capabilities_do_not_import_orchestrator_or_agents() -> None:
     imported_roots: set[str] = set()
     for source_file in PACKAGE_ROOT.rglob("*.py"):
         tree = ast.parse(source_file.read_text(encoding="utf-8"))
@@ -35,11 +42,12 @@ def test_runtime_does_not_import_capabilities_orchestrator_or_agents() -> None:
     assert imported_roots <= ALLOWED_IMPORT_ROOTS
 
 
-def test_every_public_runtime_class_has_a_docstring() -> None:
-    missing = []
-    for name in resagent2_runtime.__all__:
-        value = getattr(resagent2_runtime, name)
-        if inspect.isclass(value) and not inspect.getdoc(value):
-            missing.append(name)
+def test_every_public_capabilities_class_has_a_docstring() -> None:
+    missing = [
+        name
+        for name in resagent2_capabilities.__all__
+        if inspect.isclass(getattr(resagent2_capabilities, name))
+        and not inspect.getdoc(getattr(resagent2_capabilities, name))
+    ]
 
     assert missing == []

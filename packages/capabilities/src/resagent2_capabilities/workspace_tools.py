@@ -172,6 +172,11 @@ class ReadArtifactTool:
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(ReadArtifactInput, arguments)
         value = self.reader.read_text(args.artifact_id)
+        summaries = dict(state.memory.get("read_artifact_summaries", {}))
+        summaries[args.artifact_id] = {
+            "summary": value["summary"],
+            "content": value["content"][:2_000],
+        }
         return ToolObservation(
             summary=f"Read registered Artifact {args.artifact_id}",
             value=value,
@@ -180,7 +185,8 @@ class ReadArtifactTool:
                     state,
                     "read_artifact_ids",
                     args.artifact_id,
-                )
+                ),
+                "read_artifact_summaries": summaries,
             },
         )
 

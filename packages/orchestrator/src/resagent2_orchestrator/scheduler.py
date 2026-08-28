@@ -353,11 +353,19 @@ class WorkflowScheduler:
             target = by_id.get(task_id)
             if target is None or target.status != TaskStatus.PENDING:
                 raise OrchestrationError("only existing pending tasks can be superseded")
+            if target.work_request_id != patch.work_request_id:
+                raise OrchestrationError(
+                    "patch cannot supersede a task from another work request"
+                )
             target.status = TaskStatus.SUPERSEDED
         for update in patch.pending_task_updates:
             target = by_id.get(update.task_id)
             if target is None or target.status != TaskStatus.PENDING:
                 raise OrchestrationError("only existing pending tasks can be updated")
+            if target.work_request_id != patch.work_request_id:
+                raise OrchestrationError(
+                    "patch cannot update a task from another work request"
+                )
             if update.inputs is not None:
                 target.inputs = update.inputs
             if update.depends_on is not None:

@@ -256,11 +256,23 @@ class LiteratureSearchTool:
         observed = list(state.memory.get("literature_artifact_ids", []))
         if artifact.id not in observed:
             observed.append(artifact.id)
+        papers_dump = [paper.model_dump(mode="json") for paper in papers]
+        summaries = list(state.memory.get("literature_summaries", []))
+        summaries.append(
+            {
+                "artifact_id": artifact.id,
+                "query": args.query,
+                "papers": papers_dump,
+            }
+        )
         return ToolObservation(
             summary=f"Found {len(papers)} papers for {args.query!r}",
             value={
                 "artifact": artifact.model_dump(mode="json"),
-                "papers": [paper.model_dump(mode="json") for paper in papers],
+                "papers": papers_dump,
             },
-            memory_updates={"literature_artifact_ids": observed},
+            memory_updates={
+                "literature_artifact_ids": observed,
+                "literature_summaries": summaries,
+            },
         )

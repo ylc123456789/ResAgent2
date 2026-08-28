@@ -245,6 +245,10 @@ class ArtifactRef(ContractModel):
                 "execution artifact requires both task_id and attempt_number"
             )
         if has_task:
+            if self.producer == AgentOwner.ORCHESTRATOR:
+                raise ValueError(
+                    "orchestrator artifact cannot have task_id or attempt_number"
+                )
             return self
 
         if self.producer != AgentOwner.ORCHESTRATOR:
@@ -795,22 +799,32 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
     @model_validator(mode="after")
     def validate_status_fields(self) -> ModuleResult[PayloadT]:
         if self.status == ModuleStatus.NEEDS_USER_INPUT:
-            if self.question is None or self.error is not None:
+            if (
+                self.question is None
+                or self.error is not None
+                or self.request_work is not None
+            ):
                 raise ValueError(
-                    "needs_user_input result requires question and cannot have error"
+                    "needs_user_input result requires question, no error, no request_work"
                 )
         elif self.status == ModuleStatus.REQUEST_WORK:
-            if self.request_work is None or self.error is not None:
+            if self.request_work is None or self.error is not None or self.question is not None:
                 raise ValueError(
-                    "request_work result requires request_work and cannot have error"
+                    "request_work result requires request_work, no error, no question"
                 )
+            if self.session is None or self.session.status != SessionStatus.PAUSED:
+                raise ValueError("request_work result requires a paused session")
         elif self.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
-            if self.error is None or self.question is not None:
+            if (
+                self.error is None
+                or self.question is not None
+                or self.request_work is not None
+            ):
                 raise ValueError(
-                    "failed or blocked result requires error and cannot have question"
+                    "failed or blocked result requires error, no question, no request_work"
                 )
-        elif self.error is not None or self.question is not None:
-            raise ValueError("completed result cannot have error or question")
+        elif self.error is not None or self.question is not None or self.request_work is not None:
+            raise ValueError("completed result cannot have error, question, or request_work")
         if (
             self.status == ModuleStatus.COMPLETED_WITH_WARNINGS
             and not self.warnings
@@ -1018,6 +1032,12 @@ class ScientificTurnRequest(ContractModel):
                 raise ValueError("first call cannot carry work_outcome or answers")
         elif self.work_outcome is not None and self.answers:
             raise ValueError("resume cannot carry both work_outcome and answers")
+        artifact_ids = [artifact.id for artifact in self.authorized_artifacts]
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise ValueError("authorized_artifacts must have unique ids")
+        for artifact in self.authorized_artifacts:
+            if artifact.run_id != self.run_id:
+                raise ValueError("authorized_artifacts must belong to the same run")
         return self
 
 

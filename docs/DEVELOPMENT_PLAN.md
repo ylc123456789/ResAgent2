@@ -638,18 +638,18 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 | 架构概念/约束 | contract/接口 | 实现阶段 | 当前状态 |
 |---|---|---|---|
-| 科学判断与任务图编译分离 | ScientificTurnResult、WorkRequest、WorkflowProposal/Patch | Phase 7 | 目标契约已裁定，代码未实现 |
+| 科学判断与任务图编译分离 | ScientificTurnResult、WorkRequest、WorkflowProposal/Patch | Phase 7 | 契约已落地（7.1）；WorkflowCompiler 已实现（7.2）；未接 production |
 | 顶层唯一 WorkflowTask | TaskProposal、WorkflowTask | Phase 1/3 | 已实现 |
 | 确定性调度 | ModuleTaskRequest/ModuleResult | Phase 3 | 核心已实现 |
 | ask-user 是控制信号 | QuestionDraft/PendingQuestion/UserAnswer | Phase 3/4 | orchestrator + runtime resume 已接通 |
 | retry/resume/repair 分离 | Attempt、SessionRef、WorkflowPatch | Phase 3/4 | 已实现：retry 新 Attempt、ask-user resume 复用并校验 Session、repair 使用 WorkflowPatch |
 | Artifact 两道边界 | WorkspaceGrant、Candidate、Ref | Phase 3/5/6.5 | capabilities 访问检查与 orchestrator 登记复核均已实现 |
 | 只传播成功 Attempt Artifact | Attempt.artifact_ids | Phase 3 | 已实现并测试 |
-| 领域完成证据 | capability input/payload/finalizer | Phase 5-7 | Coding/Experiment 已实现；schema 2.0 删除未使用的通用 success_criteria |
+| 领域完成证据 | capability input/payload/finalizer | Phase 5-7 | Coding/Experiment/Scientific 已实现；schema 2.0 删除未使用的通用 success_criteria |
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
-| 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 目标契约已裁定，代码未实现 |
-| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | requested→compiling→executing→stable→consumed/failed 已裁定，代码未实现 |
-| Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | SessionStore 派生、RunStore 复核并集已裁定，代码未实现 |
+| 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；未接 production |
+| WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | requested→compiling→executing→stable→consumed/failed 已落地（7.1）；Controller 驱动待 7.5 |
+| Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生已实现（7.4）；RunStore 复核并集待 7.5 |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 目标已裁定，代码未实现 |
 
 ## 13. 文档同步检查
@@ -677,4 +677,9 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-27 | Phase 4 hardening 与收尾 | `phase4/planning-adapters-mock-e2e` | 全仓测试、mock E2E、服务器真实短闭环 | Planning/adapters/resume/payload/Artifact 映射完成；记录 legacy code retry 例外 |
 | 2026-08-27 | Phase 5 Coding Agent vNext | completed（未提交工作树） | 本地/服务器 92 tests；服务器真实闭环 4 Artifacts | 原生 Coding、shared workspace/process/Git/Artifact、legacy Coding adapter 删除 |
 | 2026-08-27 | Phase 6 Experiment Agent vNext | completed | 本地 146 tests；delivery 黄金用例 + 服务器真实闭环 | 原生 Experiment、provisioning 组件、内容寻址环境、schema 1.1、legacy Experiment adapter 删除、Attempt 证据归属、source identity |
-| 2026-08-28 | Phase 7 架构/契约 | in_progress（代码未开始） | ADR-0007、三份核心文档交叉检查 | Scientific 只作科学判断；WorkflowCompiler 归 ResAgent；schema 2.0 草案 |
+| 2026-08-28 | Phase 7 架构/契约（7.0） | completed | ADR-0007、三份核心文档交叉检查 | Scientific 只作科学判断；WorkflowCompiler 归 ResAgent；schema 2.0 草案 |
+| 2026-08-28 | Phase 7.1 schema 2.0 | `3653895` | 本地 165 tests | 新 2.0 类型、删 success_criteria、ArtifactRef 三态 provenance、work_request_id 追溯、SCHEMA_VERSION=2.0 |
+| 2026-08-28 | Phase 7.2 WorkflowCompiler | `44f7cd8` | 本地 173 tests | WorkflowCompiler Protocol + Deterministic/LLM 实现，未接 production |
+| 2026-08-28 | Phase 7.3 literature capability | `59265c6` | 本地 181 tests | ArxivLiteratureBackend + LiteratureSearchTool + ArtifactRegistrationPort |
+| 2026-08-28 | Phase 7.4 Scientific Agent | `445bb6d` | 本地 190 tests | 原生 Scientific Agent 四态，复用 AgentLoop，未接 production |
+| 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | 未提交 | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |

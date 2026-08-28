@@ -54,6 +54,7 @@ def task(
     depends_on=(),
     *,
     required: bool = True,
+    work_request_id: str = "work_legacy_initial",
 ) -> TaskProposal:
     if capability == Capability.SCIENTIFIC_ANALYZE:
         inputs = ScientificAnalyzeInput(
@@ -66,7 +67,7 @@ def task(
         inputs = ExperimentRunInput(instructions=f"Run {task_id}")
     return TaskProposal(
         id=task_id,
-        work_request_id="work_legacy_initial",
+        work_request_id=work_request_id,
         capability=capability,
         goal=f"Complete {task_id}",
         rationale="Required by the test workflow",
@@ -426,3 +427,27 @@ def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
         "task_optional": TaskStatus.FAILED,
         "task_replacement": TaskStatus.COMPLETED,
     }
+
+
+def test_patch_cannot_supersede_task_from_another_work_request() -> None:
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    engine.create_run(
+        "run_isolate",
+        research_request(),
+        WorkflowProposal(
+            work_request_id="work_a",
+            summary="first work request",
+            compilation_rationale="initial",
+            tasks=[task("task_a", Capability.EXPERIMENT_RUN, work_request_id="work_a")],
+        ),
+    )
+    with pytest.raises(OrchestrationError, match="another work request"):
+        engine.apply_patch(
+            "run_isolate",
+            WorkflowPatch(
+                work_request_id="work_b",
+                based_on_revision=1,
+                reason="cross-request supersede",
+                supersede_task_ids=["task_a"],
+            ),
+        )

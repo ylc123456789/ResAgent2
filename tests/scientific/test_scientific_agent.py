@@ -335,3 +335,118 @@ def test_budget_exhaustion_returns_failed(tmp_path: Path) -> None:
 
     assert result.status == "failed"
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+
+
+def test_request_work_assessment_cannot_cite_unobserved_evidence() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "request_work",
+                    "arguments": {
+                        "assessment": {
+                            "statement": "need more evidence",
+                            "evidence_artifact_ids": ["artifact_fake"],
+                        },
+                        "work_request": {
+                            "objective": "Run experiment",
+                            "expected_evidence": ["accuracy"],
+                        },
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn())
+
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.CONTRACT_ERROR
+
+
+def test_unknown_acknowledged_task_id_is_rejected() -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": {
+                            **opinion(ScientificVerdict.INCONCLUSIVE),
+                            "acknowledged_task_ids": ["task_unknown"],
+                            "limitations": ["something failed"],
+                        },
+                        "summary": "acknowledged a ghost task",
+                    },
+                }
+            ]
+        )
+    )
+    result = agent.run(turn())
+
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.TOOL_FAILED
+
+
+def test_repeated_first_request_is_idempotent(tmp_path: Path) -> None:
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "request_work",
+                    "arguments": {
+                        "assessment": {"statement": "need evidence"},
+                        "work_request": {
+                            "objective": "Run experiment",
+                            "expected_evidence": ["accuracy"],
+                        },
+                    },
+                },
+                # A second action must never be consumed: the repeated request
+                # is answered from the persisted result.
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
+                        "summary": "should not run",
+                    },
+                },
+            ]
+        )
+    )
+    request = turn()
+    first = agent.run(request)
+    assert first.status == "request_work"
+
+    duplicate = agent.run(request)
+    assert duplicate.status == "request_work"
+    assert duplicate.work_request.expected_evidence == ["accuracy"]
+
+
+def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
+    """Reading A then B must keep both summaries in the session memory."""
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_a"}},
+                {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_b"}},
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "opinion": opinion(
+                            ScientificVerdict.INCONCLUSIVE,
+                            evidence=["artifact_a", "artifact_b"],
+                        ),
+                        "summary": "two evidence files",
+                    },
+                },
+            ]
+        )
+    )
+    result = agent.run(
+        turn(artifacts=[artifact("artifact_a", tmp_path), artifact("artifact_b", tmp_path)])
+    )
+
+    assert result.status == "completed"
+    state = agent.store.load(result.session.id)
+    summaries = state.memory["read_artifact_summaries"]
+    assert set(summaries) == {"artifact_a", "artifact_b"}

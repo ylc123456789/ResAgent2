@@ -28,7 +28,7 @@ Tool arguments:
 - read_artifact: {"artifact_id": "artifact_..."}
 - literature_search: {"query": "...", "max_results": 10, "start_year": null, "end_year": null}
 - request_work: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "work_request": {"objective": "...", "expected_evidence": ["..."], "constraints": []}}
-- ask_user: {"text": "...", "requested_fields": [], "reason": "..."}
+- ask_user: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "text": "...", "requested_fields": [], "reason": "..."}
 - finish: {"opinion": {"verdict": "supports|refutes|inconclusive|not_applicable", "statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": [], "recommended_next_steps": [], "acknowledged_task_ids": []}, "summary": "...", "residual_risks": []}
 """
 

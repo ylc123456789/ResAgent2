@@ -69,7 +69,8 @@ class ScientificCompletionCheck:
                 ),
             )
 
-        # Every still-failed/blocked task must be acknowledged.
+        # Every still-failed/blocked task must be acknowledged, and no
+        # acknowledged id may point at a task that is not failed/blocked.
         unresolved_ids = {task.task_id for task in self._unresolved}
         acknowledged = set(opinion.acknowledged_task_ids)
         missing = sorted(unresolved_ids - acknowledged)
@@ -79,6 +80,15 @@ class ScientificCompletionCheck:
                 summary=(
                     "Acknowledge the failed/blocked tasks in the opinion: "
                     + ", ".join(missing)
+                ),
+            )
+        unknown = sorted(acknowledged - unresolved_ids)
+        if unknown:
+            return CompletionDecision(
+                complete=False,
+                summary=(
+                    "Acknowledge only failed/blocked tasks; unknown ids: "
+                    + ", ".join(unknown)
                 ),
             )
 

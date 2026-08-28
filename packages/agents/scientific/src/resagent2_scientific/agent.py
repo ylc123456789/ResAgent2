@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
@@ -111,6 +111,14 @@ class ScientificAgent:
         )
 
         session_id = request.parent_session_id or f"session_scientific_{request.run_id}"
+
+        # Idempotency: a repeated first request (no parent, no work_outcome)
+        # returns the already-persisted result instead of re-running the loop.
+        if request.parent_session_id is None and request.work_outcome is None:
+            cached = self._cached_turn_result(session_id)
+            if cached is not None:
+                return cached
+
         loop_request = _LoopRequest(
             run_id=request.run_id,
             budget=request.budget,
@@ -122,7 +130,9 @@ class ScientificAgent:
             session_id=session_id,
             initial_memory={},
         )
-        return self._to_turn_result(request, result, session_id)
+        turn_result = self._to_turn_result(request, result, session_id)
+        self._cache_turn_result(session_id, turn_result)
+        return turn_result
 
     def _to_turn_result(
         self,
@@ -166,6 +176,17 @@ class ScientificAgent:
                     session=result.session,
                     observed_artifact_ids=observed,
                 )
+            if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
+                return ScientificFailedResult(
+                    status="failed",
+                    error=ModuleError(
+                        code=ErrorCode.CONTRACT_ERROR,
+                        message="assessment cites evidence not observed by any Tool",
+                        retryable=False,
+                    ),
+                    session=result.session,
+                    observed_artifact_ids=observed,
+                )
             return ScientificWorkRequestResult(
                 status="request_work",
                 assessment=assessment,
@@ -179,6 +200,17 @@ class ScientificAgent:
             question = result.question or QuestionDraft(
                 text="Input required", reason="Scientific Agent paused for input"
             )
+            if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
+                return ScientificFailedResult(
+                    status="failed",
+                    error=ModuleError(
+                        code=ErrorCode.CONTRACT_ERROR,
+                        message="assessment cites evidence not observed by any Tool",
+                        retryable=False,
+                    ),
+                    session=result.session,
+                    observed_artifact_ids=observed,
+                )
             return ScientificQuestionResult(
                 status="needs_user_input",
                 assessment=assessment,
@@ -206,6 +238,31 @@ class ScientificAgent:
             return []
         return _observed_artifact_ids(state)
 
+    _turn_result_adapter = TypeAdapter(ScientificTurnResult)
+
+    def _cached_turn_result(self, session_id: str) -> ScientificTurnResult | None:
+        try:
+            state = self.store.load(session_id)
+        except Exception:
+            return None
+        raw = state.memory.get("_turn_result")
+        if raw is None:
+            return None
+        try:
+            return self._turn_result_adapter.validate_python(raw)
+        except ValidationError:
+            return None
+
+    def _cache_turn_result(
+        self, session_id: str, turn_result: ScientificTurnResult
+    ) -> None:
+        try:
+            state = self.store.load(session_id)
+        except Exception:
+            return
+        state.memory["_turn_result"] = turn_result.model_dump(mode="json")
+        self.store.save(state)
+
     def _latest_assessment(self, session_id: str) -> ScientificAssessment:
         try:
             state = self.store.load(session_id)
@@ -218,6 +275,11 @@ class ScientificAgent:
             return ScientificAssessment.model_validate(raw)
         except ValidationError:
             return ScientificAssessment(statement="No assessment recorded")
+
+    @staticmethod
+    def _unobserved_evidence(cited: list[str], observed: list[str]) -> bool:
+        """Return True when an assessment cites evidence no Tool observed."""
+        return bool(set(cited) - set(observed))
 
     @staticmethod
     def _validated_opinion(payload) -> ScientificOpinion | None:

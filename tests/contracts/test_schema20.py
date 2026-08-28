@@ -10,6 +10,8 @@ from resagent2_contracts import (
     ArtifactId,
     ArtifactRef,
     ModuleError,
+    ModuleResult,
+    ModuleStatus,
     ErrorCode,
     ResearchRequest,
     RunBudget,
@@ -403,4 +405,83 @@ def test_schema_1_1_object_is_rejected_as_2_0() -> None:
                 "created_at": NOW.isoformat(),
                 "updated_at": NOW.isoformat(),
             }
+        )
+
+
+def test_orchestrator_artifact_cannot_pose_as_execution() -> None:
+    with pytest.raises(ValidationError, match="orchestrator artifact cannot"):
+        ArtifactRef(
+            id="artifact_x",
+            kind="input",
+            producer=AgentOwner.ORCHESTRATOR,
+            run_id="run_example",
+            task_id="task_x",
+            attempt_number=1,
+            uri="file:///artifacts/x.json",
+            sha256="0" * 64,
+            media_type="application/json",
+            summary="imported input",
+            metadata={"source_type": "import"},
+        )
+
+
+def test_scientific_turn_rejects_cross_run_artifact() -> None:
+    artifact = ArtifactRef(
+        id="artifact_other",
+        kind="experiment_result",
+        producer=AgentOwner.EXPERIMENT,
+        run_id="run_other",
+        task_id="task_x",
+        attempt_number=1,
+        uri="file:///artifacts/x.json",
+        sha256="0" * 64,
+        media_type="application/json",
+        summary="evidence",
+    )
+    with pytest.raises(ValidationError, match="same run"):
+        ScientificTurnRequest(
+            run_id="run_example",
+            research=research_request(),
+            authorized_artifacts=[artifact],
+            budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        )
+
+
+def test_scientific_turn_rejects_duplicate_authorized_artifact() -> None:
+    artifact = ArtifactRef(
+        id="artifact_x",
+        kind="experiment_result",
+        producer=AgentOwner.EXPERIMENT,
+        run_id="run_example",
+        task_id="task_x",
+        attempt_number=1,
+        uri="file:///artifacts/x.json",
+        sha256="0" * 64,
+        media_type="application/json",
+        summary="evidence",
+    )
+    with pytest.raises(ValidationError, match="unique"):
+        ScientificTurnRequest(
+            run_id="run_example",
+            research=research_request(),
+            authorized_artifacts=[artifact, artifact],
+            budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        )
+
+
+def test_module_result_completed_cannot_carry_request_work() -> None:
+    with pytest.raises(ValidationError, match="completed result cannot"):
+        ModuleResult(
+            status=ModuleStatus.COMPLETED,
+            summary="done",
+            request_work={"assessment": {}},
+        )
+
+
+def test_module_result_request_work_requires_paused_session() -> None:
+    with pytest.raises(ValidationError, match="paused session"):
+        ModuleResult(
+            status=ModuleStatus.REQUEST_WORK,
+            summary="more work",
+            request_work={"assessment": {"statement": "need"}, "work_request": {}},
         )

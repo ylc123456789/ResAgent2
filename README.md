@@ -80,7 +80,7 @@ LLM 不能直接：
 - 绕过 Artifact 登记阶段已实现的 workspace 边界、hash 和 provenance 检查；
 - 把尚未实现的科学闭环条件伪装成已经通过。
 
-完整的 ScientificOpinion/final-report 完成门槛计划在 Phase 7 实现，目前不是生效中的 finish gate。当前代码仍使用 PlanningPort、schema 1.1 和 task graph gate；不要根据目标架构误读现状。
+完整的 ScientificOpinion/final-report 完成门槛计划在 Phase 7.6 实现，目前不是生效中的 finish gate。当前代码已切 schema 2.0 并落地原生 Scientific Agent（未接 production）；production 入口仍走 PlanningPort + task graph gate，旧 `LegacyScientificAnalyzeAdapter` 在 7.7 切换后删除。不要根据目标架构误读现状。
 
 详细说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

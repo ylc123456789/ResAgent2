@@ -2,9 +2,9 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）
 
-**当前基线**：Phase 6 已完成；Phase 7 架构已裁定但代码尚未开始
+**当前基线**：Phase 6 已完成；Phase 7 进行中（7.1 schema 2.0、7.2 WorkflowCompiler、7.3 literature capability、7.4 原生 Scientific Agent 已实现）
 
-**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为运行事实
+**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 验收后才成为运行事实；7.5–7.7（ResearchController、finish gate、原子切换）仍未实现
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 

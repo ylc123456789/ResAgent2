@@ -56,31 +56,202 @@ from resagent2_scientific import ScientificAgent
 
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
+# A small, real CIFAR-10 training script. The candidate method is a
+# Squeeze-and-Excitation (SE) block whose forward pass is deliberately left as
+# an identity placeholder; the Coding Agent must implement it. Running without
+# --use-se always yields a valid baseline, so the Experiment Agent can always
+# produce metrics for both arms.
 TRAIN_PY = """\
 import argparse
 import json
-import random
+import os
+
+import torch
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
 
 
-def train(epochs):
-    random.seed(0)
-    total = 2000
-    correct = 0
-    for _ in range(total):
-        features = [random.uniform(-1, 1) for _ in range(20)]
-        label = 1 if sum(features) > 0 else 0
-        prediction = 1 if sum(features) > 0.05 else 0
-        if prediction == label:
-            correct += 1
-    accuracy = correct / total
-    json.dump({"accuracy": round(accuracy, 4), "epochs": epochs}, open("metrics.json", "w"))
-    print(f"accuracy={accuracy:.4f}")
+def _data_root():
+    return os.environ.get("TORCHVISION_DATASETS", "./data")
+
+
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super().__init__()
+        self.channel = channel
+        self.reduction = reduction
+        # TODO(candidate): implement squeeze-and-excitation here.
+        # Squeeze: global average pool over spatial dims -> (b, c, 1, 1).
+        # Excite: fc(channel -> channel/reduction) -> relu ->
+        #         fc(channel/reduction -> channel) -> sigmoid -> (b, c, 1, 1).
+        # Then rescale x channel-wise by the excitation.
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        # TODO(candidate): implement the SE forward pass here.
+        # Squeeze: b, c, h, w = x.size(); y = avg_pool2d(x, (h, w)).view(b, c)
+        # Excite:  y = self.fc(y).view(b, c, 1, 1)
+        # Return:  x * y
+        raise NotImplementedError("SELayer.forward must be implemented")
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes),
+            )
+
+    def forward(self, x):
+        out = torch.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = torch.relu(out)
+        return out
+
+
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, use_se=False):
+        super().__init__()
+        self.in_planes = 64
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.use_se = use_se
+        if use_se:
+            self.se = SELayer(512 * block.expansion)
+        self.linear = nn.Linear(512 * block.expansion, 10)
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for s in strides:
+            layers.append(block(self.in_planes, planes, s))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = torch.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        if self.use_se:
+            # SE operates on the 4D feature map (b, c, h, w) before pooling.
+            out = self.se(out)
+        out = torch.nn.functional.avg_pool2d(out, 4)
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
+
+
+def resnet18(use_se=False):
+    return ResNet(BasicBlock, [2, 2, 2, 2], use_se=use_se)
+
+
+def _loader(train):
+    if train:
+        transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ]
+        )
+    else:
+        transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ]
+        )
+    return torch.utils.data.DataLoader(
+        torchvision.datasets.CIFAR10(root=_data_root(), train=train, download=False, transform=transform),
+        batch_size=128,
+        shuffle=train,
+        num_workers=2,
+    )
+
+
+def _accuracy(model, loader, device):
+    model.eval()
+    correct = total = 0
+    with torch.no_grad():
+        for inputs, targets in loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+    return round(correct / total, 4)
+
+
+def _train_arm(epochs, seed, use_se, device, loaders):
+    torch.manual_seed(seed)
+    model = resnet18(use_se=use_se).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
+    train_loader, test_loader = loaders
+    for _ in range(epochs):
+        model.train()
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(inputs), targets)
+            loss.backward()
+            optimizer.step()
+    return _accuracy(model, test_loader, device)
+
+
+def train(epochs, seed):
+    torch.manual_seed(seed)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    train_loader = _loader(train=True)
+    test_loader = _loader(train=False)
+    baseline = _train_arm(epochs, seed, use_se=False, device=device, loaders=(train_loader, test_loader))
+    candidate = _train_arm(epochs, seed, use_se=True, device=device, loaders=(train_loader, test_loader))
+    metrics = {
+        "baseline_accuracy": baseline,
+        "candidate_accuracy": candidate,
+        "epochs": epochs,
+        "seed": seed,
+    }
+    json.dump(metrics, open("metrics.json", "w"))
+    print(f"baseline={baseline} candidate={candidate}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=1)
-    train(parser.parse_args().epochs)
+    parser.add_argument("--seed", type=int, default=0)
+    train(parser.parse_args().epochs, parser.parse_args().seed)
+"""
+
+# The candidate method must be reflected in the training script. The Coding
+# Agent implements the SE forward pass; the Experiment Agent runs baseline and
+# candidate arms and freezes metrics.json as evidence.
+_REQUIREMENTS_TXT = """\
+torch>=2.0
+torchvision>=0.15
 """
 
 _EXPECTED_TASK_CAPABILITIES = {
@@ -96,8 +267,8 @@ _API_KEY_ENV = "DEEPSEEK_API_KEY"
 def _repo(workdir: Path) -> Path:
     repo = workdir / "repo"
     repo.mkdir(parents=True, exist_ok=True)
-    (repo / "util.py").write_text(UTIL_PY, encoding="utf-8")
     (repo / "train.py").write_text(TRAIN_PY, encoding="utf-8")
+    (repo / "requirements.txt").write_text(_REQUIREMENTS_TXT, encoding="utf-8")
     if not (repo / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
         subprocess.run(["git", "config", "user.email", "e2e@example.com"], cwd=repo, check=True)
@@ -116,23 +287,25 @@ def _grant(repo: Path) -> WorkspaceGrant:
     )
 
 
-def _coding_agent() -> NativeCodingAgent:
+def _coding_agent(session_store) -> NativeCodingAgent:
     return NativeCodingAgent(
         OpenAICompatibleClient(
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
-        )
+        ),
+        store=session_store,
     )
 
 
-def _experiment_agent() -> NativeExperimentAgent:
+def _experiment_agent(session_store) -> NativeExperimentAgent:
     return NativeExperimentAgent(
         OpenAICompatibleClient(
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
-        )
+        ),
+        store=session_store,
     )
 
 
@@ -272,15 +445,15 @@ def run_code(workdir: Path) -> ModuleResult:
         task_id="task_code",
         attempt_number=1,
         capability=Capability.CODE_MODIFY,
-        goal="Add a docstring to the add() function in util.py",
+        goal="Implement the Squeeze-and-Excitation forward pass in train.py",
         inputs=CodeModifyInput(
-            instructions="Add a docstring to the add() function in util.py",
-            verification_commands=["python -c \"import util; assert util.add(2, 3) == 5\""],
+            instructions="Implement SELayer.forward in train.py (it raises NotImplementedError)",
+            verification_commands=["python -m py_compile train.py"],
         ),
         budget=TaskBudget(max_steps=24, max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
     )
-    return _coding_agent().invoke(request)
+    return _coding_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
 
 
 def run_experiment(workdir: Path) -> ModuleResult:
@@ -290,9 +463,13 @@ def run_experiment(workdir: Path) -> ModuleResult:
         task_id="task_experiment",
         attempt_number=1,
         capability=Capability.EXPERIMENT_RUN,
-        goal="Run train.py with 2 epochs and record the accuracy from metrics.json",
+        goal="Run train.py and record baseline and candidate accuracy",
         inputs=ExperimentRunInput(
-            instructions="Run train.py with 2 epochs and record accuracy from metrics.json",
+            instructions=(
+                "Run train.py (it trains both the baseline and the SE candidate "
+                "and writes metrics.json with baseline_accuracy and "
+                "candidate_accuracy). Record those accuracies."
+            ),
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
             external_repo_path=str(repo),
@@ -300,29 +477,46 @@ def run_experiment(workdir: Path) -> ModuleResult:
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
     )
-    return _experiment_agent().invoke(request)
+    return _experiment_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
 
 
 def run_full(workdir: Path) -> bool:
     repo = _repo(workdir)
     request = ResearchRequest(
-        goal="Determine whether the method improves accuracy",
+        goal=(
+            "On CIFAR-10, compare the test accuracy of two ResNet18 variants. "
+            "The baseline is the standard ResNet18 already implemented in train.py. "
+            "The candidate adds a Squeeze-and-Excitation (SE) channel-attention "
+            "block after the final conv layer (on the 4D feature map, before "
+            "global pooling): global average pool over spatial dims, then "
+            "fc(channel -> channel/16) -> relu -> fc(channel/16 -> channel) -> "
+            "sigmoid, rescaling channels element-wise. The SELayer.forward in "
+            "train.py currently raises NotImplementedError and must be "
+            "implemented (the SE arm crashes until it is). train.py already "
+            "runs both arms (baseline and SE) and "
+            "writes metrics.json with baseline_accuracy and candidate_accuracy; "
+            "the training protocol (SGD, epochs, seed=0) is fixed and must not "
+            "be changed. Conclude whether the SE block improves accuracy over "
+            "the baseline."
+        ),
         budget=RunBudget(
-            max_tasks=6, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
+            max_tasks=2, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
     registry = _registry()
     run_store = JsonRunStore(workdir / "state")
+    coding_store = JsonSessionStore(workdir / "coding_sessions")
+    experiment_store = JsonSessionStore(workdir / "experiment_sessions")
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=_coding_agent(),
+                port=_coding_agent(coding_store),
                 workspace=_grant(repo),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
-                port=_experiment_agent(),
+                port=_experiment_agent(experiment_store),
                 workspace=_grant(repo),
             ),
         },

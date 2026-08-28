@@ -76,20 +76,6 @@ class NativeCodingAgent:
             error=error,
         )
 
-    @staticmethod
-    def _resolve_output_root(request: ModuleTaskRequest, boundary: WorkspaceBoundary) -> Path:
-        """Return the absolute audit-output directory for this attempt.
-
-        Prefer the scheduler-provided ``output_dir`` (Run data directory); fall
-        back to the legacy workspace-relative ``.resagent2/runs/...`` location.
-        """
-        root = Path(
-            request.output_dir
-            or f".resagent2/runs/{request.run_id}/{request.task_id}/"
-            f"attempt_{request.attempt_number}"
-        )
-        return root if root.is_absolute() else boundary.root / root
-
     def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
         if request.capability not in {
             Capability.CODE_UNDERSTAND,
@@ -122,11 +108,8 @@ class NativeCodingAgent:
         try:
             boundary = WorkspaceBoundary(request.workspace)
             repository = GitWorkspace(boundary)
-            repository.require_clean()
         except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
             return self._failure(str(error), blocked=True)
-
-        output_root = self._resolve_output_root(request, boundary)
 
         common_tools = (
             ListFilesTool(boundary),
@@ -153,6 +136,12 @@ class NativeCodingAgent:
                 result_type=CodeUnderstandResult,
             )
         else:
+            if request.output_dir is None:
+                return self._failure("CodingAgent requires an output_dir", blocked=True)
+            output_root = Path(request.output_dir)
+            # Capture this Attempt's baseline: previous tasks' accepted changes
+            # are the starting state, and only this Attempt's increment counts.
+            baseline = repository.snapshot()
             write_tools = (
                 CreateFileTool(boundary),
                 ReplaceTextTool(boundary),
@@ -161,6 +150,7 @@ class NativeCodingAgent:
                     repository,
                     log_root=f"{output_root}/verification",
                     timeout_seconds=request.budget.timeout_seconds,
+                    baseline=baseline,
                 ),
             )
             tools = (*common_tools, *write_tools)
@@ -176,6 +166,7 @@ class NativeCodingAgent:
                     repository,
                     boundary,
                     output_root=str(output_root),
+                    baseline=baseline,
                 ),
                 action_type=CodeModifyAction,
                 result_type=CodeModifyResult,
@@ -187,8 +178,14 @@ class NativeCodingAgent:
             session_id=f"session_{request.task_id}_{request.attempt_number}",
             initial_memory={"edit_revision": 0},
         )
-        if result.status == ModuleStatus.FAILED and repository.changed_paths():
-            patch_path = repository.write_patch(output_root / "failed_changes.patch")
+        if (
+            request.capability == Capability.CODE_MODIFY
+            and result.status == ModuleStatus.FAILED
+            and repository.changed_paths_since(baseline)
+        ):
+            patch_path = repository.write_patch_since(
+                baseline, output_root / "failed_changes.patch"
+            )
             error = result.error
             if error is not None:
                 error = error.model_copy(update={"retryable": False})
@@ -201,7 +198,7 @@ class NativeCodingAgent:
                             media_type="text/x-diff",
                             summary="Diagnostic patch from failed Coding Attempt",
                             metadata={"diagnostic": True},
-                            content=repository.diff(),
+                            content=repository.diff_since(baseline),
                         )
                     ],
                     "error": error,

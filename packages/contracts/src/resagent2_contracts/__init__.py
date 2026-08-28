@@ -1,6 +1,5 @@
 """Stable public imports for ResAgent2 cross-module contracts."""
 
-from .layout import ResourceLayout, RunLayout
 from .models import (
     SCHEMA_VERSION,
     AgentOwner,
@@ -63,6 +62,7 @@ from .models import (
     WorkTaskOutcome,
     WorkspaceDescriptor,
     WorkspaceGrant,
+    WorkspaceId,
     WorkspaceMode,
     WorkspaceRecord,
     WorkspaceSourceKind,
@@ -131,10 +131,9 @@ __all__ = [
     "WorkTaskOutcome",
     "WorkspaceDescriptor",
     "WorkspaceGrant",
+    "WorkspaceId",
     "WorkspaceMode",
     "WorkspaceRecord",
     "WorkspaceSourceKind",
     "WorkspaceSpec",
-    "RunLayout",
-    "ResourceLayout",
 ]

@@ -16,6 +16,7 @@ from .completion import (
     ScientificCompletionValidator,
 )
 from .controller import ResearchController, ScientificGate, ScientificPort
+from .layout import RunLayout
 from .models import CompletionViolation, CompletionViolationCode, ResearchRun
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
 from .scheduler import OrchestrationError, WorkflowScheduler
@@ -41,6 +42,7 @@ __all__ = [
     "ResearchController",
     "ResearchRun",
     "RenderedFinalReport",
+    "RunLayout",
     "RunStore",
     "ScientificGate",
     "ScientificCompletionValidator",

@@ -154,6 +154,7 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
         },
         store=InMemoryRunStore(),
         artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
         workspaces={
             "ws_main": WorkspaceSpec(
                 workspace_id="ws_main",

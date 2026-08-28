@@ -39,6 +39,9 @@ QuestionId = Annotated[
 WorkRequestId = Annotated[
     str, StringConstraints(pattern=r"^work_[A-Za-z0-9][A-Za-z0-9_-]*$")
 ]
+WorkspaceId = Annotated[
+    str, StringConstraints(pattern=r"^ws_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+]
 
 
 class ContractModel(BaseModel):
@@ -530,7 +533,7 @@ class TaskProposal(ContractModel):
     rationale: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
-    workspace_id: NonEmptyStr | None = None
+    workspace_id: WorkspaceId | None = None
     inputs: CapabilityInput
 
     @model_validator(mode="after")
@@ -549,7 +552,7 @@ class WorkflowTask(ContractModel):
     inputs: CapabilityInput
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
-    workspace_id: NonEmptyStr | None = None
+    workspace_id: WorkspaceId | None = None
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     attempts: list[Attempt] = Field(default_factory=list)
@@ -693,25 +696,45 @@ class WorkspaceGrant(ContractModel):
 class WorkspaceSpec(ContractModel):
     """Declared source of one logical workspace; never a physical path."""
 
-    workspace_id: NonEmptyStr
+    workspace_id: WorkspaceId
     source_kind: WorkspaceSourceKind
     location: str | None = None
+
+    @model_validator(mode="after")
+    def validate_location(self) -> WorkspaceSpec:
+        """GIT/LOCAL/COPY require a location; GENERATED must not carry one."""
+        if self.source_kind == WorkspaceSourceKind.GENERATED:
+            if self.location is not None:
+                raise ValueError("GENERATED workspace must not have a location")
+        elif self.location is None:
+            raise ValueError(f"{self.source_kind.value} workspace requires a location")
+        return self
 
 
 class WorkspaceRecord(ContractModel):
     """A workspace resolved to a physical root, plus its source declaration."""
 
-    workspace_id: NonEmptyStr
+    workspace_id: WorkspaceId
     root: NonEmptyStr
     source: WorkspaceSpec
     managed: bool = False
-    initial_commit: str | None = None
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> WorkspaceRecord:
+        if self.workspace_id != self.source.workspace_id:
+            raise ValueError("record and source workspace_id must match")
+        expect_managed = self.source.source_kind != WorkspaceSourceKind.LOCAL
+        if self.managed != expect_managed:
+            raise ValueError(
+                "managed must be True for non-LOCAL sources and False for LOCAL"
+            )
+        return self
 
 
 class WorkspaceDescriptor(ContractModel):
     """Minimal workspace summary the Compiler may see; never physical paths."""
 
-    workspace_id: NonEmptyStr
+    workspace_id: WorkspaceId
     source_kind: WorkspaceSourceKind
     description: str = ""
 
@@ -730,7 +753,7 @@ class ModuleTaskRequest(ContractModel):
     answers: list[UserAnswer] = Field(default_factory=list)
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
-    workspace_id: NonEmptyStr | None = None
+    workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
@@ -738,6 +761,21 @@ class ModuleTaskRequest(ContractModel):
     @model_validator(mode="after")
     def validate_input_type(self) -> ModuleTaskRequest:
         _validate_capability_input(self.capability, self.inputs)
+        return self
+
+    @model_validator(mode="after")
+    def validate_workspace(self) -> ModuleTaskRequest:
+        """Keep the grant, logical id and declared source mutually consistent."""
+        if self.workspace_spec is not None:
+            if self.workspace is None:
+                raise ValueError("workspace_spec requires a workspace grant")
+            if (
+                self.workspace_id is not None
+                and self.workspace_id != self.workspace_spec.workspace_id
+            ):
+                raise ValueError("workspace_id must match workspace_spec.workspace_id")
+            if self.workspace.source != self.workspace_spec.source_kind:
+                raise ValueError("workspace.source must match workspace_spec.source_kind")
         return self
 
 

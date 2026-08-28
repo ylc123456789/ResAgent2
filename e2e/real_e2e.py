@@ -452,6 +452,7 @@ def run_code(workdir: Path) -> ModuleResult:
         ),
         budget=TaskBudget(max_steps=24, max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
+        output_dir=str(workdir / "out"),
     )
     return _coding_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
 
@@ -475,6 +476,7 @@ def run_experiment(workdir: Path) -> ModuleResult:
         ),
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
+        output_dir=str(workdir / "out"),
     )
     return _experiment_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
 
@@ -519,6 +521,7 @@ def run_full(workdir: Path) -> bool:
         },
         store=run_store,
         artifact_root=workdir / "artifacts",
+        data_root=workdir / "data",
         workspaces={
             "ws_main": WorkspaceSpec(
                 workspace_id="ws_main",

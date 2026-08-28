@@ -44,4 +44,4 @@ scheduler.create_run("run_demo", request, proposal)
 run = scheduler.run_until_stable("run_demo")
 ```
 
-`run_until_stable` 只执行确定性的 ready Task。这是 schema 1.1 的当前用法。Phase 7 目标入口改为自然语言 `create_run(request)`：ResearchController 调用 Scientific Agent，接收 WorkRequest，再由 WorkflowCompiler 产生 Proposal/Patch；Scheduler 仍不调用 LLM 决定普通状态转换。
+`run_until_stable` 只执行确定性的 ready Task，这是直接驱动 Scheduler 的内部/测试用法。production 入口是自然语言 `create_run(request)`：ResearchController 调用 Scientific Agent，接收 WorkRequest，再由 WorkflowCompiler 产生 Proposal/Patch；Scheduler 仍不调用 LLM 决定普通状态转换。

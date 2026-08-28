@@ -21,6 +21,35 @@ class UnsafeCommandError(ValueError):
 
 _SHELL_TOKENS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "<<"})
 
+_SENSITIVE_ENV_MARKERS = (
+    "API_KEY",
+    "API_TOKEN",
+    "ACCESS_KEY",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE_KEY",
+    "AUTH_SOCK",
+    "AGENT_PID",
+    "_TOKEN",
+)
+
+
+def _sanitized_environment(base: dict[str, str]) -> dict[str, str]:
+    """Drop credential-like variables before launching a child process.
+
+    This is a best-effort guard, not a sandbox: it removes API keys, SSH agent
+    sockets, cloud credentials and git tokens so a verification command cannot
+    inherit them implicitly.
+    """
+    env = dict(base)
+    for name in list(env):
+        upper = name.upper()
+        if any(marker in upper for marker in _SENSITIVE_ENV_MARKERS):
+            env.pop(name, None)
+    return env
+
 
 def parse_command(command: str) -> list[str]:
     """Parse one command to argv and reject every shell composition feature."""
@@ -52,15 +81,29 @@ class CommandPermissionDecision:
     reason: str = ""
 
 
-class CommandPermissionPolicy:
-    """Decide whether Agent-chosen commands may run as verification.
+_DENY_EXECUTABLES = frozenset(
+    {
+        "rm", "rmdir", "mv", "curl", "wget", "scp", "ssh", "sftp", "rsync",
+        "bash", "sh", "zsh", "dash", "powershell", "cmd", "apt", "apt-get",
+        "pip", "pip3", "conda", "mamba", "micromamba",
+    }
+)
+_DENY_GIT_SUBCOMMANDS = frozenset(
+    {"clean", "reset", "checkout", "commit", "push", "merge", "rebase", "tag", "fetch"}
+)
+_VERIFY_PYTHON_MODULES = frozenset({"pytest", "unittest", "py_compile", "compileall"})
 
-    Enforcement is structural (shell-free argv parsing) plus an optional
-    executable deny-list. It is a workflow gate, not an OS sandbox.
+
+class VerificationCommandPolicy:
+    """Restrict Agent-chosen verification commands to known test runners.
+
+    This is a default-deny workflow gate: only recognised verification entry
+    points (``python -m pytest/unittest/py_compile``, ``pytest``, ``cargo
+    test/check``, ``go test``, ``npm/pnpm/yarn test``) are allowed, and clearly
+    destructive/package-management/shell/network commands are denied with an
+    explicit reason. It is not an OS sandbox — a test command may still execute
+    arbitrary project code, which remains a documented limitation.
     """
-
-    def __init__(self, deny_executables: frozenset[str] = frozenset()) -> None:
-        self._deny = {name.lower() for name in deny_executables}
 
     def check(self, commands: list[str]) -> CommandPermissionDecision:
         for command in commands:
@@ -68,11 +111,66 @@ class CommandPermissionPolicy:
                 argv = parse_command(command)
             except UnsafeCommandError as error:
                 return CommandPermissionDecision(allowed=False, reason=str(error))
-            if argv and Path(argv[0]).name.lower() in self._deny:
-                return CommandPermissionDecision(
-                    allowed=False, reason=f"executable {argv[0]!r} is denied"
-                )
+            decision = self._classify(argv)
+            if not decision.allowed:
+                return decision
         return CommandPermissionDecision(allowed=True)
+
+    @staticmethod
+    def _classify(argv: list[str]) -> CommandPermissionDecision:
+        executable = Path(argv[0]).name.lower()
+        args = [argument.lower() for argument in argv[1:]]
+        if executable in _DENY_EXECUTABLES:
+            return CommandPermissionDecision(
+                allowed=False,
+                reason=f"executable {argv[0]!r} is not allowed for verification",
+            )
+        if executable == "git":
+            sub = args[0] if args else ""
+            if sub in _DENY_GIT_SUBCOMMANDS:
+                return CommandPermissionDecision(
+                    allowed=False,
+                    reason=f"git subcommand {sub!r} is not allowed for verification",
+                )
+            return CommandPermissionDecision(
+                allowed=False, reason="git is not an allowed verification command"
+            )
+        if executable in {"python", "python3"}:
+            if (
+                len(args) >= 2
+                and args[0] == "-m"
+                and args[1] in _VERIFY_PYTHON_MODULES
+            ):
+                return CommandPermissionDecision(allowed=True)
+            return CommandPermissionDecision(
+                allowed=False,
+                reason="python verification must be 'python -m pytest|unittest|py_compile'",
+            )
+        if executable == "pytest":
+            return CommandPermissionDecision(allowed=True)
+        if executable == "cargo":
+            if args and args[0] in {"test", "check"}:
+                return CommandPermissionDecision(allowed=True)
+            return CommandPermissionDecision(
+                allowed=False, reason="cargo verification must be 'cargo test|check'"
+            )
+        if executable == "go":
+            if args and args[0] == "test":
+                return CommandPermissionDecision(allowed=True)
+            return CommandPermissionDecision(
+                allowed=False, reason="go verification must be 'go test'"
+            )
+        if executable in {"npm", "pnpm", "yarn"}:
+            if args and args[0] == "test":
+                return CommandPermissionDecision(allowed=True)
+            return CommandPermissionDecision(
+                allowed=False,
+                reason=f"{executable} verification must be '{executable} test'",
+            )
+        return CommandPermissionDecision(
+            allowed=False,
+            reason=f"executable {argv[0]!r} is not an allowed verification command",
+        )
 
 
 def _descendant_pids(root: int) -> list[int]:
@@ -150,7 +248,7 @@ class ProcessRunner:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         started = monotonic()
         timed_out = False
-        environment = os.environ.copy()
+        environment = _sanitized_environment(os.environ.copy())
         environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         if extra_env:
             environment.update(extra_env)

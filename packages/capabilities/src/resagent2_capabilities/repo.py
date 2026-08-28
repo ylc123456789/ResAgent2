@@ -41,8 +41,20 @@ def _git_commit(repo_path: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _is_git_repo(path: Path) -> bool:
-    return path.is_dir() and bool(_git_commit(path))
+def _is_git_worktree(path: Path) -> bool:
+    """Return whether ``path`` is inside a Git worktree (independent of HEAD)."""
+    if not path.is_dir():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def _has_content(path: Path) -> bool:
@@ -112,28 +124,26 @@ class RepoMaterializer:
         source: WorkspaceSpec,
         metadata_path: Path | None = None,
     ) -> MaterializedRepo:
-        """Return the workspace repository for the declared source."""
+        """Return the workspace repository for the declared source.
+
+        ``WorkspaceSpec`` already guarantees ``location`` for GIT/LOCAL/COPY and
+        forbids it for GENERATED, so no redundant check is done here.
+        """
         workspace = Path(workspace).expanduser().resolve()
-        if source.source_kind == WorkspaceSourceKind.GIT:
-            if source.location is None:
-                raise RepoMaterializerError("GIT source requires a location (URL)")
-            meta = metadata_path or _default_metadata_path(workspace)
-            return self._clone(workspace, source.location, meta)
-        if source.source_kind == WorkspaceSourceKind.COPY:
-            if source.location is None:
-                raise RepoMaterializerError("COPY source requires a location (path)")
-            meta = metadata_path or _default_metadata_path(workspace)
-            return self._copy(workspace, source.location, meta)
-        if source.source_kind == WorkspaceSourceKind.GENERATED:
-            meta = metadata_path or _default_metadata_path(workspace)
-            return self._generate(workspace, meta)
-        if source.source_kind == WorkspaceSourceKind.LOCAL:
-            if source.location is None:
-                raise RepoMaterializerError("LOCAL source requires a location (path)")
+        kind = source.source_kind
+        if kind == WorkspaceSourceKind.GIT:
+            return self._clone(
+                workspace, source.location, metadata_path or _default_metadata_path(workspace)
+            )
+        if kind == WorkspaceSourceKind.COPY:
+            return self._copy(
+                workspace, source.location, metadata_path or _default_metadata_path(workspace)
+            )
+        if kind == WorkspaceSourceKind.GENERATED:
+            return self._generate(workspace, metadata_path or _default_metadata_path(workspace))
+        if kind == WorkspaceSourceKind.LOCAL:
             return self._bind(source.location)
-        raise RepoMaterializerError(
-            f"unsupported workspace source kind: {source.source_kind!r}"
-        )
+        raise RepoMaterializerError(f"unsupported workspace source kind: {kind!r}")
 
     def _verify_source(
         self,
@@ -164,7 +174,7 @@ class RepoMaterializer:
     def _clone(
         self, workspace: Path, repo_url: str, metadata_path: Path
     ) -> MaterializedRepo:
-        if _is_git_repo(workspace):
+        if _is_git_worktree(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.GIT.value, repo_url
             )
@@ -192,9 +202,9 @@ class RepoMaterializer:
         self, workspace: Path, source: str, metadata_path: Path
     ) -> MaterializedRepo:
         src = Path(source).expanduser()
-        if not _is_git_repo(src):
+        if not _is_git_worktree(src):
             raise RepoMaterializerError(f"copy source is not a usable git worktree: {src}")
-        if _is_git_repo(workspace):
+        if _is_git_worktree(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.COPY.value, source
             )
@@ -213,14 +223,14 @@ class RepoMaterializer:
 
     def _bind(self, source: str) -> MaterializedRepo:
         repo = Path(source).expanduser().resolve()
-        if not _is_git_repo(repo):
+        if not _is_git_worktree(repo):
             raise RepoMaterializerError(
                 f"LOCAL source is not a usable git repository: {repo}"
             )
         return MaterializedRepo(repo, _git_commit(repo), "local")
 
     def _generate(self, workspace: Path, metadata_path: Path) -> MaterializedRepo:
-        if _is_git_repo(workspace):
+        if _is_git_worktree(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.GENERATED.value, ""
             )

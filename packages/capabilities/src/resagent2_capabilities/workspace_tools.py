@@ -16,8 +16,8 @@ from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 from .artifacts import RegisteredArtifactReader
-from .git import GitWorkspace
-from .process import CommandPermissionPolicy, ProcessRunner
+from .git import GitBaseline, GitWorkspace
+from .process import ProcessRunner, VerificationCommandPolicy
 from .workspace import WorkspaceBoundary
 
 
@@ -307,13 +307,15 @@ class RunVerificationTool:
         *,
         log_root: str,
         timeout_seconds: int,
-        permission_policy: CommandPermissionPolicy | None = None,
+        permission_policy: VerificationCommandPolicy | None = None,
+        baseline: GitBaseline | None = None,
     ) -> None:
         self.runner = runner
         self.repository = repository
         self.log_root = log_root
         self.timeout_seconds = timeout_seconds
-        self.permission_policy = permission_policy or CommandPermissionPolicy()
+        self.permission_policy = permission_policy or VerificationCommandPolicy()
+        self.baseline = baseline
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunVerificationInput, arguments)
@@ -321,9 +323,16 @@ class RunVerificationTool:
         if not decision.allowed:
             raise ValueError(f"verification commands rejected: {decision.reason}")
         revision = int(state.memory.get("edit_revision", 0))
-        before_digest = hashlib.sha256(
-            self.repository.diff().encode("utf-8")
-        ).hexdigest()
+
+        def _digest() -> str:
+            diff = (
+                self.repository.diff_since(self.baseline)
+                if self.baseline is not None
+                else self.repository.diff()
+            )
+            return hashlib.sha256(diff.encode("utf-8")).hexdigest()
+
+        before_digest = _digest()
         deadline = monotonic() + self.timeout_seconds
         results = []
         for index, command in enumerate(args.commands, start=1):
@@ -338,9 +347,7 @@ class RunVerificationTool:
                     timeout_seconds=remaining,
                 )
             )
-        after_digest = hashlib.sha256(
-            self.repository.diff().encode("utf-8")
-        ).hexdigest()
+        after_digest = _digest()
         workspace_unchanged = before_digest == after_digest
         payload = [result.model_dump(mode="json") for result in results]
         passed = workspace_unchanged and all(

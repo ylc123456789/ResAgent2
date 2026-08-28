@@ -429,6 +429,7 @@ class ArtifactCandidate:
     media_type: NonEmptyStr
     summary: NonEmptyStr
     metadata: dict[str, JsonValue] = {}
+    content: str | None = None
 
 class ArtifactRef:
     id: ArtifactId
@@ -444,7 +445,7 @@ class ArtifactRef:
     metadata: dict[str, JsonValue] = {}
 ```
 
-Candidate 的 path 必须是 workspace root 下无 `..` 的相对路径。Candidate 故意没有 id、URI、hash 或 provenance；这些只能由 ResAgent 登记时产生。
+Candidate 的 path 必须是 workspace root 下无 `..` 的相对路径。Candidate 故意没有 id、URI、hash 或 provenance；这些只能由 ResAgent 登记时产生。`content` 只用于传递派生的小型文本 Artifact（如 patch，其字节已随 Candidate 携带、源文件位于 Run 数据目录而非源码仓库）；普通大文件仍走 workspace path + ArtifactRegistry 冻结。
 
 capabilities 中的 Tool 负责访问时的路径/权限检查；ResAgent 在登记时独立复核存在、containment、symlink、hash 和 Attempt 绑定。ArtifactRef 是冻结证据，不能被后续 Attempt 覆盖。
 
@@ -1027,10 +1028,10 @@ class CodeModifyInput(ContractModel):
     suggested_paths: list[str] = []   # 仅提示，不是权限
 ```
 
-删除 `allowed_paths`（与 `WorkspaceGrant.allowed_paths` 重复）和 `verification_commands`（与 Compiler 职责重叠）。最终权限以 `WorkspaceGrant` 为准。Coding Agent 根据项目实际自行选择 shell-free 验证命令，经 `ProcessRunner` 的结构化解析执行。
+删除 `allowed_paths`（与 `WorkspaceGrant.allowed_paths` 重复）和 `verification_commands`（与 Compiler 职责重叠）。最终权限以 `WorkspaceGrant` 为准。Coding Agent 根据项目实际自行选择 shell-free 验证命令，经 `VerificationCommandPolicy`（默认只允许 pytest/py_compile 等测试运行器，拒绝破坏/包管理/网络/Shell 命令）与 `ProcessRunner` 的结构化解析执行。
 
 ### 21.4 Run 数据与共享缓存目录
 
-`RunLayout` 只负责根据 `data_root` + `run_id` 返回标准目录（`runs/{run_id}/state`、`runs/{run_id}/workspaces/{ws}/`、`runs/{run_id}/attempts/{task}/attempt_{n}/`、`scientific/sessions/`、`artifacts/`）；`ResourceLayout` 负责共享缓存目录（`resource_root`、`dataset_root`、`env_root`，`models/` 预留）。它们不承载调度逻辑，RunLayout 不管数据集，ResourceLayout 不管 Run 状态。
+`RunLayout` 只负责根据 `data_root` + `run_id` 返回标准目录（`runs/{run_id}/state`、`runs/{run_id}/workspaces/{ws}/`、`runs/{run_id}/attempts/{task}/attempt_{n}/`、`scientific/sessions/`、`artifacts/`），归 orchestrator；`ResourceLayout` 负责共享缓存目录（`resource_root`、`dataset_root`、`env_root`，`models/` 预留），归 capabilities。contracts 只保留跨模块数据模型，不读取环境变量、不决定物理目录。它们不承载调度逻辑，RunLayout 不管数据集，ResourceLayout 不管 Run 状态。
 
 `RepoMaterializer` 的来源元数据不再写进目标源码仓库（删除 `.resagent2/materialized_source.json`），改写到 `runs/{run_id}/workspaces/{workspace_id}/workspace.json`。

@@ -40,9 +40,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
                 },
                 {
                     "tool": "run_verification",
-                    "arguments": {
-                        "commands": ['python -c "import util; assert util.VALUE == 2"']
-                    },
+                    "arguments": {"commands": ["python -m py_compile util.py"]},
                 },
                 {
                     "tool": "finish",
@@ -60,6 +58,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
         },
         store=InMemoryRunStore(),
         artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
         workspaces={
             "ws_main": WorkspaceSpec(
                 workspace_id="ws_main",

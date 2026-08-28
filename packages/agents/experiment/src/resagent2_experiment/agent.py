@@ -14,7 +14,6 @@ from resagent2_contracts import (
     ModuleResult,
     ModuleStatus,
     ModuleTaskRequest,
-    ResourceLayout,
     WorkspaceMode,
     WorkspaceSourceKind,
     WorkspaceSpec,
@@ -31,6 +30,7 @@ from resagent2_capabilities import (
     RegisteredArtifactReader,
     RepoMaterializer,
     RepoMaterializerError,
+    ResourceLayout,
     SearchTextTool,
     WorkspaceBoundary,
     WorkspacePermissionError,
@@ -95,6 +95,8 @@ class NativeExperimentAgent:
             return self._failure("NativeExperimentAgent received a non-Experiment capability")
         if request.workspace is None or request.workspace.mode != WorkspaceMode.READ_WRITE:
             return self._failure("experiment_run requires a read_write workspace", blocked=True)
+        if request.output_dir is None:
+            return self._failure("ExperimentAgent requires an output_dir", blocked=True)
 
         inputs = request.inputs  # ExperimentRunInput
         spec = request.workspace_spec
@@ -128,7 +130,7 @@ class NativeExperimentAgent:
         env_spec_dict = env_spec(materialized.repo_path, inputs.python_version)
         identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", env_spec_dict)
         try:
-            env_prefix = EnvironmentManager(root=resource_layout.resource_root).ensure(
+            env_prefix = EnvironmentManager(env_root=resource_layout.env_root).ensure(
                 identifier=identifier,
                 repo_path=materialized.repo_path,
                 python_version=inputs.python_version,
@@ -145,13 +147,9 @@ class NativeExperimentAgent:
         dataset_env = DatasetCache(root=resource_layout.dataset_root).env_overrides()
 
         output_dir = request.output_dir
-        command_log_dir = (
-            f"{output_dir}/commands" if output_dir else ".resagent2/experiment/commands"
-        )
-        audit_log_dir = (
-            f"{output_dir}/audit" if output_dir else ".resagent2/experiment/audit"
-        )
-        probe_dir = output_dir or ".resagent2/experiment"
+        command_log_dir = f"{output_dir}/commands"
+        audit_log_dir = f"{output_dir}/audit"
+        probe_dir = output_dir
 
         runner = ProcessRunner(boundary)
         tools = (

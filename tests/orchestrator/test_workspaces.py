@@ -131,13 +131,18 @@ def test_two_workspaces_resolve_to_distinct_roots(tmp_path) -> None:
     assert run.workspaces["ws_b"].managed is False
 
 
-def test_managed_workspace_requires_data_root() -> None:
+def test_managed_workspace_defaults_to_data_root_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RESAGENT2_DATA_ROOT", str(tmp_path / "data"))
     engine = _scheduler(
         {"ws_a": WorkspaceSpec(workspace_id="ws_a", source_kind=WorkspaceSourceKind.GENERATED)}
     )
 
-    with pytest.raises(OrchestrationError, match="data_root"):
-        engine.create_run("run_x", _request(), _proposal(workspace_id="ws_a"))
+    run = engine.create_run("run_x", _request(), _proposal(workspace_id="ws_a"))
+
+    assert run.workspaces["ws_a"].managed is True
+    assert run.workspaces["ws_a"].root == str(
+        tmp_path / "data" / "runs" / "run_x" / "workspaces" / "ws_a" / "repo"
+    )
 
 
 def test_managed_workspace_root_is_under_data_root(tmp_path) -> None:

@@ -51,6 +51,7 @@ def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
             allowed_paths=["."],
             source=WorkspaceSourceKind.LOCAL,
         ),
+        output_dir=str(Path(root).parent / "out"),
     )
 
 
@@ -89,7 +90,7 @@ def test_read_only_profile_answers_with_observed_evidence_without_writes(tmp_pat
 
 def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path) -> None:
     init_repo(tmp_path)
-    verify = 'python -c "import util; assert util.add(2, 3) == 5"'
+    verify = "python -m py_compile util.py"
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
@@ -140,7 +141,7 @@ def test_new_file_becomes_a_code_artifact(tmp_path) -> None:
                 },
                 {
                     "tool": "run_verification",
-                    "arguments": {"commands": ['python -c "import new_helper"']},
+                    "arguments": {"commands": ["python -m py_compile new_helper.py"]},
                 },
                 {
                     "tool": "finish",
@@ -167,14 +168,12 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
                     "arguments": {
                         "path": "util.py",
                         "old_text": "return a + b",
-                        "new_text": "return a - b",
+                        "new_text": "return a +",
                     },
                 },
                 {
                     "tool": "run_verification",
-                    "arguments": {
-                        "commands": ['python -c "import util; assert util.add(2, 3) == 5"']
-                    },
+                    "arguments": {"commands": ["python -m py_compile util.py"]},
                 },
                 {
                     "tool": "finish",
@@ -192,12 +191,67 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
     assert result.artifacts[0].metadata["diagnostic"] is True
 
 
-def test_verification_command_cannot_silently_change_code(tmp_path) -> None:
-    init_repo(tmp_path)
-    mutating_command = (
-        'python -c "from pathlib import Path; '
-        "Path('new_helper.py').write_text('VALUE = 2\\n')\""
+def test_two_coding_tasks_share_workspace_and_isolate_artifacts(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+
+    # Task A modifies util.py and completes, leaving the workspace dirty.
+    agent_a = NativeCodingAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "replace_text",
+                    "arguments": {
+                        "path": "util.py",
+                        "old_text": "return a + b",
+                        "new_text": "return a + b + 0",
+                    },
+                },
+                {
+                    "tool": "run_verification",
+                    "arguments": {"commands": ["python -m py_compile util.py"]},
+                },
+                {"tool": "finish", "arguments": {"result": {"summary": "A"}}},
+            ]
+        )
     )
+    res_a = agent_a.invoke(
+        request(repo, capability=Capability.CODE_MODIFY).model_copy(
+            update={"output_dir": str(tmp_path / "out_a")}
+        )
+    )
+    assert res_a.status == ModuleStatus.COMPLETED, res_a.model_dump(mode="json")
+    assert res_a.payload["changed_files"] == ["util.py"]
+
+    # Task B runs on the same workspace: it must not be blocked by Task A's
+    # uncommitted changes, and must only claim its own new file.
+    agent_b = NativeCodingAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "create_file",
+                    "arguments": {"path": "helper.py", "content": "VALUE = 1\n"},
+                },
+                {
+                    "tool": "run_verification",
+                    "arguments": {"commands": ["python -m py_compile helper.py"]},
+                },
+                {"tool": "finish", "arguments": {"result": {"summary": "B"}}},
+            ]
+        )
+    )
+    res_b = agent_b.invoke(
+        request(repo, capability=Capability.CODE_MODIFY).model_copy(
+            update={"output_dir": str(tmp_path / "out_b")}
+        )
+    )
+    assert res_b.status == ModuleStatus.COMPLETED, res_b.model_dump(mode="json")
+    assert res_b.payload["changed_files"] == ["helper.py"]
+
+
+def test_disallowed_verification_command_cannot_complete(tmp_path) -> None:
+    init_repo(tmp_path)
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
@@ -205,7 +259,10 @@ def test_verification_command_cannot_silently_change_code(tmp_path) -> None:
                     "tool": "create_file",
                     "arguments": {"path": "new_helper.py", "content": "VALUE = 1\n"},
                 },
-                {"tool": "run_verification", "arguments": {"commands": [mutating_command]}},
+                {
+                    "tool": "run_verification",
+                    "arguments": {"commands": ['python -c "print(1)"']},
+                },
                 {
                     "tool": "finish",
                     "arguments": {"result": {"summary": "Done"}},
@@ -261,7 +318,7 @@ def test_audit_output_goes_to_output_dir_not_repo(tmp_path) -> None:
                 },
                 {
                     "tool": "run_verification",
-                    "arguments": {"commands": ['python -c "import util"']},
+                    "arguments": {"commands": ["python -m py_compile util.py"]},
                 },
                 {
                     "tool": "finish",

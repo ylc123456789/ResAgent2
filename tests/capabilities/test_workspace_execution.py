@@ -22,6 +22,7 @@ from resagent2_capabilities import (
     RegisteredArtifactReader,
     ReplaceTextTool,
     UnsafeCommandError,
+    VerificationCommandPolicy,
     WorkspaceBoundary,
     WorkspacePermissionError,
     parse_command,
@@ -86,6 +87,38 @@ def test_command_parser_rejects_shell_composition(command: str) -> None:
         parse_command(command)
 
 
+def test_verification_policy_denies_destructive_and_non_verification_commands() -> None:
+    policy = VerificationCommandPolicy()
+    denied = [
+        "rm -rf .",
+        "git clean -fd",
+        "python -m pip install xxx",
+        "curl https://example.com",
+        "bash script.sh",
+        "git commit -m x",
+    ]
+    for command in denied:
+        assert policy.check([command]).allowed is False, command
+
+
+def test_verification_policy_allows_recognised_test_runners() -> None:
+    policy = VerificationCommandPolicy()
+    allowed = [
+        "python -m py_compile train.py",
+        "python -m pytest tests/",
+        "python -m unittest",
+        "pytest -q",
+        "cargo test",
+        "cargo check",
+        "go test ./...",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+    ]
+    for command in allowed:
+        assert policy.check([command]).allowed is True, command
+
+
 def test_process_runner_uses_argv_and_writes_logs(tmp_path) -> None:
     boundary = WorkspaceBoundary(grant(tmp_path))
     result = ProcessRunner(boundary).run(
@@ -120,6 +153,28 @@ def test_git_workspace_requires_clean_baseline_and_includes_new_files(tmp_path) 
 
     assert repository.changed_paths() == ["new.py"]
     assert "new.py" in repository.diff()
+
+
+def test_git_baseline_isolates_attempt_increment(tmp_path) -> None:
+    init_repo(tmp_path)
+    repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
+
+    # Task A leaves tracked + untracked changes in the shared workspace.
+    (tmp_path / "tracked.txt").write_text("changed-a\n", encoding="utf-8")
+    (tmp_path / "a.py").write_text("a = 1\n", encoding="utf-8")
+    baseline = repository.snapshot()
+
+    # Task B's increment is only tracked.txt (again) and the new b.py.
+    (tmp_path / "tracked.txt").write_text("changed-b\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("b = 1\n", encoding="utf-8")
+
+    changed = repository.changed_paths_since(baseline)
+    assert changed == ["b.py", "tracked.txt"]
+    assert "a.py" not in changed
+
+    diff = repository.diff_since(baseline)
+    assert "changed-b" in diff
+    assert "a.py" not in diff
 
 
 def test_require_clean_rejects_dirty_workspace(tmp_path) -> None:

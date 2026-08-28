@@ -15,9 +15,8 @@ from .environment import (
     env_spec,
     find_conda,
     project_slug,
-    resource_root,
 )
-from .git import GitWorkspace, GitWorkspaceError
+from .git import GitBaseline, GitWorkspace, GitWorkspaceError
 from .hardware import HardwareAudit
 from .literature import (
     ArtifactRegistrationPort,
@@ -30,12 +29,13 @@ from .literature import (
 )
 from .process import (
     CommandPermissionDecision,
-    CommandPermissionPolicy,
     ProcessRunner,
     UnsafeCommandError,
+    VerificationCommandPolicy,
     parse_command,
 )
 from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
+from .resources import ResourceLayout
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 from .workspace_tools import (
     CreateFileInput,
@@ -62,12 +62,12 @@ __all__ = [
     "ArtifactRegistrationPort",
     "ArxivLiteratureBackend",
     "CommandPermissionDecision",
-    "CommandPermissionPolicy",
     "CreateFileInput",
     "CreateFileTool",
     "DatasetCache",
     "EnvironmentManager",
     "EnvironmentManagerError",
+    "GitBaseline",
     "GitDiffInput",
     "GitDiffTool",
     "GitWorkspace",
@@ -91,6 +91,7 @@ __all__ = [
     "ReplaceTextTool",
     "RepoMaterializer",
     "RepoMaterializerError",
+    "ResourceLayout",
     "RunVerificationInput",
     "RunVerificationTool",
     "SearchTextInput",
@@ -105,5 +106,4 @@ __all__ = [
     "mirror_env_overrides",
     "parse_command",
     "project_slug",
-    "resource_root",
 ]

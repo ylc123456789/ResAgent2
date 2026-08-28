@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from .workspace import WorkspaceBoundary
@@ -11,6 +13,21 @@ from .workspace import WorkspaceBoundary
 
 class GitWorkspaceError(ValueError):
     """Raised when a workspace cannot provide an unambiguous Git baseline."""
+
+
+@dataclass(frozen=True, slots=True)
+class GitBaseline:
+    """A content snapshot of the working directory at the start of one Attempt.
+
+    ``tree_hash`` is a tree object capturing the full working-directory state
+    (tracked and untracked, minus ignored/reserved files); ``untracked`` is the
+    set of untracked paths at that moment. Comparing later work against this
+    baseline yields only the increment produced by the current Attempt, without
+    committing, touching the real index, or rolling anything back.
+    """
+
+    tree_hash: str
+    untracked: frozenset[str]
 
 
 class GitWorkspace:
@@ -27,6 +44,7 @@ class GitWorkspace:
         arguments: list[str],
         *,
         accepted: tuple[int, ...] = (0,),
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(
             ["git", *arguments],
@@ -34,6 +52,7 @@ class GitWorkspace:
             text=True,
             capture_output=True,
             check=False,
+            env=env,
         )
         if result.returncode not in accepted:
             raise GitWorkspaceError(result.stderr.strip() or "git command failed")
@@ -50,14 +69,51 @@ class GitWorkspace:
         }
         return not ignored_parts.intersection(Path(path).parts)
 
-    def _all_changed_paths(self) -> list[str]:
-        tracked = self._run(["diff", "--name-only", "-z", "HEAD"]).stdout.split("\0")
-        untracked = self._run(
+    def _untracked_paths(self) -> list[str]:
+        return self._run(
             ["ls-files", "--others", "--exclude-standard", "-z"]
         ).stdout.split("\0")
+
+    def _all_changed_paths(self) -> list[str]:
+        tracked = self._run(["diff", "--name-only", "-z", "HEAD"]).stdout.split("\0")
         return sorted(
-            path for path in set([*tracked, *untracked]) if path and self._visible(path)
+            path
+            for path in set([*tracked, *self._untracked_paths()])
+            if path and self._visible(path)
         )
+
+    def _write_tree(self) -> str:
+        """Return a tree hash of the tracked working-directory state.
+
+        Uses a temporary index (``GIT_INDEX_FILE``) seeded from HEAD, then
+        updates only tracked files (``git add -u``); untracked files are kept
+        out of the tree and captured separately as ``baseline.untracked``. The
+        real index, branch and working tree are untouched.
+        """
+        fd, tmp_index = tempfile.mkstemp(prefix="resagent2-index-")
+        os.close(fd)
+        try:
+            index_env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
+            head = self._run(
+                ["rev-parse", "--verify", "HEAD"], accepted=(0, 1), env=index_env
+            )
+            self._run(
+                ["read-tree", "HEAD" if head.returncode == 0 else "--empty"],
+                env=index_env,
+            )
+            self._run(["add", "-u"], env=index_env)
+            return self._run(["write-tree"], env=index_env).stdout.strip()
+        finally:
+            os.unlink(tmp_index)
+
+    def snapshot(self) -> GitBaseline:
+        """Capture the current working-directory content as an Attempt baseline."""
+        return GitBaseline(
+            tree_hash=self._write_tree(),
+            untracked=frozenset(path for path in self._untracked_paths() if path),
+        )
+
+    # ── HEAD-relative observations (legacy; retain for direct callers/tests) ──
 
     def changed_paths(self) -> list[str]:
         return [
@@ -68,8 +124,7 @@ class GitWorkspace:
         changed = self._all_changed_paths()
         if changed:
             raise GitWorkspaceError(
-                "native Coding Agent requires a clean Git workspace; changed paths: "
-                + ", ".join(changed[:10])
+                "workspace is not clean; changed paths: " + ", ".join(changed[:10])
             )
 
     def deleted_paths(self) -> list[str]:
@@ -80,16 +135,12 @@ class GitWorkspace:
     def diff(self) -> str:
         changed = self.changed_paths()
         tracked_paths = set(
-            path
-            for path in self._run(["ls-files", "-z"]).stdout.split("\0")
-            if path
+            path for path in self._run(["ls-files", "-z"]).stdout.split("\0") if path
         )
         tracked = [path for path in changed if path in tracked_paths]
         chunks: list[str] = []
         if tracked:
-            chunks.append(
-                self._run(["diff", "--binary", "HEAD", "--", *tracked]).stdout
-            )
+            chunks.append(self._run(["diff", "--binary", "HEAD", "--", *tracked]).stdout)
         for relative in changed:
             if relative in tracked_paths or not (self.boundary.root / relative).is_file():
                 continue
@@ -100,16 +151,68 @@ class GitWorkspace:
             chunks.append(result.stdout)
         return "".join(chunks)
 
-    def write_patch(self, path: Path) -> str:
-        """Write the current diff to an absolute ``path`` and return it.
+    # ── Attempt-baseline-relative observations ────────────────────────────────
 
-        The patch is an audit artifact that may live in the Run data directory
-        (outside the source repository); it is no longer forced through the
-        workspace boundary.
-        """
+    def changed_paths_since(self, baseline: GitBaseline) -> list[str]:
+        """Return paths whose content differs from ``baseline`` (this Attempt)."""
+        tracked = self._run(
+            ["diff", "--name-only", "-z", baseline.tree_hash]
+        ).stdout.split("\0")
+        new_untracked = set(self._untracked_paths()) - set(baseline.untracked)
+        return sorted(
+            path
+            for path in set([*tracked, *new_untracked])
+            if path and self._visible(path) and self.boundary.allows_read(path)
+        )
+
+    def deleted_paths_since(self, baseline: GitBaseline) -> list[str]:
+        return [
+            path
+            for path in self.changed_paths_since(baseline)
+            if not (self.boundary.root / path).exists()
+        ]
+
+    def diff_since(self, baseline: GitBaseline) -> str:
+        """Return the patch produced since ``baseline`` (this Attempt only)."""
+        changed = self.changed_paths_since(baseline)
+        tracked_in_baseline = set(
+            self._run(
+                ["ls-tree", "-r", "--name-only", "-z", baseline.tree_hash]
+            ).stdout.split("\0")
+        )
+        tracked = [path for path in changed if path in tracked_in_baseline]
+        chunks: list[str] = []
+        if tracked:
+            chunks.append(
+                self._run(["diff", "--binary", baseline.tree_hash, "--", *tracked]).stdout
+            )
+        for relative in changed:
+            if relative in tracked_in_baseline:
+                continue
+            if not (self.boundary.root / relative).is_file():
+                continue
+            result = self._run(
+                ["diff", "--no-index", "--binary", "--", os.devnull, relative],
+                accepted=(0, 1),
+            )
+            chunks.append(result.stdout)
+        return "".join(chunks)
+
+    def write_patch(self, path: Path) -> str:
+        """Write the current HEAD-relative diff to an absolute ``path``."""
         patch = self.diff()
         if not patch:
             raise GitWorkspaceError("workspace has no code diff")
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(patch, encoding="utf-8")
+        return str(destination)
+
+    def write_patch_since(self, baseline: GitBaseline, path: Path) -> str:
+        """Write the Attempt-increment diff to an absolute ``path``."""
+        patch = self.diff_since(baseline)
+        if not patch:
+            raise GitWorkspaceError("workspace has no code diff since the Attempt baseline")
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(patch, encoding="utf-8")

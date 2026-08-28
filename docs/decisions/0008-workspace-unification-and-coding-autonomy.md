@@ -85,7 +85,9 @@ WorkspaceRecord → RepoMaterializer.materialize(...) → 获得或复用 repo_p
 - `data_root`（Run 专属）：`runs/{run_id}/state`、`runs/{run_id}/workspaces/{ws}/`、`runs/{run_id}/attempts/{task}/attempt_{n}/`、`scientific/sessions/`、`artifacts/`；
 - `resource_root`（跨 Run 复用）：`datasets/`、`envs/`、`models/`（预留）。
 
-实现 `RunLayout`（根据 `data_root` + `run_id` 返回标准目录，不承载调度逻辑）和 `ResourceLayout`（根据 resource_root 补全 dataset/env 目录）。`RESAGENT2_DATA_ROOT`/`RESAGENT2_RESOURCE_ROOT`/`RESAGENT2_DATASET_ROOT`/`RESAGENT2_ENV_ROOT` 按「显式参数 > 环境变量 > 派生默认」的优先级覆盖。`ExperimentRunInput` 删除 `repository_url`/`copy_from`/`external_repo_path`，数据集/环境目录来自 `ResourceLayout`，实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
+实现 `RunLayout`（归 orchestrator，根据 `data_root` + `run_id` 返回标准目录，不承载调度逻辑）和 `ResourceLayout`（归 capabilities，根据 resource_root 补全 dataset/env 目录）；contracts 只保留跨模块数据模型，不读取环境变量、不决定物理目录。`RESAGENT2_DATA_ROOT`/`RESAGENT2_RESOURCE_ROOT`/`RESAGENT2_DATASET_ROOT`/`RESAGENT2_ENV_ROOT` 按「显式参数 > 环境变量 > 派生默认」的优先级覆盖。`ExperimentRunInput` 删除 `repository_url`/`copy_from`/`external_repo_path`，数据集/环境目录来自 `ResourceLayout`，实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
+
+落地时的三个硬化：`workspace_id` 用严格 `WorkspaceId`（`^ws_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`）防目录逃逸；Coding 改动相对 `GitBaseline`（临时 index 的 `git write-tree`，不 commit/不改真实 index）计算，使多个 Coding Task 共享工作区且只登记本 Attempt 增量；验证命令经 `VerificationCommandPolicy` 默认拒绝破坏/包管理/网络/Shell 命令，并清理子进程的敏感环境变量。
 
 ### 6. Attempt 隔离与重试
 

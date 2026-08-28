@@ -2,7 +2,7 @@
 
 实验员/操作员。
 
-输入：实验目标、WorkspaceGrant、repo source、环境/资源要求、expected metrics/artifacts。
+输入：实验目标、WorkspaceGrant（统一工作区上下文）、环境/资源要求、expected metrics/artifacts。
 输出：ExperimentResult、命令证据、参数、指标、环境和 repo identity。
 
 复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Artifact 与 provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit`）。实验策略和 experiment evidence finalizer 属于本模块。

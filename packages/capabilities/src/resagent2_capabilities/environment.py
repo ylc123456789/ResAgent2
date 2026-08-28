@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .resources import ResourceLayout
+
 
 class EnvironmentManagerError(ValueError):
     """Raised when an environment cannot be created or bound."""
@@ -70,13 +72,6 @@ def env_id(project: str, repo_identity: str, spec: dict) -> str:
     return f"resenv_{project_slug(project)}_{sha256_hex(identity)[:12]}"
 
 
-def resource_root() -> Path:
-    """Return the shared resource root (env var override, else a default)."""
-    return Path(
-        os.environ.get("RESAGENT2_RESOURCE_ROOT", ".resagent2/resources")
-    ).expanduser().resolve()
-
-
 def find_conda() -> str | None:
     """Find conda from config, PATH, or common install locations."""
     configured = os.environ.get("RESAGENT2_CONDA_EXE")
@@ -111,17 +106,18 @@ class EnvironmentManager:
     def __init__(
         self,
         *,
-        root: str | Path | None = None,
+        env_root: str | Path | None = None,
         conda_exe: str | None = None,
     ) -> None:
-        self.root = (Path(root).expanduser() if root else resource_root()).resolve()
+        self.env_root = (
+            Path(env_root).expanduser()
+            if env_root
+            else ResourceLayout.from_env().env_root
+        ).resolve()
         self.conda_exe = conda_exe or find_conda()
 
-    def envs_dir(self) -> Path:
-        return self.root / "envs"
-
     def prefix(self, identifier: str) -> Path:
-        return self.envs_dir() / identifier
+        return self.env_root / identifier
 
     def ensure(
         self,

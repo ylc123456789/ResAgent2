@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from resagent2_capabilities import (
     DatasetCache,
@@ -11,11 +12,11 @@ from resagent2_capabilities import (
     HardwareAudit,
     RepoMaterializer,
     RepoMaterializerError,
+    ResourceLayout,
     env_id,
     env_spec,
     find_conda,
     project_slug,
-    resource_root,
 )
 from resagent2_capabilities.process import _descendant_pids
 from resagent2_contracts import WorkspaceSourceKind, WorkspaceSpec
@@ -191,17 +192,27 @@ def test_materialize_generated_creates_empty_managed_workspace(tmp_path) -> None
     assert (materialized.repo_path / ".git").is_dir()
 
 
-def test_materialize_git_requires_location(tmp_path) -> None:
-    with pytest.raises(RepoMaterializerError, match="location"):
-        RepoMaterializer().materialize(
-            workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.GIT)
-        )
+def test_git_source_requires_location() -> None:
+    with pytest.raises(ValidationError, match="requires a location"):
+        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.GIT)
 
 
-def test_materialize_local_requires_location(tmp_path) -> None:
-    with pytest.raises(RepoMaterializerError, match="location"):
-        RepoMaterializer().materialize(
-            workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.LOCAL)
+def test_local_source_requires_location() -> None:
+    with pytest.raises(ValidationError, match="requires a location"):
+        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.LOCAL)
+
+
+def test_copy_source_requires_location() -> None:
+    with pytest.raises(ValidationError, match="requires a location"):
+        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.COPY)
+
+
+def test_generated_source_forbids_location() -> None:
+    with pytest.raises(ValidationError, match="must not have a location"):
+        WorkspaceSpec(
+            workspace_id="ws_main",
+            source_kind=WorkspaceSourceKind.GENERATED,
+            location="/tmp/x",
         )
 
 
@@ -241,9 +252,61 @@ def test_env_spec_hashes_dependency_files(tmp_path) -> None:
     assert all(len(digest) == 64 for digest in spec["files"].values())
 
 
-def test_resource_root_respects_env_var(tmp_path, monkeypatch) -> None:
+def test_resource_layout_respects_resource_root_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("RESAGENT2_RESOURCE_ROOT", str(tmp_path / "shared"))
-    assert resource_root() == (tmp_path / "shared")
+    layout = ResourceLayout.from_env(data_root=tmp_path / "data")
+    assert layout.resource_root == tmp_path / "shared"
+
+
+def test_resource_layout_defaults_derive_from_resource_root(tmp_path) -> None:
+    layout = ResourceLayout(resource_root=tmp_path / "resources")
+
+    assert layout.dataset_root == tmp_path / "resources" / "datasets"
+    assert layout.env_root == tmp_path / "resources" / "envs"
+
+
+def test_resource_layout_accepts_independent_roots(tmp_path) -> None:
+    layout = ResourceLayout(
+        resource_root=tmp_path / "resources",
+        dataset_root=tmp_path / "elsewhere" / "datasets",
+        env_root=tmp_path / "envs",
+    )
+
+    assert layout.dataset_root == tmp_path / "elsewhere" / "datasets"
+    assert layout.env_root == tmp_path / "envs"
+
+
+def test_resource_layout_env_vars_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RESAGENT2_DATASET_ROOT", str(tmp_path / "ds"))
+    monkeypatch.setenv("RESAGENT2_ENV_ROOT", str(tmp_path / "env"))
+
+    layout = ResourceLayout.from_env(data_root=tmp_path / "data")
+
+    assert layout.resource_root == tmp_path / "data" / "resources"
+    assert layout.dataset_root == tmp_path / "ds"
+    assert layout.env_root == tmp_path / "env"
+
+
+def test_resource_layout_reads_data_root_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("RESAGENT2_RESOURCE_ROOT", raising=False)
+    monkeypatch.setenv("RESAGENT2_DATA_ROOT", str(tmp_path / "data"))
+
+    layout = ResourceLayout.from_env()
+
+    assert layout.resource_root == tmp_path / "data" / "resources"
+    assert layout.env_root == tmp_path / "data" / "resources" / "envs"
+
+
+def test_resource_layout_defaults_to_data_root_resources(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("RESAGENT2_RESOURCE_ROOT", raising=False)
+    monkeypatch.delenv("RESAGENT2_DATASET_ROOT", raising=False)
+    monkeypatch.delenv("RESAGENT2_ENV_ROOT", raising=False)
+
+    layout = ResourceLayout.from_env(data_root=tmp_path / "data")
+
+    assert layout.resource_root == tmp_path / "data" / "resources"
+    assert layout.dataset_root == tmp_path / "data" / "resources" / "datasets"
+    assert layout.env_root == tmp_path / "data" / "resources" / "envs"
 
 
 def test_find_conda_prefers_configured_exe(tmp_path, monkeypatch) -> None:
@@ -274,13 +337,15 @@ def _fake_conda(tmp_path: Path) -> Path:
 
 
 def test_environment_manager_prefix_is_content_addressed(tmp_path) -> None:
-    manager = EnvironmentManager(root=tmp_path / "resources")
+    manager = EnvironmentManager(env_root=tmp_path / "resources" / "envs")
 
     assert manager.prefix("resenv_x") == tmp_path / "resources" / "envs" / "resenv_x"
 
 
 def test_environment_manager_reuses_existing_prefix(tmp_path) -> None:
-    manager = EnvironmentManager(root=tmp_path / "resources", conda_exe=str(_fake_conda(tmp_path)))
+    manager = EnvironmentManager(
+        env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
+    )
     prefix = manager.prefix("resenv_x")
     prefix.mkdir(parents=True)
 
@@ -292,7 +357,9 @@ def test_environment_manager_reuses_existing_prefix(tmp_path) -> None:
 
 
 def test_environment_manager_creates_prefix_via_conda(tmp_path) -> None:
-    manager = EnvironmentManager(root=tmp_path / "resources", conda_exe=str(_fake_conda(tmp_path)))
+    manager = EnvironmentManager(
+        env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
+    )
 
     result = manager.ensure(
         identifier="resenv_x", repo_path=tmp_path, python_version="3.12"

@@ -14,6 +14,7 @@ from resagent2_contracts import (
     VerificationResult,
 )
 from resagent2_capabilities import (
+    GitBaseline,
     GitWorkspace,
     WorkspaceBoundary,
     media_type_for,
@@ -67,7 +68,9 @@ class CodeUnderstandCompletionCheck:
 
 class CodeModifyCompletionCheck:
     """Finalize a code change, requiring a change, a fresh successful
-    verification, and an unchanged workspace after verification."""
+    verification, and an unchanged workspace after verification — all measured
+    against the Attempt baseline, so a previous task's accepted changes are not
+    claimed by this one."""
 
     def __init__(
         self,
@@ -75,10 +78,12 @@ class CodeModifyCompletionCheck:
         boundary: WorkspaceBoundary,
         *,
         output_root: str,
+        baseline: GitBaseline,
     ) -> None:
         self.repository = repository
         self.boundary = boundary
         self.output_root = output_root
+        self.baseline = baseline
 
     def evaluate(
         self,
@@ -95,13 +100,13 @@ class CodeModifyCompletionCheck:
                 summary=f"Finish result is invalid: {error.errors()[0]['msg']}",
             )
 
-        changed = self.repository.changed_paths()
+        changed = self.repository.changed_paths_since(self.baseline)
         if not changed:
             return CompletionDecision(
                 complete=False,
-                summary="No Git workspace change was produced",
+                summary="No workspace change was produced in this Attempt",
             )
-        deleted = self.repository.deleted_paths()
+        deleted = self.repository.deleted_paths_since(self.baseline)
         existing = [path for path in changed if path not in deleted]
         for path in changed:
             self.boundary.resolve_write_file(path)
@@ -122,7 +127,7 @@ class CodeModifyCompletionCheck:
                 summary="Run verification after the latest file edit",
             )
         current_digest = hashlib.sha256(
-            self.repository.diff().encode("utf-8")
+            self.repository.diff_since(self.baseline).encode("utf-8")
         ).hexdigest()
         if (
             not state.memory.get("verification_workspace_unchanged", False)
@@ -141,7 +146,7 @@ class CodeModifyCompletionCheck:
                 summary="Verification failed; inspect the latest command observation",
             )
 
-        patch_text = self.repository.diff()
+        patch_text = self.repository.diff_since(self.baseline)
         patch_path = Path(self.output_root) / "changes.patch"
         patch_path.parent.mkdir(parents=True, exist_ok=True)
         patch_path.write_text(patch_text, encoding="utf-8")

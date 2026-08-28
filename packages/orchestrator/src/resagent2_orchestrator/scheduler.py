@@ -18,7 +18,6 @@ from resagent2_contracts import (
     ModuleTaskRequest,
     PendingQuestion,
     ResearchRequest,
-    RunLayout,
     RunStatus,
     TaskBudget,
     TaskProposal,
@@ -39,6 +38,7 @@ from resagent2_contracts import (
 )
 
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
+from .layout import RunLayout
 from .models import ResearchRun
 from .ports import ModuleBinding
 from .store import InMemoryRunStore, RunStore
@@ -63,7 +63,7 @@ class WorkflowScheduler:
         self.bindings = dict(bindings)
         self.store = store or InMemoryRunStore()
         self.artifact_registry = ArtifactRegistry(artifact_root)
-        self.run_layout = RunLayout(data_root) if data_root else None
+        self.run_layout = RunLayout(data_root) if data_root else RunLayout.from_env()
         self.workspace_specs = dict(workspaces or {})
 
     def create_run(
@@ -172,10 +172,6 @@ class WorkflowScheduler:
                 root = str(Path(spec.location).expanduser().resolve())
                 managed = False
             else:
-                if self.run_layout is None:
-                    raise OrchestrationError(
-                        f"managed workspace {workspace_id!r} requires data_root"
-                    )
                 root = str(self.run_layout.workspace_repo_dir(run_id, workspace_id))
                 managed = True
             records[workspace_id] = WorkspaceRecord(
@@ -259,11 +255,7 @@ class WorkflowScheduler:
         )
         record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
         grant = self._grant(record, task.capability) if record is not None else None
-        output_dir = (
-            str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
-            if self.run_layout is not None
-            else None
-        )
+        output_dir = str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
         module_request = ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,

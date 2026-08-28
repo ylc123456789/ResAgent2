@@ -281,10 +281,10 @@ ResearchRequest
 ### 已裁定的执行语义
 
 - `code_understand` 是物理只读 profile：不提供写 Tool 或进程 Tool，完成时再次检查 Git 未变化；
-- `code_modify` 要求 WorkspaceGrant 为 read_write，且 workspace 是已有、干净的 Git 仓库；
-- 文件读取受 WorkspaceGrant 的 allowed/denied paths 限制，写入还要同时满足 `CodeModifyInput.allowed_paths`；
+- `code_modify` 要求 WorkspaceGrant 为 read_write；仓库经 `RepoMaterializer` 准备/复用，改动相对 Attempt 基线（`GitBaseline`）计算，不再要求全局 clean；
+- 文件读取受 WorkspaceGrant 的 allowed/denied paths 限制，写入受 WorkspaceGrant 限制（`CodeModifyInput.allowed_paths` 已于 7.7 删除）；
 - `.git` 与 `.resagent2` 是 runtime 保留目录，LLM 文件 Tool 不可访问；
-- verification command 由调用方在 `CodeModifyInput.verification_commands` 中声明，LLM 只能请求运行整组命令；
+- verification command 由 Coding Agent 根据项目实际自主选择，经 `VerificationCommandPolicy` 约束（7.7 起，取代调用方预声明 `CodeModifyInput.verification_commands`）；
 - command 使用 `shlex` 解析为 argv 并以 `shell=False` 执行；管道、重定向、命令替换和复合命令直接拒绝；
 - 每次文件变化递增 edit revision；verification 前后 Git diff 必须一致，且只有绑定最新 diff hash、全部通过的结果才能支持 completed；
 - changed/new/deleted files、patch 和验证结果由 deterministic finalizer 从 Git 与进程结果生成，不信任 finish 文本；
@@ -684,7 +684,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；7.7 已接 production |
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 已接 production |
-| 统一工作区与 Coding 自主 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、workspace_id、RunLayout/ResourceLayout | Phase 7.7 | ADR-0008 已裁定；契约/实现进行中 |
+| 统一工作区与 Coding 自主 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、WorkspaceId、workspace_id、GitBaseline、VerificationCommandPolicy | Phase 7.7 | 已实现（`9543ab7`, `5d1746d` 起） |
 
 ## 13. 文档同步检查
 

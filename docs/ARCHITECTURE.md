@@ -290,7 +290,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 `runtime` 只回答“Agent 怎样运行”：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。
 
-`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它们还提供 `RunLayout`/`ResourceLayout`（Run 数据目录与共享资源目录的路径约定）。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
+`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它提供 `ResourceLayout`（共享 dataset/env 缓存的路径约定）；`RunLayout`（Run 数据目录约定）归 orchestrator。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
 
 代码依赖为两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root 同时依赖 orchestrator 与具体 Agent，并通过 Port 注入。orchestrator 不 import 具体 Agent；runtime 不依赖 capabilities；capabilities 不依赖具体 Agent。
 

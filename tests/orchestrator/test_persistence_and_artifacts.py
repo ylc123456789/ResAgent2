@@ -18,7 +18,8 @@ from resagent2_contracts import (
     WorkflowProposal,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
     CodeUnderstandInput,
 )
 from resagent2_orchestrator import (
@@ -82,16 +83,17 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([result]),
-                workspace=WorkspaceGrant(
-                    root=str(workspace),
-                    mode=WorkspaceMode.READ_WRITE,
-                    allowed_paths=["."],
-                    source=WorkspaceSource.EXISTING,
-                ),
             )
         },
         store=store,
         artifact_root=tmp_path / "artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(workspace),
+            )
+        },
     )
     engine.create_run("run_artifact", request(), proposal())
 
@@ -143,12 +145,6 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=experiment_port,
-                workspace=WorkspaceGrant(
-                    root=str(workspace),
-                    mode=WorkspaceMode.READ_WRITE,
-                    allowed_paths=["."],
-                    source=WorkspaceSource.EXISTING,
-                ),
             ),
             Capability.CODE_UNDERSTAND: ModuleBinding(
                 owner=AgentOwner.CODING,
@@ -157,6 +153,13 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         },
         store=JsonRunStore(tmp_path / "forward-state"),
         artifact_root=tmp_path / "forward-artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(workspace),
+            )
+        },
     )
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",
@@ -227,12 +230,6 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=experiment_port,
-                workspace=WorkspaceGrant(
-                    root=str(workspace),
-                    mode=WorkspaceMode.READ_WRITE,
-                    allowed_paths=["."],
-                    source=WorkspaceSource.EXISTING,
-                ),
             ),
             Capability.CODE_UNDERSTAND: ModuleBinding(
                 owner=AgentOwner.CODING,
@@ -241,6 +238,13 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         },
         store=JsonRunStore(tmp_path / "retry-state"),
         artifact_root=tmp_path / "retry-artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(workspace),
+            )
+        },
     )
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",

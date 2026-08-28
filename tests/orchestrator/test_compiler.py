@@ -25,6 +25,8 @@ from resagent2_contracts import (
     WorkflowTask,
     WorkRequest,
     WorkRequestDraft,
+    WorkspaceDescriptor,
+    WorkspaceSourceKind,
 )
 from resagent2_orchestrator import (
     CompilationError,
@@ -223,6 +225,39 @@ def test_llm_compiler_rejects_undeclared_capability() -> None:
     with pytest.raises(CompilationError, match="undeclared"):
         compiler.compile(
             work_request(), current=None, registry=registry(), budget=budget()
+        )
+
+
+def test_llm_compiler_rejects_undeclared_workspace_id() -> None:
+    # The LLM invents a workspace id that the composition root did not declare.
+    raw = {
+        "work_request_id": "work_round1",
+        "summary": "compiled",
+        "compilation_rationale": "semantic",
+        "tasks": [
+            {
+                "id": "task_experiment",
+                "work_request_id": "work_round1",
+                "capability": "experiment_run",
+                "goal": "Run",
+                "rationale": "evidence",
+                "workspace_id": "ws_evil",
+                "inputs": {"capability": "experiment_run", "instructions": "Run"},
+            }
+        ],
+    }
+    compiler = LLMWorkflowCompiler(_FakeCompilerLLM(raw))
+    with pytest.raises(CompilationError, match="workspace"):
+        compiler.compile(
+            work_request(),
+            current=None,
+            registry=registry(),
+            budget=budget(),
+            workspaces=[
+                WorkspaceDescriptor(
+                    workspace_id="ws_main", source_kind=WorkspaceSourceKind.LOCAL
+                )
+            ],
         )
 
 

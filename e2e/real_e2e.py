@@ -34,7 +34,8 @@ from resagent2_contracts import (
     TaskStatus,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
 )
 from resagent2_capabilities import ArxivLiteratureBackend
 from resagent2_coding import NativeCodingAgent
@@ -283,7 +284,7 @@ def _grant(repo: Path) -> WorkspaceGrant:
         root=str(repo),
         mode=WorkspaceMode.READ_WRITE,
         allowed_paths=["."],
-        source=WorkspaceSource.EXISTING,
+        source=WorkspaceSourceKind.LOCAL,
     )
 
 
@@ -448,7 +449,6 @@ def run_code(workdir: Path) -> ModuleResult:
         goal="Implement the Squeeze-and-Excitation forward pass in train.py",
         inputs=CodeModifyInput(
             instructions="Implement SELayer.forward in train.py (it raises NotImplementedError)",
-            verification_commands=["python -m py_compile train.py"],
         ),
         budget=TaskBudget(max_steps=24, max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
@@ -472,7 +472,6 @@ def run_experiment(workdir: Path) -> ModuleResult:
             ),
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
-            external_repo_path=str(repo),
         ),
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
@@ -512,16 +511,21 @@ def run_full(workdir: Path) -> bool:
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_MODIFY),
                 port=_coding_agent(coding_store),
-                workspace=_grant(repo),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
                 port=_experiment_agent(experiment_store),
-                workspace=_grant(repo),
             ),
         },
         store=run_store,
         artifact_root=workdir / "artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(repo),
+            )
+        },
     )
     controller = ResearchController(
         scientific_port=_scientific_agent(

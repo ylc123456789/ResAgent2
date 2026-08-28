@@ -28,7 +28,13 @@ from .literature import (
     LiteratureSearchTool,
     LiteratureSearchToolInput,
 )
-from .process import ProcessRunner, UnsafeCommandError, parse_command
+from .process import (
+    CommandPermissionDecision,
+    CommandPermissionPolicy,
+    ProcessRunner,
+    UnsafeCommandError,
+    parse_command,
+)
 from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 from .workspace_tools import (
@@ -55,6 +61,8 @@ __all__ = [
     "ArtifactReadError",
     "ArtifactRegistrationPort",
     "ArxivLiteratureBackend",
+    "CommandPermissionDecision",
+    "CommandPermissionPolicy",
     "CreateFileInput",
     "CreateFileTool",
     "DatasetCache",

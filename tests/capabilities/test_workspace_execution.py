@@ -11,7 +11,7 @@ from resagent2_contracts import (
     ArtifactRef,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
 )
 from resagent2_capabilities import (
     ArtifactReadError,
@@ -35,7 +35,7 @@ def grant(root: Path, *, mode: WorkspaceMode = WorkspaceMode.READ_WRITE) -> Work
         mode=mode,
         allowed_paths=["."],
         denied_paths=["denied"],
-        source=WorkspaceSource.EXISTING,
+        source=WorkspaceSourceKind.LOCAL,
     )
 
 
@@ -205,7 +205,7 @@ def test_resolve_system_write_ignores_allowed_paths(tmp_path) -> None:
             root=str(root),
             mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["src"],
-            source=WorkspaceSource.EXISTING,
+            source=WorkspaceSourceKind.LOCAL,
         )
     )
     resolved = boundary.resolve_system_write(".resagent2/runs/run_x/task_x/a_1/x.patch")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -65,17 +66,18 @@ class CodeUnderstandCompletionCheck:
 
 
 class CodeModifyCompletionCheck:
+    """Finalize a code change, requiring a change, a fresh successful
+    verification, and an unchanged workspace after verification."""
+
     def __init__(
         self,
         repository: GitWorkspace,
         boundary: WorkspaceBoundary,
-        verification_commands: list[str],
         *,
         output_root: str,
     ) -> None:
         self.repository = repository
         self.boundary = boundary
-        self.verification_commands = verification_commands
         self.output_root = output_root
 
     def evaluate(
@@ -114,44 +116,39 @@ class CodeModifyCompletionCheck:
             )
         edit_revision = int(state.memory.get("edit_revision", 0))
         verification_revision = state.memory.get("verification_revision")
-        if self.verification_commands:
-            if verification_revision != edit_revision:
-                return CompletionDecision(
-                    complete=False,
-                    summary="Run verification after the latest file edit",
-                )
-            if [item.command for item in results] != self.verification_commands:
-                return CompletionDecision(
-                    complete=False,
-                    summary="Verification did not run the complete declared command set",
-                )
-            current_digest = hashlib.sha256(
-                self.repository.diff().encode("utf-8")
-            ).hexdigest()
-            if (
-                not state.memory.get("verification_workspace_unchanged", False)
-                or state.memory.get("verification_diff_sha256") != current_digest
-            ):
-                return CompletionDecision(
-                    complete=False,
-                    summary=(
-                        "Workspace changed during or after verification; "
-                        "review the diff and rerun verification"
-                    ),
-                )
-            if any(item.exit_code != 0 or item.timed_out for item in results):
-                return CompletionDecision(
-                    complete=False,
-                    summary="Verification failed; inspect the latest command observation",
-                )
-        else:
-            results = []
+        if verification_revision != edit_revision:
+            return CompletionDecision(
+                complete=False,
+                summary="Run verification after the latest file edit",
+            )
+        current_digest = hashlib.sha256(
+            self.repository.diff().encode("utf-8")
+        ).hexdigest()
+        if (
+            not state.memory.get("verification_workspace_unchanged", False)
+            or state.memory.get("verification_diff_sha256") != current_digest
+        ):
+            return CompletionDecision(
+                complete=False,
+                summary=(
+                    "Workspace changed during or after verification; "
+                    "review the diff and rerun verification"
+                ),
+            )
+        if any(item.exit_code != 0 or item.timed_out for item in results):
+            return CompletionDecision(
+                complete=False,
+                summary="Verification failed; inspect the latest command observation",
+            )
 
-        patch_path = self.repository.write_patch(f"{self.output_root}/changes.patch")
+        patch_text = self.repository.diff()
+        patch_path = Path(self.output_root) / "changes.patch"
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        patch_path.write_text(patch_text, encoding="utf-8")
         payload = CodeModifyResult(
             changed_files=existing,
             deleted_files=deleted,
-            patch_path=patch_path,
+            patch_path=str(patch_path),
             verification_results=results,
             verification_passed=True,
             residual_risks=finish.residual_risks,
@@ -159,9 +156,10 @@ class CodeModifyCompletionCheck:
         artifacts = [
             ArtifactCandidate(
                 kind="code_patch",
-                path=patch_path,
+                path="changes.patch",
                 media_type="text/x-diff",
                 summary="Complete Git patch produced by Coding Agent",
+                content=patch_text,
             ),
             *[
                 ArtifactCandidate(

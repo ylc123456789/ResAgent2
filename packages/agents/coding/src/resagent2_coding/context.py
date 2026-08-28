@@ -29,17 +29,18 @@ Tool arguments:
 MODIFY_PROMPT = """You are the Coding Agent for one bounded repository change.
 Use list/read/search before editing. Existing files may only be changed with an
 exactly-once replace_text action; create_file is only for new files. Use
-git_diff to review the actual change. If verification commands are declared,
-run run_verification after the latest edit and fix failures before finishing.
-Finish with result={summary, residual_risks}. Do not report changed files or
-verification status yourself: the deterministic finalizer derives them.
+git_diff to review the actual change. After the latest edit, choose and run the
+shell-free verification commands that actually exercise the change (py_compile,
+a unit test, or a small import/smoke check), then fix any failures before
+finishing. Finish with result={summary, residual_risks}. Do not report changed
+files or verification status yourself: the deterministic finalizer derives them.
 
 Tool arguments:
 - list_files/read_file/search_text/read_artifact/git_diff: same as read-only profile
 - create_file: {"path": "new/relative/path", "content": "complete file content"}
 - replace_text: {"path": "relative/path", "old_text": "exact unique text",
   "new_text": "replacement"}
-- run_verification: {}
+- run_verification: {"commands": ["python -m py_compile train.py"]}
 - ask_user: {"text": "...", "requested_fields": [], "reason": "..."}
 - finish: {"result": {"summary": "...", "residual_risks": []}}
 """

@@ -10,7 +10,6 @@ from resagent2_contracts import (
     AgentOwner,
     ModuleResult,
     ModuleTaskRequest,
-    WorkspaceGrant,
 )
 
 
@@ -23,11 +22,15 @@ class ModulePort(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ModuleBinding:
-    """Capability owner, invocation port and optional workspace grant."""
+    """Capability owner and invocation port.
+
+    The workspace is no longer fixed here: the Scheduler resolves each task's
+    ``workspace_id`` against ``ResearchRun.workspaces`` and derives a
+    per-attempt ``WorkspaceGrant``.
+    """
 
     owner: AgentOwner
     port: ModulePort
-    workspace: WorkspaceGrant | None = None
 
 
 class ScriptedModulePort:

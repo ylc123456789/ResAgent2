@@ -100,11 +100,17 @@ class GitWorkspace:
             chunks.append(result.stdout)
         return "".join(chunks)
 
-    def write_patch(self, relative_path: str) -> str:
+    def write_patch(self, path: Path) -> str:
+        """Write the current diff to an absolute ``path`` and return it.
+
+        The patch is an audit artifact that may live in the Run data directory
+        (outside the source repository); it is no longer forced through the
+        workspace boundary.
+        """
         patch = self.diff()
         if not patch:
             raise GitWorkspaceError("workspace has no code diff")
-        destination = self.boundary.resolve_system_write(relative_path)
+        destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(patch, encoding="utf-8")
-        return relative_path
+        return str(destination)

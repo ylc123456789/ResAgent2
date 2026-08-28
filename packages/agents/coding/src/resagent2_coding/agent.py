@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
     Capability,
-    CodeModifyInput,
     CodeModifyResult,
     CodeUnderstandResult,
     ErrorCode,
@@ -27,6 +28,8 @@ from resagent2_capabilities import (
     ReadFileTool,
     RegisteredArtifactReader,
     ReplaceTextTool,
+    RepoMaterializer,
+    RepoMaterializerError,
     RunVerificationTool,
     SearchTextTool,
     WorkspaceBoundary,
@@ -73,6 +76,20 @@ class NativeCodingAgent:
             error=error,
         )
 
+    @staticmethod
+    def _resolve_output_root(request: ModuleTaskRequest, boundary: WorkspaceBoundary) -> Path:
+        """Return the absolute audit-output directory for this attempt.
+
+        Prefer the scheduler-provided ``output_dir`` (Run data directory); fall
+        back to the legacy workspace-relative ``.resagent2/runs/...`` location.
+        """
+        root = Path(
+            request.output_dir
+            or f".resagent2/runs/{request.run_id}/{request.task_id}/"
+            f"attempt_{request.attempt_number}"
+        )
+        return root if root.is_absolute() else boundary.root / root
+
     def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
         if request.capability not in {
             Capability.CODE_UNDERSTAND,
@@ -87,14 +104,29 @@ class NativeCodingAgent:
         ):
             return self._failure("code_modify requires a read_write workspace", blocked=True)
 
-        inputs = request.inputs
-        write_paths = inputs.allowed_paths if isinstance(inputs, CodeModifyInput) else []
+        # Deterministically prepare/reuse the repository before the loop.
+        if request.workspace_spec is not None:
+            try:
+                materialized = RepoMaterializer().materialize(
+                    workspace=Path(request.workspace.root),
+                    source=request.workspace_spec,
+                )
+            except RepoMaterializerError as error:
+                return self._failure(str(error), blocked=True)
+            if materialized.repo_path.resolve() != Path(request.workspace.root).resolve():
+                return self._failure(
+                    "materialized repository is not the granted workspace root",
+                    blocked=True,
+                )
+
         try:
-            boundary = WorkspaceBoundary(request.workspace, write_paths=write_paths)
+            boundary = WorkspaceBoundary(request.workspace)
             repository = GitWorkspace(boundary)
             repository.require_clean()
         except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
             return self._failure(str(error), blocked=True)
+
+        output_root = self._resolve_output_root(request, boundary)
 
         common_tools = (
             ListFilesTool(boundary),
@@ -105,19 +137,6 @@ class NativeCodingAgent:
             AskUserTool(),
             FinishTool(),
         )
-        output_root = (
-            f".resagent2/runs/{request.run_id}/{request.task_id}/"
-            f"attempt_{request.attempt_number}"
-        )
-        if request.capability == Capability.CODE_MODIFY:
-            try:
-                boundary.resolve_system_write(f"{output_root}/changes.patch")
-            except WorkspacePermissionError as error:
-                return self._failure(
-                    "code_modify requires WorkspaceGrant access to its .resagent2 "
-                    f"audit directory: {error}",
-                    blocked=True,
-                )
         if request.capability == Capability.CODE_UNDERSTAND:
             definition = AgentDefinition(
                 name="coding-understand",
@@ -134,14 +153,12 @@ class NativeCodingAgent:
                 result_type=CodeUnderstandResult,
             )
         else:
-            commands = list(inputs.verification_commands)
             write_tools = (
                 CreateFileTool(boundary),
                 ReplaceTextTool(boundary),
                 RunVerificationTool(
                     ProcessRunner(boundary),
                     repository,
-                    commands,
                     log_root=f"{output_root}/verification",
                     timeout_seconds=request.budget.timeout_seconds,
                 ),
@@ -158,8 +175,7 @@ class NativeCodingAgent:
                 completion_check=CodeModifyCompletionCheck(
                     repository,
                     boundary,
-                    commands,
-                    output_root=output_root,
+                    output_root=str(output_root),
                 ),
                 action_type=CodeModifyAction,
                 result_type=CodeModifyResult,
@@ -172,7 +188,7 @@ class NativeCodingAgent:
             initial_memory={"edit_revision": 0},
         )
         if result.status == ModuleStatus.FAILED and repository.changed_paths():
-            patch_path = repository.write_patch(f"{output_root}/failed_changes.patch")
+            patch_path = repository.write_patch(output_root / "failed_changes.patch")
             error = result.error
             if error is not None:
                 error = error.model_copy(update={"retryable": False})
@@ -181,10 +197,11 @@ class NativeCodingAgent:
                     "artifacts": [
                         ArtifactCandidate(
                             kind="code_patch",
-                            path=patch_path,
+                            path="failed_changes.patch",
                             media_type="text/x-diff",
                             summary="Diagnostic patch from failed Coding Attempt",
                             metadata={"diagnostic": True},
+                            content=repository.diff(),
                         )
                     ],
                     "error": error,

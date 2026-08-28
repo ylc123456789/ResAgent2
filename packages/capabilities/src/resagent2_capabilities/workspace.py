@@ -101,7 +101,7 @@ class WorkspaceBoundary:
         self._check_lexical(relative)
         if write and self.write_paths and not _matches(relative, self.write_paths):
             raise WorkspacePermissionError(
-                "resolved path is outside CodeModifyInput.allowed_paths"
+                "resolved path is outside the workspace write scope"
             )
 
     def resolve_read_file(self, relative_path: str) -> Path:
@@ -130,7 +130,7 @@ class WorkspaceBoundary:
         relative = _normalize_relative(relative_path)
         self._check_lexical(relative)
         if self.write_paths and not _matches(relative, self.write_paths):
-            raise WorkspacePermissionError("path is outside CodeModifyInput.allowed_paths")
+            raise WorkspacePermissionError("path is outside the workspace write scope")
         candidate = self.root / relative
         if candidate.exists() or candidate.is_symlink():
             resolved = candidate.resolve(strict=True)

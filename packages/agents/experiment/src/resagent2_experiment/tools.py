@@ -101,6 +101,7 @@ class RunCommandTool:
         confirmed: bool,
         timeout_seconds: int,
         extra_env: dict[str, str] | None = None,
+        log_dir: str = ".resagent2/experiment/commands",
     ) -> None:
         self.runner = runner
         self.argv_prefix = argv_prefix
@@ -109,6 +110,7 @@ class RunCommandTool:
         self.confirmed = confirmed
         self.timeout_seconds = timeout_seconds
         self.extra_env = extra_env
+        self.log_dir = log_dir
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunCommandInput, arguments)
@@ -131,7 +133,7 @@ class RunCommandTool:
         index = int(state.memory.get("command_count", 0)) + 1
         result = self.runner.run(
             args.command,
-            log_dir=".resagent2/experiment/commands",
+            log_dir=self.log_dir,
             index=index,
             timeout_seconds=self.timeout_seconds,
             argv_prefix=self.argv_prefix,
@@ -197,6 +199,8 @@ class AuditEnvTool:
         env_prefix: Path,
         timeout_seconds: int,
         extra_env: dict[str, str] | None = None,
+        log_dir: str = ".resagent2/experiment/audit",
+        probe_dir: str = ".resagent2/experiment",
     ) -> None:
         self.runner = runner
         self.boundary = boundary
@@ -204,15 +208,26 @@ class AuditEnvTool:
         self.env_prefix = env_prefix
         self.timeout_seconds = timeout_seconds
         self.extra_env = extra_env
+        self.log_dir = log_dir
+        self.probe_dir = probe_dir
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        probe = self.boundary.resolve_system_write(".resagent2/experiment/audit_probe.py")
+        probe_root = Path(self.probe_dir)
+        if probe_root.is_absolute():
+            probe = probe_root / "audit_probe.py"
+        else:
+            probe = self.boundary.resolve_system_write(
+                f"{self.probe_dir}/audit_probe.py"
+            )
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_text(_AUDIT_PROBE, encoding="utf-8")
-        relative = probe.relative_to(self.boundary.root).as_posix()
+        if probe.is_relative_to(self.boundary.root):
+            command_arg = probe.relative_to(self.boundary.root).as_posix()
+        else:
+            command_arg = str(probe)
         result = self.runner.run(
-            f"python {relative}",
-            log_dir=".resagent2/experiment/audit",
+            f"python {command_arg}",
+            log_dir=self.log_dir,
             index=1,
             timeout_seconds=self.timeout_seconds,
             argv_prefix=self.argv_prefix,

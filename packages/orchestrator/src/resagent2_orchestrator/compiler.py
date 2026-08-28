@@ -20,6 +20,7 @@ from resagent2_contracts import (
     WorkflowPatch,
     WorkflowProposal,
     WorkRequest,
+    WorkspaceDescriptor,
 )
 
 
@@ -33,6 +34,7 @@ class WorkflowCompiler(Protocol):
         current: Workflow | None,
         registry: CapabilityRegistry,
         budget: RunBudget,
+        workspaces: list[WorkspaceDescriptor] | None = None,
     ) -> WorkflowProposal | WorkflowPatch:
         """Return a Proposal when ``current`` is None, else a Patch."""
 
@@ -74,6 +76,7 @@ class DeterministicWorkflowCompiler:
         current: Workflow | None,
         registry: CapabilityRegistry,
         budget: RunBudget,
+        workspaces: list[WorkspaceDescriptor] | None = None,
     ) -> WorkflowProposal | WorkflowPatch:
         if current is None:
             return self._proposal
@@ -87,6 +90,7 @@ def _compile_prompt(
     current: Workflow | None,
     registry: CapabilityRegistry,
     budget: RunBudget,
+    workspaces: list[WorkspaceDescriptor] | None,
 ) -> str:
     """Describe the work request and execution constraints for one LLM call."""
     capabilities = ", ".join(
@@ -101,6 +105,17 @@ def _compile_prompt(
         "Use only capabilities from the list above; do not invent new ones.",
         f"Max tasks: {budget.max_tasks}",
     ]
+    if workspaces:
+        descriptions = "; ".join(
+            f"{item.workspace_id} ({item.source_kind.value}"
+            + (f": {item.description}" if item.description else "")
+            + ")"
+            for item in workspaces
+        )
+        lines.append(f"Available workspaces: {descriptions}")
+        lines.append(
+            "Assign each task a workspace_id from the list above; do not invent ids."
+        )
     if current is not None:
         existing = ", ".join(task.id for task in current.tasks)
         lines.append(f"Current workflow revision {current.revision}: {existing or '(empty)'}")
@@ -144,6 +159,29 @@ def _reject_undeclared_capabilities(
         )
 
 
+def _reject_undeclared_workspaces(
+    proposal: WorkflowProposal | WorkflowPatch,
+    workspace_ids: set[str],
+) -> None:
+    """Reject any task whose workspace_id the composition root did not declare.
+
+    The LLM must only choose from the given logical workspace ids, never invent
+    one. Auto-fill for a single workspace happens later, in the scheduler.
+    """
+    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
+    undeclared = sorted(
+        {
+            task.workspace_id
+            for task in tasks
+            if task.workspace_id is not None and task.workspace_id not in workspace_ids
+        }
+    )
+    if undeclared:
+        raise CompilationError(
+            "compiler selected undeclared workspace_ids: " + ", ".join(undeclared)
+        )
+
+
 class LLMWorkflowCompiler:
     """Compile via one bounded structured LLM call, then schema-validate."""
 
@@ -157,8 +195,10 @@ class LLMWorkflowCompiler:
         current: Workflow | None,
         registry: CapabilityRegistry,
         budget: RunBudget,
+        workspaces: list[WorkspaceDescriptor] | None = None,
     ) -> WorkflowProposal | WorkflowPatch:
-        prompt = _compile_prompt(request, current, registry, budget)
+        workspaces = workspaces or []
+        prompt = _compile_prompt(request, current, registry, budget, workspaces)
         if current is None:
             action_type: type[BaseModel] = WorkflowProposal
         else:
@@ -172,4 +212,8 @@ class LLMWorkflowCompiler:
                 f"compiler produced an invalid {action_type.__name__}: {error}"
             ) from error
         _reject_undeclared_capabilities(proposal, registry)
+        if workspaces:
+            _reject_undeclared_workspaces(
+                proposal, {item.workspace_id for item in workspaces}
+            )
         return proposal

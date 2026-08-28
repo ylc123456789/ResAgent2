@@ -10,7 +10,7 @@ from resagent2_contracts import (
     TaskBudget,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_runtime import ScriptedLLMClient
@@ -28,17 +28,10 @@ def init_repo(root: Path) -> None:
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
 
 
-def request(
-    root: Path,
-    *,
-    capability: Capability,
-    verification_commands: list[str] | None = None,
-) -> ModuleTaskRequest:
+def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
     if capability == Capability.CODE_MODIFY:
         inputs = CodeModifyInput(
-            instructions="Add a docstring to add and keep behavior unchanged",
-            allowed_paths=["util.py", "new_helper.py"],
-            verification_commands=verification_commands or [],
+            instructions="Add a docstring to add and keep behavior unchanged"
         )
         mode = WorkspaceMode.READ_WRITE
     else:
@@ -56,7 +49,7 @@ def request(
             root=str(root),
             mode=mode,
             allowed_paths=["."],
-            source=WorkspaceSource.EXISTING,
+            source=WorkspaceSourceKind.LOCAL,
         ),
     )
 
@@ -113,7 +106,7 @@ def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path) -> None:
                         ),
                     },
                 },
-                {"tool": "run_verification", "arguments": {}},
+                {"tool": "run_verification", "arguments": {"commands": [verify]}},
                 {
                     "tool": "finish",
                     "arguments": {
@@ -124,13 +117,7 @@ def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path) -> None:
         )
     )
 
-    result = agent.invoke(
-        request(
-            tmp_path,
-            capability=Capability.CODE_MODIFY,
-            verification_commands=[verify],
-        )
-    )
+    result = agent.invoke(request(tmp_path, capability=Capability.CODE_MODIFY))
 
     assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
     assert result.payload["changed_files"] == ["util.py"]
@@ -150,6 +137,10 @@ def test_new_file_becomes_a_code_artifact(tmp_path) -> None:
                 {
                     "tool": "create_file",
                     "arguments": {"path": "new_helper.py", "content": "VALUE = 1\n"},
+                },
+                {
+                    "tool": "run_verification",
+                    "arguments": {"commands": ['python -c "import new_helper"']},
                 },
                 {
                     "tool": "finish",
@@ -179,7 +170,12 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
                         "new_text": "return a - b",
                     },
                 },
-                {"tool": "run_verification", "arguments": {}},
+                {
+                    "tool": "run_verification",
+                    "arguments": {
+                        "commands": ['python -c "import util; assert util.add(2, 3) == 5"']
+                    },
+                },
                 {
                     "tool": "finish",
                     "arguments": {"result": {"summary": "Incorrectly done"}},
@@ -188,15 +184,7 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
         )
     )
 
-    result = agent.invoke(
-        request(
-            tmp_path,
-            capability=Capability.CODE_MODIFY,
-            verification_commands=[
-                'python -c "import util; assert util.add(2, 3) == 5"'
-            ],
-        )
-    )
+    result = agent.invoke(request(tmp_path, capability=Capability.CODE_MODIFY))
 
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None and result.error.retryable is False
@@ -206,6 +194,10 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
 
 def test_verification_command_cannot_silently_change_code(tmp_path) -> None:
     init_repo(tmp_path)
+    mutating_command = (
+        'python -c "from pathlib import Path; '
+        "Path('new_helper.py').write_text('VALUE = 2\\n')\""
+    )
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
@@ -213,7 +205,7 @@ def test_verification_command_cannot_silently_change_code(tmp_path) -> None:
                     "tool": "create_file",
                     "arguments": {"path": "new_helper.py", "content": "VALUE = 1\n"},
                 },
-                {"tool": "run_verification", "arguments": {}},
+                {"tool": "run_verification", "arguments": {"commands": [mutating_command]}},
                 {
                     "tool": "finish",
                     "arguments": {"result": {"summary": "Done"}},
@@ -221,18 +213,8 @@ def test_verification_command_cannot_silently_change_code(tmp_path) -> None:
             ]
         )
     )
-    mutating_command = (
-        'python -c "from pathlib import Path; '
-        "Path('new_helper.py').write_text('VALUE = 2\\n')\""
-    )
 
-    result = agent.invoke(
-        request(
-            tmp_path,
-            capability=Capability.CODE_MODIFY,
-            verification_commands=[mutating_command],
-        )
-    )
+    result = agent.invoke(request(tmp_path, capability=Capability.CODE_MODIFY))
 
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None and result.error.retryable is False
@@ -259,3 +241,42 @@ def test_read_only_action_schema_rejects_write_tool(tmp_path) -> None:
 
     assert result.status == ModuleStatus.FAILED
     assert (tmp_path / "util.py").read_text(encoding="utf-8").endswith("a + b\n")
+
+
+def test_audit_output_goes_to_output_dir_not_repo(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    out = tmp_path / "out"
+    agent = NativeCodingAgent(
+        ScriptedLLMClient(
+            [
+                {
+                    "tool": "replace_text",
+                    "arguments": {
+                        "path": "util.py",
+                        "old_text": "return a + b",
+                        "new_text": "return a + b + 0",
+                    },
+                },
+                {
+                    "tool": "run_verification",
+                    "arguments": {"commands": ['python -c "import util"']},
+                },
+                {
+                    "tool": "finish",
+                    "arguments": {"result": {"summary": "done"}},
+                },
+            ]
+        )
+    )
+
+    req = request(repo, capability=Capability.CODE_MODIFY).model_copy(
+        update={"output_dir": str(out)}
+    )
+    result = agent.invoke(req)
+
+    assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
+    # The patch and verification logs went to the Run output dir, not the repo.
+    assert (out / "changes.patch").is_file()
+    assert not (repo / ".resagent2").exists()

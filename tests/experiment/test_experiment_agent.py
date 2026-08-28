@@ -11,7 +11,7 @@ from resagent2_contracts import (
     VerificationResult,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
 )
 from resagent2_capabilities import WorkspaceBoundary
 from resagent2_runtime import (
@@ -77,7 +77,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
             root=str(tmp_path),
             mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["."],
-            source=WorkspaceSource.EXISTING,
+            source=WorkspaceSourceKind.LOCAL,
         )
     )
     runner = _FakeRunner(boundary, env_prefix, fail=fail)

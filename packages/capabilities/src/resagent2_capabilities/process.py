@@ -6,6 +6,8 @@ import os
 import shlex
 import signal
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from time import monotonic
 
 from resagent2_contracts import VerificationResult
@@ -40,6 +42,37 @@ def parse_command(command: str) -> list[str]:
     if any(token in _SHELL_TOKENS for token in argv):
         raise UnsafeCommandError("shell operators are forbidden; declare separate commands")
     return argv
+
+
+@dataclass(frozen=True, slots=True)
+class CommandPermissionDecision:
+    """Outcome of a command-permission check."""
+
+    allowed: bool
+    reason: str = ""
+
+
+class CommandPermissionPolicy:
+    """Decide whether Agent-chosen commands may run as verification.
+
+    Enforcement is structural (shell-free argv parsing) plus an optional
+    executable deny-list. It is a workflow gate, not an OS sandbox.
+    """
+
+    def __init__(self, deny_executables: frozenset[str] = frozenset()) -> None:
+        self._deny = {name.lower() for name in deny_executables}
+
+    def check(self, commands: list[str]) -> CommandPermissionDecision:
+        for command in commands:
+            try:
+                argv = parse_command(command)
+            except UnsafeCommandError as error:
+                return CommandPermissionDecision(allowed=False, reason=str(error))
+            if argv and Path(argv[0]).name.lower() in self._deny:
+                return CommandPermissionDecision(
+                    allowed=False, reason=f"executable {argv[0]!r} is denied"
+                )
+        return CommandPermissionDecision(allowed=True)
 
 
 def _descendant_pids(root: int) -> list[int]:
@@ -113,10 +146,7 @@ class ProcessRunner:
         extra_env: dict[str, str] | None = None,
     ) -> VerificationResult:
         argv = [*(argv_prefix or []), *parse_command(command)]
-        stdout_relative = f"{log_dir}/command_{index:02d}.stdout"
-        stderr_relative = f"{log_dir}/command_{index:02d}.stderr"
-        stdout_path = self.boundary.resolve_system_write(stdout_relative)
-        stderr_path = self.boundary.resolve_system_write(stderr_relative)
+        stdout_path, stderr_path = self._log_paths(log_dir, index)
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         started = monotonic()
         timed_out = False
@@ -146,7 +176,25 @@ class ProcessRunner:
             command=command,
             exit_code=exit_code,
             timed_out=timed_out,
-            stdout_path=stdout_relative,
-            stderr_path=stderr_relative,
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
             duration_seconds=monotonic() - started,
+        )
+
+    def _log_paths(self, log_dir: str, index: int) -> tuple[Path, Path]:
+        """Resolve stdout/stderr paths.
+
+        An absolute ``log_dir`` writes audit logs outside the workspace (the Run
+        data directory); a relative ``log_dir`` stays inside the workspace's
+        reserved ``.resagent2`` directory, enforcing the write boundary.
+        """
+        root = Path(log_dir)
+        if root.is_absolute():
+            return (
+                root / f"command_{index:02d}.stdout",
+                root / f"command_{index:02d}.stderr",
+            )
+        return (
+            self.boundary.resolve_system_write(f"{log_dir}/command_{index:02d}.stdout"),
+            self.boundary.resolve_system_write(f"{log_dir}/command_{index:02d}.stderr"),
         )

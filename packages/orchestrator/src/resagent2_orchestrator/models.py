@@ -21,6 +21,7 @@ from resagent2_contracts import (
     UserAnswer,
     Workflow,
     WorkRequest,
+    WorkspaceRecord,
     TaskId,
 )
 
@@ -59,6 +60,7 @@ class ResearchRun(OrchestratorModel):
     request: ResearchRequest
     status: RunStatus
     workflow: Workflow | None = None
+    workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
     answers: list[UserAnswer] = Field(default_factory=list)

@@ -14,7 +14,10 @@ from resagent2_contracts import (
     ModuleResult,
     ModuleStatus,
     ModuleTaskRequest,
+    ResourceLayout,
     WorkspaceMode,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
 )
 from resagent2_capabilities import (
     DatasetCache,
@@ -34,7 +37,6 @@ from resagent2_capabilities import (
     env_id,
     env_spec,
     find_conda,
-    resource_root,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -95,12 +97,17 @@ class NativeExperimentAgent:
             return self._failure("experiment_run requires a read_write workspace", blocked=True)
 
         inputs = request.inputs  # ExperimentRunInput
+        spec = request.workspace_spec
+        if spec is None:
+            spec = WorkspaceSpec(
+                workspace_id=request.workspace_id or "workspace",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(Path(request.workspace.root).expanduser().resolve()),
+            )
         try:
             materialized = RepoMaterializer().materialize(
                 workspace=Path(request.workspace.root),
-                repo_url=inputs.repository_url or "",
-                copy_from=inputs.copy_from or "",
-                external_repo_path=inputs.external_repo_path or "",
+                source=spec,
             )
         except RepoMaterializerError as error:
             return self._failure(str(error), blocked=True)
@@ -115,15 +122,13 @@ class NativeExperimentAgent:
             )
 
         source_ref = (
-            inputs.repository_url
-            or inputs.copy_from
-            or inputs.external_repo_path
-            or str(materialized.repo_path)
+            spec.location if spec.location else str(materialized.repo_path)
         )
-        spec = env_spec(materialized.repo_path, inputs.python_version)
-        identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", spec)
+        resource_layout = ResourceLayout.from_env()
+        env_spec_dict = env_spec(materialized.repo_path, inputs.python_version)
+        identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", env_spec_dict)
         try:
-            env_prefix = EnvironmentManager().ensure(
+            env_prefix = EnvironmentManager(root=resource_layout.resource_root).ensure(
                 identifier=identifier,
                 repo_path=materialized.repo_path,
                 python_version=inputs.python_version,
@@ -137,7 +142,17 @@ class NativeExperimentAgent:
         argv_prefix = [conda, "run", "--no-capture-output", "-p", str(env_prefix)]
 
         confirmed = _confirmation_granted(request, inputs.confirm_before_experiment)
-        dataset_env = DatasetCache(root=resource_root() / "datasets").env_overrides()
+        dataset_env = DatasetCache(root=resource_layout.dataset_root).env_overrides()
+
+        output_dir = request.output_dir
+        command_log_dir = (
+            f"{output_dir}/commands" if output_dir else ".resagent2/experiment/commands"
+        )
+        audit_log_dir = (
+            f"{output_dir}/audit" if output_dir else ".resagent2/experiment/audit"
+        )
+        probe_dir = output_dir or ".resagent2/experiment"
+
         runner = ProcessRunner(boundary)
         tools = (
             ListFilesTool(boundary),
@@ -152,6 +167,7 @@ class NativeExperimentAgent:
                 confirmed=confirmed,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env,
+                log_dir=command_log_dir,
             ),
             AuditEnvTool(
                 runner,
@@ -160,6 +176,8 @@ class NativeExperimentAgent:
                 env_prefix=env_prefix,
                 timeout_seconds=min(request.budget.timeout_seconds, 180),
                 extra_env=dataset_env,
+                log_dir=audit_log_dir,
+                probe_dir=probe_dir,
             ),
             AskUserTool(),
             FinishTool(),

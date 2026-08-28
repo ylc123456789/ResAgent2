@@ -18,6 +18,7 @@ from resagent2_capabilities import (
     resource_root,
 )
 from resagent2_capabilities.process import _descendant_pids
+from resagent2_contracts import WorkspaceSourceKind, WorkspaceSpec
 
 
 def _init_repo(root: Path, *, commit_file: str = "tracked.txt") -> str:
@@ -37,40 +38,45 @@ def _init_repo(root: Path, *, commit_file: str = "tracked.txt") -> str:
 # ── RepoMaterializer ────────────────────────────────────────────────
 
 
-def test_materialize_clones_repo_url(tmp_path) -> None:
+def _spec(kind: WorkspaceSourceKind, location: str | None = None) -> WorkspaceSpec:
+    return WorkspaceSpec(workspace_id="ws_main", source_kind=kind, location=location)
+
+
+def test_materialize_clones_git_source(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)
     materialized = RepoMaterializer().materialize(
-        workspace=tmp_path / "work", repo_url=str(source)
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.GIT, str(source))
     )
 
     assert materialized.repo_path.is_dir()
     assert materialized.commit == commit
-    assert materialized.source == "repo_url"
+    assert materialized.source == "git"
 
 
-def test_materialize_copy_from_preserves_worktree(tmp_path) -> None:
+def test_materialize_copy_preserves_worktree(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)
     (source / "uncommitted.py").write_text("dirty = True\n", encoding="utf-8")
     materialized = RepoMaterializer().materialize(
-        workspace=tmp_path / "work", copy_from=str(source)
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.COPY, str(source))
     )
 
     assert materialized.commit == commit
-    assert materialized.source == "copy_from"
+    assert materialized.source == "copy"
     assert (materialized.repo_path / "uncommitted.py").read_text(encoding="utf-8") == (
         "dirty = True\n"
     )
 
 
-def test_materialize_copy_from_is_idempotent_on_resume(tmp_path) -> None:
+def test_materialize_copy_is_idempotent_on_resume(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)
     materializer = RepoMaterializer()
+    spec = _spec(WorkspaceSourceKind.COPY, str(source))
 
-    first = materializer.materialize(workspace=tmp_path / "work", copy_from=str(source))
-    second = materializer.materialize(workspace=tmp_path / "work", copy_from=str(source))
+    first = materializer.materialize(workspace=tmp_path / "work", source=spec)
+    second = materializer.materialize(workspace=tmp_path / "work", source=spec)
 
     assert first.repo_path == second.repo_path
     assert first.commit == second.commit == commit
@@ -82,22 +88,28 @@ def test_materialize_copy_into_preexisting_empty_dir(tmp_path) -> None:
     workspace = tmp_path / "work"
     workspace.mkdir()
 
-    materialized = RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+    materialized = RepoMaterializer().materialize(
+        workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source))
+    )
 
     assert materialized.repo_path.is_dir()
-    assert materialized.source == "copy_from"
+    assert materialized.source == "copy"
 
 
-def test_copy_from_cannot_reuse_workspace_from_other_source(tmp_path) -> None:
+def test_copy_cannot_reuse_workspace_from_other_source(tmp_path) -> None:
     source_a = tmp_path / "source_a"
     source_b = tmp_path / "source_b"
     _init_repo(source_a)
     _init_repo(source_b)
     workspace = tmp_path / "work"
-    RepoMaterializer().materialize(workspace=workspace, copy_from=str(source_a))
+    RepoMaterializer().materialize(
+        workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source_a))
+    )
 
     with pytest.raises(RepoMaterializerError, match="does not match"):
-        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source_b))
+        RepoMaterializer().materialize(
+            workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source_b))
+        )
 
 
 def test_missing_metadata_cannot_pretend_source_match(tmp_path) -> None:
@@ -107,7 +119,9 @@ def test_missing_metadata_cannot_pretend_source_match(tmp_path) -> None:
     _init_repo(workspace)  # a git repo, but no materialization metadata
 
     with pytest.raises(RepoMaterializerError, match="metadata"):
-        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+        RepoMaterializer().materialize(
+            workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source))
+        )
 
 
 def test_corrupt_metadata_cannot_pretend_source_match(tmp_path) -> None:
@@ -115,36 +129,34 @@ def test_corrupt_metadata_cannot_pretend_source_match(tmp_path) -> None:
     _init_repo(source)
     workspace = tmp_path / "work"
     _init_repo(workspace)
-    (workspace / ".resagent2").mkdir()
-    (workspace / ".resagent2" / "materialized_source.json").write_text(
-        "not json", encoding="utf-8"
-    )
+    (workspace.parent / "workspace.json").write_text("not json", encoding="utf-8")
 
     with pytest.raises(RepoMaterializerError, match="metadata"):
-        RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+        RepoMaterializer().materialize(
+            workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source))
+        )
 
 
 def test_source_mismatch_is_a_structured_error(tmp_path) -> None:
     source = tmp_path / "source"
     _init_repo(source)
     workspace = tmp_path / "work"
-    RepoMaterializer().materialize(workspace=workspace, copy_from=str(source))
+    RepoMaterializer().materialize(
+        workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(source))
+    )
 
-    try:
+    with pytest.raises(RepoMaterializerError, match="materialized as"):
         RepoMaterializer().materialize(
-            workspace=workspace, repo_url="https://example.com/other.git"
+            workspace=workspace,
+            source=_spec(WorkspaceSourceKind.GIT, "https://example.com/other.git"),
         )
-    except RepoMaterializerError as error:
-        assert "not" in str(error)
-    else:
-        raise AssertionError("expected RepoMaterializerError on source mismatch")
 
 
 def test_materialized_commit_matches_actual_repo(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)
     materialized = RepoMaterializer().materialize(
-        workspace=tmp_path / "work", copy_from=str(source)
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.COPY, str(source))
     )
 
     actual = subprocess.run(
@@ -157,39 +169,40 @@ def test_materialized_commit_matches_actual_repo(tmp_path) -> None:
     assert materialized.commit == commit == actual
 
 
-def test_materialize_binds_external_repo_in_place(tmp_path) -> None:
+def test_materialize_binds_local_in_place(tmp_path) -> None:
     source = tmp_path / "source"
     commit = _init_repo(source)
     materialized = RepoMaterializer().materialize(
-        workspace=tmp_path / "work", external_repo_path=str(source)
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.LOCAL, str(source))
     )
 
     assert materialized.repo_path.resolve() == source.resolve()
     assert materialized.commit == commit
-    assert materialized.source == "external_repo_path"
+    assert materialized.source == "local"
 
 
-def test_materialize_rejects_conflicting_sources(tmp_path) -> None:
-    with pytest.raises(RepoMaterializerError, match="exactly one"):
+def test_materialize_generated_creates_empty_managed_workspace(tmp_path) -> None:
+    materialized = RepoMaterializer().materialize(
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.GENERATED)
+    )
+
+    assert materialized.repo_path.is_dir()
+    assert materialized.source == "generated"
+    assert (materialized.repo_path / ".git").is_dir()
+
+
+def test_materialize_git_requires_location(tmp_path) -> None:
+    with pytest.raises(RepoMaterializerError, match="location"):
         RepoMaterializer().materialize(
-            workspace=tmp_path,
-            repo_url="https://example.com/repo.git",
-            copy_from=str(tmp_path),
+            workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.GIT)
         )
 
 
-def test_materialize_resume_reuses_existing_repo(tmp_path) -> None:
-    workspace = tmp_path / "work"
-    commit = _init_repo(workspace)
-    materialized = RepoMaterializer().materialize(workspace=workspace)
-
-    assert materialized.repo_path == workspace
-    assert materialized.commit == commit
-
-
-def test_materialize_resume_without_repo_fails(tmp_path) -> None:
-    with pytest.raises(RepoMaterializerError, match="no repository source"):
-        RepoMaterializer().materialize(workspace=tmp_path)
+def test_materialize_local_requires_location(tmp_path) -> None:
+    with pytest.raises(RepoMaterializerError, match="location"):
+        RepoMaterializer().materialize(
+            workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.LOCAL)
+        )
 
 
 # ── environment identity ───────────────────────────────────────────

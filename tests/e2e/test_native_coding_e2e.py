@@ -10,9 +10,8 @@ from resagent2_contracts import (
     RunStatus,
     TaskProposal,
     WorkflowProposal,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
 )
 from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowScheduler
 from resagent2_runtime import ScriptedLLMClient
@@ -39,7 +38,12 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
                         "new_text": "VALUE = 2",
                     },
                 },
-                {"tool": "run_verification", "arguments": {}},
+                {
+                    "tool": "run_verification",
+                    "arguments": {
+                        "commands": ['python -c "import util; assert util.VALUE == 2"']
+                    },
+                },
                 {
                     "tool": "finish",
                     "arguments": {"result": {"summary": "Updated VALUE"}},
@@ -47,22 +51,22 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
             ]
         )
     )
-    grant = WorkspaceGrant(
-        root=str(repo),
-        mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."],
-        source=WorkspaceSource.EXISTING,
-    )
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=AgentOwner.CODING,
                 port=coding,
-                workspace=grant,
             )
         },
         store=InMemoryRunStore(),
         artifact_root=tmp_path / "artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(repo),
+            )
+        },
     )
     request = ResearchRequest(
         goal="Update one constant",
@@ -86,10 +90,6 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
                 rationale="Test native code modification",
                 inputs=CodeModifyInput(
                     instructions="Change VALUE from 1 to 2",
-                    allowed_paths=["util.py"],
-                    verification_commands=[
-                        'python -c "import util; assert util.VALUE == 2"'
-                    ],
                 ),
             )
         ],

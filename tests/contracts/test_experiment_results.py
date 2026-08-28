@@ -7,12 +7,11 @@ from resagent2_contracts import (
 )
 
 
-def test_experiment_run_input_round_trips_new_fields() -> None:
+def test_experiment_run_input_round_trips_fields() -> None:
     inputs = ExperimentRunInput(
         instructions="Run train.py",
         expected_metrics=["accuracy"],
         expected_artifacts=["metrics.json"],
-        repository_url="https://example.com/repo.git",
         python_version="3.11",
         confirm_before_experiment=True,
     )
@@ -20,16 +19,16 @@ def test_experiment_run_input_round_trips_new_fields() -> None:
     restored = ExperimentRunInput.model_validate_json(inputs.model_dump_json())
 
     assert restored == inputs
-    assert restored.repository_url == "https://example.com/repo.git"
     assert restored.confirm_before_experiment is True
 
 
-def test_experiment_run_input_rejects_multiple_repository_sources() -> None:
-    with pytest.raises(ValidationError, match="mutually exclusive"):
+def test_experiment_run_input_rejects_repository_source_fields() -> None:
+    # The repository source moved to the unified workspace context
+    # (ModuleTaskRequest.workspace_spec); it is no longer an input field.
+    with pytest.raises(ValidationError):
         ExperimentRunInput(
             instructions="Run train.py",
             repository_url="https://example.com/repo.git",
-            copy_from="/tmp/repo",
         )
 
 

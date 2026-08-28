@@ -10,6 +10,7 @@ ALLOWED_IMPORT_ROOTS = {
     "__future__",
     "datetime",
     "enum",
+    "os",
     "pathlib",
     "typing",
     "pydantic",

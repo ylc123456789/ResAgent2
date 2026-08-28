@@ -11,9 +11,8 @@ from resagent2_contracts import (
     TaskProposal,
     VerificationResult,
     WorkflowProposal,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
 )
 from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowScheduler
 from resagent2_capabilities import WorkspaceBoundary
@@ -146,22 +145,22 @@ class _NativeExperimentPort:
 def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    grant = WorkspaceGrant(
-        root=str(workspace),
-        mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."],
-        source=WorkspaceSource.EXISTING,
-    )
     scheduler = WorkflowScheduler(
         bindings={
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=_NativeExperimentPort(AgentLoop(store=InMemorySessionStore())),
-                workspace=grant,
             )
         },
         store=InMemoryRunStore(),
         artifact_root=tmp_path / "artifacts",
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(workspace),
+            )
+        },
     )
     request = ResearchRequest(
         goal="Run the experiment",

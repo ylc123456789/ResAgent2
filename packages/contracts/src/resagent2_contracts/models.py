@@ -130,11 +130,17 @@ class WorkspaceMode(StrEnum):
     READ_WRITE = "read_write"
 
 
-class WorkspaceSource(StrEnum):
-    """How a workspace was obtained; this is not repository identity."""
+class WorkspaceSourceKind(StrEnum):
+    """Logical source kind of a workspace (declared, not repository identity).
 
-    EXISTING = "existing"
-    CLONE = "clone"
+    - GIT: ``location`` is a Git URL, cloned into a managed directory;
+    - LOCAL: bind an existing local directory in place (managed=False);
+    - COPY: copy an existing local Git worktree into a managed directory;
+    - GENERATED: create an empty managed workspace.
+    """
+
+    GIT = "git"
+    LOCAL = "local"
     COPY = "copy"
     GENERATED = "generated"
 
@@ -264,13 +270,21 @@ def _validate_relative_path(value: str) -> str:
 
 
 class ArtifactCandidate(ContractModel):
-    """Child-produced output awaiting orchestrator validation and registration."""
+    """Child-produced output awaiting orchestrator validation and registration.
+
+    A candidate is normally a workspace file (``path`` is workspace-relative).
+    When ``content`` is set, the candidate carries its bytes directly and
+    ``path`` is only the filename used inside the artifact store; this lets a
+    child register a derived artifact (e.g. a patch) that lives in the Run data
+    directory rather than inside the source repository.
+    """
 
     kind: NonEmptyStr
     path: str
     media_type: NonEmptyStr
     summary: NonEmptyStr
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    content: str | None = None
 
     @field_validator("path")
     @classmethod
@@ -351,35 +365,34 @@ class CodeUnderstandInput(ContractModel):
 
 
 class CodeModifyInput(ContractModel):
-    """Inputs for an authorized code change and its verification."""
+    """Inputs for an authorized code change; the Agent picks its own verification."""
 
     capability: Literal[Capability.CODE_MODIFY] = Capability.CODE_MODIFY
     instructions: NonEmptyStr
-    allowed_paths: list[str] = Field(default_factory=list)
-    verification_commands: list[NonEmptyStr] = Field(default_factory=list)
+    suggested_paths: list[str] = Field(default_factory=list)
 
-    @field_validator("allowed_paths")
+    @field_validator("suggested_paths")
     @classmethod
     def validate_paths(cls, values: list[str]) -> list[str]:
-        """Keep edit paths relative to the granted workspace."""
+        """Keep suggested edit paths relative to the granted workspace (hints only)."""
 
         return [_validate_relative_path(value) for value in values]
 
 
 class VerificationResult(ContractModel):
-    """Auditable outcome of one caller-declared verification command."""
+    """Auditable outcome of one verification command.
+
+    ``stdout_path``/``stderr_path`` may be workspace-relative or absolute; they
+    locate a durable log file produced by the ProcessRunner (which may live in
+    the Run data directory rather than inside the source repository).
+    """
 
     command: NonEmptyStr
     exit_code: int
     timed_out: bool = False
-    stdout_path: str
-    stderr_path: str
+    stdout_path: NonEmptyStr
+    stderr_path: NonEmptyStr
     duration_seconds: float = Field(ge=0)
-
-    @field_validator("stdout_path", "stderr_path")
-    @classmethod
-    def validate_log_path(cls, value: str) -> str:
-        return _validate_relative_path(value)
 
 
 class CodeUnderstandResult(ContractModel):
@@ -400,7 +413,7 @@ class CodeModifyResult(ContractModel):
 
     changed_files: list[str]
     deleted_files: list[str] = Field(default_factory=list)
-    patch_path: str
+    patch_path: NonEmptyStr
     verification_results: list[VerificationResult] = Field(default_factory=list)
     verification_passed: bool
     residual_risks: list[NonEmptyStr] = Field(default_factory=list)
@@ -409,11 +422,6 @@ class CodeModifyResult(ContractModel):
     @classmethod
     def validate_changed_paths(cls, values: list[str]) -> list[str]:
         return [_validate_relative_path(value) for value in values]
-
-    @field_validator("patch_path")
-    @classmethod
-    def validate_patch_path(cls, value: str) -> str:
-        return _validate_relative_path(value)
 
     @model_validator(mode="after")
     def validate_result(self) -> CodeModifyResult:
@@ -431,36 +439,19 @@ class CodeModifyResult(ContractModel):
 
 
 class ExperimentRunInput(ContractModel):
-    """Inputs for running an experiment and collecting named evidence."""
+    """Inputs for running an experiment and collecting named evidence.
+
+    The repository source comes from the unified workspace context
+    (``ModuleTaskRequest.workspace_spec``), not from this model.
+    """
 
     capability: Literal[Capability.EXPERIMENT_RUN] = Capability.EXPERIMENT_RUN
     instructions: NonEmptyStr
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
     expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
-    repository_url: NonEmptyStr | None = None
-    copy_from: NonEmptyStr | None = None
-    external_repo_path: NonEmptyStr | None = None
     python_version: str = "3.12"
     confirm_before_experiment: bool = False
-
-    @model_validator(mode="after")
-    def validate_single_repository_source(self) -> ExperimentRunInput:
-        """Require at most one repository source for a fresh experiment."""
-        sources = [
-            name
-            for name, value in (
-                ("repository_url", self.repository_url),
-                ("copy_from", self.copy_from),
-                ("external_repo_path", self.external_repo_path),
-            )
-            if value is not None
-        ]
-        if len(sources) > 1:
-            raise ValueError(
-                "repository_url, copy_from, and external_repo_path are mutually exclusive"
-            )
-        return self
 
 
 class ExperimentResult(ContractModel):
@@ -539,6 +530,7 @@ class TaskProposal(ContractModel):
     rationale: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
+    workspace_id: NonEmptyStr | None = None
     inputs: CapabilityInput
 
     @model_validator(mode="after")
@@ -557,6 +549,7 @@ class WorkflowTask(ContractModel):
     inputs: CapabilityInput
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
+    workspace_id: NonEmptyStr | None = None
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     attempts: list[Attempt] = Field(default_factory=list)
@@ -687,7 +680,7 @@ class WorkspaceGrant(ContractModel):
     mode: WorkspaceMode
     allowed_paths: list[str] = Field(default_factory=list)
     denied_paths: list[str] = Field(default_factory=list)
-    source: WorkspaceSource
+    source: WorkspaceSourceKind
 
     @field_validator("allowed_paths", "denied_paths")
     @classmethod
@@ -695,6 +688,32 @@ class WorkspaceGrant(ContractModel):
         """Require every grant path to be relative to root."""
 
         return [_validate_relative_path(value) for value in values]
+
+
+class WorkspaceSpec(ContractModel):
+    """Declared source of one logical workspace; never a physical path."""
+
+    workspace_id: NonEmptyStr
+    source_kind: WorkspaceSourceKind
+    location: str | None = None
+
+
+class WorkspaceRecord(ContractModel):
+    """A workspace resolved to a physical root, plus its source declaration."""
+
+    workspace_id: NonEmptyStr
+    root: NonEmptyStr
+    source: WorkspaceSpec
+    managed: bool = False
+    initial_commit: str | None = None
+
+
+class WorkspaceDescriptor(ContractModel):
+    """Minimal workspace summary the Compiler may see; never physical paths."""
+
+    workspace_id: NonEmptyStr
+    source_kind: WorkspaceSourceKind
+    description: str = ""
 
 
 class ModuleTaskRequest(ContractModel):
@@ -711,6 +730,9 @@ class ModuleTaskRequest(ContractModel):
     answers: list[UserAnswer] = Field(default_factory=list)
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
+    workspace_id: NonEmptyStr | None = None
+    workspace_spec: WorkspaceSpec | None = None
+    output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
 
     @model_validator(mode="after")

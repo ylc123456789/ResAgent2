@@ -18,8 +18,10 @@ from resagent2_contracts import (
     ModuleTaskRequest,
     PendingQuestion,
     ResearchRequest,
+    RunLayout,
     RunStatus,
     TaskBudget,
+    TaskProposal,
     TaskStatus,
     UserAnswer,
     Workflow,
@@ -29,6 +31,11 @@ from resagent2_contracts import (
     WorkOutcome,
     WorkRequestStatus,
     WorkTaskOutcome,
+    WorkspaceGrant,
+    WorkspaceMode,
+    WorkspaceRecord,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
 )
 
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
@@ -50,10 +57,14 @@ class WorkflowScheduler:
         bindings: dict[Capability, ModuleBinding],
         store: RunStore | None = None,
         artifact_root: str | Path = ".resagent2/artifacts",
+        data_root: str | Path | None = None,
+        workspaces: dict[str, WorkspaceSpec] | None = None,
     ) -> None:
         self.bindings = dict(bindings)
         self.store = store or InMemoryRunStore()
         self.artifact_registry = ArtifactRegistry(artifact_root)
+        self.run_layout = RunLayout(data_root) if data_root else None
+        self.workspace_specs = dict(workspaces or {})
 
     def create_run(
         self,
@@ -78,6 +89,7 @@ class WorkflowScheduler:
                 tasks=tasks,
                 created_from=proposal.work_request_id,
             ),
+            workspaces=self._resolve_workspaces(run_id),
             created_at=now,
             updated_at=now,
         )
@@ -96,6 +108,7 @@ class WorkflowScheduler:
         if len(proposal.tasks) > run.request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
         self._require_bindings(task.capability for task in proposal.tasks)
+        run.workspaces = self._resolve_workspaces(run_id)
         run.workflow = Workflow(
             run_id=run_id,
             revision=1,
@@ -105,8 +118,7 @@ class WorkflowScheduler:
         self._save(run)
         return run.model_copy(deep=True)
 
-    @staticmethod
-    def _tasks_from_proposal(proposal: WorkflowProposal) -> list[WorkflowTask]:
+    def _tasks_from_proposal(self, proposal: WorkflowProposal) -> list[WorkflowTask]:
         return [
             WorkflowTask(
                 id=item.id,
@@ -116,9 +128,73 @@ class WorkflowScheduler:
                 inputs=item.inputs,
                 depends_on=item.depends_on,
                 required=item.required,
+                workspace_id=self._resolve_workspace_id(item),
             )
             for item in proposal.tasks
         ]
+
+    def _resolve_workspace_id(self, task: TaskProposal) -> str | None:
+        """Fill or validate one task's workspace_id against declared workspaces.
+
+        A single declared workspace is filled in automatically; a compiler that
+        invents an undeclared id is rejected.
+        """
+        ids = list(self.workspace_specs.keys())
+        if task.workspace_id is not None:
+            if task.workspace_id not in ids:
+                raise OrchestrationError(
+                    f"task {task.id} references unknown workspace_id "
+                    f"{task.workspace_id!r}"
+                )
+            return task.workspace_id
+        if len(ids) == 1:
+            return ids[0]
+        if ids:
+            raise OrchestrationError(
+                f"task {task.id} must declare a workspace_id (multiple workspaces exist)"
+            )
+        return None
+
+    def _resolve_workspaces(self, run_id: str) -> dict[str, WorkspaceRecord]:
+        """Resolve declared workspace specs into physical records for one run."""
+        records: dict[str, WorkspaceRecord] = {}
+        for workspace_id, spec in self.workspace_specs.items():
+            if spec.workspace_id != workspace_id:
+                raise OrchestrationError(
+                    f"workspace spec id {spec.workspace_id!r} does not match key "
+                    f"{workspace_id!r}"
+                )
+            if spec.source_kind == WorkspaceSourceKind.LOCAL:
+                if spec.location is None:
+                    raise OrchestrationError(
+                        f"LOCAL workspace {workspace_id!r} requires a location"
+                    )
+                root = str(Path(spec.location).expanduser().resolve())
+                managed = False
+            else:
+                if self.run_layout is None:
+                    raise OrchestrationError(
+                        f"managed workspace {workspace_id!r} requires data_root"
+                    )
+                root = str(self.run_layout.workspace_repo_dir(run_id, workspace_id))
+                managed = True
+            records[workspace_id] = WorkspaceRecord(
+                workspace_id=workspace_id,
+                root=root,
+                source=spec,
+                managed=managed,
+            )
+        return records
+
+    @staticmethod
+    def _grant(record: WorkspaceRecord, capability: Capability) -> WorkspaceGrant:
+        """Derive the per-attempt boundary from a resolved workspace record."""
+        writable = capability in {Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN}
+        return WorkspaceGrant(
+            root=record.root,
+            mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
+            source=record.source.source_kind,
+        )
 
     def load(self, run_id: str) -> ResearchRun:
         """Load the current validated run state."""
@@ -181,6 +257,13 @@ class WorkflowScheduler:
             and previous_attempt.session is not None
             else None
         )
+        record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
+        grant = self._grant(record, task.capability) if record is not None else None
+        output_dir = (
+            str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
+            if self.run_layout is not None
+            else None
+        )
         module_request = ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,
@@ -200,7 +283,10 @@ class WorkflowScheduler:
                 max_llm_calls=min(50, run.request.budget.max_llm_calls),
                 timeout_seconds=run.request.budget.timeout_seconds,
             ),
-            workspace=binding.workspace,
+            workspace=grant,
+            workspace_id=task.workspace_id,
+            workspace_spec=record.source if record is not None else None,
+            output_dir=output_dir,
             parent_session_id=previous_session,
         )
         try:
@@ -242,7 +328,7 @@ class WorkflowScheduler:
             for index, candidate in enumerate(result.artifacts, start=1):
                 artifact = self.artifact_registry.register(
                     candidate,
-                    grant=binding.workspace,
+                    grant=grant,
                     producer=binding.owner,
                     run_id=run.run_id,
                     task_id=task.id,
@@ -408,6 +494,7 @@ class WorkflowScheduler:
                     inputs=item.inputs,
                     depends_on=item.depends_on,
                     required=item.required,
+                    workspace_id=self._resolve_workspace_id(item),
                 )
             )
         try:

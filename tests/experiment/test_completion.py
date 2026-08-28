@@ -6,7 +6,7 @@ from resagent2_contracts import (
     ExperimentResult,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceSourceKind,
 )
 from resagent2_capabilities import WorkspaceBoundary
 from resagent2_runtime import AgentState, FinishCandidate
@@ -35,7 +35,7 @@ def _boundary(root: Path) -> WorkspaceBoundary:
             root=str(root),
             mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["."],
-            source=WorkspaceSource.EXISTING,
+            source=WorkspaceSourceKind.LOCAL,
         )
     )
 

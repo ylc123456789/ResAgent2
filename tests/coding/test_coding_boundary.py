@@ -10,6 +10,7 @@ ALLOWED_IMPORT_ROOTS = {
     "__future__",
     "hashlib",
     "json",
+    "pathlib",
     "pydantic",
     "resagent2_capabilities",
     "resagent2_contracts",

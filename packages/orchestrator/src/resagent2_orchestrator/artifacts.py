@@ -51,23 +51,6 @@ class ArtifactRegistry:
         index: int,
         existing_ids: set[str],
     ) -> ArtifactRef:
-        if grant is None:
-            raise ArtifactRegistrationError("ArtifactCandidate requires a workspace grant")
-        workspace = Path(grant.root).resolve(strict=True)
-        source = (workspace / candidate.path).resolve(strict=True)
-        if not source.is_file() or not source.is_relative_to(workspace):
-            raise ArtifactRegistrationError("artifact path is outside workspace or not a file")
-        if grant.allowed_paths and not any(
-            source.is_relative_to((workspace / path).resolve())
-            for path in grant.allowed_paths
-        ):
-            raise ArtifactRegistrationError("artifact path is outside allowed_paths")
-        if any(
-            source.is_relative_to((workspace / path).resolve())
-            for path in grant.denied_paths
-        ):
-            raise ArtifactRegistrationError("artifact path is inside denied_paths")
-
         suffix = task_id.removeprefix("task_")
         artifact_id = f"artifact_{suffix}_{attempt_number}_{index}"
         if artifact_id in existing_ids:
@@ -75,17 +58,59 @@ class ArtifactRegistry:
 
         destination_dir = self.root / run_id / artifact_id
         destination_dir.mkdir(parents=True, exist_ok=False)
-        destination = destination_dir / source.name
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
-                temporary = Path(handle.name)
-            shutil.copyfile(source, temporary)
-            os.replace(temporary, destination)
-            digest = _sha256(destination)
-        except Exception:
-            shutil.rmtree(destination_dir, ignore_errors=True)
-            raise
+
+        if candidate.content is not None:
+            # Content-carried artifact (e.g. a patch living in the Run data
+            # directory): write bytes directly, no workspace containment check.
+            destination = destination_dir / Path(candidate.path).name
+            encoded = candidate.content.encode("utf-8")
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(encoded)
+                os.replace(temporary, destination)
+                digest = _sha256(destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                shutil.rmtree(destination_dir, ignore_errors=True)
+                raise
+        else:
+            if grant is None:
+                raise ArtifactRegistrationError(
+                    "workspace-file ArtifactCandidate requires a workspace grant"
+                )
+            workspace = Path(grant.root).resolve(strict=True)
+            source = (workspace / candidate.path).resolve(strict=True)
+            if not source.is_file() or not source.is_relative_to(workspace):
+                raise ArtifactRegistrationError(
+                    "artifact path is outside workspace or not a file"
+                )
+            if grant.allowed_paths and not any(
+                source.is_relative_to((workspace / path).resolve())
+                for path in grant.allowed_paths
+            ):
+                raise ArtifactRegistrationError("artifact path is outside allowed_paths")
+            if any(
+                source.is_relative_to((workspace / path).resolve())
+                for path in grant.denied_paths
+            ):
+                raise ArtifactRegistrationError("artifact path is inside denied_paths")
+
+            destination = destination_dir / source.name
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+                    temporary = Path(handle.name)
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, destination)
+                digest = _sha256(destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                shutil.rmtree(destination_dir, ignore_errors=True)
+                raise
 
         return ArtifactRef(
             id=artifact_id,

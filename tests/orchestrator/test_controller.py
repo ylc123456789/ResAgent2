@@ -219,7 +219,7 @@ def _cycle_compiler():
     a fresh task) for every subsequent request on the same workflow."""
 
     class _CycleCompiler:
-        def compile(self, request, *, current, registry, budget):
+        def compile(self, request, *, current, registry, budget, workspaces=None):
             if current is None:
                 return proposal(request.id)
             # A new request on an existing workflow becomes a patch adding one task.
@@ -353,7 +353,7 @@ def test_json_store_recovers_run_boundary(tmp_path) -> None:
 
 def test_compilation_failure_fails_run() -> None:
     class _FailingCompiler:
-        def compile(self, request, *, current, registry, budget):
+        def compile(self, request, *, current, registry, budget, workspaces=None):
             raise ValueError("compiler exploded")
 
     scheduler = WorkflowScheduler(
@@ -381,7 +381,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> Non
     """Do not compile/apply a second graph after the acceptance crash window."""
 
     class _MustNotCompile:
-        def compile(self, request, *, current, registry, budget):
+        def compile(self, request, *, current, registry, budget, workspaces=None):
             raise AssertionError("accepted workflow must not be compiled again")
 
     completed_session = SessionRef(

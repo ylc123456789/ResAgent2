@@ -26,7 +26,9 @@ from resagent2_contracts import (
     WorkflowTask,
     WorkspaceGrant,
     WorkspaceMode,
-    WorkspaceSource,
+    WorkspaceRecord,
+    WorkspaceSourceKind,
+    WorkspaceSpec,
     ModuleTaskRequest,
     ResearchRequest,
     WarningRecord,
@@ -272,8 +274,33 @@ def test_workspace_grant_rejects_paths_outside_root() -> None:
             root="/work/repo",
             mode=WorkspaceMode.READ_ONLY,
             allowed_paths=["/etc/passwd"],
-            source=WorkspaceSource.EXISTING,
+            source=WorkspaceSourceKind.LOCAL,
         )
+
+
+def test_workspace_source_kind_values() -> None:
+    assert {kind.value for kind in WorkspaceSourceKind} == {
+        "git",
+        "local",
+        "copy",
+        "generated",
+    }
+
+
+def test_workspace_spec_and_record_round_trip() -> None:
+    spec = WorkspaceSpec(
+        workspace_id="ws_main",
+        source_kind=WorkspaceSourceKind.LOCAL,
+        location="/tmp/repo",
+    )
+    record = WorkspaceRecord(
+        workspace_id="ws_main", root="/tmp/repo", source=spec, managed=False
+    )
+
+    restored = WorkspaceRecord.model_validate_json(record.model_dump_json())
+
+    assert restored == record
+    assert restored.source.source_kind == WorkspaceSourceKind.LOCAL
 
 
 def test_models_reject_unknown_fields() -> None:

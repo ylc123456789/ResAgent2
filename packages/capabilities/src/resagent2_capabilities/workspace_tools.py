@@ -17,7 +17,7 @@ from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 from .artifacts import RegisteredArtifactReader
 from .git import GitWorkspace
-from .process import ProcessRunner
+from .process import CommandPermissionPolicy, ProcessRunner
 from .workspace import WorkspaceBoundary
 
 
@@ -289,13 +289,13 @@ class ReplaceTextTool:
 
 
 class RunVerificationInput(RuntimeModel):
-    """Empty request that runs the complete declared verification set."""
+    """Agent-chosen shell-free commands, run as one bounded verification pass."""
 
-    pass
+    commands: list[NonEmptyStr] = Field(min_length=1)
 
 
 class RunVerificationTool:
-    """Run caller-declared commands and bind results to the edit revision."""
+    """Run Agent-chosen commands and bind results to the edit revision."""
 
     name = "run_verification"
     input_model = RunVerificationInput
@@ -304,25 +304,29 @@ class RunVerificationTool:
         self,
         runner: ProcessRunner,
         repository: GitWorkspace,
-        commands: list[str],
         *,
         log_root: str,
         timeout_seconds: int,
+        permission_policy: CommandPermissionPolicy | None = None,
     ) -> None:
         self.runner = runner
         self.repository = repository
-        self.commands = commands
         self.log_root = log_root
         self.timeout_seconds = timeout_seconds
+        self.permission_policy = permission_policy or CommandPermissionPolicy()
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        args = cast(RunVerificationInput, arguments)
+        decision = self.permission_policy.check(args.commands)
+        if not decision.allowed:
+            raise ValueError(f"verification commands rejected: {decision.reason}")
         revision = int(state.memory.get("edit_revision", 0))
         before_digest = hashlib.sha256(
             self.repository.diff().encode("utf-8")
         ).hexdigest()
         deadline = monotonic() + self.timeout_seconds
         results = []
-        for index, command in enumerate(self.commands, start=1):
+        for index, command in enumerate(args.commands, start=1):
             remaining = deadline - monotonic()
             if remaining <= 0:
                 break

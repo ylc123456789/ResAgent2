@@ -30,6 +30,7 @@ from resagent2_contracts import (
     WorkRequest,
     WorkRequestStatus,
     WorkTaskOutcome,
+    WorkspaceDescriptor,
 )
 
 from .compiler import WorkflowCompiler
@@ -291,6 +292,7 @@ class ResearchController:
                 current=run.workflow,
                 registry=self.registry,
                 budget=run.request.budget,
+                workspaces=self._workspace_descriptors(),
             )
         except Exception as error:
             active.status = WorkRequestStatus.FAILED
@@ -391,6 +393,16 @@ class ResearchController:
                 )
             )
         return unresolved
+
+    def _workspace_descriptors(self) -> list[WorkspaceDescriptor]:
+        """Summarize the scheduler's declared workspaces for the compiler."""
+        return [
+            WorkspaceDescriptor(
+                workspace_id=workspace_id,
+                source_kind=spec.source_kind,
+            )
+            for workspace_id, spec in self.scheduler.workspace_specs.items()
+        ]
 
     def _save(self, run: ResearchRun) -> None:
         run.updated_at = datetime.now(UTC)

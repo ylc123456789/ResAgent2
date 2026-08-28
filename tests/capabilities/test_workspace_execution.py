@@ -20,6 +20,7 @@ from resagent2_capabilities import (
     ProcessRunner,
     ReadFileTool,
     RegisteredArtifactReader,
+    ReplaceTextTool,
     UnsafeCommandError,
     WorkspaceBoundary,
     WorkspacePermissionError,
@@ -219,3 +220,75 @@ def test_read_file_rejects_oversized_files(tmp_path) -> None:
     tool = ReadFileTool(boundary, max_bytes=1_000_000)
     with pytest.raises(ValueError, match="too large"):
         tool.execute(_agent_state(), tool.input_model(path="big.txt"))
+
+
+def test_replace_text_preserves_leading_whitespace_in_old_text(tmp_path) -> None:
+    # old_text is an exact needle: indentation must survive model validation.
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "m.py").write_text("class A:\n    def f(self):\n        return 1\n", encoding="utf-8")
+    boundary = WorkspaceBoundary(grant(root))
+    tool = ReplaceTextTool(boundary)
+
+    args = tool.input_model(
+        path="m.py",
+        old_text="    def f(self):\n        return 1",
+        new_text="    def f(self):\n        return 2",
+    )
+    assert args.old_text == "    def f(self):\n        return 1"
+
+    tool.execute(_agent_state(), args)
+    assert (root / "m.py").read_text(encoding="utf-8") == (
+        "class A:\n    def f(self):\n        return 2\n"
+    )
+
+
+def test_replace_text_does_not_grow_indentation(tmp_path) -> None:
+    # The historical bug stripped old_text's indentation, so the replacement
+    # left the original spaces AND prepended new ones (4 -> 8). This guards it.
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "m.py").write_text("class A:\n    def f(self):\n        return 1\n", encoding="utf-8")
+    tool = ReplaceTextTool(WorkspaceBoundary(grant(root)))
+
+    tool.execute(
+        _agent_state(),
+        tool.input_model(
+            path="m.py",
+            old_text="    def f(self):\n        return 1",
+            new_text="    def f(self):\n        return 2",
+        ),
+    )
+    assert (root / "m.py").read_text(encoding="utf-8") == (
+        "class A:\n    def f(self):\n        return 2\n"
+    )
+
+
+def test_replace_text_rejects_ambiguous_match_without_touching_file(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    original = "def f(self):\n    pass\ndef g(self):\n    pass\n"
+    (root / "m.py").write_text(original, encoding="utf-8")
+    tool = ReplaceTextTool(WorkspaceBoundary(grant(root)))
+
+    with pytest.raises(ValueError, match="found 2"):
+        tool.execute(
+            _agent_state(),
+            tool.input_model(
+                path="m.py",
+                old_text="    pass",
+                new_text="    return 1",
+            ),
+        )
+    # The file must be untouched after a rejected ambiguous replacement.
+    assert (root / "m.py").read_text(encoding="utf-8") == original
+
+
+def test_replace_text_rejects_empty_old_text(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "m.py").write_text("x = 1\n", encoding="utf-8")
+    tool = ReplaceTextTool(WorkspaceBoundary(grant(root)))
+
+    with pytest.raises(Exception, match="old_text must not be empty"):
+        tool.input_model(path="m.py", old_text="", new_text="y")

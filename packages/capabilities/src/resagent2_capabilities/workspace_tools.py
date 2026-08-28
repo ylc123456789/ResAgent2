@@ -10,7 +10,7 @@ from pathlib import Path
 from time import monotonic
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
@@ -225,8 +225,21 @@ class ReplaceTextInput(RuntimeModel):
     """Replace one exact text occurrence in an existing file."""
 
     path: NonEmptyStr
-    old_text: NonEmptyStr
+    old_text: str
     new_text: str
+
+    @field_validator("old_text")
+    @classmethod
+    def _old_text_must_not_be_empty(cls, value: str) -> str:
+        """Reject empty matches without stripping whitespace.
+
+        ``old_text`` is an exact-text needle: leading/trailing spaces, tabs and
+        newlines are significant (they encode Python indentation). Unlike
+        ``NonEmptyStr``, it must never be strip-normalized.
+        """
+        if value == "":
+            raise ValueError("old_text must not be empty")
+        return value
 
 
 class ReplaceTextTool:

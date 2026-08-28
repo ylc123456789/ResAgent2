@@ -484,6 +484,8 @@ class WorkflowScheduler:
         }
         tasks: list[WorkTaskOutcome] = []
         for task in run.workflow.tasks:
+            if task.work_request_id != work_request_id:
+                continue
             outcome_status = status_by_task.get(task.status)
             if outcome_status is None:
                 continue

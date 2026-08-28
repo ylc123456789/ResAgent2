@@ -651,7 +651,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | ModuleResult payload | ModuleResult[PayloadT]、Attempt.payload | Phase 4/5-7 | Core 原样持久化但不解释；原生强类型模型与领域消费方在对应 Agent 阶段定义 |
 | 科学控制闭环 | ScientificAssessment、WorkRequest、WorkOutcome、ScientificOpinion | Phase 7 | 契约已落地（7.1）；Scientific Agent 四态已实现（7.4）；未接 production |
 | WorkRequest 生命周期 | WorkRequestStatus、work_request_id 幂等 | Phase 7 | 状态机已落地（7.1）；ResearchController 驱动已实现（7.5）；未接 production |
-| Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生已实现（7.4）；RunStore 复核并集待 7.5 |
+| Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 目标已裁定，代码未实现 |
 
 ## 13. 文档同步检查
@@ -685,4 +685,5 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.3 literature capability | `59265c6` | 本地 181 tests | ArxivLiteratureBackend + LiteratureSearchTool + ArtifactRegistrationPort |
 | 2026-08-28 | Phase 7.4 Scientific Agent | `445bb6d` | 本地 190 tests | 原生 Scientific Agent 四态，复用 AgentLoop，未接 production |
 | 2026-08-28 | Phase 7.1–7.4 hardening 收尾 | `5cbfaec` | 本地 200 tests | 修 7 条契约硬违约（assessment 证据、acknowledged 双向、幂等、patch 隔离、跨 run 拒绝、orchestrator provenance、控制信号互斥）+ 证据摘要 + prompt；负例测试 |
-| 2026-08-28 | Phase 7.5 ResearchController | 未提交 | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |
+| 2026-08-28 | Phase 7.5 ResearchController | `a1562fe` | 本地 207 tests | 自然语言入口、WorkRequest 状态机、compiler→scheduler→WorkOutcome→resume、ScientificGate 占位、ResearchRun §20.10.1 字段 |
+| 2026-08-28 | Phase 7.5 hardening 收尾 | 未提交 | 本地 213 tests | 修 resume 幂等（work_outcome/answers 键）、consumed 时机、answers 只传新增、WorkOutcome 按 work_request_id 隔离、unresolved 从整个 workflow 派生、observed 复核、Run 总预算；补 6 类负例测试 |

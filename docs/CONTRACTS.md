@@ -6,11 +6,11 @@
 
 **当前实现**：`resagent2-contracts 0.1.0`，wire schema `2.0`（`SCHEMA_VERSION="2.0"`，Phase 7.1 起）
 
-**Phase 7 目标**：§20 已实现大部分（ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型、ArtifactRef 三态 provenance、work_request_id 追溯）；剩余 §20.10.1（ResearchRun 字段）、§20.10.2（ScientificCompletionValidator）随 7.5/7.6 落地
+**Phase 7 目标**：§20 已实现大部分（ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型、ArtifactRef 三态 provenance、work_request_id 追溯）；§20.10.1（ResearchRun 字段）已随 7.5 落地，§20.10.2（ScientificCompletionValidator）随 7.6 落地
 
 ## 1. 使用规则
 
-本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（部分已 deprecated）；§20 描述 Phase 7 的 2.0 目标契约，其中 7.1 已落地并在 `models.py` 导出，7.5/7.6 待实现的部分以“尚未实现”标注。
+本文件回答“模块之间传什么、字段准确表示什么”。§3—§19 描述 schema 1.1 的历史类型（部分已 deprecated）；§20 描述 Phase 7 的 2.0 目标契约，其中 7.1 已落地并在 `models.py` 导出，7.6 待实现的部分以“尚未实现”标注。
 
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
@@ -532,7 +532,7 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 
 ## 20. Phase 7 目标契约（schema 2.0）
 
-7.1 已把本节大部分类型落入 `models.py` 并导出（`SCHEMA_VERSION="2.0"`）；§20.10.1（ResearchRun 内部字段）、§20.10.2（ScientificCompletionValidator/FinalReportData）是 orchestrator 内部模型，随 7.5/7.6 落地。尚未实现的类型会在相应小节明确标注「尚未实现」，不得当作当前公共导出。
+7.1 已把本节大部分类型落入 `models.py` 并导出（`SCHEMA_VERSION="2.0"`）；§20.10.1（ResearchRun 内部字段）已随 7.5 落地，§20.10.2（ScientificCompletionValidator/FinalReportData）是 orchestrator 内部模型，随 7.6 落地。尚未实现的类型会在相应小节明确标注「尚未实现」，不得当作当前公共导出。
 
 ### 20.1 新 ID
 

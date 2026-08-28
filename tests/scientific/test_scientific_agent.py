@@ -450,3 +450,50 @@ def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
     state = agent.store.load(result.session.id)
     summaries = state.memory["read_artifact_summaries"]
     assert set(summaries) == {"artifact_a", "artifact_b"}
+
+
+def test_repeated_work_outcome_delivery_is_idempotent() -> None:
+    """Delivering the same work_outcome twice must return the same result,
+    not consume a second LLM action."""
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "request_work", "arguments": {
+                    "assessment": {"statement": "need evidence"},
+                    "work_request": {
+                        "objective": "Run experiment",
+                        "expected_evidence": ["accuracy"],
+                    },
+                }},
+                {"tool": "finish", "arguments": {
+                    "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
+                    "summary": "done",
+                }},
+                # A third action that must never be reached on duplicate delivery.
+                {"tool": "finish", "arguments": {
+                    "opinion": opinion(ScientificVerdict.SUPPORTS, evidence=["artifact_x"]),
+                    "summary": "should not run",
+                }},
+            ]
+        )
+    )
+    first = agent.run(turn())
+    assert first.status == "request_work"
+    session_id = first.session.id
+
+    outcome = WorkOutcome(
+        work_request_id="work_round1",
+        workflow_revision=1,
+        summary="ran experiment",
+        tasks=[
+            WorkTaskOutcome(task_id="task_experiment", status="completed", summary="ran")
+        ],
+    )
+    resume = turn(work_outcome=outcome, parent=session_id)
+    result = agent.run(resume)
+    assert result.status == "completed"
+
+    duplicate = agent.run(resume)
+    assert duplicate.status == "completed"
+    assert duplicate.opinion.verdict == ScientificVerdict.INCONCLUSIVE
+    assert duplicate.opinion == result.opinion

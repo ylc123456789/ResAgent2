@@ -1047,6 +1047,7 @@ class ScientificWorkRequestResult(ContractModel):
     work_request: WorkRequestDraft
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    llm_calls: int = Field(default=0, ge=0)
 
 
 class ScientificQuestionResult(ContractModel):
@@ -1055,6 +1056,7 @@ class ScientificQuestionResult(ContractModel):
     question: QuestionDraft
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    llm_calls: int = Field(default=0, ge=0)
 
 
 class ScientificCompletedResult(ContractModel):
@@ -1062,6 +1064,7 @@ class ScientificCompletedResult(ContractModel):
     opinion: ScientificOpinion
     session: SessionRef
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    llm_calls: int = Field(default=0, ge=0)
 
 
 class ScientificFailedResult(ContractModel):
@@ -1069,6 +1072,7 @@ class ScientificFailedResult(ContractModel):
     error: ModuleError
     session: SessionRef | None = None
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    llm_calls: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_failed(self) -> ScientificFailedResult:

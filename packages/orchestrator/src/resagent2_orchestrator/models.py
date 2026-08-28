@@ -48,5 +48,7 @@ class ResearchRun(OrchestratorModel):
     scientific_observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
     final_opinion: ScientificOpinion | None = None
     final_report_artifact_id: ArtifactId | None = None
+    delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
+    llm_calls_used: int = Field(default=0, ge=0)
     created_at: datetime
     updated_at: datetime

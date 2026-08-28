@@ -112,13 +112,16 @@ class ScientificAgent:
 
         session_id = request.parent_session_id or f"session_scientific_{request.run_id}"
 
-        # Idempotency: a repeated first request (no parent, no work_outcome)
-        # returns the already-persisted result instead of re-running the loop.
-        if request.parent_session_id is None and request.work_outcome is None:
-            cached = self._cached_turn_result(session_id)
-            if cached is not None:
-                return cached
+        # Idempotency: repeated delivery of the same work_outcome or the same
+        # answers returns the persisted result instead of re-running the loop
+        # (CONTRACTS §20.7: work_outcome keyed by work_request_id, answers keyed
+        # by question_id).
+        idem_key = self._idempotency_key(request)
+        cached = self._cached_turn_result(session_id, idem_key)
+        if cached is not None:
+            return cached
 
+        step_before = self._step(session_id)
         loop_request = _LoopRequest(
             run_id=request.run_id,
             budget=request.budget,
@@ -130,15 +133,27 @@ class ScientificAgent:
             session_id=session_id,
             initial_memory={},
         )
-        turn_result = self._to_turn_result(request, result, session_id)
-        self._cache_turn_result(session_id, turn_result)
+        llm_calls = self._step(session_id) - step_before
+        turn_result = self._to_turn_result(request, result, session_id, llm_calls)
+        self._cache_turn_result(session_id, idem_key, turn_result)
         return turn_result
+
+    @staticmethod
+    def _idempotency_key(request: ScientificTurnRequest) -> tuple:
+        if request.work_outcome is not None:
+            return ("work", request.work_outcome.work_request_id)
+        if request.answers:
+            return ("answers", tuple(sorted(a.question_id for a in request.answers)))
+        if request.parent_session_id is None:
+            return ("first",)
+        return ("resume",)
 
     def _to_turn_result(
         self,
         request: ScientificTurnRequest,
         result: ModuleResult,
         session_id: str,
+        llm_calls: int,
     ) -> ScientificTurnResult:
         observed = self._observed(session_id)
 
@@ -154,6 +169,7 @@ class ScientificAgent:
                     ),
                     session=result.session,
                     observed_artifact_ids=observed,
+                    llm_calls=llm_calls,
                 )
             return ScientificCompletedResult(
                 status="completed",
@@ -175,6 +191,7 @@ class ScientificAgent:
                     ),
                     session=result.session,
                     observed_artifact_ids=observed,
+                    llm_calls=llm_calls,
                 )
             if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
                 return ScientificFailedResult(
@@ -186,6 +203,7 @@ class ScientificAgent:
                     ),
                     session=result.session,
                     observed_artifact_ids=observed,
+                    llm_calls=llm_calls,
                 )
             return ScientificWorkRequestResult(
                 status="request_work",
@@ -210,6 +228,7 @@ class ScientificAgent:
                     ),
                     session=result.session,
                     observed_artifact_ids=observed,
+                    llm_calls=llm_calls,
                 )
             return ScientificQuestionResult(
                 status="needs_user_input",
@@ -238,14 +257,26 @@ class ScientificAgent:
             return []
         return _observed_artifact_ids(state)
 
+    def _step(self, session_id: str) -> int:
+        try:
+            return self.store.load(session_id).step
+        except Exception:
+            return 0
+
     _turn_result_adapter = TypeAdapter(ScientificTurnResult)
 
-    def _cached_turn_result(self, session_id: str) -> ScientificTurnResult | None:
+    @staticmethod
+    def _idem_key_label(key: tuple) -> str:
+        return "/".join(str(part) for part in key)
+
+    def _cached_turn_result(
+        self, session_id: str, key: tuple
+    ) -> ScientificTurnResult | None:
         try:
             state = self.store.load(session_id)
         except Exception:
             return None
-        raw = state.memory.get("_turn_result")
+        raw = state.memory.get("_turn_results", {}).get(self._idem_key_label(key))
         if raw is None:
             return None
         try:
@@ -254,13 +285,15 @@ class ScientificAgent:
             return None
 
     def _cache_turn_result(
-        self, session_id: str, turn_result: ScientificTurnResult
+        self, session_id: str, key: tuple, turn_result: ScientificTurnResult
     ) -> None:
         try:
             state = self.store.load(session_id)
         except Exception:
             return
-        state.memory["_turn_result"] = turn_result.model_dump(mode="json")
+        results = dict(state.memory.get("_turn_results", {}))
+        results[self._idem_key_label(key)] = turn_result.model_dump(mode="json")
+        state.memory["_turn_results"] = results
         self.store.save(state)
 
     def _latest_assessment(self, session_id: str) -> ScientificAssessment:

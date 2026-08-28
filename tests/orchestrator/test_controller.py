@@ -6,6 +6,7 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner,
+    ArtifactRef,
     Capability,
     CapabilityDefinition,
     CapabilityRegistry,
@@ -127,11 +128,15 @@ def request_work_action() -> dict:
     }
 
 
-def finish_action(verdict=ScientificVerdict.INCONCLUSIVE) -> dict:
+def finish_action(verdict=ScientificVerdict.INCONCLUSIVE, acknowledged=()) -> dict:
+    opinion = {"verdict": verdict.value, "statement": "done"}
+    if acknowledged:
+        opinion["acknowledged_task_ids"] = list(acknowledged)
+        opinion["limitations"] = ["a task failed"]
     return {
         "tool": "finish",
         "arguments": {
-            "opinion": {"verdict": verdict.value, "statement": "done"},
+            "opinion": opinion,
             "summary": "complete",
         },
     }
@@ -237,7 +242,11 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
         },
         store=InMemoryRunStore(),
     )
-    actions = [request_work_action(), request_work_action(), finish_action()]
+    actions = [
+        request_work_action(),
+        request_work_action(),
+        finish_action(acknowledged=["task_experiment"]),
+    ]
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
         scientific_port=scientific,
@@ -317,3 +326,192 @@ def test_compilation_failure_fails_run() -> None:
 
     assert run.status == RunStatus.FAILED
     assert run.work_requests[0].status.value == "failed"
+
+
+def test_second_work_outcome_contains_only_second_round_tasks() -> None:
+    actions = [
+        request_work_action(),
+        request_work_action(),
+        finish_action(),
+    ]
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result(), completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=_cycle_compiler(),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_outcome_isolate", research_request())
+
+    assert run.status == RunStatus.COMPLETED
+    first = run.work_requests[0]
+    second = run.work_requests[1]
+    assert first.outcome.work_request_id == first.id
+    assert [t.task_id for t in first.outcome.tasks] == ["task_experiment"]
+    assert second.outcome.work_request_id == second.id
+    assert [t.task_id for t in second.outcome.tasks] == ["task_work_2"]
+
+
+def test_failed_task_appears_in_unresolved_then_acknowledged() -> None:
+    failed = ModuleResult(
+        status=ModuleStatus.FAILED,
+        summary="crashed",
+        error=ModuleError(
+            code=ErrorCode.TOOL_FAILED, message="crashed", retryable=False
+        ),
+    )
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([failed, completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    actions = [
+        request_work_action(),
+        request_work_action(),
+        finish_action(acknowledged=["task_experiment"]),
+    ]
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=_cycle_compiler(),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_unresolved", research_request())
+
+    assert run.status == RunStatus.COMPLETED
+    first_outcome = run.work_requests[0].outcome
+    assert [t.task_id for t in first_outcome.tasks] == ["task_experiment"]
+    assert first_outcome.tasks[0].status == "failed"
+
+
+def test_forged_observed_artifact_is_rejected() -> None:
+    class _ForgingPort:
+        """A ScientificPort that reports an observed id that was never registered."""
+
+        def __init__(self):
+            from resagent2_scientific import ScientificAgent
+
+            self.agent = ScientificAgent(
+                ScriptedLLMClient([request_work_action(), finish_action()]),
+                store=InMemorySessionStore(),
+            )
+
+        def run(self, request):
+            result = self.agent.run(request)
+            # Forge an extra observed id into the result.
+            return result.model_copy(
+                update={"observed_artifact_ids": ["artifact_fake"]}
+            )
+
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    controller = ResearchController(
+        scientific_port=_ForgingPort(),
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_forged", research_request())
+
+    assert run.status == RunStatus.COMPLETED
+    assert run.scientific_observed_artifact_ids == []
+
+
+def test_run_total_llm_budget_exhaustion() -> None:
+    # A tiny run budget so the accumulated Scientific turns exceed it.
+    tiny = ResearchRequest(
+        goal="Evaluate",
+        budget=RunBudget(
+            max_tasks=5,
+            max_attempts_per_task=2,
+            max_llm_calls=1,
+            timeout_seconds=60,
+        ),
+    )
+    actions = [request_work_action(), request_work_action()]
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result(), completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=_cycle_compiler(),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_budget", tiny)
+
+    assert run.status == RunStatus.FAILED
+
+
+def test_answer_then_request_work_then_outcome_completes() -> None:
+    ask_action = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "need dataset"},
+            "text": "Which dataset?",
+            "requested_fields": ["dataset"],
+            "reason": "missing",
+        },
+    }
+    actions = [ask_action, request_work_action(), finish_action()]
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    paused = controller.create_run("run_answer_work", research_request())
+    assert paused.status == RunStatus.PAUSED
+
+    answer = UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset": "demo"},
+        answered_at=NOW,
+    )
+    run = controller.answer_question("run_answer_work", answer)
+
+    assert run.status == RunStatus.COMPLETED
+    assert run.final_opinion is not None

@@ -114,6 +114,11 @@ class ResearchController:
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
 
+            if run.llm_calls_used >= run.request.budget.max_llm_calls:
+                run.status = RunStatus.FAILED
+                self._save(run)
+                return run
+
             turn_result = self._scientific_turn(run)
             run = self._apply_turn(run_id, turn_result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
@@ -126,10 +131,6 @@ class ResearchController:
         if active is not None and active.status == WorkRequestStatus.STABLE:
             work_outcome = active.outcome
             parent_session_id = active.scientific_session_id
-            # Mark consumed before the resume; the same WorkOutcome must never
-            # be delivered twice (CONTRACTS §20.7 idempotency).
-            active.status = WorkRequestStatus.CONSUMED
-            self._save(run)
         return self.scientific_port.run(
             ScientificTurnRequest(
                 run_id=run.run_id,
@@ -137,7 +138,7 @@ class ResearchController:
                 authorized_artifacts=self._authorized_artifacts(run),
                 work_outcome=work_outcome,
                 unresolved_task_outcomes=self._unresolved_tasks(run),
-                answers=list(run.answers),
+                answers=self._pending_answers(run),
                 budget=TaskBudget(
                     max_steps=run.request.budget.max_llm_calls,
                     max_llm_calls=run.request.budget.max_llm_calls,
@@ -150,8 +151,19 @@ class ResearchController:
     def _apply_turn(self, run_id: str, result: ScientificTurnResult) -> ResearchRun:
         run = self.scheduler.store.load(run_id)
 
+        # The ScientificPort returned, so the delivered WorkOutcome is consumed.
+        # This runs only after a successful return; a crash before this point
+        # leaves the work request stable so a restart redelivers it (and the
+        # ScientificPort idempotency returns the same result).
+        for work_request in run.work_requests:
+            if work_request.status == WorkRequestStatus.STABLE:
+                work_request.status = WorkRequestStatus.CONSUMED
+
+        self._merge_observed(run, result.observed_artifact_ids)
+        self._accumulate_llm_calls(run, result.llm_calls)
+        self._mark_answers_delivered(run)
+
         if isinstance(result, ScientificWorkRequestResult):
-            self._merge_observed(run, result.observed_artifact_ids)
             run.latest_scientific_assessment = result.assessment
             run.scientific_session = result.session
             now = datetime.now(UTC)
@@ -170,7 +182,6 @@ class ResearchController:
             return self._execute_work_request(run_id)
 
         if isinstance(result, ScientificQuestionResult):
-            self._merge_observed(run, result.observed_artifact_ids)
             run.latest_scientific_assessment = result.assessment
             run.scientific_session = result.session
             run.pending_question = PendingQuestion(
@@ -185,7 +196,6 @@ class ResearchController:
             return run
 
         if isinstance(result, ScientificCompletedResult):
-            self._merge_observed(run, result.observed_artifact_ids)
             violations = self.gate.validate(run, result)
             if violations:
                 run.status = RunStatus.FAILED
@@ -199,7 +209,6 @@ class ResearchController:
 
         # ScientificFailedResult
         assert isinstance(result, ScientificFailedResult)
-        self._merge_observed(run, result.observed_artifact_ids)
         if result.session is not None:
             run.scientific_session = result.session
         run.status = RunStatus.FAILED
@@ -261,19 +270,45 @@ class ResearchController:
     def _merge_observed(self, run: ResearchRun, observed: list[str]) -> None:
         current = set(run.scientific_observed_artifact_ids)
         for artifact_id in observed:
+            artifact = run.artifacts.get(artifact_id)
+            if artifact is None:
+                continue
+            if artifact.run_id != run.run_id:
+                continue
             current.add(artifact_id)
         run.scientific_observed_artifact_ids = sorted(current)
+
+    def _pending_answers(self, run: ResearchRun) -> list[UserAnswer]:
+        delivered = set(run.delivered_answer_ids)
+        return [a for a in run.answers if a.question_id not in delivered]
+
+    def _mark_answers_delivered(self, run: ResearchRun) -> None:
+        run.delivered_answer_ids = [a.question_id for a in run.answers]
+
+    def _accumulate_llm_calls(self, run: ResearchRun, calls: int) -> None:
+        run.llm_calls_used += calls
 
     def _authorized_artifacts(self, run: ResearchRun):
         return [run.artifacts[artifact_id] for artifact_id in run.artifacts]
 
     def _unresolved_tasks(self, run: ResearchRun) -> list[WorkTaskOutcome]:
-        active = self._active_work_request(run)
-        if active is None or active.outcome is None:
+        if run.workflow is None:
             return []
-        return [
-            task for task in active.outcome.tasks if task.status in {"failed", "blocked"}
-        ]
+        unresolved: list[WorkTaskOutcome] = []
+        for task in run.workflow.tasks:
+            if task.status not in {"failed", "blocked"}:
+                continue
+            last = task.attempts[-1] if task.attempts else None
+            unresolved.append(
+                WorkTaskOutcome(
+                    task_id=task.id,
+                    status=task.status.value,
+                    summary=task.goal,
+                    error=last.error if last else None,
+                    warnings=list(task.warnings),
+                )
+            )
+        return unresolved
 
     def _save(self, run: ResearchRun) -> None:
         run.updated_at = datetime.now(UTC)

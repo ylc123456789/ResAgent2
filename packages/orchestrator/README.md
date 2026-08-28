@@ -29,11 +29,12 @@ ResAgent2 的顶层控制模块。
 - ArtifactCandidate 的 workspace 边界检查、hash、复制和 provenance 登记；
 - revision-bound WorkflowPatch 和旧 revision 历史；
 - finish gate；
-- 内存 RunStore 和原子 JSON RunStore。
+- 内存 RunStore 和原子 JSON RunStore；
+- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，一次结构化调用）。
 
 当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding 和 Experiment legacy adapter 已分别在 Phase 5/6 删除，只剩 `LegacyScientificAnalyzeAdapter` 作为过渡。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-上面“WorkRequest/WorkflowCompiler/Scientific Session”的职责是 Phase 7 目标，当前代码尚未实现。当前 production 仍使用 PlanningPort + WorkflowProposal 创建 Run，Scientific 仍走 `LegacyScientificAnalyzeAdapter`；Phase 7 切换后删除旧路径，不长期维护两套总控逻辑。
+上面“WorkRequest/Scientific Session”的职责仍是 Phase 7 目标。WorkflowCompiler（§7.2）已实现并测试，但尚未接入 production composition root；当前 production 仍使用 PlanningPort + WorkflowProposal 创建 Run，Scientific 仍走 `LegacyScientificAnalyzeAdapter`；Phase 7 切换后删除旧路径，不长期维护两套总控逻辑。
 
 ## 最小使用方式
 

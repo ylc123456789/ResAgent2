@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 contracts schema 2.0 完成） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 contracts schema 2.0、7.2 WorkflowCompiler 完成） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
@@ -487,6 +487,8 @@ Compiler 只翻译，不持久化、不执行 Tool、不调用 Agent、不修改
 测试至少覆盖：初始 proposal、已有图 patch、未知 capability、循环依赖、超预算、错误 revision、修改 running/completed Task、编译器返回非法 JSON。测试必须证明同一 WorkRequest 可追溯到 Workflow.created_from。
 
 退出条件：新 Compiler Port 的测试路径完整；PlanningPort/DeterministicPlanningPort 继续仅服务旧 production 路径，到 7.7 一次性删除，不能同时接入 production composition root。
+
+**状态：已完成（2026-08-28）。** `WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入本地 `CompilerLLM`，一次结构化调用，`model_validate` 后强制把 work_request_id 绑定到 `request.id`，保证 traceability 不依赖 LLM 返回值）落地 `orchestrator/compiler.py`。orchestrator 不 import runtime，`CompilerLLM` 由 composition root 适配。测试覆盖 initial proposal、已有图 patch、缺 patch、非法 JSON、循环依赖、超预算，以及 WorkRequest→Workflow.created_from 追溯。未接 production composition root。本地 173 tests 通过。
 
 #### 7.3 literature capability
 

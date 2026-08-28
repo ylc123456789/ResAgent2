@@ -496,26 +496,29 @@ Phase 7 不再创建 scientific_analyze WorkflowTask；schema 2.0 使用 `Scient
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前唯一支持版本为 `1.1`，不维护旧格式兼容层。Phase 4 完成起 `1.0` 冻结；Phase 6 给 `ExperimentRunInput` 增加可选字段时按规则发布 `1.1`（迁移说明见 §10.3 与 ADR-0005），并新增 round-trip 与非法组合测试。Phase 7 会删除旧 capability/input、改变 Proposal 所有权并新增科学控制对象，因此目标版本定为不兼容的 `2.0`，而不是伪装成只加可选字段的 `1.2`。
+Phase 4 完成起 `1.0` 冻结；Phase 6 给 `ExperimentRunInput` 增加可选字段时按规则发布 `1.1`（迁移说明见 §10.3 与 ADR-0005），并新增 round-trip 与非法组合测试。Phase 7 删除旧 capability/input、改变 Proposal 所有权并新增科学控制对象，因此目标版本定为不兼容的 `2.0`，而不是伪装成只加可选字段的 `1.2`。
+
+Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删除 `SuccessCriterion`/`VerificationMode`/`success_criteria`/`WorkflowProposal.questions`、把 `scientific_rationale` 改名 `compilation_rationale`、给 Proposal/Patch/Task 加 `work_request_id`；不维护 1.1 的旧格式兼容层。`2.0` 只有到 7.7 删除全部临时兼容符号、全仓/E2E 通过后才冻结（§20.13.6）。旧 scientific/planning 类型在此期间仍保留并标记 deprecated，供唯一旧 production 路径使用。
 
 ## 18. 当前公共导出核对表
 
 | 类别 | Python 公共类型 |
 |---|---|
-| ID/版本 | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId |
-| 状态/路由 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus |
+| ID/版本 | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId、WorkRequestId |
+| 状态/路由 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus、WorkRequestStatus |
 | 错误/授权 | ErrorCode、WorkspaceMode、WorkspaceSource、SessionStatus |
-| 科学枚举 | VerificationMode、ScientificVerdict |
+| 科学枚举 | ScientificVerdict |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest |
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
-| capability 输入 | ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、CodeUnderstandInput、CodeModifyInput、ExperimentPrepareInput、ExperimentRunInput、AskUserInput、CapabilityInput |
+| capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput（ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput 已 deprecated，7.7 删除） |
 | Coding payload | VerificationResult、CodeUnderstandResult、CodeModifyResult |
 | Experiment payload | ExperimentResult |
-| 工作流 | SuccessCriterion、TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
+| 工作流 | TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
-| 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion |
+| 注册/结论 | CapabilityDefinition、CapabilityRegistry、ScientificConclusion（deprecated，7.7 删除） |
+| 科学控制（2.0） | ScientificAssessment、WorkRequestDraft、WorkRequest、WorkTaskOutcome、WorkOutcome、ScientificOpinion、ScientificTurnRequest、ScientificTurnResult |
 
 ## 19. 已知契约对齐项
 

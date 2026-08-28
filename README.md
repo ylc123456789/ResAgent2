@@ -17,11 +17,11 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：Phase 6 已完成；Phase 7 正在做架构/契约工作，代码尚未开始。**
+**阶段：Phase 6 已完成；Phase 7 进行中（7.1 contracts schema 2.0 已完成）。**
 
-当前已实现 `resagent2-contracts` schema 1.1、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding Agent 与原生 Experiment Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和内容寻址环境；真实执行不再依赖旧 CodingAgent 或旧 reproagent。Scientific 当前仍通过 Phase 4 `LegacyScientificAnalyzeAdapter` 运行。
+当前已实现 `resagent2-contracts` schema 2.0（`SCHEMA_VERSION="2.0"`）、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding Agent 与原生 Experiment Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和内容寻址环境；真实执行不再依赖旧 CodingAgent 或旧 reproagent。Scientific 当前仍通过 Phase 4 `LegacyScientificAnalyzeAdapter` 运行。
 
-Phase 7 的目标架构已经裁定，但尚不是当前代码事实：Scientific Agent 将只负责科学判断；ResAgent 新增 WorkflowCompiler，把语义化 WorkRequest 转成可执行 Workflow；旧 PlanningPort 和 `LegacyScientificAnalyzeAdapter` 在切换后删除。
+Phase 7 的目标架构已经裁定，7.1 已把契约切到 2.0（新增 ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型，删除 SuccessCriterion/evidence_key，ArtifactRef 改为三态 provenance，Proposal/Patch/Task 增加 work_request_id 追溯）；后续步骤尚未落地：Scientific Agent 将只负责科学判断；ResAgent 新增 WorkflowCompiler，把语义化 WorkRequest 转成可执行 Workflow；旧 PlanningPort 和 `LegacyScientificAnalyzeAdapter` 在 7.7 切换后删除。
 
 ## 四个角色
 

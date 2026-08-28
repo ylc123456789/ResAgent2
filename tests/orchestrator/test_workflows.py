@@ -16,11 +16,9 @@ from resagent2_contracts import (
     ScientificAnalyzeInput,
     SessionRef,
     SessionStatus,
-    SuccessCriterion,
     TaskProposal,
     TaskStatus,
     UserAnswer,
-    VerificationMode,
     WorkflowPatch,
     WorkflowProposal,
     ResearchRequest,
@@ -50,14 +48,6 @@ def research_request() -> ResearchRequest:
     )
 
 
-def criterion() -> SuccessCriterion:
-    return SuccessCriterion(
-        description="The fake module returns a valid result",
-        verification=VerificationMode.AUTOMATIC,
-        evidence_key="result",
-    )
-
-
 def task(
     task_id: str,
     capability: Capability,
@@ -76,13 +66,13 @@ def task(
         inputs = ExperimentRunInput(instructions=f"Run {task_id}")
     return TaskProposal(
         id=task_id,
+        work_request_id="work_legacy_initial",
         capability=capability,
         goal=f"Complete {task_id}",
         rationale="Required by the test workflow",
         depends_on=list(depends_on),
         required=required,
         inputs=inputs,
-        success_criteria=[criterion()],
     )
 
 
@@ -108,8 +98,9 @@ def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowSchedule
 
 def test_linear_workflow_runs_to_completion() -> None:
     workflow = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="linear",
-        scientific_rationale="A minimal research sequence",
+        compilation_rationale="A minimal research sequence",
         tasks=[
             task("task_code", Capability.CODE_MODIFY),
             task("task_experiment", Capability.EXPERIMENT_RUN, ["task_code"]),
@@ -138,8 +129,9 @@ def test_linear_workflow_runs_to_completion() -> None:
 
 def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="parallel",
-        scientific_rationale="Compare two runs",
+        compilation_rationale="Compare two runs",
         tasks=[
             task("task_baseline", Capability.EXPERIMENT_RUN),
             task("task_treatment", Capability.EXPERIMENT_RUN),
@@ -187,8 +179,9 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
         }
     )
     proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="repair",
-        scientific_rationale="Exercise explicit recovery",
+        compilation_rationale="Exercise explicit recovery",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     engine.create_run("run_repair", research_request(), proposal)
@@ -200,6 +193,7 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
     patched = engine.apply_patch(
         "run_repair",
         WorkflowPatch(
+            work_request_id="work_legacy_initial",
             based_on_revision=1,
             reason="Add an explicit repair task",
             add_tasks=[task("task_repair", Capability.CODE_MODIFY)],
@@ -246,8 +240,9 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
         store=InMemoryRunStore(),
     )
     proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="question",
-        scientific_rationale="Ask for missing input",
+        compilation_rationale="Ask for missing input",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     engine.create_run("run_question", research_request(), proposal)
@@ -284,8 +279,9 @@ def test_failed_payload_cannot_be_promoted_to_completed() -> None:
         "run_failed_payload",
         research_request(),
         WorkflowProposal(
+            work_request_id="work_legacy_initial",
             summary="failure",
-            scientific_rationale="Status is machine-owned",
+            compilation_rationale="Status is machine-owned",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -313,8 +309,9 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
         "run_auto_retry",
         research_request(),
         WorkflowProposal(
+            work_request_id="work_legacy_initial",
             summary="retry",
-            scientific_rationale="Retry a transient failure",
+            compilation_rationale="Retry a transient failure",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -343,8 +340,9 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
         "run_invalid_port",
         research_request(),
         WorkflowProposal(
+            work_request_id="work_legacy_initial",
             summary="invalid port",
-            scientific_rationale="Validate the module boundary",
+            compilation_rationale="Validate the module boundary",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -363,8 +361,9 @@ def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
         "run_ready_gate",
         research_request(),
         WorkflowProposal(
+            work_request_id="work_legacy_initial",
             summary="ready gate",
-            scientific_rationale="Ready work prevents early completion",
+            compilation_rationale="Ready work prevents early completion",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -394,8 +393,9 @@ def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
         "run_required_gate",
         research_request(),
         WorkflowProposal(
+            work_request_id="work_legacy_initial",
             summary="required gate",
-            scientific_rationale="Only active required tasks gate completion",
+            compilation_rationale="Only active required tasks gate completion",
             tasks=[
                 task("task_old", Capability.EXPERIMENT_RUN),
                 task(
@@ -409,6 +409,7 @@ def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
     engine.apply_patch(
         "run_required_gate",
         WorkflowPatch(
+            work_request_id="work_legacy_initial",
             based_on_revision=1,
             reason="Replace the old required task",
             supersede_task_ids=["task_old"],
@@ -425,24 +426,3 @@ def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
         "task_optional": TaskStatus.FAILED,
         "task_replacement": TaskStatus.COMPLETED,
     }
-
-
-def test_create_run_rejects_proposal_with_unresolved_questions() -> None:
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
-    with pytest.raises(OrchestrationError, match="question"):
-        engine.create_run(
-            "run_questions",
-            research_request(),
-            WorkflowProposal(
-                summary="has questions",
-                scientific_rationale="Must be answered before running",
-                questions=[
-                    QuestionDraft(
-                        text="Which dataset?",
-                        requested_fields=["dataset"],
-                        reason="missing input",
-                    )
-                ],
-                tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
-            ),
-        )

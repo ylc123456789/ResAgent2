@@ -19,12 +19,10 @@ from resagent2_contracts import (
     QuestionDraft,
     RunBudget,
     ScientificPlanInput,
-    SuccessCriterion,
     TaskBudget,
     TaskProposal,
     TaskStatus,
     UserAnswer,
-    VerificationMode,
     Workflow,
     WorkflowProposal,
     WorkflowTask,
@@ -38,14 +36,6 @@ from resagent2_contracts import (
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
-
-
-def criterion() -> SuccessCriterion:
-    return SuccessCriterion(
-        description="Produce a validated plan",
-        verification=VerificationMode.AUTOMATIC,
-        evidence_key="workflow",
-    )
 
 
 def research_request() -> ResearchRequest:
@@ -68,11 +58,11 @@ def plan_input() -> ScientificPlanInput:
 def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
     return WorkflowTask(
         id=task_id,
+        work_request_id="work_test",
         capability=Capability.CODE_UNDERSTAND,
         goal="Inspect the entry point",
         inputs=CodeUnderstandInput(question="Where is the entry point?"),
         depends_on=depends_on or [],
-        success_criteria=[criterion()],
     )
 
 
@@ -89,13 +79,13 @@ def test_schema_round_trip_preserves_contract() -> None:
         run_id="run_example",
         revision=1,
         tasks=[task("task_plan")],
-        created_from="initial scientific proposal",
+        created_from="work_test",
     )
 
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "1.1"
+    assert restored.schema_version == "2.0"
 
 
 @pytest.mark.parametrize(
@@ -109,7 +99,7 @@ def test_schema_round_trip_preserves_contract() -> None:
 def test_id_namespaces_are_not_interchangeable(field: str, bad_id: str) -> None:
     if field == "run_id":
         with pytest.raises(ValidationError):
-            Workflow(run_id=bad_id, revision=1, tasks=[], created_from="test")
+            Workflow(run_id=bad_id, revision=1, tasks=[], created_from="work_test")
     elif field == "task_id":
         with pytest.raises(ValidationError):
             task(bad_id)
@@ -124,7 +114,7 @@ def test_workflow_rejects_unknown_dependency() -> None:
             run_id="run_example",
             revision=1,
             tasks=[task("task_analyze", ["task_missing"])],
-            created_from="test",
+            created_from="work_test",
         )
 
 
@@ -137,25 +127,26 @@ def test_workflow_rejects_dependency_cycle() -> None:
                 task("task_first", ["task_second"]),
                 task("task_second", ["task_first"]),
             ],
-            created_from="test",
+            created_from="work_test",
         )
 
 
 def test_proposal_rejects_duplicate_task_ids() -> None:
     proposal_task = TaskProposal(
         id="task_plan",
+        work_request_id="work_test",
         capability=Capability.CODE_UNDERSTAND,
         goal="Inspect the entry point",
         rationale="Locate the code to change.",
         inputs=CodeUnderstandInput(question="Where is the entry point?"),
-        success_criteria=[criterion()],
     )
 
     with pytest.raises(ValidationError, match="duplicate task"):
         WorkflowProposal(
+            work_request_id="work_test",
             summary="Plan",
             tasks=[proposal_task, proposal_task],
-            scientific_rationale="A plan is required before execution.",
+            compilation_rationale="A plan is required before execution.",
         )
 
 
@@ -163,10 +154,10 @@ def test_task_input_must_match_capability() -> None:
     with pytest.raises(ValidationError, match="does not match"):
         WorkflowTask(
             id="task_plan",
+            work_request_id="work_test",
             capability=Capability.CODE_MODIFY,
             goal="Modify",
             inputs=CodeUnderstandInput(question="Where is the entry point?"),
-            success_criteria=[criterion()],
         )
 
 
@@ -201,19 +192,19 @@ def test_task_rejects_control_plane_capabilities(capability: Capability) -> None
     with pytest.raises(ValidationError, match="control-plane"):
         TaskProposal(
             id="task_control",
+            work_request_id="work_test",
             capability=capability,
             goal="Control-plane",
             rationale="Control-plane operations do not belong in a workflow",
             inputs=inputs,
-            success_criteria=[criterion()],
         )
     with pytest.raises(ValidationError, match="control-plane"):
         WorkflowTask(
             id="task_control",
+            work_request_id="work_test",
             capability=capability,
             goal="Control-plane",
             inputs=inputs,
-            success_criteria=[criterion()],
         )
 
 
@@ -255,21 +246,6 @@ def test_warning_status_and_warning_records_cannot_disagree() -> None:
             status=ModuleStatus.COMPLETED,
             summary="Done",
             warnings=[warning],
-        )
-
-
-def test_artifact_ref_requires_complete_provenance() -> None:
-    with pytest.raises(ValidationError):
-        ArtifactRef(
-            id="artifact_metrics",
-            kind="experiment_result",
-            producer="experiment",
-            run_id="run_example",
-            task_id="task_experiment",
-            attempt_number=1,
-            uri="artifacts/run_example/metrics.json",
-            media_type="application/json",
-            summary="Evaluation metrics",
         )
 
 

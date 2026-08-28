@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "2.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -36,6 +36,9 @@ ArtifactId = Annotated[
 QuestionId = Annotated[
     str, StringConstraints(pattern=r"^question_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ]
+WorkRequestId = Annotated[
+    str, StringConstraints(pattern=r"^work_[A-Za-z0-9][A-Za-z0-9_-]*$")
+]
 
 
 class ContractModel(BaseModel):
@@ -43,20 +46,22 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.1"] = SCHEMA_VERSION
+    schema_version: Literal["2.0"] = SCHEMA_VERSION
 
 
 class Capability(StrEnum):
     """Stable capability names used for routing, not module names."""
 
+    # Deprecated in schema 2.0: only the old planning/analysis/legacy path uses
+    # these; they are removed at the Phase 7 atomic switch (see CONTRACTS §20.8).
     SCIENTIFIC_PLAN = "scientific_plan"
     SCIENTIFIC_ANALYZE = "scientific_analyze"
     LITERATURE_SEARCH = "literature_search"
+    EXPERIMENT_PREPARE = "experiment_prepare"
+    ASK_USER = "ask_user"
     CODE_UNDERSTAND = "code_understand"
     CODE_MODIFY = "code_modify"
-    EXPERIMENT_PREPARE = "experiment_prepare"
     EXPERIMENT_RUN = "experiment_run"
-    ASK_USER = "ask_user"
 
 
 class AgentOwner(StrEnum):
@@ -150,13 +155,6 @@ class SessionStatus(StrEnum):
     PAUSED = "paused"
 
 
-class VerificationMode(StrEnum):
-    """Whether a success criterion is machine-checkable or human-reviewed."""
-
-    AUTOMATIC = "automatic"
-    MANUAL = "manual"
-
-
 class ScientificVerdict(StrEnum):
     """Scientific relation between collected evidence and a hypothesis."""
 
@@ -207,13 +205,55 @@ class ArtifactRef(ContractModel):
     kind: NonEmptyStr
     producer: AgentOwner
     run_id: RunId
-    task_id: TaskId
-    attempt_number: int = Field(ge=1)
+    task_id: TaskId | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
+    session_id: SessionId | None = None
     uri: NonEmptyStr
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     media_type: NonEmptyStr
     summary: NonEmptyStr
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_provenance(self) -> ArtifactRef:
+        """Reject mixed execution/session/orchestrator provenance.
+
+        Three mutually exclusive shapes are legal:
+
+        - execution artifact: task_id and attempt_number both present, no session;
+        - scientific tool artifact: session_id present, no task/attempt, scientific;
+        - orchestrator artifact: none of the three, orchestrator + source_type.
+
+        The execution shape does not whitelist the producer: during the Phase 7
+        migration ``scientific_analyze`` is still a task capability, so legacy
+        scientific evidence is registered as an execution artifact.
+        """
+        has_task = self.task_id is not None
+        has_attempt = self.attempt_number is not None
+        has_session = self.session_id is not None
+
+        if has_session:
+            if has_task or has_attempt or self.producer != AgentOwner.SCIENTIFIC:
+                raise ValueError(
+                    "session-bound artifact requires scientific producer and no task/attempt"
+                )
+            return self
+
+        if has_task != has_attempt:
+            raise ValueError(
+                "execution artifact requires both task_id and attempt_number"
+            )
+        if has_task:
+            return self
+
+        if self.producer != AgentOwner.ORCHESTRATOR:
+            raise ValueError("orchestrator artifact requires orchestrator producer")
+        if self.metadata.get("source_type") not in {"import", "final_report"}:
+            raise ValueError(
+                "orchestrator artifact requires metadata.source_type "
+                "in {import, final_report}"
+            )
+        return self
 
 
 def _validate_relative_path(value: str) -> str:
@@ -297,29 +337,15 @@ class UserAnswer(ContractModel):
     answered_at: datetime
 
 
-class SuccessCriterion(ContractModel):
-    """Observable condition used to decide whether a task is complete."""
-
-    description: NonEmptyStr
-    verification: VerificationMode
-    evidence_key: NonEmptyStr | None = None
-
-    @model_validator(mode="after")
-    def require_automatic_evidence_key(self) -> SuccessCriterion:
-        if self.verification == VerificationMode.AUTOMATIC and not self.evidence_key:
-            raise ValueError("automatic success criteria require evidence_key")
-        return self
-
-
 class ScientificPlanInput(ContractModel):
-    """Inputs for producing or revising a scientific workflow proposal."""
+    """Deprecated: legacy planning input, removed at the Phase 7 switch."""
 
     capability: Literal[Capability.SCIENTIFIC_PLAN] = Capability.SCIENTIFIC_PLAN
     request: ResearchRequest
 
 
 class ScientificAnalyzeInput(ContractModel):
-    """Inputs for drawing a conclusion from registered evidence."""
+    """Deprecated: legacy analysis input, removed at the Phase 7 switch."""
 
     capability: Literal[Capability.SCIENTIFIC_ANALYZE] = Capability.SCIENTIFIC_ANALYZE
     question: NonEmptyStr
@@ -327,7 +353,7 @@ class ScientificAnalyzeInput(ContractModel):
 
 
 class LiteratureSearchInput(ContractModel):
-    """Inputs for a bounded literature search."""
+    """Deprecated: legacy literature task input, removed at the Phase 7 switch."""
 
     capability: Literal[Capability.LITERATURE_SEARCH] = Capability.LITERATURE_SEARCH
     query: NonEmptyStr
@@ -430,7 +456,7 @@ class CodeModifyResult(ContractModel):
 
 
 class ExperimentPrepareInput(ContractModel):
-    """Inputs for preparing and auditing an experimental repository."""
+    """Deprecated: merged into experiment_run, removed at the Phase 7 switch."""
 
     capability: Literal[Capability.EXPERIMENT_PREPARE] = Capability.EXPERIMENT_PREPARE
     repository_url: NonEmptyStr | None = None
@@ -490,7 +516,7 @@ class ExperimentResult(ContractModel):
 
 
 class AskUserInput(ContractModel):
-    """Inputs for the orchestrator-owned human interaction capability."""
+    """Deprecated: ask-user is a control signal, removed at the Phase 7 switch."""
 
     capability: Literal[Capability.ASK_USER] = Capability.ASK_USER
     question: QuestionDraft
@@ -561,13 +587,13 @@ class TaskProposal(ContractModel):
     """Scientific suggestion for one logical task, before scheduler acceptance."""
 
     id: TaskId
+    work_request_id: WorkRequestId
     capability: Capability
     goal: NonEmptyStr
     rationale: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
     inputs: CapabilityInput
-    success_criteria: list[SuccessCriterion]
 
     @model_validator(mode="after")
     def validate_input_type(self) -> TaskProposal:
@@ -580,6 +606,7 @@ class WorkflowTask(ContractModel):
     """The single scheduler-owned top-level unit of work."""
 
     id: TaskId
+    work_request_id: WorkRequestId
     capability: Capability
     goal: NonEmptyStr
     inputs: CapabilityInput
@@ -587,7 +614,6 @@ class WorkflowTask(ContractModel):
     required: bool = True
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
-    success_criteria: list[SuccessCriterion]
     attempts: list[Attempt] = Field(default_factory=list)
     warnings: list[WarningRecord] = Field(default_factory=list)
 
@@ -633,16 +659,21 @@ def _validate_task_graph(tasks: list[TaskProposal] | list[WorkflowTask]) -> None
 
 
 class WorkflowProposal(ContractModel):
-    """Scientific Agent recommendation that requires orchestrator validation."""
+    """Compiler-produced task graph candidate that needs orchestrator validation."""
 
+    work_request_id: WorkRequestId
     summary: NonEmptyStr
     tasks: list[TaskProposal]
-    questions: list[QuestionDraft] = Field(default_factory=list)
-    scientific_rationale: NonEmptyStr
+    compilation_rationale: NonEmptyStr
 
     @model_validator(mode="after")
     def validate_graph(self) -> WorkflowProposal:
         _validate_task_graph(self.tasks)
+        for task in self.tasks:
+            if task.work_request_id != self.work_request_id:
+                raise ValueError(
+                    "task work_request_id must match its proposal work_request_id"
+                )
         return self
 
 
@@ -652,7 +683,7 @@ class Workflow(ContractModel):
     run_id: RunId
     revision: int = Field(ge=1)
     tasks: list[WorkflowTask]
-    created_from: NonEmptyStr
+    created_from: WorkRequestId
 
     @model_validator(mode="after")
     def validate_graph(self) -> Workflow:
@@ -677,6 +708,7 @@ class PendingTaskUpdate(ContractModel):
 class WorkflowPatch(ContractModel):
     """Revision-bound proposal to extend or supersede pending workflow work."""
 
+    work_request_id: WorkRequestId
     based_on_revision: int = Field(ge=1)
     reason: NonEmptyStr
     add_tasks: list[TaskProposal] = Field(default_factory=list)
@@ -696,6 +728,11 @@ class WorkflowPatch(ContractModel):
             raise ValueError("duplicate task id in pending_task_updates")
         if set(added) & set(superseded):
             raise ValueError("new task cannot also be superseded")
+        for task in self.add_tasks:
+            if task.work_request_id != self.work_request_id:
+                raise ValueError(
+                    "task work_request_id must match its patch work_request_id"
+                )
         return self
 
 
@@ -803,10 +840,226 @@ class CapabilityRegistry(ContractModel):
 
 
 class ScientificConclusion(ContractModel):
-    """Scientific interpretation of evidence, independent of execution success."""
+    """Deprecated: superseded by ScientificOpinion, removed at the Phase 7 switch."""
 
     verdict: ScientificVerdict
     summary: NonEmptyStr
     evidence_artifact_ids: list[ArtifactId]
     limitations: list[NonEmptyStr] = Field(default_factory=list)
     recommended_next_steps: list[NonEmptyStr] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Schema 2.0 target contracts (CONTRACTS §20). These are new public data types
+# for the Phase 7 scientific control loop; the ScientificPort protocol itself
+# lands in a later step (7.4), not here.
+# ---------------------------------------------------------------------------
+
+
+class WorkRequestStatus(StrEnum):
+    """Lifecycle of one persisted work request within a run."""
+
+    REQUESTED = "requested"
+    COMPILING = "compiling"
+    EXECUTING = "executing"
+    STABLE = "stable"
+    CONSUMED = "consumed"
+    FAILED = "failed"
+
+
+class ScientificAssessment(ContractModel):
+    """Scientific Agent's current judgment before it requests more work."""
+
+    statement: NonEmptyStr
+    evidence_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    limitations: list[NonEmptyStr] = Field(default_factory=list)
+    unresolved_questions: list[NonEmptyStr] = Field(default_factory=list)
+
+
+class WorkRequestDraft(ContractModel):
+    """Semantic request for evidence; never carries execution-graph fields."""
+
+    objective: NonEmptyStr
+    expected_evidence: list[NonEmptyStr] = Field(min_length=1)
+    constraints: list[NonEmptyStr] = Field(default_factory=list)
+
+
+class WorkRequest(ContractModel):
+    """ResAgent-persisted work request bound to a run and scientific session."""
+
+    id: WorkRequestId
+    run_id: RunId
+    scientific_session_id: SessionId
+    request: WorkRequestDraft
+    status: WorkRequestStatus = WorkRequestStatus.REQUESTED
+    workflow_revision: int | None = None
+    outcome: WorkOutcome | None = None
+    error: ModuleError | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_status_fields(self) -> WorkRequest:
+        if self.status in {
+            WorkRequestStatus.REQUESTED,
+            WorkRequestStatus.COMPILING,
+        }:
+            if (
+                self.workflow_revision is not None
+                or self.outcome is not None
+                or self.error is not None
+            ):
+                raise ValueError(
+                    f"{self.status.value} work request cannot carry execution fields"
+                )
+        elif self.status == WorkRequestStatus.EXECUTING:
+            if self.workflow_revision is None or self.outcome is not None or self.error is not None:
+                raise ValueError(
+                    "executing work request requires workflow_revision and no outcome/error"
+                )
+        elif self.status == WorkRequestStatus.STABLE:
+            if self.workflow_revision is None or self.outcome is None or self.error is not None:
+                raise ValueError(
+                    "stable work request requires workflow_revision and outcome, no error"
+                )
+        elif self.status == WorkRequestStatus.CONSUMED:
+            if self.workflow_revision is None or self.outcome is None or self.error is not None:
+                raise ValueError(
+                    "consumed work request requires workflow_revision and outcome, no error"
+                )
+        elif self.status == WorkRequestStatus.FAILED:
+            if self.error is None:
+                raise ValueError("failed work request requires error")
+        return self
+
+
+class WorkTaskOutcome(ContractModel):
+    """Factual summary of one task's outcome within a completed work request."""
+
+    task_id: TaskId
+    status: Literal["completed", "failed", "blocked", "superseded"]
+    summary: NonEmptyStr
+    artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    error: ModuleError | None = None
+    warnings: list[WarningRecord] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_status_fields(self) -> WorkTaskOutcome:
+        if self.status in {"failed", "blocked"}:
+            if self.error is None:
+                raise ValueError(f"{self.status} task outcome requires error")
+        elif self.error is not None:
+            raise ValueError(f"{self.status} task outcome cannot have error")
+        return self
+
+
+class WorkOutcome(ContractModel):
+    """Execution fact summary returned to the Scientific Agent."""
+
+    work_request_id: WorkRequestId
+    workflow_revision: int = Field(ge=1)
+    summary: NonEmptyStr
+    tasks: list[WorkTaskOutcome] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_tasks(self) -> WorkOutcome:
+        ids = [task.task_id for task in self.tasks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate task id in work outcome")
+        return self
+
+
+class ScientificOpinion(ContractModel):
+    """Scientific Agent's final view with evidence and limitation references."""
+
+    verdict: ScientificVerdict
+    statement: NonEmptyStr
+    evidence_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    limitations: list[NonEmptyStr] = Field(default_factory=list)
+    unresolved_questions: list[NonEmptyStr] = Field(default_factory=list)
+    recommended_next_steps: list[NonEmptyStr] = Field(default_factory=list)
+    acknowledged_task_ids: list[TaskId] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> ScientificOpinion:
+        if self.verdict in {ScientificVerdict.SUPPORTS, ScientificVerdict.REFUTES}:
+            if not self.evidence_artifact_ids:
+                raise ValueError(
+                    f"{self.verdict.value} opinion requires at least one evidence artifact"
+                )
+        if self.acknowledged_task_ids and not self.limitations:
+            raise ValueError("acknowledged failed tasks require limitations")
+        return self
+
+
+class ScientificTurnRequest(ContractModel):
+    """One ResAgent-to-Scientific call: goal, state, evidence, and new outcome."""
+
+    run_id: RunId
+    research: ResearchRequest
+    authorized_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    work_outcome: WorkOutcome | None = None
+    unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
+    answers: list[UserAnswer] = Field(default_factory=list)
+    budget: TaskBudget
+    parent_session_id: SessionId | None = None
+
+    @model_validator(mode="after")
+    def validate_turn(self) -> ScientificTurnRequest:
+        if self.parent_session_id is None:
+            if (
+                self.work_outcome is not None
+                or self.unresolved_task_outcomes
+                or self.answers
+            ):
+                raise ValueError("first call cannot carry work_outcome or answers")
+        elif self.work_outcome is not None and self.answers:
+            raise ValueError("resume cannot carry both work_outcome and answers")
+        return self
+
+
+class ScientificWorkRequestResult(ContractModel):
+    status: Literal["request_work"]
+    assessment: ScientificAssessment
+    work_request: WorkRequestDraft
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
+class ScientificQuestionResult(ContractModel):
+    status: Literal["needs_user_input"]
+    assessment: ScientificAssessment
+    question: QuestionDraft
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
+class ScientificCompletedResult(ContractModel):
+    status: Literal["completed"]
+    opinion: ScientificOpinion
+    session: SessionRef
+    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
+class ScientificFailedResult(ContractModel):
+    status: Literal["failed"]
+    error: ModuleError
+    session: SessionRef | None = None
+    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_failed(self) -> ScientificFailedResult:
+        if self.session is None and self.observed_artifact_ids:
+            raise ValueError("failed without session cannot carry observed artifacts")
+        return self
+
+
+ScientificTurnResult = Annotated[
+    Union[
+        ScientificWorkRequestResult,
+        ScientificQuestionResult,
+        ScientificCompletedResult,
+        ScientificFailedResult,
+    ],
+    Field(discriminator="status"),
+]

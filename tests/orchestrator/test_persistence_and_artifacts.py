@@ -13,9 +13,7 @@ from resagent2_contracts import (
     ModuleStatus,
     ResearchRequest,
     RunBudget,
-    SuccessCriterion,
     TaskProposal,
-    VerificationMode,
     WorkflowPatch,
     WorkflowProposal,
     WorkspaceGrant,
@@ -46,22 +44,17 @@ def request() -> ResearchRequest:
 
 def proposal() -> WorkflowProposal:
     return WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="one task",
-        scientific_rationale="Persistence test",
+        compilation_rationale="Persistence test",
         tasks=[
             TaskProposal(
                 id="task_experiment",
+                work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run a tiny experiment",
                 rationale="Produce one evidence file",
                 inputs=ExperimentRunInput(instructions="Run once"),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="Evidence file is registered",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="artifact",
-                    )
-                ],
             )
         ],
     )
@@ -138,6 +131,7 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
     experiment = proposal().tasks[0]
     analyze = TaskProposal(
         id="task_analyze",
+        work_request_id="work_legacy_initial",
         capability=Capability.SCIENTIFIC_ANALYZE,
         goal="Analyze evidence",
         rationale="Close the evidence loop",
@@ -145,7 +139,6 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         inputs=ScientificAnalyzeInput(
             question="What happened?", evidence_artifact_ids=[]
         ),
-        success_criteria=experiment.success_criteria,
     )
     engine = WorkflowScheduler(
         bindings={
@@ -168,8 +161,9 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         artifact_root=tmp_path / "forward-artifacts",
     )
     combined = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="forward",
-        scientific_rationale="Evidence must cross the module boundary",
+        compilation_rationale="Evidence must cross the module boundary",
         tasks=[experiment, analyze],
     )
     engine.create_run("run_forward", request(), combined)
@@ -223,6 +217,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     experiment = proposal().tasks[0]
     analyze = TaskProposal(
         id="task_analyze",
+        work_request_id="work_legacy_initial",
         capability=Capability.SCIENTIFIC_ANALYZE,
         goal="Analyze evidence",
         rationale="Only verified evidence may cross the boundary",
@@ -230,7 +225,6 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         inputs=ScientificAnalyzeInput(
             question="What happened?", evidence_artifact_ids=[]
         ),
-        success_criteria=experiment.success_criteria,
     )
     engine = WorkflowScheduler(
         bindings={
@@ -253,8 +247,9 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         artifact_root=tmp_path / "retry-artifacts",
     )
     combined = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="retry",
-        scientific_rationale="A retried task must not leak its failed evidence",
+        compilation_rationale="A retried task must not leak its failed evidence",
         tasks=[experiment, analyze],
     )
     engine.create_run("run_retry", request(), combined)
@@ -312,7 +307,11 @@ def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path)
     with pytest.raises(OrchestrationError, match="revision"):
         valid.apply_patch(
             "run_patch",
-            WorkflowPatch(based_on_revision=2, reason="stale"),
+            WorkflowPatch(
+                work_request_id="work_legacy_initial",
+                based_on_revision=2,
+                reason="stale",
+            ),
         )
 
 

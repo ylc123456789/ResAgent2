@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（架构/契约阶段；代码未开始） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | in_progress（7.1 contracts schema 2.0 完成） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据；这只证明 Phase 6 以前的链路可运行，不代表 Phase 7 ScientificOpinion gate 已实现。
@@ -446,9 +446,9 @@ ADR-0007 已裁定：Scientific Agent 只负责科学判断；WorkflowProposal/P
 
 在同一个原子变更中：
 
-1. 将 `SCHEMA_VERSION` 切到 `"2.0"`，新增 WorkRequestId、WorkRequestStatus、ScientificAssessment、WorkRequestDraft/WorkRequest、WorkTaskOutcome/WorkOutcome、ScientificOpinion、ScientificTurnRequest/ScientificTurnResult、FinalReportData，以及 ArtifactRef 的 Task/Attempt、Scientific Session、Orchestrator 三种 provenance 和 work_request_id traceability；
+1. 将 `SCHEMA_VERSION` 切到 `"2.0"`，新增 WorkRequestId、WorkRequestStatus、ScientificAssessment、WorkRequestDraft/WorkRequest、WorkTaskOutcome/WorkOutcome、ScientificOpinion、ScientificTurnRequest/ScientificTurnResult，以及 ArtifactRef 的 Task/Attempt、Scientific Session、Orchestrator 三种 provenance 和 work_request_id traceability；
 2. 删除 `SuccessCriterion`、`VerificationMode`、TaskProposal/WorkflowTask.success_criteria 和 WorkflowProposal.questions；同时把 `scientific_rationale` 改为 `compilation_rationale`、`Workflow.created_from` 改为 WorkRequestId，并同步修改 planning.py、scheduler.py、create_run 的旧 questions 分支和全部 fixture/tests；
-3. 新增 ResearchRun 的 Phase 7 字段与 model validation，但不接入 production composition root；
+3. `ResearchRun` 的 Phase 7 字段（§20.10.1）、`ScientificCompletionValidator`/`FinalReportData`（§20.10.2）和 `ScientificPort` 协议（§20.7）都是 orchestrator 内部模型，随 7.5/7.6 落地，7.1 只做 contracts 公共数据契约；
 4. 暂时保留并标为 deprecated：ScientificPlanInput、ScientificAnalyzeInput、LiteratureSearchInput、ExperimentPrepareInput、AskUserInput、ScientificConclusion，以及旧 scientific/ask_user/experiment_prepare capability。它们只服务当前唯一旧 production 路径，7.7 原子切换时删除。
 
 旧 PlanningPort 在该未发布迁移期为 Proposal/Task 填入 Run 内固定的 `work_legacy_initial`，repair fixture 使用显式 `work_legacy_repair_<n>`；Scheduler 不再从 summary/reason 生成 Workflow.created_from。legacy ID 只保证旧测试路径可运行，不创建虚假的 WorkRequest，也不得进入新 ResearchController。
@@ -470,6 +470,8 @@ ADR-0007 已裁定：Scientific Agent 只负责科学判断；WorkflowProposal/P
 - contracts 包依然不依赖 runtime/orchestrator/agents。
 
 退出条件：contracts 与全仓测试全绿，所有 production import 可解析；CONTRACTS §20 与 models.py/exports 对已实现部分一致；旧 production Scientific 路径仍是唯一启用路径。
+
+**状态：已完成（2026-08-28）。** `SCHEMA_VERSION="2.0"`；新 2.0 数据契约（WorkRequestId/WorkRequestStatus/ScientificAssessment/WorkRequestDraft/WorkRequest/WorkTaskOutcome/WorkOutcome/ScientificOpinion/ScientificTurnRequest/ScientificTurnResult）已落地 `models.py` 并导出；`SuccessCriterion`/`VerificationMode`/`success_criteria`/`WorkflowProposal.questions` 已删除，`scientific_rationale` 改名 `compilation_rationale`；`ArtifactRef` 改为 task/attempt、session、orchestrator 三态 provenance；Proposal/Patch/Task/Workflow 加 `work_request_id`。旧 scientific/planning 类型标 deprecated 保留；`DeterministicPlanningPort` 填 `work_legacy_initial`。本地 165 tests 通过，`git diff --check` 干净。
 
 #### 7.2 WorkflowCompiler
 

@@ -6,9 +6,7 @@ from resagent2_contracts import (
     ModuleStatus,
     ResearchRequest,
     RunBudget,
-    SuccessCriterion,
     TaskProposal,
-    VerificationMode,
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
@@ -33,22 +31,17 @@ def request() -> ResearchRequest:
 
 def proposal() -> WorkflowProposal:
     return WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="one task",
-        scientific_rationale="Payload persistence test",
+        compilation_rationale="Payload persistence test",
         tasks=[
             TaskProposal(
                 id="task_experiment",
+                work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Produce metrics",
                 rationale="Return a structured payload",
                 inputs=ExperimentRunInput(instructions="Run once"),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="metrics returned",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="metrics",
-                    )
-                ],
             )
         ],
     )

@@ -8,9 +8,7 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
-    SuccessCriterion,
     TaskProposal,
-    VerificationMode,
     WorkflowProposal,
     WorkspaceGrant,
     WorkspaceMode,
@@ -76,11 +74,13 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
         ),
     )
     proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="Native Coding E2E",
-        scientific_rationale="Exercise the Phase 5 module boundary",
+        compilation_rationale="Exercise the Phase 5 module boundary",
         tasks=[
             TaskProposal(
                 id="task_code_native",
+                work_request_id="work_legacy_initial",
                 capability=Capability.CODE_MODIFY,
                 goal="Change VALUE from 1 to 2",
                 rationale="Test native code modification",
@@ -91,13 +91,6 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
                         'python -c "import util; assert util.VALUE == 2"'
                     ],
                 ),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="VALUE is updated and verified",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="code_patch",
-                    )
-                ],
             )
         ],
     )

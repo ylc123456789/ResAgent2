@@ -8,9 +8,7 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
-    SuccessCriterion,
     TaskProposal,
-    VerificationMode,
     VerificationResult,
     WorkflowProposal,
     WorkspaceGrant,
@@ -175,11 +173,13 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
         ),
     )
     proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
         summary="native experiment E2E",
-        scientific_rationale="Exercise the Phase 6 module boundary",
+        compilation_rationale="Exercise the Phase 6 module boundary",
         tasks=[
             TaskProposal(
                 id="task_experiment_native",
+                work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run train.py and record accuracy",
                 rationale="Test native experiment execution",
@@ -188,13 +188,6 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
                     expected_metrics=["accuracy"],
                     expected_artifacts=["metrics.json"],
                 ),
-                success_criteria=[
-                    SuccessCriterion(
-                        description="accuracy is produced",
-                        verification=VerificationMode.AUTOMATIC,
-                        evidence_key="metrics",
-                    )
-                ],
             )
         ],
     )

@@ -60,20 +60,18 @@ class WorkflowScheduler:
     ) -> ResearchRun:
         if self.store.exists(run_id):
             raise OrchestrationError(f"run already exists: {run_id}")
-        if proposal.questions:
-            raise OrchestrationError("proposal has unresolved questions")
         if len(proposal.tasks) > request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
         self._require_bindings(task.capability for task in proposal.tasks)
         tasks = [
             WorkflowTask(
                 id=item.id,
+                work_request_id=item.work_request_id,
                 capability=item.capability,
                 goal=item.goal,
                 inputs=item.inputs,
                 depends_on=item.depends_on,
                 required=item.required,
-                success_criteria=item.success_criteria,
             )
             for item in proposal.tasks
         ]
@@ -86,7 +84,7 @@ class WorkflowScheduler:
                 run_id=run_id,
                 revision=1,
                 tasks=tasks,
-                created_from=proposal.summary,
+                created_from=proposal.work_request_id,
             ),
             created_at=now,
             updated_at=now,
@@ -368,12 +366,12 @@ class WorkflowScheduler:
             tasks.append(
                 WorkflowTask(
                     id=item.id,
+                    work_request_id=item.work_request_id,
                     capability=item.capability,
                     goal=item.goal,
                     inputs=item.inputs,
                     depends_on=item.depends_on,
                     required=item.required,
-                    success_criteria=item.success_criteria,
                 )
             )
         try:
@@ -381,7 +379,7 @@ class WorkflowScheduler:
                 run_id=run.run_id,
                 revision=run.workflow.revision + 1,
                 tasks=tasks,
-                created_from=patch.reason,
+                created_from=patch.work_request_id,
             )
         except ValidationError as error:
             raise OrchestrationError(f"invalid patched workflow: {error}") from error

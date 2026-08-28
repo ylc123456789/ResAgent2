@@ -10,11 +10,14 @@ from resagent2_contracts import (
     ExperimentRunInput,
     ResearchRequest,
     ScientificAnalyzeInput,
-    SuccessCriterion,
     TaskProposal,
-    VerificationMode,
     WorkflowProposal,
 )
+
+# Placeholder work_request_id used by the legacy planning path until Phase 7
+# replaces it with the WorkflowCompiler. It is not a real WorkRequest and must
+# never reach the Phase 7 ResearchController (CONTRACTS §20.13.2).
+_LEGACY_WORK_REQUEST_ID = "work_legacy_initial"
 
 
 class PlanningPort(Protocol):
@@ -33,11 +36,13 @@ class DeterministicPlanningPort:
 
     def propose(self, request: ResearchRequest) -> WorkflowProposal:
         return WorkflowProposal(
+            work_request_id=_LEGACY_WORK_REQUEST_ID,
             summary="Deterministic golden loop",
-            scientific_rationale="Local mock E2E exercises the full closed loop",
+            compilation_rationale="Local mock E2E exercises the full closed loop",
             tasks=[
                 TaskProposal(
                     id="task_code",
+                    work_request_id=_LEGACY_WORK_REQUEST_ID,
                     capability=Capability.CODE_MODIFY,
                     goal="Add a docstring to the add() function in util.py",
                     rationale="Produce a verified code change",
@@ -49,16 +54,10 @@ class DeterministicPlanningPort:
                             "python -c \"import util; assert util.add(2, 3) == 5\""
                         ],
                     ),
-                    success_criteria=[
-                        SuccessCriterion(
-                            description="A code change is produced",
-                            verification=VerificationMode.AUTOMATIC,
-                            evidence_key="code_patch",
-                        )
-                    ],
                 ),
                 TaskProposal(
                     id="task_experiment",
+                    work_request_id=_LEGACY_WORK_REQUEST_ID,
                     capability=Capability.EXPERIMENT_RUN,
                     goal="Run the experiment and record metrics",
                     rationale="Produce evidence for analysis",
@@ -69,16 +68,10 @@ class DeterministicPlanningPort:
                         expected_metrics=["accuracy"],
                         expected_artifacts=["metrics.json"],
                     ),
-                    success_criteria=[
-                        SuccessCriterion(
-                            description="Metrics are produced",
-                            verification=VerificationMode.AUTOMATIC,
-                            evidence_key="metrics",
-                        )
-                    ],
                 ),
                 TaskProposal(
                     id="task_analyze",
+                    work_request_id=_LEGACY_WORK_REQUEST_ID,
                     capability=Capability.SCIENTIFIC_ANALYZE,
                     goal=(
                         "Determine whether the recorded accuracy supports the hypothesis "
@@ -95,13 +88,6 @@ class DeterministicPlanningPort:
                         ),
                         evidence_artifact_ids=[],
                     ),
-                    success_criteria=[
-                        SuccessCriterion(
-                            description="A conclusion is formed",
-                            verification=VerificationMode.AUTOMATIC,
-                            evidence_key="conclusion",
-                        )
-                    ],
                 ),
             ],
         )

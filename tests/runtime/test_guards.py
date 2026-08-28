@@ -99,8 +99,12 @@ def test_tool_arguments_are_validated_before_execution() -> None:
 
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
-    assert result.error.code == ErrorCode.INVALID_INPUT
+    # Invalid arguments are recoverable within the loop. This scripted client
+    # has no corrective action left, so its exhaustion becomes TOOL_FAILED while
+    # the original actionable rejection remains persisted for diagnosis.
+    assert result.error.code == ErrorCode.TOOL_FAILED
     assert store.load("session_invalid_input").memory == {}
+    assert store.load("session_invalid_input").runtime_feedback is not None
 
 
 def test_llm_action_must_match_the_typed_action_schema() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -237,7 +237,21 @@ class AgentLoop:
                 )
 
             try:
-                sections = definition.context_builder(request, state)
+                sections = list(definition.context_builder(request, state))
+                if state.runtime_feedback is not None:
+                    sections.insert(
+                        0,
+                        ContextSection(
+                            name="runtime_feedback",
+                            content=(
+                                "Your previous action was rejected. Address this "
+                                "before retrying the same action:\n"
+                                f"{state.runtime_feedback.summary}"
+                            ),
+                            priority=1000,
+                            required=True,
+                        ),
+                    )
                 context = self.context_composer.compose(
                     definition.system_prompt,
                     sections,
@@ -332,39 +346,40 @@ class AgentLoop:
                     state,
                 )
             except ValidationError as error:
-                return self._failure(
+                self._feedback(
                     state,
-                    ErrorCode.INVALID_INPUT,
-                    "Tool arguments did not match input schema",
-                    retryable=True,
-                    details=self._validation_details(error),
+                    "Tool arguments did not match the input schema: "
+                    + str(self._validation_details(error)),
+                    tool=action.tool,
                 )
+                continue
             except ToolNotFoundError:
-                return self._failure(
+                self._feedback(
                     state,
-                    ErrorCode.INVALID_INPUT,
                     f"unknown tool: {action.tool}",
-                    retryable=True,
+                    tool=action.tool,
                 )
+                continue
             except PermissionError as error:
-                return self._failure(
+                self._feedback(
                     state,
-                    ErrorCode.PERMISSION_DENIED,
-                    str(error) or "Tool execution denied",
-                    retryable=True,
-                    details={"tool": action.tool},
+                    f"Tool execution denied: {error}",
+                    tool=action.tool,
                 )
+                continue
             except Exception as error:
-                return self._failure(
+                self._feedback(
                     state,
-                    ErrorCode.TOOL_FAILED,
                     f"Tool execution failed: {error}",
-                    retryable=True,
-                    details={"tool": action.tool},
+                    tool=action.tool,
                 )
+                continue
 
             state.memory.update(observation.memory_updates)
             state.last_observation = observation
+            if state.runtime_feedback_source == "tool_error":
+                state.runtime_feedback = None
+                state.runtime_feedback_source = None
             self._append_event(
                 state,
                 event_type="observation",
@@ -430,6 +445,8 @@ class AgentLoop:
                             details=self._validation_details(error),
                         )
                 state.status = SessionStatus.COMPLETED
+                state.runtime_feedback = None
+                state.runtime_feedback_source = None
                 self._save(state)
                 status = (
                     ModuleStatus.COMPLETED_WITH_WARNINGS
@@ -445,18 +462,13 @@ class AgentLoop:
                     session=self._session_ref(state),
                 )
             if decision.summary:
-                feedback = ToolObservation(
-                    summary=decision.summary,
-                    value={"completion_check": "rejected"},
-                )
-                state.last_observation = feedback
-                self._append_event(
+                self._feedback(
                     state,
-                    event_type="observation",
+                    decision.summary,
                     tool="completion_check",
-                    data=feedback.model_dump(mode="json"),
+                    value={"completion_check": "rejected"},
+                    source="completion_check",
                 )
-                self._save(state)
 
         return self._failure(
             state,
@@ -487,6 +499,34 @@ class AgentLoop:
     def _save(self, state: AgentState) -> None:
         state.updated_at = datetime.now(UTC)
         self.store.save(state)
+
+    def _feedback(
+        self,
+        state: AgentState,
+        summary: str,
+        *,
+        tool: str | None = None,
+        value=None,
+        source: Literal["completion_check", "tool_error"] = "tool_error",
+    ) -> None:
+        """Persist a recoverable rejection as durable runtime feedback.
+
+        Unlike ``last_observation``, this is injected as the highest-priority
+        required context section on every later iteration, so an ordinary
+        observation (read_file, list_files, ...) cannot overwrite it. The LLM
+        keeps seeing why its previous action was rejected and can act on it.
+        """
+        feedback = ToolObservation(summary=summary, value=value)
+        state.last_observation = feedback
+        state.runtime_feedback = feedback
+        state.runtime_feedback_source = source
+        self._append_event(
+            state,
+            event_type="observation",
+            tool=tool,
+            data=feedback.model_dump(mode="json"),
+        )
+        self._save(state)
 
     def _failure(
         self,

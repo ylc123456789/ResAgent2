@@ -245,3 +245,125 @@ def test_final_payload_must_match_profile_result_schema() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     assert result.error.code.value == "contract_error"
+
+
+class RequireWriteBeforeFinish:
+    """Reject finish until memory has a ``ready`` key, with an actionable summary."""
+
+    def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
+        if candidate is None:
+            return CompletionDecision(complete=False)
+        if not state.memory.get("ready"):
+            return CompletionDecision(
+                complete=False,
+                summary="Run the write_value tool before finishing",
+            )
+        return CompletionDecision(complete=True, summary="done", payload=candidate.result)
+
+
+def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    profile = definition(
+        name="recover-finish",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
+                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            ]
+        ),
+        tools=(WriteValueTool(), FinishTool()),
+        allowed_tools={"write_value", "finish"},
+        completion_check=RequireWriteBeforeFinish(),
+    )
+
+    result = loop.run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_recover_finish",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert store.load("session_recover_finish").memory["ready"] is True
+
+
+def test_runtime_feedback_survives_an_intervening_observation() -> None:
+    """A rejection must remain visible even after an ordinary observation
+    (read_value) overwrites last_observation; the durable slot is separate."""
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    llm = ScriptedLLMClient(
+        [
+            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            AgentAction(tool="read_value", arguments={"key": "missing"}),
+            AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
+            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+        ]
+    )
+    profile = definition(
+        name="feedback-persists",
+        llm=llm,
+        tools=(ReadValueTool(), WriteValueTool(), FinishTool()),
+        allowed_tools={"read_value", "write_value", "finish"},
+        completion_check=RequireWriteBeforeFinish(),
+    )
+
+    result = loop.run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_feedback_persists",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert "runtime_feedback" in llm.contexts[1].included_sections
+    assert "runtime_feedback" in llm.contexts[2].included_sections
+    assert "runtime_feedback" in llm.contexts[3].included_sections
+    assert "Run the write_value tool before finishing" in llm.contexts[2].text
+    assert store.load("session_feedback_persists").runtime_feedback is None
+
+
+def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
+    """A Tool that raises (recoverable) must not kill the session immediately:
+    it becomes runtime_feedback and the next scripted action still runs."""
+    from resagent2_runtime import ToolObservation
+
+    class FailingOnceTool:
+        name = "flaky"
+        input_model = FinishTool.input_model  # reuse a valid schema
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, state, arguments):
+            self.calls += 1
+            if self.calls == 1:
+                raise ValueError("transient failure")
+            return ToolObservation(summary="recovered", value={"ok": True})
+
+    flaky = FailingOnceTool()
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    profile = definition(
+        name="recover-tool",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(tool="flaky", arguments={"result": {"ok": True}}),
+                AgentAction(tool="flaky", arguments={"result": {"ok": True}}),
+                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            ]
+        ),
+        tools=(flaky, FinishTool()),
+        allowed_tools={"flaky", "finish"},
+    )
+
+    result = loop.run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_recover_tool",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert flaky.calls == 2
+    # The first failure was recorded as durable feedback before the recovery.
+    assert store.load("session_recover_tool").runtime_feedback is None

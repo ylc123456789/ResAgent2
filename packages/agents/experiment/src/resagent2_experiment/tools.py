@@ -102,22 +102,36 @@ class RunCommandTool:
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunCommandInput, arguments)
-        if classify_command(args.command) == "experiment":
-            if not self.binding.certified:
-                return ToolObservation(
-                    summary="Experiment command blocked: run audit_env first",
-                    value={"blocked": True, "reason": "environment not certified"},
-                )
-            if self.confirm_before_experiment and not self.confirmed:
-                return ToolObservation(
-                    summary="Experiment confirmation required",
-                    value={"blocked": True, "reason": "confirmation required"},
-                    question=QuestionDraft(
-                        text=f"Confirm running the experiment command: {args.command}",
-                        requested_fields=["approve"],
-                        reason="confirm_before_experiment is enabled",
-                    ),
-                )
+        if self.binding.current is None:
+            return ToolObservation(
+                summary="No environment prepared; call prepare_environment first",
+                ok=False,
+                value={"blocked": True, "reason": "no_environment"},
+            )
+        if classify_command(args.command) != "experiment":
+            return ToolObservation(
+                summary=(
+                    "run_command only runs experiment commands; use run_setup "
+                    "for dependency installs and the file tools for inspection"
+                ),
+                ok=False,
+                value={"blocked": True, "reason": "not_an_experiment_command"},
+            )
+        if not self.binding.certified:
+            return ToolObservation(
+                summary="Experiment command blocked: run audit_env first",
+                value={"blocked": True, "reason": "environment not certified"},
+            )
+        if self.confirm_before_experiment and not self.confirmed:
+            return ToolObservation(
+                summary="Experiment confirmation required",
+                value={"blocked": True, "reason": "confirmation required"},
+                question=QuestionDraft(
+                    text=f"Confirm running the experiment command: {args.command}",
+                    requested_fields=["approve"],
+                    reason="confirm_before_experiment is enabled",
+                ),
+            )
         index = int(state.memory.get("command_count", 0)) + 1
         result = self.runner.run(
             args.command,

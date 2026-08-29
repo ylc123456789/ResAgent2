@@ -41,6 +41,11 @@ Evidence citation rules:
   fill that artifact id into your evidence list.
 - Never cite an unread artifact just to make the assessment look complete.
 
+Acknowledged-task rule:
+- acknowledged_task_ids must list exactly the failed/blocked task ids from the
+  unresolved task outcomes. If no task failed or was blocked, use []. Never
+  include completed or superseded tasks.
+
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
 

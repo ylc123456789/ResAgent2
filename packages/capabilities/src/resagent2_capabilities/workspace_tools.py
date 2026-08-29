@@ -334,6 +334,12 @@ class RunVerificationTool:
                     ok=False,
                     value={"blocked": True, "reason": "no_environment"},
                 )
+            if not self.env_binding.certified:
+                return ToolObservation(
+                    summary="Environment not audited; call audit_env before verification",
+                    ok=False,
+                    value={"blocked": True, "reason": "not_certified"},
+                )
         revision = int(state.memory.get("edit_revision", 0))
 
         def _digest() -> str:

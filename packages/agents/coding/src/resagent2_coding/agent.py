@@ -151,11 +151,16 @@ class NativeCodingAgent:
             if request.output_dir is None:
                 return self._failure("CodingAgent requires an output_dir", blocked=True)
             output_root = Path(request.output_dir)
+            workspace_id = request.workspace_id or (
+                request.workspace_spec.workspace_id if request.workspace_spec else None
+            )
+            if workspace_id is None:
+                return self._failure("code_modify requires a workspace_id", blocked=True)
             manager = EnvironmentManager(env_root=self.resource_layout.env_root)
             binding = EnvironmentBinding(
                 manager,
                 run_id=request.run_id,
-                workspace_id=request.workspace_id or "default",
+                workspace_id=workspace_id,
                 hard_constraint=request.environment_spec.python_version,
             )
             runner = ProcessRunner(boundary)

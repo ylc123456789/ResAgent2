@@ -44,6 +44,28 @@ def find_conda() -> str | None:
 _BASE_MARKER = ".resagent2_base_ready"
 
 
+def _major_minor(version: str) -> tuple[int, int] | None:
+    parts = (version or "").strip().split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def version_matches(requested: str, actual: str) -> bool:
+    """True when ``actual`` satisfies ``requested`` at the major.minor level.
+
+    ``3.10`` requested accepts ``3.10.16`` actual; ``3.12.x`` fails.
+    """
+    req = _major_minor(requested)
+    act = _major_minor(actual)
+    if req is None or act is None:
+        return False
+    return req == act
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedEnvironment:
     """A bound base environment; the physical prefix is a local detail."""
@@ -53,12 +75,24 @@ class PreparedEnvironment:
     python_version: str
 
 
+_PROBE = (
+    "import json, sys, importlib.util; "
+    "print(json.dumps({"
+    "'sys_executable': sys.executable, "
+    "'sys_prefix': sys.prefix, "
+    "'python_version': sys.version.split()[0], "
+    "'pip_available': importlib.util.find_spec('pip') is not None"
+    "}))"
+)
+
+
 class EnvironmentManager:
     """Create, reuse and audit a base Python env bound to run_id + workspace_id.
 
     The manager never interprets project dependencies: it only creates the base
-    Python environment and proves (via ``audit``) that commands run inside it.
-    Dependency installation is the Agent's job, through ``run_setup``.
+    Python environment (python + pip) and proves (via ``audit``) that commands
+    run inside it with the requested interpreter. Dependency installation is
+    the Agent's job, through ``run_setup``.
     """
 
     def __init__(
@@ -82,7 +116,11 @@ class EnvironmentManager:
         return self.env_root / self.env_id(run_id=run_id, workspace_id=workspace_id)
 
     def inspect(self, *, run_id: str, workspace_id: str) -> PreparedEnvironment | None:
-        """Return a healthy, already-created base env, or ``None``."""
+        """Return a structurally healthy, already-created base env, or ``None``.
+
+        This is a cheap structural check (marker + python + pip files exist);
+        the deep interpreter probe is ``audit``'s job.
+        """
         if self.conda_exe is None:
             return None
         prefix = self.prefix(run_id=run_id, workspace_id=workspace_id)
@@ -104,39 +142,63 @@ class EnvironmentManager:
         workspace_id: str,
         python_version: str,
     ) -> PreparedEnvironment:
-        """Create (or recreate) the base env and write the ready marker.
+        """Create (or recreate) the base env, audited, and return it.
 
-        A partial base env is confirmed to live under ``env_root``, deleted, and
-        recreated; it is never silently reused as complete.
+        An existing env is reused only when its *actual* interpreter satisfies
+        ``python_version``; otherwise it is deleted (strictly) and recreated.
+        The ready marker records the *actual* probed version, never the request.
         """
         if self.conda_exe is None:
             raise EnvironmentManagerError(
                 "conda not found; set RESAGENT2_CONDA_EXE or install conda"
             )
-        prefix = self.prefix(run_id=run_id, workspace_id=workspace_id)
-        if prefix.exists() and not self._base_healthy(prefix):
-            self._delete_if_managed(prefix)
-        if not prefix.exists():
-            self.env_root.mkdir(parents=True, exist_ok=True)
-            command = [
-                self.conda_exe,
-                "create",
-                "-p",
-                str(prefix),
-                f"python={python_version}",
-                "-y",
-            ]
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise EnvironmentManagerError(
-                    f"conda env creation failed: {(result.stderr or '').strip()}"
-                )
         env_id = self.env_id(run_id=run_id, workspace_id=workspace_id)
+        prefix = self.prefix(run_id=run_id, workspace_id=workspace_id)
+        if prefix.exists():
+            probe = self._probe(prefix)
+            reusable = (
+                probe["returncode"] == 0
+                and probe["prefix_match"]
+                and probe["pip_available"]
+                and version_matches(python_version, probe["python_version"])
+            )
+            if reusable:
+                return PreparedEnvironment(
+                    env_id=env_id,
+                    prefix=prefix,
+                    python_version=probe["python_version"],
+                )
+            self._delete_if_managed(prefix)
+        self.env_root.mkdir(parents=True, exist_ok=True)
+        command = [
+            self.conda_exe,
+            "create",
+            "-p",
+            str(prefix),
+            f"python={python_version}",
+            "pip",
+            "-y",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise EnvironmentManagerError(
+                f"conda env creation failed: {(result.stderr or '').strip()}"
+            )
+        environment = PreparedEnvironment(
+            env_id=env_id, prefix=prefix, python_version=python_version
+        )
+        audit = self.audit(environment)
+        if not audit["success"]:
+            raise EnvironmentManagerError(
+                "environment audit failed after create: "
+                + (audit.get("stderr_tail", "").strip())
+            )
+        actual_version = audit["python_version"]
         marker = prefix / _BASE_MARKER
         marker.write_text(
             json.dumps(
                 {
-                    "python_version": python_version,
+                    "python_version": actual_version,
                     "env_id": env_id,
                     "prefix": str(prefix),
                 }
@@ -144,26 +206,47 @@ class EnvironmentManager:
             encoding="utf-8",
         )
         return PreparedEnvironment(
-            env_id=env_id, prefix=prefix, python_version=python_version
+            env_id=env_id, prefix=prefix, python_version=actual_version
         )
 
     def audit(self, environment: PreparedEnvironment) -> dict:
-        """Probe the bound env and report whether commands run inside it.
+        """Probe the bound env and report whether it is a correct base env.
 
-        Proves the base environment is correct (sys.executable / sys.prefix /
-        Python version / pip), not that project dependencies are complete.
+        Success requires the probe to run, ``sys.prefix`` to match the bound
+        prefix, pip to be importable, and the actual interpreter to satisfy the
+        environment's recorded Python version.
         """
         if self.conda_exe is None:
-            return {"success": False, "error": "conda not found", "prefix_match": False}
-        probe = (
-            "import json, sys, importlib.util; "
-            "print(json.dumps({"
-            "'sys_executable': sys.executable, "
-            "'sys_prefix': sys.prefix, "
-            "'python_version': sys.version.split()[0], "
-            "'pip_available': importlib.util.find_spec('pip') is not None"
-            "}))"
+            return {
+                "success": False,
+                "error": "conda not found",
+                "prefix_match": False,
+                "pip_available": False,
+                "version_match": False,
+            }
+        probe = self._probe(environment.prefix)
+        prefix_match = probe["prefix_match"]
+        pip_available = probe["pip_available"]
+        actual_version = probe["python_version"]
+        version_ok = version_matches(environment.python_version, actual_version)
+        success = (
+            probe["returncode"] == 0
+            and prefix_match
+            and pip_available
+            and version_ok
         )
+        return {
+            "success": success,
+            "sys_executable": probe["sys_executable"],
+            "sys_prefix": probe["sys_prefix"],
+            "python_version": actual_version,
+            "pip_available": pip_available,
+            "prefix_match": prefix_match,
+            "version_match": version_ok,
+            "stderr_tail": probe["stderr_tail"],
+        }
+
+    def _probe(self, prefix: Path) -> dict:
         try:
             result = subprocess.run(
                 [
@@ -171,17 +254,26 @@ class EnvironmentManager:
                     "run",
                     "--no-capture-output",
                     "-p",
-                    str(environment.prefix),
+                    str(prefix),
                     "python",
                     "-c",
-                    probe,
+                    _PROBE,
                 ],
                 capture_output=True,
                 text=True,
                 timeout=120,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            return {"success": False, "error": str(error), "prefix_match": False}
+            return {
+                "returncode": None,
+                "error": str(error),
+                "sys_executable": "",
+                "sys_prefix": "",
+                "python_version": "",
+                "pip_available": False,
+                "prefix_match": False,
+                "stderr_tail": str(error),
+            }
         data: dict = {}
         if result.returncode == 0:
             try:
@@ -189,11 +281,11 @@ class EnvironmentManager:
             except json.JSONDecodeError:
                 data = {}
         prefix_match = (
-            Path(str(data.get("sys_prefix", ""))).resolve()
-            == environment.prefix.resolve()
+            Path(str(data.get("sys_prefix", ""))).resolve() == prefix.resolve()
         )
         return {
-            "success": result.returncode == 0 and prefix_match,
+            "returncode": result.returncode,
+            "error": None,
             "sys_executable": data.get("sys_executable", ""),
             "sys_prefix": data.get("sys_prefix", ""),
             "python_version": data.get("python_version", ""),
@@ -215,7 +307,8 @@ class EnvironmentManager:
         if not marker.is_file():
             return False
         bin_dir = prefix / "bin"
-        return (bin_dir / "python").exists() or (bin_dir / "python3").exists()
+        has_python = (bin_dir / "python").exists() or (bin_dir / "python3").exists()
+        return has_python and (bin_dir / "pip").exists()
 
     def _delete_if_managed(self, prefix: Path) -> None:
         resolved = prefix.resolve()
@@ -223,7 +316,10 @@ class EnvironmentManager:
             raise EnvironmentManagerError(
                 f"refusing to delete prefix outside env_root: {resolved}"
             )
-        shutil.rmtree(resolved, ignore_errors=True)
+        try:
+            shutil.rmtree(resolved)
+        except OSError as error:
+            raise EnvironmentManagerError(f"failed to delete environment: {error}") from error
 
 
 class EnvironmentBinding:
@@ -232,6 +328,10 @@ class EnvironmentBinding:
     Holds the current bound environment and its audit state so that
     ``prepare_environment``, ``run_setup``, ``audit_env`` and every command
     runner all operate on the same environment within one task attempt.
+
+    On construction the binding restores an existing healthy environment via
+    ``inspect`` (so a resumed session finds its env), but starts uncertified:
+    the restored env must be re-audited before any experiment/verification.
     """
 
     def __init__(
@@ -246,9 +346,10 @@ class EnvironmentBinding:
         self.run_id = run_id
         self.workspace_id = workspace_id
         self.hard_constraint = hard_constraint
-        self.current: PreparedEnvironment | None = None
+        self.current: PreparedEnvironment | None = manager.inspect(
+            run_id=run_id, workspace_id=workspace_id
+        )
         self.certified: bool = False
-        self.version_switches: int = 0
 
     def argv_prefix(self) -> list[str] | None:
         if self.current is None or self.manager.conda_exe is None:

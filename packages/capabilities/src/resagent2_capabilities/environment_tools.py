@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import cast
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
-from .environment import EnvironmentBinding, EnvironmentManagerError
+from .environment import EnvironmentBinding, EnvironmentManagerError, version_matches
 from .process import (
     CommandPermissionDecision,
     ProcessRunner,
@@ -53,7 +54,7 @@ class PrepareEnvironmentTool:
         args = cast(PrepareEnvironmentInput, arguments)
         requested = (args.python_version or "").strip() or None
         hard = self.binding.hard_constraint
-        if hard and requested and requested != hard:
+        if hard and requested and not version_matches(hard, requested):
             return ToolObservation(
                 summary=(
                     f"Python version conflict: requested {requested} but the task "
@@ -69,20 +70,26 @@ class PrepareEnvironmentTool:
                 ok=False,
                 value={"invalid_version": version},
             )
+        # A switch is counted only when the requested version differs (by
+        # major.minor) from the currently bound interpreter.
+        switches = int(state.memory.get("version_switches", 0))
         if (
             self.binding.current is not None
-            and self.binding.current.python_version != version
+            and not version_matches(version, self.binding.current.python_version)
         ):
-            self.binding.version_switches += 1
-            if self.binding.version_switches > self.max_version_switches:
+            switches += 1
+            if switches > self.max_version_switches:
                 return ToolObservation(
                     summary=(
                         "Too many Python version switches in this attempt "
                         f"(limit {self.max_version_switches})"
                     ),
                     ok=False,
-                    value={"version_switches": self.binding.version_switches},
+                    value={"version_switches": switches},
+                    memory_updates={"version_switches": switches},
                 )
+        # Preparing/switching may mutate the env: invalidate any prior audit.
+        self.binding.certified = False
         try:
             environment = self.binding.manager.prepare(
                 run_id=self.binding.run_id,
@@ -90,10 +97,14 @@ class PrepareEnvironmentTool:
                 python_version=version,
             )
         except EnvironmentManagerError as error:
+            # A failed switch must not leave the old env as the active binding.
+            self.binding.current = None
+            self.binding.certified = False
             return ToolObservation(
                 summary=f"Environment creation failed: {error}",
                 ok=False,
                 value={"stderr_tail": str(error)},
+                memory_updates={"version_switches": switches},
             )
         self.binding.current = environment
         self.binding.certified = False
@@ -112,7 +123,8 @@ class PrepareEnvironmentTool:
                     "env_id": environment.env_id,
                     "prefix": str(environment.prefix),
                     "python_version": environment.python_version,
-                }
+                },
+                "version_switches": switches,
             },
         )
 
@@ -168,18 +180,25 @@ class RunSetupTool:
                 ok=False,
                 value={"blocked": True, "reason": decision.reason},
             )
+        # Any setup command may mutate the env even if it later fails, so the
+        # previous audit is invalidated *before* the command runs.
+        self.binding.certified = False
+        command = args.command
+        argv_prefix = self.binding.argv_prefix()
+        if _is_conda_command(args.command):
+            # conda manages the env from the host: bind the prefix explicitly
+            # and do not wrap it in `conda run -p <prefix>`.
+            command = _bind_conda_prefix(args.command, self.binding.current.prefix)
+            argv_prefix = None
         index = int(state.memory.get("setup_count", 0)) + 1
         result = self.runner.run(
-            args.command,
+            command,
             log_dir=self.log_dir,
             index=index,
             timeout_seconds=self.timeout_seconds,
-            argv_prefix=self.binding.argv_prefix(),
+            argv_prefix=argv_prefix,
         )
         ok = result.exit_code == 0 and not result.timed_out
-        if ok:
-            # A successful setup mutates the env, so the previous audit is stale.
-            self.binding.certified = False
         value = result.model_dump(mode="json")
         value["stdout_tail"] = self._tail(result.stdout_path)
         value["stderr_tail"] = self._tail(result.stderr_path)
@@ -219,7 +238,8 @@ class AuditEnvTool:
             summary=(
                 "Environment audit passed"
                 if audit.get("success")
-                else "Environment audit failed: sys.prefix does not match the bound env"
+                else "Environment audit failed: sys.prefix, pip or Python version "
+                "does not match the bound env"
             ),
             value=audit,
             ok=bool(audit.get("success")),
@@ -227,13 +247,40 @@ class AuditEnvTool:
         )
 
 
+def _is_conda_command(command: str) -> bool:
+    try:
+        argv = parse_command(command)
+    except UnsafeCommandError:
+        return False
+    if not argv:
+        return False
+    return Path(argv[0]).name.lower() in {"conda", "mamba", "micromamba"}
+
+
+def _bind_conda_prefix(command: str, prefix: Path) -> str:
+    """Inject ``-p <prefix>`` after the ``update`` subcommand.
+
+    The command has already passed the policy (a bare ``conda env update -f``),
+    so the tool binds it to the current environment instead of trusting the
+    caller's active env.
+    """
+    argv = parse_command(command)
+    prefix_text = str(prefix)
+    result: list[str] = []
+    for token in argv:
+        result.append(token)
+        if token == "update":
+            result.extend(["-p", prefix_text])
+    return shlex.join(result)
+
+
 class SetupCommandPolicy:
     """Restrict ``run_setup`` to package-installation entry points.
 
-    Default-deny: allows ``python -m pip install ...`` / ``pip install ...``,
-    ``uv sync``, ``poetry install``, ``conda env update -f ...``; forbids
-    ``sudo``, ``conda create/remove`` and any explicit ``--prefix/-p/--name/-n/
-    --target`` (the system binds the environment).
+    Default-deny. Only ``python -m pip install ...`` / ``pip install ...`` and
+    ``conda env update -f ...`` are allowed; ``sudo``, ``conda create/remove``,
+    and explicit ``--prefix/-p/--name/-n/--target`` are forbidden. ``uv`` and
+    ``poetry`` are intentionally not supported yet (no bound-environment test).
     """
 
     _FORBIDDEN_FLAGS = {"--prefix", "-p", "--name", "-n", "--target"}
@@ -268,18 +315,6 @@ class SetupCommandPolicy:
                 return CommandPermissionDecision(allowed=True)
             return CommandPermissionDecision(
                 allowed=False, reason="pip setup must be 'pip install ...'"
-            )
-        if executable == "uv":
-            if args and args[0] == "sync":
-                return CommandPermissionDecision(allowed=True)
-            return CommandPermissionDecision(
-                allowed=False, reason="uv setup must be 'uv sync'"
-            )
-        if executable == "poetry":
-            if args and args[0] == "install":
-                return CommandPermissionDecision(allowed=True)
-            return CommandPermissionDecision(
-                allowed=False, reason="poetry setup must be 'poetry install'"
             )
         if executable in {"conda", "mamba", "micromamba"}:
             if args and args[0] == "env" and "update" in args:

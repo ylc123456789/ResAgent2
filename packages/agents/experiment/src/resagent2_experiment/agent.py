@@ -139,7 +139,11 @@ class NativeExperimentAgent:
         except DatasetResolutionError as error:
             return self._failure(str(error), blocked=True)
 
-        workspace_id = request.workspace_id or "default"
+        workspace_id = request.workspace_id or (
+            request.workspace_spec.workspace_id if request.workspace_spec else None
+        )
+        if workspace_id is None:
+            return self._failure("experiment_run requires a workspace_id", blocked=True)
         manager = EnvironmentManager(env_root=resource_layout.env_root)
         binding = EnvironmentBinding(
             manager,

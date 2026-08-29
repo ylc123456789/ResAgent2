@@ -685,6 +685,10 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | Scientific evidence trace | ScientificTurnResult.observed_artifact_ids | Phase 7 | Session 派生 + RunStore 复核并集已实现（7.4/7.5） |
 | final report 事实约束 | FinalReportData + ArtifactRef 的确定性 renderer | Phase 7 | 7.6 已实现并测试；7.7 已接 production |
 | 统一工作区与 Coding 自主 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、WorkspaceId、workspace_id、GitBaseline、VerificationCommandPolicy | Phase 7.7 | 已实现（`9543ab7`, `5d1746d` 起） |
+| 恢复闭环（信息不丢） | previous_work_request、真实 summary/stderr_tail、Experiment prompt 规则 | Phase 7.7 hardening | 已实现：Scientific 重发 self-contained WorkRequest、Experiment 先读接口不臆造 CLI、按错误改命令 |
+| 运行时反馈与连续失败保护 | ToolObservation.ok、runtime_feedback、recent_observations、连续失败上限 | Phase 7.7 hardening | 已实现：拒绝落 ok=False 持久反馈、有界最近历史 head+tail 截断、finish 由 completion check 判定、连续 5 次 TOOL_FAILED |
+| 数据集两层资源模型 | DatasetRef、dataset_refs、RESAGENT2_DATASETS_JSON/RESAGENT2_DATASET_ROOT | Phase 7.7 hardening | 已实现：dataset_root 是公共根、DatasetRef 指向具体只读目录、通用 id→路径映射、重复 id 拒绝 |
+| 环境中断恢复 | EnvironmentManager `.resagent2_env_ready` marker、conda env update | Phase 7.7 hardening | 已实现：半成品环境不直接标 ready，有 environment.yml 时先 env update |
 
 ## 13. 文档同步检查
 

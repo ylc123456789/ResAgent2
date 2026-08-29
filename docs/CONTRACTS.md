@@ -1040,3 +1040,15 @@ class CodeModifyInput(ContractModel):
 ### 21.5 数据集引用
 
 `dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」，不表示某个具体数据集。任务级数据集用 `DatasetRef(dataset_id, relative_path)` 声明：运行时把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸、检查存在、默认只读，再把解析结果传给 Experiment Agent。用户可在 `ResearchRequest.dataset_refs` 声明，Scheduler 调度 experiment 任务时注入 `ExperimentRunInput.dataset_refs`。
+
+解析结果是 `{dataset_id, path, access="read_only"}` 列表；重复的 `dataset_id` 直接拒绝（同一 id 不得解析到两个路径）。Experiment Agent 用通用环境变量把映射交给脚本——`RESAGENT2_DATASET_ROOT`（公共根目录）与 `RESAGENT2_DATASETS_JSON`（`{dataset_id: 绝对路径}` 的 JSON）——核心代码不绑定任何框架，也不假定存在「第一个/默认数据集」；脚本按 `dataset_id` 查表取用所需数据集。
+
+## 22. 运行时反馈与连续失败保护（recovery-loop hardening）
+
+`ToolObservation.ok` 是机器可读的成功标志：成功读取/命令为 True，失败命令（非零退出）、参数拒绝、路径缺失等可恢复失败为 False。下游不得靠解析 `summary` 文本判断失败。
+
+AgentLoop 的反馈语义：
+
+- 可恢复失败（工具抛异常、参数校验失败、completion check 拒绝、未观察证据拒绝）落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它（`last_observation` 是独立槽位）。
+- `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保证末尾错误字段（如 `stderr_tail`）不丢；每条标注 ok/FAILED。
+- 连续失败计数：成功的非 finish 工具（`read_file`/`list_files`/`read_artifact` 等）重置；`ok=False` 累加；finish 工具的 `ok` 不重置（是否成功由 completion check 决定）；completion check 拒绝的 finish 也累加。连续 5 次失败返回 `TOOL_FAILED`，先于 step 预算。

@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -356,6 +357,7 @@ class _ScientificArtifactRegistration:
     def __init__(self, registry: ArtifactRegistry, store) -> None:
         self._registry = registry
         self._store = store
+        self._live: dict = {}
 
     def register_scientific(self, candidate, *, run_id, session_id):
         artifact = self._registry.register_scientific(
@@ -364,7 +366,11 @@ class _ScientificArtifactRegistration:
         run = self._store.load(run_id)
         run.artifacts[artifact.id] = artifact
         self._store.save(run)
+        self._live[artifact.id] = artifact
         return artifact
+
+    def resolve(self, artifact_id):
+        return self._live.get(artifact_id)
 
 
 class _CompilerClient:
@@ -739,6 +745,7 @@ def run_ask_resume(workdir: Path, answer_text: str) -> bool:
     answer = UserAnswer(
         question_id=question.id,
         values={field: answer_text for field in question.requested_fields},
+        answered_at=datetime.now(UTC),
     )
     run = controller.answer_question("run_ask", answer)
     print(f"run status={run.status.value}")
@@ -750,10 +757,15 @@ def run_literature(workdir: Path) -> bool:
     controller, _ = _build_controller(workdir, None)
     request = ResearchRequest(
         goal=(
-            "What does the literature say about Squeeze-and-Excitation networks "
-            "improving image classification accuracy? Summarize the evidence "
-            "from the papers you retrieve."
+            "According to the literature, does the Squeeze-and-Excitation (SE) "
+            "block in SENet improve image classification accuracy on ImageNet? "
+            "Retrieve relevant papers with literature_search, read them, and "
+            "cite them in your final opinion."
         ),
+        constraints=[
+            "This is a literature-only review: use literature_search directly and "
+            "do not request code or experiment work."
+        ],
         budget=RunBudget(
             max_tasks=1, max_attempts_per_task=1, max_llm_calls=60, timeout_seconds=900
         ),

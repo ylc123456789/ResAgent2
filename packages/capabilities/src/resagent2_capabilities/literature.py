@@ -75,6 +75,13 @@ class ArtifactRegistrationPort(Protocol):
     ) -> ArtifactRef:
         """Freeze one candidate with session provenance and return its Ref."""
 
+    def resolve(self, artifact_id: str) -> ArtifactRef | None:
+        """Return a previously registered artifact by id, or ``None``.
+
+        This lets the Scientific Agent's ``read_artifact`` see an artifact
+        (e.g. a literature search) registered earlier in the same turn.
+        """
+
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
 
@@ -256,20 +263,27 @@ class LiteratureSearchTool:
         observed = list(state.memory.get("literature_artifact_ids", []))
         if artifact.id not in observed:
             observed.append(artifact.id)
-        papers_dump = [paper.model_dump(mode="json") for paper in papers]
+        # Bound the in-context summary: the full abstracts live in the frozen
+        # artifact (read via read_artifact), so the required last_observation
+        # context section never exceeds the context budget.
+        brief = []
+        for paper in papers:
+            data = paper.model_dump(mode="json")
+            data["abstract"] = (data.get("abstract") or "")[:200]
+            brief.append(data)
         summaries = list(state.memory.get("literature_summaries", []))
         summaries.append(
             {
                 "artifact_id": artifact.id,
                 "query": args.query,
-                "papers": papers_dump,
+                "papers": brief,
             }
         )
         return ToolObservation(
             summary=f"Found {len(papers)} papers for {args.query!r}",
             value={
-                "artifact": artifact.model_dump(mode="json"),
-                "papers": papers_dump,
+                "artifact": artifact.model_dump(mode="json", exclude={"metadata"}),
+                "papers": brief,
             },
             memory_updates={
                 "literature_artifact_ids": observed,

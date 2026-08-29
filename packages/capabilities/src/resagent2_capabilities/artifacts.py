@@ -15,13 +15,21 @@ class ArtifactReadError(ValueError):
 
 
 class RegisteredArtifactReader:
-    """Resolve only provided ArtifactRefs and verify their frozen content hash."""
+    """Resolve provided ArtifactRefs (plus an optional live resolver) and verify."""
 
-    def __init__(self, artifacts: list[ArtifactRef]) -> None:
+    def __init__(
+        self,
+        artifacts: list[ArtifactRef],
+        *,
+        resolve=None,
+    ) -> None:
         self._artifacts = {artifact.id: artifact for artifact in artifacts}
+        self._resolve = resolve
 
     def read_text(self, artifact_id: str, *, max_chars: int = 8_000) -> dict:
         artifact = self._artifacts.get(artifact_id)
+        if artifact is None and self._resolve is not None:
+            artifact = self._resolve(artifact_id)
         if artifact is None:
             raise ArtifactReadError(f"unknown artifact id: {artifact_id}")
         parsed = urlparse(artifact.uri)

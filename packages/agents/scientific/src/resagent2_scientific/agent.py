@@ -84,8 +84,12 @@ class ScientificAgent:
         self.loop = AgentLoop(store=self.store)
 
     def run(self, request: ScientificTurnRequest) -> ScientificTurnResult:
+        reader = RegisteredArtifactReader(
+            request.authorized_artifacts,
+            resolve=getattr(self.registration_port, "resolve", None),
+        )
         tools: list = [
-            ReadArtifactTool(RegisteredArtifactReader(request.authorized_artifacts)),
+            ReadArtifactTool(reader),
             RequestWorkTool(),
             AskUserTool(),
             FinishTool(),

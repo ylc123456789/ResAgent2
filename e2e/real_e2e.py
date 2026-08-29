@@ -402,6 +402,10 @@ def _registry() -> CapabilityRegistry:
             CapabilityDefinition(
                 capability=Capability.CODE_UNDERSTAND,
                 owner=AgentOwner.CODING,
+                description=(
+                    "Read-only code inspection; use only when the goal is to "
+                    "analyze or explain code without changing it."
+                ),
                 request_model="CodeUnderstandInput",
                 result_model="CodeUnderstandResult",
                 permission_policy="read_only_workspace",
@@ -410,6 +414,10 @@ def _registry() -> CapabilityRegistry:
             CapabilityDefinition(
                 capability=Capability.CODE_MODIFY,
                 owner=AgentOwner.CODING,
+                description=(
+                    "Change code to implement a feature or fix a bug; it already "
+                    "reads and diagnoses the code before editing."
+                ),
                 request_model="CodeModifyInput",
                 result_model="CodeModifyResult",
                 permission_policy="read_write_workspace",
@@ -418,6 +426,9 @@ def _registry() -> CapabilityRegistry:
             CapabilityDefinition(
                 capability=Capability.EXPERIMENT_RUN,
                 owner=AgentOwner.EXPERIMENT,
+                description=(
+                    "Run an experiment and record its measured metrics and artifacts."
+                ),
                 request_model="ExperimentRunInput",
                 result_model="ExperimentResult",
                 permission_policy="read_write_workspace",
@@ -710,7 +721,7 @@ def run_repair(workdir: Path) -> bool:
             "and rerun to obtain the accuracy."
         ),
         budget=RunBudget(
-            max_tasks=8, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
+            max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
         ),
     )
     controller, _ = _build_controller(workdir, repo)

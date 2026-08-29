@@ -871,6 +871,7 @@ class CapabilityDefinition(ContractModel):
 
     capability: Capability
     owner: AgentOwner
+    description: str = ""
     request_model: NonEmptyStr
     result_model: NonEmptyStr
     side_effects: list[NonEmptyStr] = Field(default_factory=list)

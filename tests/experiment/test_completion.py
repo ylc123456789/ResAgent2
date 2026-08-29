@@ -73,17 +73,31 @@ def test_golden_case_new_evidence_completes(tmp_path) -> None:
     assert {artifact.kind for artifact in decision.artifacts} == {"experiment_result"}
 
 
-def test_missing_metric_and_artifact_downgrades(tmp_path) -> None:
+def test_missing_all_evidence_is_rejected(tmp_path) -> None:
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
 
     decision = check.evaluate(_state(), _finish())
 
+    # No metric and no artifact at all: reject instead of completing with
+    # warnings that would mask a total failure.
+    assert decision.complete is False
+    assert "No required metric or artifact" in decision.summary
+
+
+def test_partial_delivery_downgrades_to_warnings(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+
+    # The metric is claimed but the artifact file is unchanged from the baseline.
+    decision = check.evaluate(
+        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+    )
+
     assert decision.complete is True
     assert len(decision.warnings) == 1
-    message = decision.warnings[0].message
-    assert "Missing required metric: accuracy" in message
-    assert "Missing required artifact: metrics.json" in message
-    assert decision.artifacts == []
+    assert "unchanged" in decision.warnings[0].message
 
 
 def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:

@@ -22,6 +22,10 @@ three control signals through the typed tools:
 - ask_user: only missing information a user must supply can resolve this.
 
 WorkRequest rules:
+- Request only the next necessary round of work that the current evidence
+  supports. Do not preemptively request repair or diagnosis before a failure has
+  actually occurred: first request the experiment run; only after it fails,
+  request a fix.
 - Be self-contained: preserve every unmet precondition and constraint from the
   goal. Do not describe only the final evidence you want; also describe the
   problems that must be solved before that evidence can be produced.

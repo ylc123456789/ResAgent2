@@ -93,20 +93,32 @@ def _compile_prompt(
     workspaces: list[WorkspaceDescriptor] | None,
 ) -> str:
     """Describe the work request and execution constraints for one LLM call."""
-    capabilities = ", ".join(
-        item.capability.value for item in registry.definitions
-    )
     lines = [
-        "Translate this research work request into an executable task graph.",
+        "Translate this research work request into the MINIMAL executable task graph.",
         f"Objective: {request.request.objective}",
         f"Expected evidence: {', '.join(request.request.expected_evidence)}",
         f"Constraints: {', '.join(request.request.constraints) or '(none)'}",
-        f"Available capabilities: {capabilities or '(none)'}",
-        "Use only capabilities from the list above; do not invent new ones.",
-        "Every prerequisite the request explicitly names must become a task in "
-        "the graph, ordered via dependencies before the evidence-producing tasks.",
-        f"Max tasks: {budget.max_tasks}",
+        "Available capabilities:",
     ]
+    for item in registry.definitions:
+        suffix = f" — {item.description}" if item.description else ""
+        lines.append(f"- {item.capability.value}{suffix}")
+    lines.extend(
+        [
+            "Use only capabilities from the list above; do not invent new ones.",
+            "Generate the smallest graph that satisfies the request. Do not split "
+            "one agent's internal work into separate tasks: code_modify already "
+            "reads and diagnoses the code before editing, and experiment_run "
+            "already prepares the environment before running.",
+            "Every prerequisite the request explicitly names must become a task in "
+            "the graph, ordered via dependencies before the evidence-producing tasks.",
+        ]
+    )
+    if current is not None:
+        remaining = max(0, budget.max_tasks - len(current.tasks))
+        lines.append(f"Remaining task budget (new tasks): {remaining}")
+    else:
+        lines.append(f"Max tasks: {budget.max_tasks}")
     if workspaces:
         descriptions = "; ".join(
             f"{item.workspace_id} ({item.source_kind.value}"

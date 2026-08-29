@@ -138,6 +138,22 @@ class ExperimentCompletionCheck:
             if normalized not in evidence:
                 evidence.append(normalized)
 
+        # A run that delivered none of the explicitly required evidence did not
+        # actually produce results; reject it instead of completing with
+        # warnings that could mask a total failure.
+        metrics_delivered = any(
+            _metric_is_present(name, finish.metrics) for name in self.expected_metrics
+        )
+        if (
+            (self.expected_metrics or self.expected_artifacts)
+            and not metrics_delivered
+            and not evidence
+        ):
+            return CompletionDecision(
+                complete=False,
+                summary="No required metric or artifact was produced; rerun the experiment",
+            )
+
         payload = ExperimentResult(
             metrics=finish.metrics,
             parameters=finish.parameters,

@@ -35,6 +35,8 @@ Rules:
   "unrecognized arguments" -> check --help or the source; "No such file" ->
   check the path; "dataset not found" -> check the bound dataset; "No module
   named X" -> check the environment/dependencies.
+- Run the entry script exactly as written. If it errors, report the failure in
+  your finish rather than substituting an equivalent command to work around a bug.
 - Do not repeat an unchanged failing command when the inputs, workspace and
   context have not changed.
 - Available datasets (resolved, read-only) are listed in your context under

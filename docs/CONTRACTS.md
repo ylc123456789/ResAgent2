@@ -1061,8 +1061,8 @@ AgentLoop 的反馈语义：
 - `EnvironmentSpec.python_version: str | None = None`：有值表示用户/上游硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断。
 - `ModuleTaskRequest.environment_spec` 承载上游声明；删除 `ExperimentRunInput.python_version`（Experiment 专属字段收归通用 `environment_spec`）。
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用）；不同 Workspace/Run 隔离；不跨 Run 复用可变环境。`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`。
-- `EnvironmentManager` 接口 `inspect`/`prepare`/`audit`；`PreparedEnvironment(env_id, prefix, python_version)` 是 capabilities 内部对象，不进公共导出。
-- 三个共享 Tool（capabilities，不进公共导出）：`prepare_environment`（校验版本、创建/复用并绑定环境）、`run_setup`（允许 `pip install -r`/`-e .`、`uv sync`、`poetry install`、`conda env update -f`；禁止 `sudo`、`conda create/remove`、指定其它 `--prefix/-p/--name/-n`）、`audit_env`（证明基础环境正确，不硬编码具体框架）。
+- `EnvironmentManager` 接口 `inspect`/`prepare`/`audit`；`PreparedEnvironment(env_id, prefix, python_version)` 不进入跨模块 contracts，属 capabilities 的公开 Python API。
+- 三个共享 Tool（capabilities 的公开 Python API，不进入跨模块 contracts）：`prepare_environment`（校验版本、创建/复用并绑定环境，切换版本真实删除重建）、`run_setup`（允许 `pip install -r`/`-e .` 与 `conda env update -f`——conda 由工具注入 `-p <绑定 prefix>`；禁止 `sudo`、`conda create/remove`、指定其它 `--prefix/-p/--name/-n`；暂不支持 uv/poetry）、`audit_env`（证明基础环境正确：sys.prefix 匹配 + pip 可用 + 实际版本满足绑定版本，不硬编码具体框架）。
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 - 半成品基础环境：目录不存在 → 创建；基础检查失败 → 确认在受管 env_root 内 → 删除 → 重建。marker `.resagent2_base_ready` 只表示基础 Python 健康，不代表项目依赖装完。
 - `run_setup` 成功修改环境后置 `env_certified=False`，须重新 `audit_env`。

@@ -31,8 +31,9 @@ Use list/read/search before editing. Read the project's Python and dependency
 requirements first (pyproject.toml, requirements.txt, environment.yml, README).
 If no environment is ready, choose a compatible Python version and call
 prepare_environment; do not run conda create/remove yourself. Install missing
-dependencies with run_setup (pip install -r / -e ., uv sync, poetry install, or
-conda env update -f environment.yml). Re-audit with audit_env after any setup.
+dependencies with run_setup (python -m pip install ..., pip install ..., or
+conda env update -f environment.yml; uv and poetry are not yet supported).
+Re-audit with audit_env after any setup.
 Existing files may only be changed with an exactly-once replace_text action;
 create_file is only for new files. Use git_diff to review the actual change.
 After the latest edit, run shell-free verification commands inside the bound

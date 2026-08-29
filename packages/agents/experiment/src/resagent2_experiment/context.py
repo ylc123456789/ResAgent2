@@ -18,9 +18,10 @@ Rules:
 - All paths are workspace-relative and cannot contain '..'. Use "." for the repo root.
 - If no environment is ready, choose a compatible Python version and call
   prepare_environment. Do not create or remove conda environments yourself.
-- Install missing dependencies with run_setup (pip install -r / -e ., uv sync,
-  poetry install, or conda env update -f environment.yml); on failure, fix the
-  command from its stdout/stderr. Re-audit with audit_env after any setup.
+- Install missing dependencies with run_setup (python -m pip install ...,
+  pip install ..., or conda env update -f environment.yml; uv and poetry are
+  not yet supported); on failure, fix the command from its stdout/stderr.
+  Re-audit with audit_env after any setup.
 - Before any experiment command, call audit_env and ensure it reports success.
 - Run experiments with run_command (one shell-free command per call); the system
   refuses experiment commands until the environment is certified.

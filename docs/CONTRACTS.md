@@ -1065,4 +1065,4 @@ AgentLoop 的反馈语义：
 - 三个共享 Tool（capabilities 的公开 Python API，不进入跨模块 contracts）：`prepare_environment`（校验版本、创建/复用并绑定环境，切换版本真实删除重建）、`run_setup`（允许 `pip install -r`/`-e .` 与 `conda env update -f`——conda 由工具注入 `-p <绑定 prefix>`；禁止 `sudo`、`conda create/remove`、指定其它 `--prefix/-p/--name/-n`；暂不支持 uv/poetry）、`audit_env`（证明基础环境正确：sys.prefix 匹配 + pip 可用 + 实际版本满足绑定版本，不硬编码具体框架）。
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 - 半成品基础环境：目录不存在 → 创建；基础检查失败 → 确认在受管 env_root 内 → 删除 → 重建。marker `.resagent2_base_ready` 只表示基础 Python 健康，不代表项目依赖装完。
-- `run_setup` 成功修改环境后置 `env_certified=False`，须重新 `audit_env`。
+- 任何被允许并开始执行的 `run_setup` 命令（无论成功或失败）都使旧 audit 失效（`env_certified=False`），须重新 `audit_env`。

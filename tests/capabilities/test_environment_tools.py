@@ -11,6 +11,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     AuditEnvTool,
     EnvironmentBinding,
+    EnvironmentManagerError,
     PreparedEnvironment,
     PrepareEnvironmentTool,
     RunSetupTool,
@@ -190,7 +191,7 @@ def test_prepare_version_switch_survives_session_restart(tmp_path) -> None:
         python_version="3.12.4",
     )
     tool = PrepareEnvironmentTool(binding, max_version_switches=2)
-    state = _state(version_switches=2)
+    state = _state(version_switches=2, last_requested_python="3.12")
 
     observation = tool.execute(state, tool.input_model(python_version="3.13"))
 
@@ -310,3 +311,76 @@ def test_binding_restores_existing_env_but_requires_reaudit() -> None:
     assert binding.current is not None
     assert binding.current.python_version == "3.12.4"
     assert binding.certified is False  # a restored env must be re-audited
+
+
+def test_failed_switches_consume_the_switch_budget(tmp_path) -> None:
+    class FailingManager(_FakeManager):
+        def prepare(self, *, run_id, workspace_id, python_version):
+            raise EnvironmentManagerError("creation failed")
+
+    manager = FailingManager(tmp_path / "envs")
+    binding = _binding(manager)
+    binding.current = PreparedEnvironment(
+        env_id="resenv_x",
+        prefix=tmp_path / "envs" / "resenv_x",
+        python_version="3.12.4",
+    )
+    tool = PrepareEnvironmentTool(binding, max_version_switches=2)
+    state = _state(last_requested_python="3.12", version_switches=0)
+
+    def run(python_version):
+        observation = tool.execute(state, tool.input_model(python_version=python_version))
+        state.memory.update(observation.memory_updates)
+        return observation
+
+    assert run("3.11").ok is False  # switch 1, failed
+    assert state.memory["version_switches"] == 1
+    assert run("3.10").ok is False  # switch 2, failed
+    assert state.memory["version_switches"] == 2
+    blocked = run("3.9")  # switch 3 -> rejected by the budget
+    assert blocked.ok is False
+    assert blocked.value["version_switches"] == 3
+
+
+def test_conda_update_uses_manager_conda_and_single_prefix(tmp_path) -> None:
+    boundary = WorkspaceBoundary(
+        WorkspaceGrant(
+            root=str(tmp_path),
+            mode=WorkspaceMode.READ_WRITE,
+            allowed_paths=["."],
+            source=WorkspaceSourceKind.LOCAL,
+        )
+    )
+    manager = _FakeManager(tmp_path / "envs")
+    manager.conda_exe = "/opt/conda/bin/conda"
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    prefix = str(binding.current.prefix)
+
+    class RecordingRunner:
+        def __init__(self, boundary):
+            self.boundary = boundary
+            self.commands = []
+
+        def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
+            self.commands.append((command, argv_prefix))
+            return VerificationResult(
+                command=command, exit_code=0, timed_out=False,
+                stdout_path=str(tmp_path / "x.stdout"),
+                stderr_path=str(tmp_path / "x.stderr"),
+                duration_seconds=0.0,
+            )
+
+    runner = RecordingRunner(boundary)
+    tool = RunSetupTool(runner, binding, log_dir=str(tmp_path / "setup"), timeout_seconds=30)
+
+    observation = tool.execute(
+        _state(), tool.input_model(command="conda env update -f environment.yml")
+    )
+
+    assert observation.ok is True
+    command, argv_prefix = runner.commands[0]
+    assert argv_prefix is None  # conda runs at host level, no `conda run` wrapper
+    assert command.startswith("/opt/conda/bin/conda ")
+    assert command.count(prefix) == 1
+    assert "-p " + prefix in command

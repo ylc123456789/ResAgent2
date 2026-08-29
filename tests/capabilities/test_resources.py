@@ -409,6 +409,26 @@ def test_prepare_recreates_on_version_mismatch(tmp_path, monkeypatch) -> None:
     assert marker["python_version"] == "3.10.16"
 
 
+def test_prepare_corrects_stale_marker_on_reuse(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    prefix = manager.prefix(run_id="r", workspace_id="w")
+    # Env whose actual interpreter is 3.10 but whose marker still says 3.12.
+    prefix.mkdir(parents=True)
+    (prefix / "bin").mkdir()
+    (prefix / "bin" / "python").write_text("")
+    (prefix / "bin" / "pip").write_text("")
+    (prefix / ".resagent2_base_ready").write_text(
+        json.dumps({"python_version": "3.12.4", "env_id": "x", "prefix": str(prefix)})
+    )
+    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.10.16"))
+
+    prepared = manager.prepare(run_id="r", workspace_id="w", python_version="3.10")
+
+    assert prepared.python_version == "3.10.16"
+    marker = json.loads((prefix / ".resagent2_base_ready").read_text(encoding="utf-8"))
+    assert marker["python_version"] == "3.10.16"  # corrected, not 3.12.4
+
+
 def test_audit_requires_pip(tmp_path, monkeypatch) -> None:
     manager = _manager(tmp_path, monkeypatch)
     env = PreparedEnvironment(

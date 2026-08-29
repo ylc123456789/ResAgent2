@@ -710,7 +710,7 @@ def run_repair(workdir: Path) -> bool:
             "and rerun to obtain the accuracy."
         ),
         budget=RunBudget(
-            max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
+            max_tasks=8, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
         ),
     )
     controller, _ = _build_controller(workdir, repo)

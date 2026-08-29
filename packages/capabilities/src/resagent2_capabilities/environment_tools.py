@@ -70,12 +70,12 @@ class PrepareEnvironmentTool:
                 ok=False,
                 value={"invalid_version": version},
             )
-        # A switch is counted only when the requested version differs (by
-        # major.minor) from the currently bound interpreter.
+        # Count a switch against the last *requested* version (not the current
+        # binding), so a failed switch still consumes the switch budget.
+        last_requested = state.memory.get("last_requested_python")
         switches = int(state.memory.get("version_switches", 0))
-        if (
-            self.binding.current is not None
-            and not version_matches(version, self.binding.current.python_version)
+        if last_requested is not None and not version_matches(
+            version, str(last_requested)
         ):
             switches += 1
             if switches > self.max_version_switches:
@@ -86,7 +86,10 @@ class PrepareEnvironmentTool:
                     ),
                     ok=False,
                     value={"version_switches": switches},
-                    memory_updates={"version_switches": switches},
+                    memory_updates={
+                        "version_switches": switches,
+                        "last_requested_python": version,
+                    },
                 )
         # Preparing/switching may mutate the env: invalidate any prior audit.
         self.binding.certified = False
@@ -97,14 +100,18 @@ class PrepareEnvironmentTool:
                 python_version=version,
             )
         except EnvironmentManagerError as error:
-            # A failed switch must not leave the old env as the active binding.
+            # A failed switch must not leave the old env as the active binding,
+            # but must still remember the attempted version.
             self.binding.current = None
             self.binding.certified = False
             return ToolObservation(
                 summary=f"Environment creation failed: {error}",
                 ok=False,
                 value={"stderr_tail": str(error)},
-                memory_updates={"version_switches": switches},
+                memory_updates={
+                    "version_switches": switches,
+                    "last_requested_python": version,
+                },
             )
         self.binding.current = environment
         self.binding.certified = False
@@ -125,6 +132,7 @@ class PrepareEnvironmentTool:
                     "python_version": environment.python_version,
                 },
                 "version_switches": switches,
+                "last_requested_python": version,
             },
         )
 
@@ -186,9 +194,13 @@ class RunSetupTool:
         command = args.command
         argv_prefix = self.binding.argv_prefix()
         if _is_conda_command(args.command):
-            # conda manages the env from the host: bind the prefix explicitly
-            # and do not wrap it in `conda run -p <prefix>`.
-            command = _bind_conda_prefix(args.command, self.binding.current.prefix)
+            # conda manages the env from the host: rebuild with the manager's
+            # conda and the bound prefix, not the agent-named executable.
+            command = _conda_update_command(
+                args.command,
+                conda_exe=self.binding.manager.conda_exe,
+                prefix=self.binding.current.prefix,
+            )
             argv_prefix = None
         index = int(state.memory.get("setup_count", 0)) + 1
         result = self.runner.run(
@@ -252,25 +264,18 @@ def _is_conda_command(command: str) -> bool:
         argv = parse_command(command)
     except UnsafeCommandError:
         return False
-    if not argv:
-        return False
-    return Path(argv[0]).name.lower() in {"conda", "mamba", "micromamba"}
+    return bool(argv) and Path(argv[0]).name.lower() == "conda"
 
 
-def _bind_conda_prefix(command: str, prefix: Path) -> str:
-    """Inject ``-p <prefix>`` after the ``update`` subcommand.
+def _conda_update_command(command: str, *, conda_exe: str, prefix: Path) -> str:
+    """Rebuild ``conda env update`` to use the manager's conda and the bound prefix.
 
-    The command has already passed the policy (a bare ``conda env update -f``),
-    so the tool binds it to the current environment instead of trusting the
-    caller's active env.
+    The command has already passed the policy (argv[0] = conda, argv[1] = env,
+    argv[2] = update), so everything after ``update`` is the caller's own args
+    and the executable is whatever ``EnvironmentManager.conda_exe`` resolved.
     """
     argv = parse_command(command)
-    prefix_text = str(prefix)
-    result: list[str] = []
-    for token in argv:
-        result.append(token)
-        if token == "update":
-            result.extend(["-p", prefix_text])
+    result = [conda_exe, "env", "update", "-p", str(prefix), *argv[3:]]
     return shlex.join(result)
 
 
@@ -316,8 +321,8 @@ class SetupCommandPolicy:
             return CommandPermissionDecision(
                 allowed=False, reason="pip setup must be 'pip install ...'"
             )
-        if executable in {"conda", "mamba", "micromamba"}:
-            if args and args[0] == "env" and "update" in args:
+        if executable == "conda":
+            if len(args) >= 2 and args[0] == "env" and args[1] == "update":
                 return CommandPermissionDecision(allowed=True)
             if args and args[0] in {"create", "remove"}:
                 return CommandPermissionDecision(

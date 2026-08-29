@@ -163,6 +163,7 @@ class EnvironmentManager:
                 and version_matches(python_version, probe["python_version"])
             )
             if reusable:
+                self._write_marker(prefix, env_id, probe["python_version"])
                 return PreparedEnvironment(
                     env_id=env_id,
                     prefix=prefix,
@@ -194,17 +195,7 @@ class EnvironmentManager:
                 + (audit.get("stderr_tail", "").strip())
             )
         actual_version = audit["python_version"]
-        marker = prefix / _BASE_MARKER
-        marker.write_text(
-            json.dumps(
-                {
-                    "python_version": actual_version,
-                    "env_id": env_id,
-                    "prefix": str(prefix),
-                }
-            ),
-            encoding="utf-8",
-        )
+        self._write_marker(prefix, env_id, actual_version)
         return PreparedEnvironment(
             env_id=env_id, prefix=prefix, python_version=actual_version
         )
@@ -301,6 +292,22 @@ class EnvironmentManager:
         except (OSError, json.JSONDecodeError):
             return ""
         return str(info.get("python_version", "") or "")
+
+    def _write_marker(self, prefix: Path, env_id: str, python_version: str) -> None:
+        """Atomically persist the ready marker with the *actual* interpreter."""
+        marker = prefix / _BASE_MARKER
+        temporary = marker.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "python_version": python_version,
+                    "env_id": env_id,
+                    "prefix": str(prefix),
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary, marker)
 
     def _base_healthy(self, prefix: Path) -> bool:
         marker = prefix / _BASE_MARKER

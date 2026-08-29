@@ -606,3 +606,30 @@ def test_failure_details_keep_both_feedback_and_observation() -> None:
     assert "runtime_feedback" in details
     assert "last_observation" in details
     assert details["last_observation"]["value"]["stderr_tail"] == "NameError: totla"
+
+
+def test_malformed_action_is_recoverable() -> None:
+    """An action that fails schema validation is fed back, then corrected."""
+    store = InMemorySessionStore()
+    profile = definition(
+        name="recover-invalid-action",
+        llm=ScriptedLLMClient(
+            [
+                {
+                    "tool": "finish",
+                    "arguments": {"result": {}},
+                    "undocumented_field": True,
+                },
+                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            ]
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+        completion_check=AcceptFinish(),
+    )
+    result = AgentLoop(store=store).run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_recover_invalid_action",
+    )
+    assert result.status == ModuleStatus.COMPLETED

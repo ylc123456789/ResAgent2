@@ -309,13 +309,25 @@ class AgentLoop:
                 llm_calls += 1
                 action = definition.action_type.model_validate(raw_action)
             except ValidationError as error:
-                return self._failure(
+                # A malformed action is recoverable: record it as durable
+                # feedback and let the LLM correct it, bounded by the same
+                # consecutive-failure limit as any other recoverable error.
+                self._feedback(
                     state,
-                    ErrorCode.INVALID_INPUT,
-                    "LLM action did not match action schema",
-                    retryable=True,
-                    details=self._validation_details(error),
+                    "LLM action did not match the action schema: "
+                    + str(self._validation_details(error)),
+                    tool="llm",
+                    value={
+                        "validation_errors": self._validation_details(error)[
+                            "validation_errors"
+                        ]
+                    },
                 )
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
+                continue
             except LLMExhaustedError as error:
                 return self._failure(
                     state,

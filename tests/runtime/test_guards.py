@@ -108,7 +108,8 @@ def test_tool_arguments_are_validated_before_execution() -> None:
 
 
 def test_llm_action_must_match_the_typed_action_schema() -> None:
-    result = AgentLoop(store=InMemorySessionStore()).run(
+    store = InMemorySessionStore()
+    result = AgentLoop(store=store).run(
         definition(
             [
                 {
@@ -123,12 +124,13 @@ def test_llm_action_must_match_the_typed_action_schema() -> None:
         session_id="session_invalid_action",
     )
 
+    # The malformed action is rejected (never executed) and recorded as durable
+    # feedback; with no corrective action left the loop fails on exhaustion.
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
-    assert result.error.code == ErrorCode.INVALID_INPUT
-    assert result.error.details["validation_errors"][0]["loc"] == [
-        "undocumented_field"
-    ]
+    state = store.load("session_invalid_action")
+    assert state.runtime_feedback is not None
+    assert "undocumented_field" in state.runtime_feedback.summary
 
 
 def test_rejected_finish_exhausts_budget_instead_of_completing() -> None:

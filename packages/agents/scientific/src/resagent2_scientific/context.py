@@ -7,6 +7,8 @@ import json
 from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import AgentState, ContextSection
 
+from .completion import _observed_artifact_ids
+
 
 SCIENTIFIC_PROMPT = """You are the Scientific Agent: the scientific brain of one research run.
 
@@ -62,6 +64,30 @@ Tool arguments:
 """
 
 
+def _evidence_control_state(turn: ScientificTurnRequest, state: AgentState) -> dict:
+    """Derive the deterministic "read evidence before concluding" control state.
+
+    The Scientific Agent must not rely on its own memory that a cited artifact is
+    still unread: that is an outstanding obligation, and the model can lose it
+    under a flood of observations. This state is recomputed every turn and shown
+    at the highest priority so the obligation stays visible until the artifacts
+    are actually read or dropped from the citation.
+    """
+    observed = _observed_artifact_ids(state)
+    authorized = [artifact.id for artifact in turn.authorized_artifacts]
+    unobserved_authorized = sorted(set(authorized) - set(observed))
+    pending = state.memory.get("pending_citation_artifact_ids", [])
+    pending = list(pending) if isinstance(pending, list) else []
+    return {
+        "observed_artifact_ids": observed,
+        "unobserved_authorized_artifact_ids": unobserved_authorized,
+        "pending_citation_artifact_ids": pending,
+        "required_next_action": (
+            "read_artifact_or_remove_citation" if pending else "none"
+        ),
+    }
+
+
 def build_context(
     turn: ScientificTurnRequest,
     state: AgentState,
@@ -96,6 +122,16 @@ def build_context(
     answers = [answer.model_dump(mode="json") for answer in turn.answers]
 
     sections = [
+        ContextSection(
+            name="evidence_control_state",
+            content=(
+                "Current evidence control state (deterministic — do not invent "
+                "your own):\n"
+                + json.dumps(_evidence_control_state(turn, state), ensure_ascii=False)
+            ),
+            priority=1000,
+            required=True,
+        ),
         ContextSection(
             name="research",
             content=json.dumps(research, ensure_ascii=False),

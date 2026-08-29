@@ -35,7 +35,7 @@
 | Phase 4 | Planning Port、Legacy Adapters 与最小黄金闭环 | completed |
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
-| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | 代码完成（7.1—7.7 全部落地并通过本地测试；服务器真实 E2E 待跑） |
+| Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | 代码完成并服务器真实 E2E 跑通（7.1—7.7 全部落地，场景 2 completed） |
 | Phase 8 | 稳定化与按需高级能力 | not_started |
 
 Phase 3、Phase 4、Phase 5 与 Phase 6 已完成。原生 Coding Agent 与原生 Experiment Agent 已分别替换 legacy Coding/Experiment adapter，并在服务器真实闭环中登记 patch、代码、实验和 legacy 科学结论四类证据。Phase 7 已通过 7.7 原子切换把 production composition root 切到唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`），删除旧 PlanningPort/`LegacyScientificAnalyzeAdapter` 及全部 deprecated 类型；schema 2.0 仍待服务器真实 E2E 通过后冻结。
@@ -612,22 +612,22 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 ### 10.5 Phase 7 总完成标准
 
-- [ ] schema 2.0 代码/导出/文档/测试一致；
-- [ ] Scientific Agent 只有一套 Agentic Loop 和一个 Port；
-- [ ] Scientific Agent 不输出 capability/task/path/env/status 等执行字段；
-- [ ] WorkflowCompiler 不形成科学结论，所有输出经过统一 validator；
-- [ ] 自然语言 ResearchRequest 可在无预建 Workflow 时启动 Run；
-- [ ] WorkRequest → Workflow → WorkOutcome → 同一 Scientific Session 的闭环可恢复；
-- [ ] Task 失败不会被掩盖，也不会在仍可科学恢复时过早结束 Run；
-- [ ] literature 是可注入 capability，限流/超时不会伪装为空结果；
-- [ ] ScientificOpinion 只引用已授权、已通过 trusted Tool observation、已登记 Artifact；
-- [ ] inconclusive 与 failed 的语义和测试分离；
-- [ ] final report 是确定性渲染且只引用 typed facts；
-- [ ] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
-- [ ] production composition root 只有一条 Scientific 路径；
-- [ ] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
-- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；
-- [ ] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
+- [x] schema 2.0 代码/导出/文档/测试一致；
+- [x] Scientific Agent 只有一套 Agentic Loop 和一个 Port；
+- [x] Scientific Agent 不输出 capability/task/path/env/status 等执行字段；
+- [x] WorkflowCompiler 不形成科学结论，所有输出经过统一 validator；
+- [x] 自然语言 ResearchRequest 可在无预建 Workflow 时启动 Run；
+- [x] WorkRequest → Workflow → WorkOutcome → 同一 Scientific Session 的闭环可恢复；
+- [x] Task 失败不会被掩盖，也不会在仍可科学恢复时过早结束 Run；
+- [x] literature 是可注入 capability，限流/超时不会伪装为空结果；
+- [x] ScientificOpinion 只引用已授权、已通过 trusted Tool observation、已登记 Artifact；
+- [x] inconclusive 与 failed 的语义和测试分离；
+- [x] final report 是确定性渲染且只引用 typed facts；
+- [x] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
+- [x] production composition root 只有一条 Scientific 路径；
+- [x] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
+- [x] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；
+- [x] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理
 
@@ -688,7 +688,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 恢复闭环（信息不丢） | previous_work_request、真实 summary/stderr_tail、Experiment prompt 规则 | Phase 7.7 hardening | 已实现：Scientific 重发 self-contained WorkRequest、Experiment 先读接口不臆造 CLI、按错误改命令 |
 | 运行时反馈与连续失败保护 | ToolObservation.ok、runtime_feedback、recent_observations、连续失败上限 | Phase 7.7 hardening | 已实现：拒绝落 ok=False 持久反馈、有界最近历史 head+tail 截断、finish 由 completion check 判定、连续 5 次 TOOL_FAILED |
 | 数据集两层资源模型 | DatasetRef、dataset_refs、RESAGENT2_DATASETS_JSON/RESAGENT2_DATASET_ROOT | Phase 7.7 hardening | 已实现：dataset_root 是公共根、DatasetRef 指向具体只读目录、通用 id→路径映射、重复 id 拒绝 |
-| 环境中断恢复 | EnvironmentManager `.resagent2_env_ready` marker、conda env update | Phase 7.7 hardening | 已实现：半成品环境不直接标 ready，有 environment.yml 时先 env update |
+| 环境中断恢复 | EnvironmentManager `.resagent2_env_ready` marker、conda env update/install | Phase 7.7 hardening | 已实现：半成品环境不直接标 ready——有 environment.yml 时 env update、无依赖文件时 conda install 补齐 python |
 
 ## 13. 文档同步检查
 
@@ -727,3 +727,4 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.6 finish gate + final report | `c9fc5f3` | 本地 230 passed、1 skipped | 结构化完成复核与 violation 持久化、typed deterministic report、orchestrator Artifact 登记、7.5 acceptance crash-window 恢复；未接 production |
 | 2026-08-28 | Phase 7.7 原子切换 | 未提交 | 本地 227 passed、1 skipped | 删除 PlanningPort/DeterministicPlanningPort/LegacyScientificAnalyzeAdapter 及全部 deprecated 类型与 enum 值；production 切到唯一 Scientific 路径；e2e 重写；scheduler 测试下游节点改写 code_understand；服务器真实 E2E 未跑 |
 | 2026-08-29 | Phase 7.7 Hardening（工作区/Coding 自主） | `9543ab7`, `5d1746d` | 本地 253 passed、1 skipped；mock E2E completed | 统一工作区（WorkspaceSourceKind/WorkspaceSpec/WorkspaceRecord + workspace_id）、Coding 自主验证命令、RepoMaterializer 元数据出仓、RunLayout/ResourceLayout 分离 Run 数据与共享缓存；服务器真实 E2E 未跑 |
+| 2026-08-29 | Phase 7.7 recovery-loop hardening 收尾 | `0a57b6c`, `812c0aa` + 本地未 push | 本地 281 passed、1 skipped；mock E2E completed；服务器真实 E2E 场景 2 completed（baseline 0.4367 → candidate 0.5079，verdict=supports） | 修 3 条 P1（数据集通用绑定、运行时 ok=False/completion rejection 计数、环境中断恢复）+ 恢复闭环（previous_work_request + 最近历史/连续失败保护 + prompt 规则）；全新 workdir 场景 2 跑通 |

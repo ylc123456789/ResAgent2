@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -10,10 +11,12 @@ from resagent2_capabilities import (
     DatasetCache,
     DatasetResolutionError,
     EnvironmentManager,
+    EnvironmentManagerError,
     HardwareAudit,
     RepoMaterializer,
     RepoMaterializerError,
     ResourceLayout,
+    dataset_env_overrides,
     env_id,
     env_spec,
     find_conda,
@@ -470,3 +473,101 @@ def test_descendant_pids_finds_child_process() -> None:
     finally:
         child.terminate()
         child.wait()
+
+
+def _recording_conda(tmp_path: Path, log: Path) -> Path:
+    fake = tmp_path / "conda"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"with open({str(log)!r}, 'a') as f:\n"
+        "    f.write(' '.join(sys.argv[1:]) + '\\n')\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    return fake
+
+
+def test_resolve_dataset_refs_rejects_duplicate_id(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    (root / "cifar10").mkdir(parents=True)
+
+    with pytest.raises(DatasetResolutionError, match="duplicate"):
+        resolve_dataset_refs(
+            root,
+            [
+                DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
+                DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
+            ],
+        )
+
+
+def test_dataset_env_overrides_are_generic(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    (root / "cifar10").mkdir(parents=True)
+    (root / "mnist").mkdir(parents=True)
+    resolved = resolve_dataset_refs(
+        root,
+        [
+            DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
+            DatasetRef(dataset_id="mnist", relative_path="mnist"),
+        ],
+    )
+
+    overrides = dataset_env_overrides(root, resolved)
+
+    assert "TORCHVISION_DATASETS" not in overrides
+    assert overrides["RESAGENT2_DATASET_ROOT"] == str(root.resolve())
+    assert json.loads(overrides["RESAGENT2_DATASETS_JSON"]) == {
+        "cifar10": str((root / "cifar10").resolve()),
+        "mnist": str((root / "mnist").resolve()),
+    }
+
+
+def test_environment_manager_partial_env_runs_update(tmp_path) -> None:
+    env_root = tmp_path / "resources" / "envs"
+    prefix = env_root / "resenv_x"
+    prefix.mkdir(parents=True)  # partial env: prefix exists, no ready marker
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "environment.yml").write_text(
+        "name: x\ndependencies:\n  - python\n", encoding="utf-8"
+    )
+    log = tmp_path / "conda_calls.txt"
+    manager = EnvironmentManager(
+        env_root=env_root, conda_exe=str(_recording_conda(tmp_path, log))
+    )
+
+    result = manager.ensure(
+        identifier="resenv_x", repo_path=repo, python_version="3.12"
+    )
+
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert any("update" in call for call in calls)
+    assert not any("create" in call for call in calls)
+    assert result == prefix
+    assert (prefix / ".resagent2_env_ready").is_file()
+
+
+def test_environment_manager_partial_env_update_failure_does_not_mark_ready(
+    tmp_path,
+) -> None:
+    env_root = tmp_path / "resources" / "envs"
+    prefix = env_root / "resenv_x"
+    prefix.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "environment.yml").write_text(
+        "name: x\ndependencies:\n  - python\n", encoding="utf-8"
+    )
+    fake = tmp_path / "conda"
+    fake.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.exit(1)\n", encoding="utf-8"
+    )
+    fake.chmod(0o755)
+    manager = EnvironmentManager(env_root=env_root, conda_exe=str(fake))
+
+    with pytest.raises(EnvironmentManagerError):
+        manager.ensure(identifier="resenv_x", repo_path=repo, python_version="3.12")
+
+    assert not (prefix / ".resagent2_env_ready").is_file()

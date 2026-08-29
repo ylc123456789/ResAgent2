@@ -20,8 +20,9 @@ Rules:
 - Before running an unfamiliar entry script, confirm its interface first: read
   the entry script or its README, or run it with --help.
 - Command-line flags must come from the entry code, documentation, or --help
-  output. Do not infer CLI flags from library API arguments: a
-  CIFAR10(download=True) call does NOT mean the script supports --download.
+  output. Do not infer CLI flags from library API arguments: a library call
+  with a ``download=True`` argument does NOT mean the script supports a
+  ``--download`` flag.
 - When a command fails, change your next action based on the error:
   "unrecognized arguments" -> check --help or the source; "No such file" ->
   check the path; "dataset not found" -> check the bound dataset; "No module
@@ -29,9 +30,10 @@ Rules:
 - Do not repeat an unchanged failing command when the inputs, workspace and
   context have not changed.
 - Available datasets (resolved, read-only) are listed in your context under
-  "datasets". Point the framework's dataset cache env var (e.g.
-  TORCHVISION_DATASETS for torchvision) to the relevant dataset's path before
-  running.
+  "datasets", and are exposed to scripts as two environment variables:
+  RESAGENT2_DATASET_ROOT (the shared dataset root) and
+  RESAGENT2_DATASETS_JSON (a JSON object mapping each dataset id to its absolute
+  path). Look up the dataset you need by id; do not assume a single default.
 - Inspect produced files to extract the actual metrics; do not invent numbers.
 - Finish with result={summary, metrics, parameters, evidence_files, residual_risks}.
   evidence_files are workspace-relative paths to the result files you actually

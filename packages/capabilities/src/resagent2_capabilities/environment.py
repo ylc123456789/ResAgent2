@@ -176,6 +176,23 @@ class EnvironmentManager:
                 raise EnvironmentManagerError(
                     f"conda env creation failed: {(result.stderr or '').strip()}"
                 )
+        elif env_file is not None:
+            # A previous create was interrupted and left a partial env. Finish
+            # it with an update instead of silently marking it ready.
+            command = [
+                self.conda_exe,
+                "env",
+                "update",
+                "-p",
+                str(prefix),
+                "-f",
+                str(env_file),
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise EnvironmentManagerError(
+                    f"conda env update failed: {(result.stderr or '').strip()}"
+                )
         # Install explicitly declared pip deps when no environment.yml did it.
         if env_file is None:
             requirements = _find_requirements_txt(repo_path)

@@ -45,12 +45,17 @@ _RECENT_OBSERVATION_LIMIT = 6
 
 
 def _trim_json(value, limit: int) -> str:
-    """Serialize ``value`` to a bounded string for context injection."""
+    """Serialize ``value`` to a bounded string for context injection.
+
+    Keeps the head and tail when truncating, so a trailing error field (e.g. a
+    command's ``stderr_tail``) is not dropped from a long value.
+    """
     if value is None:
         return ""
     text = json.dumps(value, ensure_ascii=False, default=str)
     if len(text) > limit:
-        text = text[:limit] + "…"
+        half = max(limit // 2 - 1, 1)
+        text = text[:half] + " … " + text[-half:]
     return text
 
 
@@ -422,9 +427,14 @@ class AgentLoop:
             )
             self._save(state)
 
-            if observation.ok:
+            # A successful non-finish tool (read_file, list_files, ...) resets
+            # the failure streak. A finish tool's ``ok`` only means "finish was
+            # proposed", not "the task is done"; that is decided by the
+            # completion check below, so do not reset here.
+            is_finish = observation.finish_candidate is not None
+            if observation.ok and not is_finish:
                 consecutive_failures = 0
-            else:
+            elif not observation.ok:
                 failure = self._note_failure(state, consecutive_failures)
                 if failure is not None:
                     return failure
@@ -511,6 +521,13 @@ class AgentLoop:
                     value={"completion_check": "rejected"},
                     source="completion_check",
                 )
+            if observation.finish_candidate is not None:
+                # A proposed finish was rejected: count it so a model that keeps
+                # proposing the same finish is eventually stopped.
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
 
         details: dict = {}
         if state.runtime_feedback is not None:
@@ -613,7 +630,7 @@ class AgentLoop:
         observation (read_file, list_files, ...) cannot overwrite it. The LLM
         keeps seeing why its previous action was rejected and can act on it.
         """
-        feedback = ToolObservation(summary=summary, value=value)
+        feedback = ToolObservation(summary=summary, value=value, ok=False)
         state.last_observation = feedback
         state.runtime_feedback = feedback
         state.runtime_feedback_source = source

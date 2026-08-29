@@ -75,7 +75,17 @@ import torchvision.transforms as transforms
 
 
 def _data_root():
-    return os.environ.get("TORCHVISION_DATASETS", "./data")
+    # Datasets are exposed generically by the Experiment Agent. Pick the cifar10
+    # entry from the id -> path map, falling back to the shared dataset root.
+    mapping = os.environ.get("RESAGENT2_DATASETS_JSON")
+    if mapping:
+        try:
+            datasets = json.loads(mapping)
+            if "cifar10" in datasets:
+                return datasets["cifar10"]
+        except (ValueError, TypeError):
+            pass
+    return os.environ.get("RESAGENT2_DATASET_ROOT", "./data")
 
 
 class SELayer(nn.Module):

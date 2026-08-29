@@ -10,6 +10,7 @@ from .artifacts import ArtifactReadError, RegisteredArtifactReader
 from .dataset import (
     DatasetCache,
     DatasetResolutionError,
+    dataset_env_overrides,
     mirror_env_overrides,
     resolve_dataset_refs,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "UnsafeCommandError",
     "WorkspaceBoundary",
     "WorkspacePermissionError",
+    "dataset_env_overrides",
     "env_id",
     "env_spec",
     "find_conda",

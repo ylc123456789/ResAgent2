@@ -426,3 +426,96 @@ def test_recent_observations_are_injected() -> None:
 
     # The second turn's context carries the recent tool history.
     assert "recent_observations" in llm.contexts[1].included_sections
+
+
+class RejectWithReason:
+    """Reject every proposed finish with an actionable summary."""
+
+    def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
+        return CompletionDecision(
+            complete=False, summary="Missing required evidence; keep working"
+        )
+
+
+def test_completion_rejection_counts_as_failure() -> None:
+    """A model that keeps proposing finish while the completion check keeps
+    rejecting must be stopped by the consecutive-failure guard, not the budget."""
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    profile = definition(
+        name="reject-finish",
+        llm=ScriptedLLMClient(
+            [AgentAction(tool="finish", arguments={"result": {"ok": True}})] * 50
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+        completion_check=RejectWithReason(),
+    )
+    req = ModuleTaskRequest(
+        run_id="run_x",
+        task_id="task_x",
+        attempt_number=1,
+        capability=Capability.CODE_MODIFY,
+        goal="g",
+        inputs=CodeModifyInput(instructions="i"),
+        budget=TaskBudget(max_steps=50, max_llm_calls=50, timeout_seconds=60),
+    )
+    result = loop.run(profile, req, session_id="session_reject_finish")
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    state = store.load("session_reject_finish")
+    assert state.step < 50
+    # Every rejection was persisted as a failed observation, not ok=True.
+    rejections = [
+        event.data for event in state.events
+        if event.type == "observation" and event.tool == "completion_check"
+    ]
+    assert rejections
+    assert all(not data.get("ok") for data in rejections if isinstance(data, dict))
+
+
+def test_recent_observations_preserve_error_bodies() -> None:
+    """Two distinct command errors must both remain readable in the next turn,
+    even when a long value forces the recent-history trim."""
+    from resagent2_runtime import ToolObservation
+
+    pad = "x" * 600
+    errors = ["AlphaError: alpha broke", "BravoError: bravo broke"]
+
+    class FailingTool:
+        name = "flaky"
+        input_model = FinishTool.input_model
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, state, arguments):
+            err = errors[min(self.calls, len(errors) - 1)]
+            self.calls += 1
+            return ToolObservation(
+                summary="command failed",
+                ok=False,
+                value={"stdout_tail": pad, "stderr_tail": err},
+            )
+
+    llm = ScriptedLLMClient(
+        [
+            AgentAction(tool="flaky", arguments={"result": {}}),
+            AgentAction(tool="flaky", arguments={"result": {}}),
+            AgentAction(tool="flaky", arguments={"result": {}}),
+        ]
+    )
+    profile = definition(
+        name="errors",
+        llm=llm,
+        tools=(FailingTool(), FinishTool()),
+        allowed_tools={"flaky", "finish"},
+        completion_check=NeverFinish(),
+    )
+    loop = AgentLoop(store=InMemorySessionStore())
+    loop.run(profile, request(Capability.CODE_MODIFY), session_id="session_errors")
+
+    assert "recent_observations" in llm.contexts[2].included_sections
+    assert errors[0] in llm.contexts[2].text
+    assert errors[1] in llm.contexts[2].text

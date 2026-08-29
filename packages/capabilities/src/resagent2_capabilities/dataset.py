@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from resagent2_contracts import DatasetRef
+
+
+# Generic dataset hand-off surface. These are the only dataset-related env vars
+# the Experiment Agent promises to its scripts: nothing framework-specific and
+# no "first dataset" special-casing.
+RESAGENT2_DATASET_ROOT = "RESAGENT2_DATASET_ROOT"
+RESAGENT2_DATASETS_JSON = "RESAGENT2_DATASETS_JSON"
 
 
 class DatasetResolutionError(ValueError):
@@ -19,11 +27,16 @@ def resolve_dataset_refs(
     Each reference's ``relative_path`` is joined under ``dataset_root``, then
     checked for directory escape (``..`` / absolute) and existence. The result
     is a list of ``{dataset_id, path, access}`` entries; the dataset root is the
-    shared "all datasets" directory, never one specific dataset.
+    shared "all datasets" directory, never one specific dataset. A duplicate
+    ``dataset_id`` is rejected so one id can never resolve to two paths.
     """
     root = Path(dataset_root).expanduser().resolve()
     resolved: list[dict] = []
+    seen: set[str] = set()
     for ref in refs:
+        if ref.dataset_id in seen:
+            raise DatasetResolutionError(f"duplicate dataset_id: {ref.dataset_id!r}")
+        seen.add(ref.dataset_id)
         candidate = (root / ref.relative_path).resolve()
         if not candidate.is_relative_to(root):
             raise DatasetResolutionError(
@@ -41,9 +54,26 @@ def resolve_dataset_refs(
     return resolved
 
 
+def dataset_env_overrides(
+    dataset_root: str | Path, resolved: list[dict]
+) -> dict[str, str]:
+    """Expose resolved datasets to scripts as a generic ``id -> path`` map.
+
+    No framework is named and no single dataset is preferred: the Experiment
+    Agent passes this mapping through so a script can look up the dataset it
+    actually needs by id.
+    """
+    return {
+        RESAGENT2_DATASET_ROOT: str(Path(dataset_root).expanduser().resolve()),
+        RESAGENT2_DATASETS_JSON: json.dumps(
+            {entry["dataset_id"]: entry["path"] for entry in resolved},
+            ensure_ascii=False,
+        ),
+    }
+
+
 _CACHE_ENV_VARS = (
     "TORCH_HOME",
-    "TORCHVISION_DATASETS",
     "HF_HOME",
     "HUGGINGFACE_HUB_CACHE",
     "TORCH_HUB",

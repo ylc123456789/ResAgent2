@@ -21,6 +21,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     DatasetCache,
     DatasetResolutionError,
+    dataset_env_overrides,
     EnvironmentManager,
     EnvironmentManagerError,
     HardwareAudit,
@@ -155,10 +156,9 @@ class NativeExperimentAgent:
 
         confirmed = _confirmation_granted(request, inputs.confirm_before_experiment)
         dataset_env = DatasetCache(root=resource_layout.dataset_root).env_overrides()
-        if datasets:
-            # Point the torchvision dataset cache at the resolved dataset dir, so
-            # a script that reads TORCHVISION_DATASETS finds the actual dataset.
-            dataset_env["TORCHVISION_DATASETS"] = datasets[0]["path"]
+        dataset_env.update(
+            dataset_env_overrides(resource_layout.dataset_root, datasets)
+        )
 
         output_dir = request.output_dir
         command_log_dir = f"{output_dir}/commands"

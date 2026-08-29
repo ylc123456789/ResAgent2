@@ -1,8 +1,7 @@
-"""Experiment command execution and environment certification tools."""
+"""Experiment command execution tools (environment tools are shared)."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import cast
 
@@ -10,8 +9,8 @@ from pydantic import BaseModel
 
 from resagent2_contracts import QuestionDraft
 from resagent2_capabilities import (
+    EnvironmentBinding,
     ProcessRunner,
-    WorkspaceBoundary,
     parse_command,
 )
 from resagent2_runtime import (
@@ -60,33 +59,14 @@ def classify_command(command: str) -> str:
     return "experiment"
 
 
-def mutates_environment(command: str) -> bool:
-    """Return whether a command changes installed packages."""
-    try:
-        argv = parse_command(command)
-    except ValueError:
-        return False
-    if not argv:
-        return False
-    executable = Path(argv[0]).name.lower()
-    args = [argument.lower() for argument in argv[1:]]
-    if executable in {"pip", "pip3"}:
-        return bool(args and args[0] in {"install", "uninstall", "upgrade"})
-    if executable in {"python", "python3"} and args[:2] == ["-m", "pip"]:
-        return len(args) >= 3 and args[2] in {"install", "uninstall", "upgrade"}
-    if executable in {"conda", "mamba", "micromamba"}:
-        return bool(args and args[0] in {"install", "remove", "update", "create"})
-    return False
-
-
 class RunCommandInput(RuntimeModel):
-    """One shell-free command to run inside the prepared environment."""
+    """One shell-free command to run inside the bound environment."""
 
     command: NonEmptyStr
 
 
 class RunCommandTool:
-    """Execute a shell-free command, gated by certification and confirmation."""
+    """Execute a shell-free experiment command, gated by audit and confirmation."""
 
     name = "run_command"
     input_model = RunCommandInput
@@ -94,9 +74,8 @@ class RunCommandTool:
     def __init__(
         self,
         runner: ProcessRunner,
+        binding: EnvironmentBinding,
         *,
-        argv_prefix: list[str],
-        env_prefix: Path,
         confirm_before_experiment: bool,
         confirmed: bool,
         timeout_seconds: int,
@@ -104,8 +83,7 @@ class RunCommandTool:
         log_dir: str = ".resagent2/experiment/commands",
     ) -> None:
         self.runner = runner
-        self.argv_prefix = argv_prefix
-        self.env_prefix = env_prefix
+        self.binding = binding
         self.confirm_before_experiment = confirm_before_experiment
         self.confirmed = confirmed
         self.timeout_seconds = timeout_seconds
@@ -125,7 +103,7 @@ class RunCommandTool:
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunCommandInput, arguments)
         if classify_command(args.command) == "experiment":
-            if state.memory.get("env_certified", False) != str(self.env_prefix):
+            if not self.binding.certified:
                 return ToolObservation(
                     summary="Experiment command blocked: run audit_env first",
                     value={"blocked": True, "reason": "environment not certified"},
@@ -146,7 +124,7 @@ class RunCommandTool:
             log_dir=self.log_dir,
             index=index,
             timeout_seconds=self.timeout_seconds,
-            argv_prefix=self.argv_prefix,
+            argv_prefix=self.binding.argv_prefix(),
             extra_env=self.extra_env,
         )
         memory_updates: dict = {"command_count": index}
@@ -158,8 +136,6 @@ class RunCommandTool:
             memory_updates["experiment_success_count"] = (
                 int(state.memory.get("experiment_success_count", 0)) + 1
             )
-        if mutates_environment(args.command) and result.exit_code == 0:
-            memory_updates["env_certified"] = False
         value = result.model_dump(mode="json")
         value["stdout_tail"] = self._tail(result.stdout_path)
         value["stderr_tail"] = self._tail(result.stderr_path)
@@ -168,122 +144,4 @@ class RunCommandTool:
             value=value,
             ok=(result.exit_code == 0 and not result.timed_out),
             memory_updates=memory_updates,
-        )
-
-
-_AUDIT_PROBE = """\
-import json
-import sys
-
-data = {
-    "sys_executable": sys.executable,
-    "sys_prefix": sys.prefix,
-    "python_version": sys.version.split()[0],
-}
-try:
-    import torch
-    data["torch"] = {
-        "version": torch.__version__,
-        "cuda_available": bool(torch.cuda.is_available()),
-    }
-except Exception as exc:
-    data["torch_error"] = str(exc)
-print(json.dumps(data))
-"""
-
-
-class AuditEnvInput(RuntimeModel):
-    """Empty request that audits the prepared environment."""
-
-    pass
-
-
-class AuditEnvTool:
-    """Probe the prepared environment and update the certification state."""
-
-    name = "audit_env"
-    input_model = AuditEnvInput
-
-    def __init__(
-        self,
-        runner: ProcessRunner,
-        boundary: WorkspaceBoundary,
-        *,
-        argv_prefix: list[str],
-        env_prefix: Path,
-        timeout_seconds: int,
-        extra_env: dict[str, str] | None = None,
-        log_dir: str = ".resagent2/experiment/audit",
-        probe_dir: str = ".resagent2/experiment",
-    ) -> None:
-        self.runner = runner
-        self.boundary = boundary
-        self.argv_prefix = argv_prefix
-        self.env_prefix = env_prefix
-        self.timeout_seconds = timeout_seconds
-        self.extra_env = extra_env
-        self.log_dir = log_dir
-        self.probe_dir = probe_dir
-
-    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        probe_root = Path(self.probe_dir)
-        if probe_root.is_absolute():
-            probe = probe_root / "audit_probe.py"
-        else:
-            probe = self.boundary.resolve_system_write(
-                f"{self.probe_dir}/audit_probe.py"
-            )
-        probe.parent.mkdir(parents=True, exist_ok=True)
-        probe.write_text(_AUDIT_PROBE, encoding="utf-8")
-        if probe.is_relative_to(self.boundary.root):
-            command_arg = probe.relative_to(self.boundary.root).as_posix()
-        else:
-            command_arg = str(probe)
-        result = self.runner.run(
-            f"python {command_arg}",
-            log_dir=self.log_dir,
-            index=1,
-            timeout_seconds=self.timeout_seconds,
-            argv_prefix=self.argv_prefix,
-            extra_env=self.extra_env,
-        )
-        if result.exit_code != 0 or result.timed_out:
-            return ToolObservation(
-                summary="Environment audit failed to run",
-                value={"success": False, "exit_code": result.exit_code},
-                memory_updates={"env_certified": False},
-            )
-        try:
-            stdout = (self.boundary.root / result.stdout_path).read_text(
-                encoding="utf-8", errors="replace"
-            )
-            data = json.loads(stdout)
-        except (OSError, json.JSONDecodeError):
-            return ToolObservation(
-                summary="Environment audit output was invalid",
-                value={"success": False},
-                memory_updates={"env_certified": False},
-            )
-        prefix_ok = (
-            Path(str(data.get("sys_prefix", ""))).resolve()
-            == self.env_prefix.resolve()
-        )
-        value = {
-            "success": prefix_ok,
-            "sys_prefix": data.get("sys_prefix", ""),
-            "python_version": data.get("python_version", ""),
-            "torch": data.get("torch"),
-            "torch_error": data.get("torch_error"),
-        }
-        return ToolObservation(
-            summary=(
-                "Environment audit passed"
-                if prefix_ok
-                else "Environment audit failed: sys.prefix does not match the env"
-            ),
-            value=value,
-            memory_updates={
-                "env_certified": str(self.env_prefix) if prefix_ok else False,
-                "env_audit": value,
-            },
         )

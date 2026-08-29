@@ -18,8 +18,10 @@ class ExperimentAction(AgentAction):
         "read_file",
         "search_text",
         "read_artifact",
-        "run_command",
+        "prepare_environment",
+        "run_setup",
         "audit_env",
+        "run_command",
         "finish",
         "ask_user",
     ]

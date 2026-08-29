@@ -18,11 +18,15 @@ from resagent2_contracts import (
     WorkspaceMode,
 )
 from resagent2_capabilities import (
+    AuditEnvTool,
     CreateFileTool,
+    EnvironmentBinding,
+    EnvironmentManager,
     GitDiffTool,
     GitWorkspace,
     GitWorkspaceError,
     ListFilesTool,
+    PrepareEnvironmentTool,
     ProcessRunner,
     ReadArtifactTool,
     ReadFileTool,
@@ -30,6 +34,8 @@ from resagent2_capabilities import (
     ReplaceTextTool,
     RepoMaterializer,
     RepoMaterializerError,
+    ResourceLayout,
+    RunSetupTool,
     RunVerificationTool,
     SearchTextTool,
     WorkspaceBoundary,
@@ -59,9 +65,11 @@ class NativeCodingAgent:
         llm_client: LLMClient,
         *,
         store: SessionStore | None = None,
+        resource_layout: ResourceLayout | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.loop = AgentLoop(store=store or InMemorySessionStore())
+        self.resource_layout = resource_layout or ResourceLayout.from_env()
 
     @staticmethod
     def _failure(message: str, *, blocked: bool = False) -> ModuleResult:
@@ -143,15 +151,32 @@ class NativeCodingAgent:
             if request.output_dir is None:
                 return self._failure("CodingAgent requires an output_dir", blocked=True)
             output_root = Path(request.output_dir)
+            manager = EnvironmentManager(env_root=self.resource_layout.env_root)
+            binding = EnvironmentBinding(
+                manager,
+                run_id=request.run_id,
+                workspace_id=request.workspace_id or "default",
+                hard_constraint=request.environment_spec.python_version,
+            )
+            runner = ProcessRunner(boundary)
             write_tools = (
                 CreateFileTool(boundary),
                 ReplaceTextTool(boundary),
+                PrepareEnvironmentTool(binding),
+                RunSetupTool(
+                    runner,
+                    binding,
+                    log_dir=f"{output_root}/setup",
+                    timeout_seconds=request.budget.timeout_seconds,
+                ),
+                AuditEnvTool(binding),
                 RunVerificationTool(
-                    ProcessRunner(boundary),
+                    runner,
                     repository,
                     log_root=f"{output_root}/verification",
                     timeout_seconds=request.budget.timeout_seconds,
                     baseline=baseline,
+                    env_binding=binding,
                 ),
             )
             tools = (*common_tools, *write_tools)

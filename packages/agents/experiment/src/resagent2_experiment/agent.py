@@ -19,13 +19,15 @@ from resagent2_contracts import (
     WorkspaceSpec,
 )
 from resagent2_capabilities import (
+    AuditEnvTool,
     DatasetCache,
     DatasetResolutionError,
     dataset_env_overrides,
+    EnvironmentBinding,
     EnvironmentManager,
-    EnvironmentManagerError,
     HardwareAudit,
     ListFilesTool,
+    PrepareEnvironmentTool,
     ProcessRunner,
     ReadArtifactTool,
     ReadFileTool,
@@ -33,13 +35,11 @@ from resagent2_capabilities import (
     RepoMaterializer,
     RepoMaterializerError,
     ResourceLayout,
+    RunSetupTool,
     SearchTextTool,
     resolve_dataset_refs,
     WorkspaceBoundary,
     WorkspacePermissionError,
-    env_id,
-    env_spec,
-    find_conda,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -55,7 +55,7 @@ from resagent2_runtime import (
 from .completion import ExperimentCompletionCheck, snapshot_workspace
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
-from .tools import AuditEnvTool, RunCommandTool
+from .tools import RunCommandTool
 
 
 def _confirmation_granted(request: ModuleTaskRequest, confirm_before_experiment: bool) -> bool:
@@ -69,7 +69,7 @@ def _confirmation_granted(request: ModuleTaskRequest, confirm_before_experiment:
 
 
 class NativeExperimentAgent:
-    """Implement experiment_run with repo/env provisioning and delivery validation."""
+    """Implement experiment_run with repo provisioning and delivery validation."""
 
     def __init__(
         self,
@@ -138,21 +138,16 @@ class NativeExperimentAgent:
             )
         except DatasetResolutionError as error:
             return self._failure(str(error), blocked=True)
-        env_spec_dict = env_spec(materialized.repo_path, inputs.python_version)
-        identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", env_spec_dict)
-        try:
-            env_prefix = EnvironmentManager(env_root=resource_layout.env_root).ensure(
-                identifier=identifier,
-                repo_path=materialized.repo_path,
-                python_version=inputs.python_version,
-            )
-        except EnvironmentManagerError as error:
-            return self._failure(str(error), blocked=True)
 
-        conda = find_conda()
-        if conda is None:
-            return self._failure("conda not found; set RESAGENT2_CONDA_EXE", blocked=True)
-        argv_prefix = [conda, "run", "--no-capture-output", "-p", str(env_prefix)]
+        workspace_id = request.workspace_id or "default"
+        manager = EnvironmentManager(env_root=resource_layout.env_root)
+        binding = EnvironmentBinding(
+            manager,
+            run_id=request.run_id,
+            workspace_id=workspace_id,
+            hard_constraint=request.environment_spec.python_version,
+        )
+        env_id = manager.env_id(run_id=request.run_id, workspace_id=workspace_id)
 
         confirmed = _confirmation_granted(request, inputs.confirm_before_experiment)
         dataset_env = DatasetCache(root=resource_layout.dataset_root).env_overrides()
@@ -162,8 +157,7 @@ class NativeExperimentAgent:
 
         output_dir = request.output_dir
         command_log_dir = f"{output_dir}/commands"
-        audit_log_dir = f"{output_dir}/audit"
-        probe_dir = output_dir
+        setup_log_dir = f"{output_dir}/setup"
 
         runner = ProcessRunner(boundary)
         tools = (
@@ -171,25 +165,22 @@ class NativeExperimentAgent:
             ReadFileTool(boundary),
             SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts)),
+            PrepareEnvironmentTool(binding),
+            RunSetupTool(
+                runner,
+                binding,
+                log_dir=setup_log_dir,
+                timeout_seconds=request.budget.timeout_seconds,
+            ),
+            AuditEnvTool(binding),
             RunCommandTool(
                 runner,
-                argv_prefix=argv_prefix,
-                env_prefix=env_prefix,
+                binding,
                 confirm_before_experiment=inputs.confirm_before_experiment,
                 confirmed=confirmed,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env,
                 log_dir=command_log_dir,
-            ),
-            AuditEnvTool(
-                runner,
-                boundary,
-                argv_prefix=argv_prefix,
-                env_prefix=env_prefix,
-                timeout_seconds=min(request.budget.timeout_seconds, 180),
-                extra_env=dataset_env,
-                log_dir=audit_log_dir,
-                probe_dir=probe_dir,
             ),
             AskUserTool(),
             FinishTool(),
@@ -206,7 +197,7 @@ class NativeExperimentAgent:
                 boundary,
                 expected_metrics=list(inputs.expected_metrics),
                 expected_artifacts=list(inputs.expected_artifacts),
-                env_id=identifier,
+                env_id=env_id,
                 repo_url=source_ref,
                 commit=materialized.commit,
             ),
@@ -214,12 +205,10 @@ class NativeExperimentAgent:
             result_type=ExperimentResult,
         )
         initial_memory = {
-            "environment": {"env_id": identifier, "env_prefix": str(env_prefix)},
             "repo": {"repo_url": source_ref, "commit": materialized.commit},
             "datasets": datasets,
             "hardware": HardwareAudit().text(),
             "command_count": 0,
-            "env_certified": False,
             "experiment_success_count": 0,
             "workspace_baseline": snapshot_workspace(boundary),
         }

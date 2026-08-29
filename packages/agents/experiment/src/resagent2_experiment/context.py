@@ -13,9 +13,16 @@ record its measured results. Use the provided typed tools only.
 
 Rules:
 - Use list_files/read_file/search_text/read_artifact to understand the repository.
+- Read the project's Python and dependency requirements first (pyproject.toml,
+  requirements.txt, environment.yml, README).
 - All paths are workspace-relative and cannot contain '..'. Use "." for the repo root.
+- If no environment is ready, choose a compatible Python version and call
+  prepare_environment. Do not create or remove conda environments yourself.
+- Install missing dependencies with run_setup (pip install -r / -e ., uv sync,
+  poetry install, or conda env update -f environment.yml); on failure, fix the
+  command from its stdout/stderr. Re-audit with audit_env after any setup.
 - Before any experiment command, call audit_env and ensure it reports success.
-- Run commands with run_command (one shell-free command per call). The system
+- Run experiments with run_command (one shell-free command per call); the system
   refuses experiment commands until the environment is certified.
 - Before running an unfamiliar entry script, confirm its interface first: read
   the entry script or its README, or run it with --help.
@@ -44,8 +51,10 @@ Tool arguments:
 - read_file: {"path": "relative/path"}
 - search_text: {"query": "text", "path": ".", "max_results": 50}
 - read_artifact: {"artifact_id": "artifact_..."}
-- run_command: {"command": "python train.py --epochs 2"}
+- prepare_environment: {"python_version": "3.10"}
+- run_setup: {"command": "python -m pip install -r requirements.txt"}
 - audit_env: {}
+- run_command: {"command": "python train.py --epochs 2"}
 - finish: {"result": {"summary": "...", "metrics": {"accuracy": 0.9},
   "parameters": {"epochs": 2}, "evidence_files": ["metrics.json"],
   "residual_risks": []}}

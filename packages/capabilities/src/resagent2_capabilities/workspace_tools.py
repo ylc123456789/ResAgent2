@@ -16,6 +16,7 @@ from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 from .artifacts import RegisteredArtifactReader
+from .environment import EnvironmentBinding
 from .git import GitBaseline, GitWorkspace
 from .process import ProcessRunner, VerificationCommandPolicy
 from .workspace import WorkspaceBoundary
@@ -309,6 +310,7 @@ class RunVerificationTool:
         timeout_seconds: int,
         permission_policy: VerificationCommandPolicy | None = None,
         baseline: GitBaseline | None = None,
+        env_binding: EnvironmentBinding | None = None,
     ) -> None:
         self.runner = runner
         self.repository = repository
@@ -316,12 +318,22 @@ class RunVerificationTool:
         self.timeout_seconds = timeout_seconds
         self.permission_policy = permission_policy or VerificationCommandPolicy()
         self.baseline = baseline
+        self.env_binding = env_binding
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunVerificationInput, arguments)
         decision = self.permission_policy.check(args.commands)
         if not decision.allowed:
             raise ValueError(f"verification commands rejected: {decision.reason}")
+        argv_prefix = None
+        if self.env_binding is not None:
+            argv_prefix = self.env_binding.argv_prefix()
+            if argv_prefix is None:
+                return ToolObservation(
+                    summary="No environment prepared; call prepare_environment before verification",
+                    ok=False,
+                    value={"blocked": True, "reason": "no_environment"},
+                )
         revision = int(state.memory.get("edit_revision", 0))
 
         def _digest() -> str:
@@ -345,6 +357,7 @@ class RunVerificationTool:
                     log_dir=f"{self.log_root}/revision_{revision}",
                     index=index,
                     timeout_seconds=remaining,
+                    argv_prefix=argv_prefix,
                 )
             )
         after_digest = _digest()

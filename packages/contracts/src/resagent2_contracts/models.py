@@ -459,6 +459,18 @@ class DatasetRef(ContractModel):
         return _validate_relative_path(value)
 
 
+class EnvironmentSpec(ContractModel):
+    """Environment constraints declared for one task.
+
+    ``python_version`` is a hard constraint when set: the Agent must not
+    silently override a version the user/upstream chose. When it is ``None`` the
+    Agent infers a compatible version from the project (``.python-version``,
+    ``requires-python``, ``environment.yml``, README) and the system default.
+    """
+
+    python_version: str | None = None
+
+
 class ExperimentRunInput(ContractModel):
     """Inputs for running an experiment and collecting named evidence.
 
@@ -472,7 +484,6 @@ class ExperimentRunInput(ContractModel):
     expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
     expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
-    python_version: str = "3.12"
     confirm_before_experiment: bool = False
 
 
@@ -775,6 +786,7 @@ class ModuleTaskRequest(ContractModel):
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
+    environment_spec: EnvironmentSpec = Field(default_factory=EnvironmentSpec)
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
 

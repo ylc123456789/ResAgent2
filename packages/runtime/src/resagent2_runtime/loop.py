@@ -301,6 +301,15 @@ class AgentLoop:
                     retryable=False,
                 )
 
+            tracer = getattr(definition.llm_client, "set_trace_context", None)
+            if tracer is not None:
+                tracer(
+                    run_id=request.run_id,
+                    session_id=session_id,
+                    task_id=request.task_id,
+                    agent=definition.name,
+                    step=state.step,
+                )
             try:
                 raw_action = definition.llm_client.next_action(
                     context,

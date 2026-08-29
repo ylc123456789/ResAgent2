@@ -110,6 +110,7 @@ class CompilationTaskDraft(BaseModel):
     rationale: NonEmpty
     depends_on: list[DraftKey] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
+    constraints: list[NonEmpty] = Field(default_factory=list)
     inputs: CapabilityInput
 
 
@@ -217,6 +218,7 @@ def _compile_prompt(
             '      "rationale": "<why this task is needed>",',
             '      "depends_on": ["<another key in this draft>", ...],',
             '      "workspace_id": "<only if multiple workspaces; omit for one>",',
+            '      "constraints": ["<task-specific constraint>", ...],',
             '      "inputs": {"capability": "<same as above>", ...capability-specific fields}',
             "    }",
             "  ]",
@@ -229,6 +231,11 @@ def _compile_prompt(
             "implement, fix or run), not as specific file paths, function "
             "locations, CLI flags or verification commands: the Coding/Experiment "
             "Agent inspects the workspace and decides those details itself.",
+            "Assign each task the constraints that are relevant to THAT task, "
+            "drawn from the request's constraints and objective. Do not include "
+            "control constraints that were already satisfied before this request "
+            "(for example 'ask the user first'): the request already reflects the "
+            "resolved decision.",
         ]
     )
     if current is not None:
@@ -432,6 +439,7 @@ def _materialize_draft(
             rationale=task.rationale,
             depends_on=[key_to_id[dep] for dep in task.depends_on],
             workspace_id=workspace,
+            constraints=list(task.constraints),
             inputs=_sanitize_inputs(task.capability, task.inputs),
         )
         for task, workspace in zip(draft.tasks, resolved)

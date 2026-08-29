@@ -11,6 +11,7 @@ ALLOWED_IMPORT_ROOTS = {
     "collections",
     "dataclasses",
     "datetime",
+    "hashlib",
     "json",
     "math",
     "os",

@@ -565,6 +565,7 @@ class TaskProposal(ContractModel):
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
     workspace_id: WorkspaceId | None = None
+    constraints: list[NonEmptyStr] = Field(default_factory=list)
     inputs: CapabilityInput
 
     @model_validator(mode="after")
@@ -584,6 +585,7 @@ class WorkflowTask(ContractModel):
     depends_on: list[TaskId] = Field(default_factory=list)
     required: bool = True
     workspace_id: WorkspaceId | None = None
+    constraints: list[NonEmptyStr] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     attempts: list[Attempt] = Field(default_factory=list)

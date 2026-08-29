@@ -61,6 +61,64 @@ def test_transient_llm_failure_is_retried(monkeypatch) -> None:
     assert urlopen_mock.call_count == 2
 
 
+def test_trace_writes_jsonl_when_enabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="full",
+    )
+    client.set_trace_context(
+        run_id="run_x", session_id="session_s", agent="test", step=1
+    )
+    ok = _FakeResponse(
+        {"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]}
+    )
+    with mock.patch("resagent2_runtime.llm.urlopen", return_value=ok):
+        result = client.next_action(_context(), AgentAction)
+
+    assert result == {"tool": "finish"}
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    records = [
+        json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record["run_id"] == "run_x"
+    assert record["session_id"] == "session_s"
+    assert record["agent"] == "test"
+    assert record["step"] == 1
+    assert record["model"] == "test-model"
+    assert record["request_text"]
+    assert record["raw_response_text"] == json.dumps({"tool": "finish"})
+    assert record["parsed_action"] == {"tool": "finish"}
+
+
+def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="metadata",
+    )
+    ok = _FakeResponse(
+        {"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]}
+    )
+    with mock.patch("resagent2_runtime.llm.urlopen", return_value=ok):
+        client.next_action(_context(), AgentAction)
+
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert "request_text" not in record
+    assert "raw_response_text" not in record
+    assert record["request_sha256"]
+    assert record["response_sha256"]
+
+
 def test_transient_failure_exhausts_retries(monkeypatch) -> None:
     client = _client(monkeypatch)
     with (

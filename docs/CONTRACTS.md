@@ -783,6 +783,7 @@ class TaskProposal:
     depends_on: list[TaskId] = []
     required: bool = True
     workspace_id: WorkspaceId | None = None
+    constraints: list[NonEmptyStr] = []
     inputs: CapabilityInput
 
 class WorkflowProposal:
@@ -812,6 +813,8 @@ class WorkflowTask:
     inputs: CapabilityInput
     depends_on: list[TaskId] = []
     required: bool = True
+    workspace_id: WorkspaceId | None = None
+    constraints: list[NonEmptyStr] = []
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = []
     attempts: list[Attempt] = []

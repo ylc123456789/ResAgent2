@@ -279,6 +279,15 @@ _API_BASE = "https://api.deepseek.com/v1"
 _API_KEY_ENV = "DEEPSEEK_API_KEY"
 
 
+def _llm_trace_dir() -> Path | None:
+    value = os.environ.get("RESAGENT2_LLM_TRACE_DIR")
+    return Path(value) if value else None
+
+
+def _llm_trace_level() -> str:
+    return os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
+
+
 def _repo(workdir: Path) -> Path:
     repo = workdir / "repo"
     repo.mkdir(parents=True, exist_ok=True)
@@ -308,6 +317,8 @@ def _coding_agent(session_store) -> NativeCodingAgent:
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
+            trace_dir=_llm_trace_dir(),
+            trace_level=_llm_trace_level(),
         ),
         store=session_store,
     )
@@ -321,6 +332,8 @@ def _experiment_agent(
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
+            trace_dir=_llm_trace_dir(),
+            trace_level=_llm_trace_level(),
         ),
         store=session_store,
         resource_layout=resource_layout,
@@ -336,6 +349,8 @@ def _scientific_agent(
             model=_MODEL,
             api_base=_API_BASE,
             api_key_env=_API_KEY_ENV,
+            trace_dir=_llm_trace_dir(),
+            trace_level=_llm_trace_level(),
         ),
         literature_backend=ArxivLiteratureBackend(),
         registration_port=registration_port,
@@ -383,7 +398,11 @@ class _CompilerClient:
 
     def __init__(self, *, model: str, api_base: str, api_key_env: str) -> None:
         self._client = OpenAICompatibleClient(
-            model=model, api_base=api_base, api_key_env=api_key_env
+            model=model,
+            api_base=api_base,
+            api_key_env=api_key_env,
+            trace_dir=_llm_trace_dir(),
+            trace_level=_llm_trace_level(),
         )
 
     def next_action(self, prompt: str, action_type):
@@ -736,25 +755,31 @@ def run_repair(workdir: Path) -> bool:
 
 def run_ask_start(workdir: Path) -> bool:
     """Scenario 4a: pause on a Scientific question and persist the session."""
-    repo = _repo(workdir)
     request = ResearchRequest(
         goal=(
-            "Compare ResNet18 and ResNet18+SE on CIFAR-10. The primary "
-            "evaluation metric must be selected by the user before running."
+            "Ask the user which primary evaluation metric should be recorded "
+            "for a future comparison. This run is only for obtaining and "
+            "recording the user's preference. After receiving the answer, "
+            "finish and state the selected metric."
         ),
         constraints=[
-            "The primary evaluation metric is a user preference that cannot be "
-            "inferred.",
-            "Ask the user which metric to report before requesting or executing "
-            "any work.",
-            "Do not choose a default metric and do not start an experiment until "
-            "the user answers.",
+            "This run only obtains and records the user's preferred evaluation "
+            "metric.",
+            "Ask the user which metric to record before doing anything else.",
+            "Do not request or execute code or experiment work: after the user "
+            "answers, finish and state the selected metric.",
         ],
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         budget=RunBudget(
-            max_tasks=2, max_attempts_per_task=2, max_llm_calls=40, timeout_seconds=600
+            max_tasks=1, max_attempts_per_task=1, max_llm_calls=20, timeout_seconds=600
         ),
     )
+    controller, _ = _build_controller(workdir, None)
+    run = controller.create_run("run_ask", request)
+    print(f"run status={run.status.value}")
+    if run.pending_question is not None:
+        print(f"pending_question={run.pending_question.text}")
+        print(f"requested_fields={run.pending_question.requested_fields}")
+    return _ask_start_succeeded(run)
     controller, _ = _build_controller(workdir, repo)
     run = controller.create_run("run_ask", request)
     print(f"run status={run.status.value}")
@@ -766,8 +791,7 @@ def run_ask_start(workdir: Path) -> bool:
 
 def run_ask_resume(workdir: Path, answer_text: str) -> bool:
     """Scenario 4b: resume the paused run in a fresh process and complete it."""
-    repo = _repo(workdir)
-    controller, run_store = _build_controller(workdir, repo)
+    controller, run_store = _build_controller(workdir, None)
     run = run_store.load("run_ask")
     question = run.pending_question
     if question is None:

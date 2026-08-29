@@ -659,3 +659,76 @@ def test_semantic_review_rejects_twice_then_fails() -> None:
         compiler.compile(
             work_request(), current=None, registry=registry(), budget=budget()
         )
+
+
+def test_materialize_carries_task_constraints() -> None:
+    raw = {
+        "summary": "implement",
+        "rationale": "needed",
+        "tasks": [
+            {
+                "key": "implement",
+                "capability": "code_modify",
+                "goal": "Implement the missing behavior",
+                "rationale": "fix",
+                "constraints": ["Use accuracy as the primary metric"],
+                "inputs": {"capability": "code_modify", "instructions": "Implement"},
+            }
+        ],
+    }
+    result = materialize(raw)
+    assert isinstance(result, WorkflowProposal)
+    assert result.tasks[0].constraints == ["Use accuracy as the primary metric"]
+
+
+def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
+    from resagent2_contracts import TaskProposal
+
+    class _CapturePort:
+        def __init__(self, result):
+            self._result = result
+            self.requests = []
+
+        def invoke(self, request):
+            self.requests.append(request)
+            return self._result
+
+    proposal = WorkflowProposal(
+        work_request_id="work_1",
+        summary="s",
+        compilation_rationale="r",
+        tasks=[
+            TaskProposal(
+                id="task_x",
+                work_request_id="work_1",
+                capability=Capability.EXPERIMENT_RUN,
+                goal="Run",
+                rationale="evidence",
+                constraints=["use accuracy"],
+                inputs=ExperimentRunInput(instructions="Run"),
+            )
+        ],
+    )
+    port = _CapturePort(ModuleResult(status=ModuleStatus.COMPLETED, summary="done"))
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT, port=port
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scheduler.create_run(
+        "run_x",
+        ResearchRequest(
+            goal="g",
+            constraints=["stale run-level constraint"],
+            budget=RunBudget(
+                max_tasks=5, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60
+            ),
+        ),
+        proposal,
+    )
+    scheduler.run_until_stable("run_x")
+    assert port.requests[0].constraints == ["use accuracy"]
+    assert "stale run-level constraint" not in port.requests[0].constraints

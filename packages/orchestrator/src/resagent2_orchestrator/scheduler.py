@@ -129,6 +129,7 @@ class WorkflowScheduler:
                 depends_on=item.depends_on,
                 required=item.required,
                 workspace_id=self._resolve_workspace_id(item),
+                constraints=list(item.constraints),
             )
             for item in proposal.tasks
         ]
@@ -269,7 +270,7 @@ class WorkflowScheduler:
             goal=task.goal,
             inputs=inputs,
             input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
-            constraints=run.request.constraints,
+            constraints=task.constraints,
             answers=[
                 answer
                 for answer in run.answers
@@ -493,6 +494,7 @@ class WorkflowScheduler:
                     depends_on=item.depends_on,
                     required=item.required,
                     workspace_id=self._resolve_workspace_id(item),
+                    constraints=list(item.constraints),
                 )
             )
         try:

@@ -35,6 +35,7 @@ from resagent2_orchestrator import (
     CompilationError,
     DeterministicWorkflowCompiler,
     InMemoryRunStore,
+    LLMWorkflowCompiler,
     ModuleBinding,
     ResearchController,
     ScriptedModulePort,
@@ -240,4 +241,125 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
     assert tasks["task_fix"].status == TaskStatus.COMPLETED
     assert tasks["task_exp2"].status == TaskStatus.COMPLETED
     # Two work requests: the initial run and the repair.
+    assert len(run.work_requests) >= 2
+
+
+class _ScriptedCompilerLLM:
+    """Return a scripted sequence of CompilationDraft raw dicts."""
+
+    def __init__(self, drafts: list[dict]) -> None:
+        self._drafts = list(drafts)
+
+    def next_action(self, prompt, action_type):
+        if not self._drafts:
+            raise AssertionError("no more scripted drafts")
+        return self._drafts.pop(0)
+
+
+def _proposal_draft() -> dict:
+    return {
+        "summary": "run the experiment",
+        "rationale": "first attempt",
+        "tasks": [
+            {
+                "key": "run_initial",
+                "capability": "experiment_run",
+                "goal": "Run the experiment",
+                "rationale": "evidence",
+                "inputs": {"capability": "experiment_run", "instructions": "Run the experiment"},
+            }
+        ],
+    }
+
+
+def _repair_draft() -> dict:
+    return {
+        "summary": "repair",
+        "rationale": "fix the bug and rerun",
+        "tasks": [
+            {
+                "key": "fix",
+                "capability": "code_modify",
+                "goal": "Fix the bug",
+                "rationale": "repair",
+                "inputs": {"capability": "code_modify", "instructions": "Fix the bug"},
+            },
+            {
+                "key": "rerun",
+                "capability": "experiment_run",
+                "goal": "Rerun the experiment",
+                "rationale": "re-obtain evidence",
+                "depends_on": ["fix"],
+                "inputs": {"capability": "experiment_run", "instructions": "Rerun"},
+            },
+        ],
+    }
+
+
+def _finish_after_repair() -> dict:
+    return {
+        "tool": "finish",
+        "arguments": {
+            "opinion": {
+                "verdict": ScientificVerdict.INCONCLUSIVE.value,
+                "statement": "the first run failed, then a fix restored it",
+                "acknowledged_task_ids": ["task_run_initial"],
+                "limitations": ["the first run failed before the fix"],
+            },
+            "summary": "done",
+        },
+    }
+
+
+def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
+    """The production LLMWorkflowCompiler drives the repair loop end to end.
+
+    Round 1 compiles a semantic draft into a proposal (one experiment task that
+    fails); round 2 compiles a repair draft into an append-only patch that adds
+    a fix + rerun. The failed attempt is preserved as immutable history.
+    """
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.CODE_MODIFY: ModuleBinding(
+                owner=AgentOwner.CODING,
+                port=ScriptedModulePort([_completed()]),
+            ),
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([_failed(), _completed()]),
+            ),
+        },
+        store=InMemoryRunStore(),
+        artifact_root=tmp_path / "artifacts",
+    )
+    scientific = ScientificAgent(
+        ScriptedLLMClient([_request_work(), _request_work(), _finish_after_repair()]),
+        store=InMemorySessionStore(),
+    )
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=LLMWorkflowCompiler(
+            _ScriptedCompilerLLM([_proposal_draft(), _repair_draft()])
+        ),
+        scheduler=scheduler,
+        registry=_registry(),
+    )
+    request = ResearchRequest(
+        goal="Run the experiment; if it fails, fix and rerun.",
+        budget=RunBudget(
+            max_tasks=5, max_attempts_per_task=3, max_llm_calls=50, timeout_seconds=60
+        ),
+    )
+
+    run = controller.create_run("run_repair_semantic", request)
+
+    assert run.status == RunStatus.COMPLETED, [v.message for v in run.completion_violations]
+    tasks = {task.id: task for task in run.workflow.tasks}
+    # The old failed experiment is preserved, not overwritten.
+    assert tasks["task_run_initial"].status == TaskStatus.FAILED
+    assert tasks["task_run_initial"].attempts[-1].status.value == "failed"
+    # The repair tasks were added and completed (with code-assigned ids).
+    assert tasks["task_fix"].status == TaskStatus.COMPLETED
+    assert tasks["task_rerun"].status == TaskStatus.COMPLETED
+    assert tasks["task_rerun"].depends_on == ["task_fix"]
     assert len(run.work_requests) >= 2

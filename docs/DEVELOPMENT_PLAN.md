@@ -490,6 +490,8 @@ Compiler 只翻译，不持久化、不执行 Tool、不调用 Agent、不修改
 
 **状态：已完成（2026-08-28）。** `WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入本地 `CompilerLLM`，一次结构化调用，`model_validate` 后强制把 work_request_id 绑定到 `request.id`，保证 traceability 不依赖 LLM 返回值）落地 `orchestrator/compiler.py`。orchestrator 不 import runtime，`CompilerLLM` 由 composition root 适配。测试覆盖 initial proposal、已有图 patch、缺 patch、非法 JSON、循环依赖、超预算，以及 WorkRequest→Workflow.created_from 追溯。未接 production composition root。本地 173 tests 通过。
 
+**后续收敛（2026-08-29，ADR-0010）。** 场景 3 repair 暴露：让 LLM 直接输出完整 Proposal/Patch 会诱导空图和跨 WorkRequest 依赖。据此把 production Compiler 改为“语义草图 + 确定性物化 + 一次纠错重编译”：LLM 只输出内部 `CompilationDraft`（局部 `key`/`depends_on`/`capability`/`inputs`，不进 contracts）；确定性 `_materialize_draft` 分配全局 TaskId、绑定 `work_request_id`、解析 workspace、转换局部依赖并产出只追加 Patch；validator 拒绝时携带精确原因最多重编译一次。改动范围仅 `orchestrator/compiler.py` + 两处测试文件（test_compiler.py、test_repair_flow.py）+ 四份文档（ARCHITECTURE/CONTRACTS/DEVELOPMENT_PLAN/decisions README）+ 新增 ADR-0010。本地 319 tests 通过。
+
 #### 7.3 literature capability
 
 在 `packages/capabilities` 增加小型 `LiteratureSearchBackend` Protocol 和 arXiv 实现，只提供 Scientific Agent 真正需要的字段：paper id、title、authors、published_at、abstract、source_url。
@@ -626,7 +628,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [x] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
 - [x] production composition root 只有一条 Scientific 路径；
 - [x] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
-- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（五场景 E2E：1/2/4/5 已通过；场景 3 repair 的 WorkflowPatch 契约断点已修 + 确定性测试覆盖，真实 LLM 图生成仍待收敛）
+- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（五场景 E2E：1/2/4/5 已通过；场景 3 repair 的契约断点与空图/跨请求依赖已由 ADR-0010「草图+确定性物化+一次纠错重编译」根治，本地 319 tests 通过，待服务器三连跑验收后勾选）
 - [x] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理

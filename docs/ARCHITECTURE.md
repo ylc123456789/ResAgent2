@@ -202,14 +202,19 @@ Scheduler 不选择 Agent 内部 Tool；Agentic Loop 不修改顶层 TaskStatus�
 
 ### 6.3 WorkflowCompiler
 
-WorkflowCompiler 不是第三种循环。它只做一次转换：
+WorkflowCompiler 不是第三种循环。它把一次 `WorkRequest` 翻译成一张可执行图，采用“语义草图 + 确定性物化”（ADR-0010）：
 
 ```text
-WorkRequest + 当前能力注册表 + 当前 Workflow 摘要 + Run 约束
-  → WorkflowProposal（尚无图）或 WorkflowPatch（已有图）
+WorkRequest + 能力注册表 + 当前 Workflow 摘要 + Run 约束
+  → (LLM 只输出) CompilationDraft —— summary/rationale + 局部 task key + 局部依赖 + capability + inputs
+  → (确定性 _materialize_draft) 分配全局 TaskId、绑定 work_request_id、解析 workspace、
+    转换局部依赖、校验 DAG/能力/预算
+  → WorkflowProposal（尚无图）或只追加的 WorkflowPatch（已有图）
 ```
 
-允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态、保留 work_request_id，并把结果交给确定性 validator。它只选择任务类型、目标、依赖和逻辑 `workspace_id`；不扫描源码、不指定文件、不生成 import、不生成验证命令、不决定物理目录、不执行 `git clone`。测试中可由 `DeterministicWorkflowCompiler` 替代。
+LLM 只负责语义：做什么、任务之间有什么关系。所有运行时身份、作用域和状态由代码决定——LLM 不输出全局 TaskId、WorkRequestId、revision、status 或旧 Task 引用。允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态，并把结果交给确定性 validator。它只选择任务类型、目标、依赖和逻辑 `workspace_id`；不扫描源码、不指定文件、不生成 import、不生成验证命令、不决定物理目录、不执行 `git clone`。
+
+当确定性 validator 拒绝一张草图（`ValidationError` 或 `CompilationError`）时，`LLMWorkflowCompiler` 把精确拒绝原因作为反馈，最多重编译一次；第二次仍被拒绝才失败。现有 `_reject_*` 校验作为最终防御继续在物化结果上执行，Scheduler 保留同等检查。测试中可由 `DeterministicWorkflowCompiler` 替代。
 
 ## 7. 完整工作流
 

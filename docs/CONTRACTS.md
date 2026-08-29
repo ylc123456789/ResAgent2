@@ -162,6 +162,7 @@ class WorkflowTask:
     inputs: CapabilityInput
     depends_on: list[TaskId] = []
     required: bool = True
+    workspace_id: WorkspaceId | None = None
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = []
     success_criteria: list[SuccessCriterion]
@@ -781,6 +782,7 @@ class TaskProposal:
     rationale: NonEmptyStr
     depends_on: list[TaskId] = []
     required: bool = True
+    workspace_id: WorkspaceId | None = None
     inputs: CapabilityInput
 
 class WorkflowProposal:
@@ -823,6 +825,8 @@ class Workflow:
 ```
 
 WorkflowProposal 不再有 questions，`scientific_rationale` 改名为 `compilation_rationale`，因为图由 WorkflowCompiler 而不是 Scientific Agent 产生。TaskProposal/WorkflowTask 不再有 success_criteria。
+
+production `LLMWorkflowCompiler` 不直接让 LLM 输出上面的 Proposal/Patch（ADR-0010）。LLM 只输出 orchestrator 内部的 `CompilationDraft`（顶层 `summary`/`rationale` + 每任务 `key`/`capability`/`goal`/`rationale`/`depends_on`/`workspace_id`/`inputs`，不进入公共 contracts），再由确定性 `_materialize_draft` 分配全局 TaskId、绑定 `work_request_id = request.id`、解析 workspace、转换局部依赖并产出上表的 Proposal（首轮）或只追加 Patch（修复轮）。validator 拒绝草图时，Compiler 携带精确拒绝原因最多重编译一次；两次都失败才把 WorkRequest/Run 置为 failed。
 
 Proposal 中每个 Task 的 work_request_id 必须等于 Proposal.work_request_id。Patch 新增/更新/supersede 的 Task 必须是 pending 且属于 Patch.work_request_id；旧 revision 中未被修改的历史 Task 保持原 work_request_id。Workflow.created_from 等于创建当前 revision 的 Proposal/Patch.work_request_id。编译器不得产生 §20.8 以外的 capability；validator 必须检查 run、revision、work_request_id、DAG、能力注册表、预算和 inputs discriminator。
 

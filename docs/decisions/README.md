@@ -21,4 +21,5 @@ ADR 状态：
 - `0006-runtime-capabilities-boundary.md`；
 - `0007-scientific-control-and-workflow-compilation.md`；
 - `0008-workspace-unification-and-coding-autonomy.md`；
-- `0009-shared-environment-capability.md`。
+- `0009-shared-environment-capability.md`；
+- `0010-semantic-compilation-draft.md`。

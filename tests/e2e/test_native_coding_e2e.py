@@ -22,20 +22,33 @@ def _fake_conda(tmp_path) -> str:
     fake = tmp_path / "conda"
     fake.write_text(
         f"#!{sys.executable}\n"
-        "import os, sys\n"
+        "import json, os, sys\n"
         "args = sys.argv[1:]\n"
-        "if '-p' in args:\n"
+        "if 'create' in args and '-p' in args:\n"
         "    prefix = args[args.index('-p') + 1]\n"
         "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
         "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
-        "print('created', flush=True)\n",
+        "    open(os.path.join(prefix, 'bin', 'pip'), 'a').close()\n"
+        "    print('created', flush=True)\n"
+        "elif 'run' in args and '-p' in args:\n"
+        "    prefix = args[args.index('-p') + 1]\n"
+        "    if '-c' in args:\n"
+        "        print(json.dumps({'sys_executable': os.path.join(prefix, 'bin', 'python'), 'sys_prefix': prefix, 'python_version': '3.12.4', 'pip_available': True}), flush=True)\n"
+        "    else:\n"
+        "        print('ok', flush=True)\n",
         encoding="utf-8",
     )
     fake.chmod(0o755)
     return str(fake)
 
 
+def _setup_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", _fake_conda(tmp_path))
+    monkeypatch.setenv("RESAGENT2_ENV_ROOT", str(tmp_path / "envs"))
+
+
 _PREPARE = {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}}
+_AUDIT = {"tool": "audit_env", "arguments": {}}
 
 
 def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> None:
@@ -47,12 +60,12 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
     (repo / "util.py").write_text("VALUE = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "util.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
-    monkeypatch.setenv("RESAGENT2_CONDA_EXE", _fake_conda(tmp_path))
+    _setup_env(tmp_path, monkeypatch)
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
             [
-                _PREPARE,
+                _PREPARE, _AUDIT,
                 {
                     "tool": "replace_text",
                     "arguments": {

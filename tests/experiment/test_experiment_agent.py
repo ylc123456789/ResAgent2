@@ -44,6 +44,9 @@ class _FakeManager:
     def env_id(self, *, run_id: str, workspace_id: str) -> str:
         return "resenv_x"
 
+    def inspect(self, *, run_id: str, workspace_id: str):
+        return None
+
     def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
         prefix = self.env_root / "resenv_x"
         prefix.mkdir(parents=True, exist_ok=True)

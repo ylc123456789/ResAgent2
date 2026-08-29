@@ -13,6 +13,7 @@ from resagent2_capabilities import (
     EnvironmentManager,
     EnvironmentManagerError,
     HardwareAudit,
+    PreparedEnvironment,
     RepoMaterializer,
     RepoMaterializerError,
     ResourceLayout,
@@ -297,6 +298,7 @@ def _fake_conda(tmp_path: Path) -> Path:
         "    prefix = args[args.index('-p') + 1]\n"
         "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
         "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
+        "    open(os.path.join(prefix, 'bin', 'pip'), 'a').close()\n"
         "print('created', flush=True)\n",
         encoding="utf-8",
     )
@@ -304,10 +306,26 @@ def _fake_conda(tmp_path: Path) -> Path:
     return fake
 
 
-def _manager(tmp_path: Path) -> EnvironmentManager:
-    return EnvironmentManager(
+def _probe_result(prefix: Path, version: str, *, pip: bool = True, prefix_ok: bool = True) -> dict:
+    return {
+        "returncode": 0,
+        "error": None,
+        "sys_executable": str(prefix / "bin" / "python"),
+        "sys_prefix": str(prefix) if prefix_ok else "/elsewhere",
+        "python_version": version,
+        "pip_available": pip,
+        "prefix_match": prefix_ok,
+        "stderr_tail": "",
+    }
+
+
+def _manager(tmp_path: Path, monkeypatch, *, probe=None) -> EnvironmentManager:
+    manager = EnvironmentManager(
         env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
     )
+    if probe is not None:
+        monkeypatch.setattr(manager, "_probe", probe)
+    return manager
 
 
 def test_env_id_is_hash_derived_and_scope_bound() -> None:
@@ -324,8 +342,8 @@ def test_env_id_is_hash_derived_and_scope_bound() -> None:
     assert len(same.split("_")[-1]) == 12
 
 
-def test_prefix_is_under_env_root(tmp_path) -> None:
-    manager = _manager(tmp_path)
+def test_prefix_is_under_env_root(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
 
     prefix = manager.prefix(run_id="run_a", workspace_id="ws_main")
 
@@ -334,52 +352,91 @@ def test_prefix_is_under_env_root(tmp_path) -> None:
     )
 
 
-def test_inspect_returns_none_for_missing_env(tmp_path) -> None:
-    manager = _manager(tmp_path)
+def test_inspect_returns_none_for_missing_env(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
 
     assert manager.inspect(run_id="run_a", workspace_id="ws_main") is None
 
 
-def test_prepare_creates_and_inspect_reuses(tmp_path) -> None:
-    manager = _manager(tmp_path)
+def test_prepare_creates_audited_env(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch, probe=lambda p: _probe_result(p, "3.12.4"))
 
     prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
 
-    assert prepared.prefix.is_dir()
+    assert prepared.python_version == "3.12.4"
     assert (prepared.prefix / ".resagent2_base_ready").is_file()
-    assert prepared.python_version == "3.12"
-
-    inspected = manager.inspect(run_id="run_a", workspace_id="ws_main")
-    assert inspected is not None
-    assert inspected.env_id == prepared.env_id
-    assert inspected.python_version == "3.12"
-
-
-def test_prepare_recreates_partial_env(tmp_path) -> None:
-    manager = _manager(tmp_path)
-    partial = manager.prefix(run_id="run_a", workspace_id="ws_main")
-    partial.mkdir(parents=True)
-    (partial / "junk.txt").write_text("partial", encoding="utf-8")
-
-    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
-
-    assert not (partial / "junk.txt").exists()
-    assert (partial / ".resagent2_base_ready").is_file()
-    assert prepared.python_version == "3.12"
-
-
-def test_prepare_does_not_install_dependencies(tmp_path) -> None:
-    manager = _manager(tmp_path)
-
-    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
-
     marker = json.loads(
         (prepared.prefix / ".resagent2_base_ready").read_text(encoding="utf-8")
     )
-    assert marker["python_version"] == "3.12"
-    assert marker["env_id"] == prepared.env_id
-    # The manager never installs project dependencies: no pip was invoked.
-    assert not (prepared.prefix / "bin" / "pip").exists()
+    assert marker["python_version"] == "3.12.4"  # actual, not the request
+
+
+def test_prepare_reuses_matching_version(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch, probe=lambda p: _probe_result(p, "3.12.4"))
+
+    first = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    (first.prefix / "sentinel.txt").write_text("keep")
+
+    second = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+
+    assert second.python_version == "3.12.4"
+    assert (first.prefix / "sentinel.txt").exists()  # reused, not recreated
+
+
+def test_prepare_recreates_on_version_mismatch(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    prefix = manager.prefix(run_id="r", workspace_id="w")
+    # A pre-existing env whose actual interpreter is 3.12 but whose marker lied.
+    prefix.mkdir(parents=True)
+    (prefix / "bin").mkdir()
+    (prefix / "bin" / "python").write_text("")
+    (prefix / "bin" / "pip").write_text("")
+    (prefix / ".resagent2_base_ready").write_text(
+        json.dumps({"python_version": "3.12.4", "env_id": "x", "prefix": str(prefix)})
+    )
+    (prefix / "junk.txt").write_text("old")
+
+    versions = iter(["3.12.4", "3.10.16"])
+    def probe(p):
+        return _probe_result(p, next(versions, "3.10.16"))
+    monkeypatch.setattr(manager, "_probe", probe)
+
+    prepared = manager.prepare(run_id="r", workspace_id="w", python_version="3.10")
+
+    assert prepared.python_version == "3.10.16"
+    assert not (prefix / "junk.txt").exists()  # deleted + recreated
+    marker = json.loads((prefix / ".resagent2_base_ready").read_text(encoding="utf-8"))
+    assert marker["python_version"] == "3.10.16"
+
+
+def test_audit_requires_pip(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    env = PreparedEnvironment(
+        env_id="resenv_x",
+        prefix=manager.prefix(run_id="r", workspace_id="w"),
+        python_version="3.12",
+    )
+    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.12.4", pip=False))
+
+    audit = manager.audit(env)
+
+    assert audit["success"] is False
+    assert audit["pip_available"] is False
+
+
+def test_audit_requires_version_match(tmp_path, monkeypatch) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    env = PreparedEnvironment(
+        env_id="resenv_x",
+        prefix=manager.prefix(run_id="r", workspace_id="w"),
+        python_version="3.10",
+    )
+    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.12.4"))
+
+    audit = manager.audit(env)
+
+    assert audit["success"] is False
+    assert audit["version_match"] is False
 
 
 def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
@@ -389,15 +446,6 @@ def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
 
     with pytest.raises(EnvironmentManagerError, match="outside"):
         manager._delete_if_managed(outside)
-
-
-def test_audit_returns_structured_result(tmp_path) -> None:
-    manager = _manager(tmp_path)
-    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
-
-    audit = manager.audit(prepared)
-
-    assert set(audit) >= {"success", "pip_available", "prefix_match", "python_version"}
 
 
 # ── DatasetCache / HardwareAudit ───────────────────────────────────

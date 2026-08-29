@@ -143,3 +143,40 @@ def test_run_command_asks_for_confirmation(tmp_path) -> None:
 
     assert observation.question is not None
     assert observation.question.requested_fields == ["approve"]
+
+
+def test_run_command_rejects_setup_commands(tmp_path) -> None:
+    boundary = _boundary(tmp_path)
+    tool = RunCommandTool(
+        _FakeRunner(boundary),
+        _binding(tmp_path, certified=True),
+        confirm_before_experiment=False,
+        confirmed=True,
+        timeout_seconds=30,
+    )
+
+    observation = tool.execute(_state(), tool.input_model(command="pip install numpy"))
+
+    assert observation.ok is False
+    assert observation.value["reason"] == "not_an_experiment_command"
+
+
+def test_run_command_blocks_without_environment(tmp_path) -> None:
+    boundary = _boundary(tmp_path)
+    binding = EnvironmentBinding(
+        EnvironmentManager(env_root=tmp_path / "envs", conda_exe="conda"),
+        run_id="run_test",
+        workspace_id="ws_test",
+    )
+    tool = RunCommandTool(
+        _FakeRunner(boundary),
+        binding,
+        confirm_before_experiment=False,
+        confirmed=True,
+        timeout_seconds=30,
+    )
+
+    observation = tool.execute(_state(), tool.input_model(command="python train.py"))
+
+    assert observation.ok is False
+    assert observation.value["reason"] == "no_environment"

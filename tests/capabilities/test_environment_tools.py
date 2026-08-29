@@ -46,6 +46,9 @@ class _FakeManager:
     def env_id(self, *, run_id: str, workspace_id: str) -> str:
         return "resenv_x"
 
+    def inspect(self, *, run_id: str, workspace_id: str):
+        return None
+
     def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
         self.prepared.append(python_version)
         prefix = self.env_root / "resenv_x"
@@ -104,9 +107,13 @@ def test_setup_policy_allows_install_entry_points() -> None:
     policy = SetupCommandPolicy()
     assert policy.check("python -m pip install -r requirements.txt").allowed
     assert policy.check("pip install -e .").allowed
-    assert policy.check("uv sync").allowed
-    assert policy.check("poetry install").allowed
     assert policy.check("conda env update -f environment.yml").allowed
+
+
+def test_setup_policy_forbids_uv_and_poetry() -> None:
+    policy = SetupCommandPolicy()
+    assert not policy.check("uv sync").allowed
+    assert not policy.check("poetry install").allowed
 
 
 def test_setup_policy_forbids_destructive_and_prefix_commands() -> None:
@@ -156,14 +163,39 @@ def test_prepare_invalid_version_is_recoverable(tmp_path) -> None:
 def test_prepare_version_switch_is_bounded(tmp_path) -> None:
     manager = _FakeManager(tmp_path / "envs")
     tool = PrepareEnvironmentTool(_binding(manager), max_version_switches=2)
+    state = _state()
 
-    assert tool.execute(_state(), tool.input_model(python_version="3.10")).ok
-    assert tool.execute(_state(), tool.input_model(python_version="3.11")).ok
-    assert tool.execute(_state(), tool.input_model(python_version="3.12")).ok
-    blocked = tool.execute(_state(), tool.input_model(python_version="3.13"))
+    def run(python_version: str):
+        observation = tool.execute(state, tool.input_model(python_version=python_version))
+        state.memory.update(observation.memory_updates)
+        return observation
+
+    assert run("3.10").ok
+    assert run("3.11").ok
+    assert run("3.12").ok
+    blocked = run("3.13")
 
     assert blocked.ok is False
     assert "version" in blocked.summary
+
+
+def test_prepare_version_switch_survives_session_restart(tmp_path) -> None:
+    manager = _FakeManager(tmp_path / "envs")
+    binding = _binding(manager)
+    # Simulate a resumed session: the binding restored the existing 3.12 env and
+    # two switches already happened before the restart (persisted in memory).
+    binding.current = PreparedEnvironment(
+        env_id="resenv_x",
+        prefix=tmp_path / "envs" / "resenv_x",
+        python_version="3.12.4",
+    )
+    tool = PrepareEnvironmentTool(binding, max_version_switches=2)
+    state = _state(version_switches=2)
+
+    observation = tool.execute(state, tool.input_model(python_version="3.13"))
+
+    assert observation.ok is False
+    assert observation.value["version_switches"] == 3
 
 
 # ── RunSetupTool ───────────────────────────────────────────────────
@@ -262,3 +294,19 @@ def test_audit_certifies_bound_environment(tmp_path) -> None:
     assert observation.ok is True
     assert binding.certified is True
     assert observation.value["pip_available"] is True
+
+
+def test_binding_restores_existing_env_but_requires_reaudit() -> None:
+    class Manager:
+        conda_exe = "conda"
+
+        def inspect(self, *, run_id, workspace_id):
+            return PreparedEnvironment(
+                env_id="resenv_x", prefix=Path("/tmp/env"), python_version="3.12.4"
+            )
+
+    binding = EnvironmentBinding(Manager(), run_id="r", workspace_id="w")
+
+    assert binding.current is not None
+    assert binding.current.python_version == "3.12.4"
+    assert binding.certified is False  # a restored env must be re-audited

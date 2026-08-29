@@ -216,6 +216,10 @@ LLM 只负责语义：做什么、任务之间有什么关系。所有运行时�
 
 结构校验通过后，Compiler 再做一次短小的**语义完整性审查**（`CompilationReview`）：判断草图有没有漏掉请求明确要求的前置任务（如“先实现再做实验”却只生成 experiment_run）。结构拒绝与语义不完整各自最多带精确反馈重编一次，第二次仍失败才把 WorkRequest/Run 置为 failed。现有 `_reject_*` 校验作为最终防御继续在物化结果上执行，Scheduler 保留同等检查。测试中可由 `DeterministicWorkflowCompiler` 替代。
 
+下游任务的约束只来自 `WorkflowTask.constraints`——由 Compiler 从最新 WorkRequest 分配给每个 Task；Scheduler 只传 `task.constraints`，不再把 `ResearchRequest.constraints` 原样广播给每个子 Agent。这样 Scientific 已经消化的旧控制约束（如「先问用户」）不会再污染 Coding/Experiment 的上下文。
+
+LLM 调用可开启一个最小 JSONL trace（`OpenAICompatibleClient.trace_dir` + `trace_level`，off/metadata/full）：记录 run/session/task/agent/step、model、latency、retry、usage、call_id/created_at；full 档才保留完整 request/response，metadata 档只记 hash/tool/valid。目录 0700、文件 0600，永不记录 API key，trace 不进 ArtifactRegistry 也不进 Run JSON，仅用于调试。
+
 ## 7. 完整工作流
 
 ### 7.1 新 Run

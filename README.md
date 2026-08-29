@@ -17,11 +17,11 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：Phase 6 已完成；Phase 7 完成（7.1—7.7 代码路径已全部落地并通过本地测试；服务器真实 E2E 已跑通场景 2——CIFAR-10 baseline vs SE）。**
+**阶段：Phase 6 已完成；Phase 7 完成（7.1—7.7 代码路径已全部落地并通过本地测试；服务器真实 E2E 五场景全部通过——direct / code-experiment / repair / ask-resume / literature）。**
 
 当前已实现 `resagent2-contracts` schema 2.0（`SCHEMA_VERSION="2.0"`）、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding/Experiment/Scientific Agent。Phase 5/6 已接通 workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和内容寻址环境；真实执行不再依赖旧 CodingAgent 或旧 reproagent。
 
-Phase 7 已落地：7.1 契约切 2.0（新增 ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型，删除 SuccessCriterion/evidence_key，ArtifactRef 三态 provenance，work_request_id 追溯）；7.2 WorkflowCompiler；7.3 literature capability；7.4 原生 Scientific Agent（实现 ScientificPort 四态，复用 AgentLoop）；7.5 ResearchController（自然语言入口，编排 ScientificPort + WorkflowCompiler + WorkflowScheduler，WorkRequest 状态机）；7.6 ScientificCompletionValidator + 确定性 final report；7.7 原子切换——删除 PlanningPort/`DeterministicPlanningPort`/`LegacyScientificAnalyzeAdapter` 和全部 deprecated scientific/planning/ask_user/experiment_prepare 类型与 enum 值，production composition root 切到唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）。schema 2.0 现由唯一新路径装配；服务器真实 E2E 已跑通（场景 2）。
+Phase 7 已落地：7.1 契约切 2.0（新增 ScientificAssessment/WorkRequest/WorkOutcome/ScientificOpinion/ScientificTurnResult 等科学控制类型，删除 SuccessCriterion/evidence_key，ArtifactRef 三态 provenance，work_request_id 追溯）；7.2 WorkflowCompiler；7.3 literature capability；7.4 原生 Scientific Agent（实现 ScientificPort 四态，复用 AgentLoop）；7.5 ResearchController（自然语言入口，编排 ScientificPort + WorkflowCompiler + WorkflowScheduler，WorkRequest 状态机）；7.6 ScientificCompletionValidator + 确定性 final report；7.7 原子切换——删除 PlanningPort/`DeterministicPlanningPort`/`LegacyScientificAnalyzeAdapter` 和全部 deprecated scientific/planning/ask_user/experiment_prepare 类型与 enum 值，production composition root 切到唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）。schema 2.0 现由唯一新路径装配；服务器真实 E2E 五场景全部跑通。
 
 ## 四个角色
 

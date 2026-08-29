@@ -115,8 +115,38 @@ def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
     record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
     assert "request_text" not in record
     assert "raw_response_text" not in record
+    assert "parsed_action" not in record
     assert record["request_sha256"]
     assert record["response_sha256"]
+    assert record["action_sha256"]
+    assert record["tool"] == "finish"
+    assert record["action_valid"] is True
+
+
+def test_trace_preserves_bad_json_response(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="full",
+    )
+    bad = _FakeResponse(
+        {"choices": [{"message": {"content": "not valid json"}}]}
+    )
+    with (
+        mock.patch("resagent2_runtime.llm.time.sleep"),
+        mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
+    ):
+        with pytest.raises(RuntimeError, match="3 attempts"):
+            client.next_action(_context(), AgentAction)
+
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["action_valid"] is False
+    assert record["raw_response_text"] == "not valid json"
+    assert record["validation_error"]
 
 
 def test_transient_failure_exhausts_retries(monkeypatch) -> None:

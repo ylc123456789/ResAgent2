@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -71,6 +73,7 @@ class OpenAICompatibleClient:
         self.trace_level = trace_level
         self._trace_context: dict = {}
         self._trace_seq = 0
+        self._last_call_id: str | None = None
 
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
@@ -81,12 +84,27 @@ class OpenAICompatibleClient:
         if self.trace_dir is None or self.trace_level == "off":
             return
         self.trace_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.trace_dir, 0o700)
         self._trace_seq += 1
         line = json.dumps(
             {"sequence": self._trace_seq, **record}, ensure_ascii=False, default=str
         )
-        with (self.trace_dir / "llm_traces.jsonl").open("a", encoding="utf-8") as handle:
+        path = self.trace_dir / "llm_traces.jsonl"
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+        os.chmod(path, 0o600)
+
+    def record_validation(self, validation_error: str) -> None:
+        """Record an action-schema validation failure, keyed by the last call_id."""
+        if self.trace_dir is None or self.trace_level == "off":
+            return
+        self._write_trace(
+            {
+                "call_id": self._last_call_id,
+                "schema_validation_error": validation_error,
+            }
+        )
 
     @staticmethod
     def _sha256(text: str | None) -> str | None:
@@ -104,18 +122,29 @@ class OpenAICompatibleClient:
         started: float,
         retry_number: int,
         usage,
+        call_id: str,
+        created_at: str,
     ) -> dict:
-        """Build one trace record; the full level keeps request/response text."""
+        """Build one trace record; the full level keeps request/response text.
+
+        ``metadata`` level never records action content (which may embed source
+        code or user input); it keeps only the tool name and a hash of the
+        parsed action.
+        """
         record = dict(self._trace_context)
+        tool = parsed_action.get("tool") if isinstance(parsed_action, dict) else None
         record.update(
             {
+                "call_id": call_id,
+                "created_at": created_at,
                 "model": self.model,
                 "included_sections": context.included_sections,
                 "omitted_sections": context.omitted_sections,
                 "estimated_tokens": context.estimated_tokens,
                 "latency_ms": round((time.monotonic() - started) * 1000),
                 "retry_number": retry_number,
-                "parsed_action": parsed_action,
+                "tool": tool,
+                "action_valid": parsed_action is not None,
                 "validation_error": validation_error,
                 "usage": usage,
             }
@@ -123,9 +152,15 @@ class OpenAICompatibleClient:
         if self.trace_level == "full":
             record["request_text"] = message
             record["raw_response_text"] = raw_response_text
+            record["parsed_action"] = parsed_action
         else:
             record["request_sha256"] = self._sha256(message)
             record["response_sha256"] = self._sha256(raw_response_text)
+            record["action_sha256"] = (
+                self._sha256(json.dumps(parsed_action, ensure_ascii=False, default=str))
+                if parsed_action is not None
+                else None
+            )
         return record
 
     def next_action(
@@ -160,6 +195,9 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
+        call_id = uuid.uuid4().hex
+        created_at = datetime.now(UTC).isoformat()
+        self._last_call_id = call_id
         started = time.monotonic()
         last_error: Exception | None = None
         retry_number = 0
@@ -181,7 +219,7 @@ class OpenAICompatibleClient:
                         self._trace_record(
                             context, message, None, None,
                             f"LLM HTTP {error.code}: {detail}",
-                            started, retry_number, None,
+                            started, retry_number, None, call_id, created_at,
                         )
                     )
                     raise RuntimeError(f"LLM HTTP {error.code}: {detail}") from error
@@ -191,12 +229,12 @@ class OpenAICompatibleClient:
                 last_error = error
                 continue
             try:
-                content = payload["choices"][0]["message"]["content"].strip()
+                raw_response_text = payload["choices"][0]["message"]["content"]
+                content = raw_response_text.strip()
                 if content.startswith("```"):
                     content = content.removeprefix("```json").removeprefix("```")
                     content = content.removesuffix("```").strip()
                 parsed_action = json.loads(content)
-                raw_response_text = content
                 usage = payload.get("usage")
                 last_error = None
                 break
@@ -207,7 +245,7 @@ class OpenAICompatibleClient:
             self._trace_record(
                 context, message, parsed_action, raw_response_text,
                 str(last_error) if last_error is not None else None,
-                started, retry_number, usage,
+                started, retry_number, usage, call_id, created_at,
             )
         )
         if last_error is not None:

@@ -628,7 +628,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [x] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
 - [x] production composition root 只有一条 Scientific 路径；
 - [x] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
-- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（场景 2 code-experiment 三连跑通过、场景 3 repair 三连跑通过、场景 1 direct / 5 literature 通过。场景 4 已收窄为「仅 ask/resume」并修了约束旁路：Scheduler 不再把 ResearchRequest 级约束原样广播给每个下游 Agent（旧约束在用户回答后已满足，却仍传给 Coding 导致其二次 ask_user），改为 `WorkflowTask` 携带自身约束、由 Compiler 从最新 WorkRequest 分配、Scheduler 只传 `task.constraints`。另加最小 LLM JSONL trace（off/metadata/full）。本地 346 tests 通过，待服务器场景 4 ask-start×3 + ask-resume 验收后勾选）
+- [x] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（五场景 E2E 全部通过：1 direct / 2 code-experiment / 3 repair / 4 ask-resume / 5 literature。本地 347 tests。含：Compiler 语义审查 + Coding/Experiment 控制状态；Scientific 证据闭环 + Runtime 可恢复 schema 校验；`WorkflowTask` 自身约束（Scheduler 不再广播 ResearchRequest 级约束）；最小 LLM JSONL trace——off/metadata/full 三档、目录 0700/文件 0600、metadata 只记 hash/tool/valid 不记内容、保留坏 JSON 原始响应、call_id/created_at 关联）
 - [x] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理

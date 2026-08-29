@@ -318,6 +318,9 @@ class AgentLoop:
                 llm_calls += 1
                 action = definition.action_type.model_validate(raw_action)
             except ValidationError as error:
+                validator = getattr(definition.llm_client, "record_validation", None)
+                if validator is not None:
+                    validator(str(self._validation_details(error)))
                 # A malformed action is recoverable: record it as durable
                 # feedback and let the LLM correct it, bounded by the same
                 # consecutive-failure limit as any other recoverable error.

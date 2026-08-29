@@ -20,6 +20,7 @@ ALLOWED_IMPORT_ROOTS = {
     "time",
     "typing",
     "urllib",
+    "uuid",
     "pydantic",
     "resagent2_contracts",
 }

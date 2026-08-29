@@ -599,6 +599,13 @@ class LLMWorkflowCompiler:
             prompt = _compile_prompt(
                 request, current, registry, budget, workspaces, feedback=feedback
             )
+            tracer = getattr(self._client, "set_trace_context", None)
+            if tracer is not None:
+                tracer(
+                    agent="workflow_compiler",
+                    run_id=request.run_id,
+                    work_request_id=request.id,
+                )
             raw = self._client.next_action(prompt, CompilationDraft)
             try:
                 draft = CompilationDraft.model_validate(raw)
@@ -649,6 +656,14 @@ class LLMWorkflowCompiler:
         self, request: WorkRequest, draft: CompilationDraft
     ) -> CompilationReview:
         """Run one bounded semantic-completeness review of the draft."""
+        tracer = getattr(self._client, "set_trace_context", None)
+        if tracer is not None:
+            tracer(
+                agent="workflow_compiler",
+                run_id=request.run_id,
+                work_request_id=request.id,
+                step="review",
+            )
         raw = self._client.next_action(
             _review_prompt(request, draft), CompilationReview
         )

@@ -405,6 +405,9 @@ class _CompilerClient:
             trace_level=_llm_trace_level(),
         )
 
+    def set_trace_context(self, **kwargs) -> None:
+        self._client.set_trace_context(**kwargs)
+
     def next_action(self, prompt: str, action_type):
         context = ComposedContext(
             text=prompt,
@@ -774,13 +777,6 @@ def run_ask_start(workdir: Path) -> bool:
         ),
     )
     controller, _ = _build_controller(workdir, None)
-    run = controller.create_run("run_ask", request)
-    print(f"run status={run.status.value}")
-    if run.pending_question is not None:
-        print(f"pending_question={run.pending_question.text}")
-        print(f"requested_fields={run.pending_question.requested_fields}")
-    return _ask_start_succeeded(run)
-    controller, _ = _build_controller(workdir, repo)
     run = controller.create_run("run_ask", request)
     print(f"run status={run.status.value}")
     if run.pending_question is not None:

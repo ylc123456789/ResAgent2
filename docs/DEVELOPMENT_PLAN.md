@@ -628,7 +628,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [x] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
 - [x] production composition root 只有一条 Scientific 路径；
 - [x] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
-- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（场景 2 code-experiment 三连跑已通过（scen2_a/b/c）——Compiler 语义审查兜底漏编 + 不编造路径 + Coding 控制状态均已生效；场景 3 repair 的修复机制正常（experiment fail → code_modify → experiment rerun），但 Scientific Agent 最终 turn 有既有波动：DeepSeek 偶尔不 `read_artifact` 就引用 WorkOutcome 里的 artifact，completion check 正确拒绝但连败上限耗尽，非本次 Compiler/Coding 改动的回归。本地 336 tests 通过，待 Scientific 证据引用收敛后勾选）
+- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（场景 2 code-experiment 三连跑通过（Compiler 语义审查 + 不编造路径 + Coding 控制状态）；场景 3 repair 三连跑通过（Scientific 证据闭环：FinishTool 提前拒绝未读引用 + 确定性 `evidence_control_state` 每轮注入 + Runtime schema 校验改可恢复）；场景 1 direct / 5 literature 通过。场景 4 ask 仍有既有波动——DeepSeek 偶发把「先问清 metric」误判为「先跑实验」（产出 experiment_run 而非 ask_user），非本次回归。本地 342 tests 通过，待场景 4 收敛后勾选）
 - [x] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理

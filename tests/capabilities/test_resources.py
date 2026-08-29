@@ -571,3 +571,24 @@ def test_environment_manager_partial_env_update_failure_does_not_mark_ready(
         manager.ensure(identifier="resenv_x", repo_path=repo, python_version="3.12")
 
     assert not (prefix / ".resagent2_env_ready").is_file()
+
+
+def test_environment_manager_partial_bare_env_repairs_python(tmp_path) -> None:
+    env_root = tmp_path / "resources" / "envs"
+    prefix = env_root / "resenv_x"
+    prefix.mkdir(parents=True)  # partial bare env, no marker, no dep files
+    repo = tmp_path / "repo"
+    repo.mkdir()  # no environment.yml, no requirements.txt
+    log = tmp_path / "conda_calls.txt"
+    manager = EnvironmentManager(
+        env_root=env_root, conda_exe=str(_recording_conda(tmp_path, log))
+    )
+
+    result = manager.ensure(
+        identifier="resenv_x", repo_path=repo, python_version="3.12"
+    )
+
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert any("install" in call for call in calls)
+    assert result == prefix
+    assert (prefix / ".resagent2_env_ready").is_file()

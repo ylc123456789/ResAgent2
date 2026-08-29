@@ -151,6 +151,7 @@ class EnvironmentManager:
             return prefix
         prefix.parent.mkdir(parents=True, exist_ok=True)
         env_file = _find_environment_yml(repo_path)
+        requirements = _find_requirements_txt(repo_path)
         if not prefix.exists():
             if env_file is not None:
                 command = [
@@ -193,20 +194,34 @@ class EnvironmentManager:
                 raise EnvironmentManagerError(
                     f"conda env update failed: {(result.stderr or '').strip()}"
                 )
-        # Install explicitly declared pip deps when no environment.yml did it.
-        if env_file is None:
-            requirements = _find_requirements_txt(repo_path)
-            if requirements is not None:
-                pip = prefix / "bin" / "pip"
-                result = subprocess.run(
-                    [str(pip), "install", "-r", str(requirements)],
-                    capture_output=True,
-                    text=True,
+        elif requirements is None:
+            # A previous bare `conda create` was interrupted: finish the python
+            # install instead of silently marking the partial env ready.
+            command = [
+                self.conda_exe,
+                "install",
+                "-p",
+                str(prefix),
+                f"python={python_version}",
+                "-y",
+            ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise EnvironmentManagerError(
+                    f"conda env repair failed: {(result.stderr or '').strip()}"
                 )
-                if result.returncode != 0:
-                    raise EnvironmentManagerError(
-                        "pip install -r failed: "
-                        + (result.stderr or result.stdout or "").strip()[-500:]
-                    )
+        # Install explicitly declared pip deps when no environment.yml did it.
+        if env_file is None and requirements is not None:
+            pip = prefix / "bin" / "pip"
+            result = subprocess.run(
+                [str(pip), "install", "-r", str(requirements)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise EnvironmentManagerError(
+                    "pip install -r failed: "
+                    + (result.stderr or result.stdout or "").strip()[-500:]
+                )
         marker.write_text("ready", encoding="utf-8")
         return prefix

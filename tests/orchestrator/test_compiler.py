@@ -408,6 +408,14 @@ def test_compile_produces_append_only_patch() -> None:
     assert [task.id for task in result.add_tasks] == ["task_fix", "task_rerun"]
 
 
+def test_materialize_disambiguates_colliding_key() -> None:
+    # Round 2 reuses the same key as a round-1 task; the id is deterministically
+    # disambiguated (scoped by request.id) rather than rejected.
+    result = materialize(raw_experiment("initial"), current=current_workflow())
+    assert isinstance(result, WorkflowPatch)
+    assert [task.id for task in result.add_tasks] == ["task_initial_round1"]
+
+
 def test_materialize_generates_global_ids() -> None:
     result = materialize(raw_repair(), current=current_workflow())
     assert isinstance(result, WorkflowPatch)

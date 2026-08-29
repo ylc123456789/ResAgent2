@@ -57,7 +57,7 @@ LLM **不再输出**：全局 TaskId、WorkRequestId、workflow revision、statu
 6. capability 已在注册表中声明；
 7. capability 与 inputs discriminator 一致；
 8. 解析 workspace：单一工作区自动填入，多个工作区必须显式选择，不得编造；
-9. 确定性分配全局 TaskId（`task_<key>`），并检查不与既有图冲突；
+9. 确定性分配全局 TaskId（`task_<key>`）。跨 WorkRequest 复用同一 `key` 时，按 `request.id` 确定性加后缀消歧（`task_<key>_<N>`），**绝不因 key 复用而拒绝**——LLM 看不到旧 Task ID（§4），不能要求它避开旧 key；
 10. 把局部依赖转换为全局 TaskId；
 11. 统一绑定 `work_request_id = request.id`；
 12. 生成最终契约对象。

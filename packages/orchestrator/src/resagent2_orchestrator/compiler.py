@@ -348,16 +348,25 @@ def _materialize_draft(
                 f"{task.workspace_id!r}"
             )
 
-    # 9. Assign deterministic global task ids; reject collisions with history.
-    key_to_id = {task.key: f"task_{task.key}" for task in draft.tasks}
-    if current is not None:
-        existing_ids = {task.id for task in current.tasks}
-        collisions = sorted(tid for tid in key_to_id.values() if tid in existing_ids)
-        if collisions:
-            raise CompilationError(
-                "new task id(s) collide with the existing workflow: "
-                + ", ".join(collisions)
-            )
+    # 9. Assign deterministic global task ids. A key that collides with an
+    # existing workflow task is disambiguated deterministically by scoping it to
+    # this work request, so reusing a key across rounds can never fail the run:
+    # the LLM never sees old task ids (ADR-0010 §4), so it cannot be expected to
+    # avoid their keys.
+    existing_ids = {task.id for task in current.tasks} if current is not None else set()
+    key_to_id: dict[str, str] = {}
+    for task in draft.tasks:
+        base = f"task_{task.key}"
+        candidate = base
+        if candidate in existing_ids:
+            scope = request.id.removeprefix("work_")
+            candidate = f"{base}_{scope}"
+            index = 2
+            while candidate in existing_ids:
+                candidate = f"{base}_{scope}_{index}"
+                index += 1
+        key_to_id[task.key] = candidate
+        existing_ids.add(candidate)
 
     # 10-12. Convert local dependencies to global ids and emit the contract.
     proposals = [

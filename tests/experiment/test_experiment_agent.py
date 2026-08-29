@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -13,7 +12,13 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSourceKind,
 )
-from resagent2_capabilities import WorkspaceBoundary
+from resagent2_capabilities import (
+    AuditEnvTool,
+    EnvironmentBinding,
+    PreparedEnvironment,
+    PrepareEnvironmentTool,
+    WorkspaceBoundary,
+)
 from resagent2_runtime import (
     AgentDefinition,
     AgentLoop,
@@ -26,13 +31,40 @@ from resagent2_runtime import (
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
 from resagent2_experiment.models import ExperimentAction
-from resagent2_experiment.tools import AuditEnvTool, RunCommandTool
+from resagent2_experiment.tools import RunCommandTool
+
+
+class _FakeManager:
+    """Duck-typed manager that binds a base env without shelling to conda."""
+
+    def __init__(self, root: Path) -> None:
+        self.env_root = root
+        self.conda_exe = "conda"
+
+    def env_id(self, *, run_id: str, workspace_id: str) -> str:
+        return "resenv_x"
+
+    def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
+        prefix = self.env_root / "resenv_x"
+        prefix.mkdir(parents=True, exist_ok=True)
+        return PreparedEnvironment(
+            env_id="resenv_x", prefix=prefix, python_version=python_version
+        )
+
+    def audit(self, environment):
+        return {
+            "success": True,
+            "sys_prefix": str(environment.prefix),
+            "python_version": environment.python_version,
+            "pip_available": True,
+            "prefix_match": True,
+            "stderr_tail": "",
+        }
 
 
 class _FakeRunner:
-    def __init__(self, boundary: WorkspaceBoundary, env_prefix: Path, *, fail: bool = False) -> None:
+    def __init__(self, boundary: WorkspaceBoundary, *, fail: bool = False) -> None:
         self.boundary = boundary
-        self.env_prefix = env_prefix
         self.fail = fail
 
     def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
@@ -43,13 +75,7 @@ class _FakeRunner:
         stdout.parent.mkdir(parents=True, exist_ok=True)
         stderr.parent.mkdir(parents=True, exist_ok=True)
         exit_code = 0
-        if "audit_probe.py" in command:
-            stdout.write_text(
-                json.dumps({"sys_prefix": str(self.env_prefix), "python_version": "3.12"}),
-                encoding="utf-8",
-            )
-        elif self.fail:
-            stdout.write_text("error", encoding="utf-8")
+        if self.fail:
             stderr.write_text("boom", encoding="utf-8")
             exit_code = 1
         else:
@@ -70,8 +96,6 @@ class _FakeRunner:
 
 
 def _run(tmp_path: Path, actions: list, *, fail: bool = False):
-    env_prefix = tmp_path / "envs" / "resenv_x"
-    env_prefix.mkdir(parents=True)
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(tmp_path),
@@ -80,18 +104,18 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
             source=WorkspaceSourceKind.LOCAL,
         )
     )
-    runner = _FakeRunner(boundary, env_prefix, fail=fail)
+    manager = _FakeManager(tmp_path / "envs")
+    binding = EnvironmentBinding(manager, run_id="run_test", workspace_id="ws_test")
+    runner = _FakeRunner(boundary, fail=fail)
     tools = (
+        PrepareEnvironmentTool(binding),
+        AuditEnvTool(binding),
         RunCommandTool(
             runner,
-            argv_prefix=[],
-            env_prefix=env_prefix,
+            binding,
             confirm_before_experiment=False,
             confirmed=True,
             timeout_seconds=30,
-        ),
-        AuditEnvTool(
-            runner, boundary, argv_prefix=[], env_prefix=env_prefix, timeout_seconds=30
         ),
         FinishTool(),
     )
@@ -131,11 +155,9 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         request,
         session_id="session_experiment",
         initial_memory={
-            "environment": {"env_id": "resenv_x", "env_prefix": str(env_prefix)},
             "hardware": "",
             "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
             "command_count": 0,
-            "env_certified": False,
             "experiment_success_count": 0,
             "workspace_baseline": {},
         },
@@ -143,6 +165,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
 
 
 _GOLDEN_ACTIONS = [
+    {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
     {"tool": "audit_env", "arguments": {}},
     {"tool": "run_command", "arguments": {"command": "python train.py --epochs 2"}},
     {

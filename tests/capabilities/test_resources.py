@@ -17,10 +17,7 @@ from resagent2_capabilities import (
     RepoMaterializerError,
     ResourceLayout,
     dataset_env_overrides,
-    env_id,
-    env_spec,
     find_conda,
-    project_slug,
     resolve_dataset_refs,
 )
 from resagent2_capabilities.process import _descendant_pids
@@ -221,42 +218,6 @@ def test_generated_source_forbids_location() -> None:
         )
 
 
-# ── environment identity ───────────────────────────────────────────
-
-
-def test_project_slug_sanitizes_and_lowercases() -> None:
-    assert project_slug("My Repo.git") == "my-repo-git"
-    assert project_slug("  ") == "project"
-    assert project_slug("a--b") == "a-b"
-
-
-def test_env_id_is_content_addressed_and_ignores_basename() -> None:
-    spec = {"python": "3.12", "files": []}
-    same_url_a = env_id("repo", "https://host/alice/repo.git\0abc", spec)
-    same_url_b = env_id("repo", "https://host/alice/repo.git\0abc", spec)
-    other_commit = env_id("repo", "https://host/alice/repo.git\0def", spec)
-    other_url = env_id("repo", "https://host/bob/repo.git\0abc", spec)
-
-    assert same_url_a == same_url_b
-    assert other_commit != same_url_a
-    assert other_url != same_url_a  # same basename, different URL -> different id
-    assert same_url_a.startswith("resenv_repo_")
-    assert len(same_url_a.split("_")[-1]) == 12
-
-
-def test_env_spec_hashes_dependency_files(tmp_path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "requirements.txt").write_text("numpy==1.26\n", encoding="utf-8")
-    (repo / "train.py").write_text("x = 1\n", encoding="utf-8")
-
-    spec = env_spec(repo, "3.12")
-
-    assert spec["python"] == "3.12"
-    assert set(spec["files"]) == {"requirements.txt"}
-    assert all(len(digest) == 64 for digest in spec["files"].values())
-
-
 def test_resource_layout_respects_resource_root_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("RESAGENT2_RESOURCE_ROOT", str(tmp_path / "shared"))
     layout = ResourceLayout.from_env(data_root=tmp_path / "data")
@@ -333,7 +294,9 @@ def _fake_conda(tmp_path: Path) -> Path:
         "import os, sys\n"
         "args = sys.argv[1:]\n"
         "if '-p' in args:\n"
-        "    os.makedirs(args[args.index('-p') + 1], exist_ok=True)\n"
+        "    prefix = args[args.index('-p') + 1]\n"
+        "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
+        "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
         "print('created', flush=True)\n",
         encoding="utf-8",
     )
@@ -341,75 +304,100 @@ def _fake_conda(tmp_path: Path) -> Path:
     return fake
 
 
-def test_environment_manager_prefix_is_content_addressed(tmp_path) -> None:
-    manager = EnvironmentManager(env_root=tmp_path / "resources" / "envs")
-
-    assert manager.prefix("resenv_x") == tmp_path / "resources" / "envs" / "resenv_x"
-
-
-def test_environment_manager_reuses_existing_prefix(tmp_path) -> None:
-    manager = EnvironmentManager(
-        env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
-    )
-    prefix = manager.prefix("resenv_x")
-    prefix.mkdir(parents=True)
-
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=tmp_path, python_version="3.12"
-    )
-
-    assert result == prefix
-
-
-def test_environment_manager_creates_prefix_via_conda(tmp_path) -> None:
-    manager = EnvironmentManager(
+def _manager(tmp_path: Path) -> EnvironmentManager:
+    return EnvironmentManager(
         env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
     )
 
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=tmp_path, python_version="3.12"
+
+def test_env_id_is_hash_derived_and_scope_bound() -> None:
+    manager = EnvironmentManager(env_root=Path("/tmp/envs"), conda_exe="conda")
+
+    same = manager.env_id(run_id="run_a", workspace_id="ws_main")
+    other_ws = manager.env_id(run_id="run_a", workspace_id="ws_other")
+    other_run = manager.env_id(run_id="run_b", workspace_id="ws_main")
+
+    assert same == manager.env_id(run_id="run_a", workspace_id="ws_main")
+    assert same != other_ws
+    assert same != other_run
+    assert same.startswith("resenv_")
+    assert len(same.split("_")[-1]) == 12
+
+
+def test_prefix_is_under_env_root(tmp_path) -> None:
+    manager = _manager(tmp_path)
+
+    prefix = manager.prefix(run_id="run_a", workspace_id="ws_main")
+
+    assert prefix == manager.env_root / manager.env_id(
+        run_id="run_a", workspace_id="ws_main"
     )
 
-    assert result.is_dir()
-    assert result == tmp_path / "resources" / "envs" / "resenv_x"
+
+def test_inspect_returns_none_for_missing_env(tmp_path) -> None:
+    manager = _manager(tmp_path)
+
+    assert manager.inspect(run_id="run_a", workspace_id="ws_main") is None
 
 
-def test_environment_manager_installs_requirements_txt(tmp_path) -> None:
-    prefix = tmp_path / "resources" / "envs" / "resenv_x"
-    bin_dir = prefix / "bin"
-    bin_dir.mkdir(parents=True)
-    called = tmp_path / "pip_called"
-    (bin_dir / "pip").write_text(f"#!/bin/sh\ntouch {called}\n", encoding="utf-8")
-    (bin_dir / "pip").chmod(0o755)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "requirements.txt").write_text("torch>=2.0\n", encoding="utf-8")
+def test_prepare_creates_and_inspect_reuses(tmp_path) -> None:
+    manager = _manager(tmp_path)
 
-    manager = EnvironmentManager(
-        env_root=tmp_path / "resources" / "envs", conda_exe="unused"
+    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
+
+    assert prepared.prefix.is_dir()
+    assert (prepared.prefix / ".resagent2_base_ready").is_file()
+    assert prepared.python_version == "3.12"
+
+    inspected = manager.inspect(run_id="run_a", workspace_id="ws_main")
+    assert inspected is not None
+    assert inspected.env_id == prepared.env_id
+    assert inspected.python_version == "3.12"
+
+
+def test_prepare_recreates_partial_env(tmp_path) -> None:
+    manager = _manager(tmp_path)
+    partial = manager.prefix(run_id="run_a", workspace_id="ws_main")
+    partial.mkdir(parents=True)
+    (partial / "junk.txt").write_text("partial", encoding="utf-8")
+
+    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
+
+    assert not (partial / "junk.txt").exists()
+    assert (partial / ".resagent2_base_ready").is_file()
+    assert prepared.python_version == "3.12"
+
+
+def test_prepare_does_not_install_dependencies(tmp_path) -> None:
+    manager = _manager(tmp_path)
+
+    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
+
+    marker = json.loads(
+        (prepared.prefix / ".resagent2_base_ready").read_text(encoding="utf-8")
     )
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=repo, python_version="3.12"
-    )
-
-    assert result == prefix
-    assert called.is_file()  # pip install -r was invoked
-    assert (prefix / ".resagent2_env_ready").is_file()  # ready marker written
+    assert marker["python_version"] == "3.12"
+    assert marker["env_id"] == prepared.env_id
+    # The manager never installs project dependencies: no pip was invoked.
+    assert not (prepared.prefix / "bin" / "pip").exists()
 
 
-def test_environment_manager_reuses_ready_env_without_reinstall(tmp_path) -> None:
-    prefix = tmp_path / "resources" / "envs" / "resenv_x"
-    prefix.mkdir(parents=True)
-    (prefix / ".resagent2_env_ready").write_text("ready", encoding="utf-8")
+def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
+    manager = EnvironmentManager(env_root=tmp_path / "envs", conda_exe="conda")
+    outside = tmp_path / "outside"
+    outside.mkdir()
 
-    manager = EnvironmentManager(
-        env_root=tmp_path / "resources" / "envs", conda_exe="unused"
-    )
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=tmp_path, python_version="3.12"
-    )
+    with pytest.raises(EnvironmentManagerError, match="outside"):
+        manager._delete_if_managed(outside)
 
-    assert result == prefix
+
+def test_audit_returns_structured_result(tmp_path) -> None:
+    manager = _manager(tmp_path)
+    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
+
+    audit = manager.audit(prepared)
+
+    assert set(audit) >= {"success", "pip_available", "prefix_match", "python_version"}
 
 
 # ── DatasetCache / HardwareAudit ───────────────────────────────────
@@ -475,19 +463,6 @@ def test_descendant_pids_finds_child_process() -> None:
         child.wait()
 
 
-def _recording_conda(tmp_path: Path, log: Path) -> Path:
-    fake = tmp_path / "conda"
-    fake.write_text(
-        f"#!{sys.executable}\n"
-        "import sys\n"
-        f"with open({str(log)!r}, 'a') as f:\n"
-        "    f.write(' '.join(sys.argv[1:]) + '\\n')\n",
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-    return fake
-
-
 def test_resolve_dataset_refs_rejects_duplicate_id(tmp_path) -> None:
     root = tmp_path / "datasets"
     (root / "cifar10").mkdir(parents=True)
@@ -522,73 +497,3 @@ def test_dataset_env_overrides_are_generic(tmp_path) -> None:
         "cifar10": str((root / "cifar10").resolve()),
         "mnist": str((root / "mnist").resolve()),
     }
-
-
-def test_environment_manager_partial_env_runs_update(tmp_path) -> None:
-    env_root = tmp_path / "resources" / "envs"
-    prefix = env_root / "resenv_x"
-    prefix.mkdir(parents=True)  # partial env: prefix exists, no ready marker
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "environment.yml").write_text(
-        "name: x\ndependencies:\n  - python\n", encoding="utf-8"
-    )
-    log = tmp_path / "conda_calls.txt"
-    manager = EnvironmentManager(
-        env_root=env_root, conda_exe=str(_recording_conda(tmp_path, log))
-    )
-
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=repo, python_version="3.12"
-    )
-
-    calls = log.read_text(encoding="utf-8").splitlines()
-    assert any("update" in call for call in calls)
-    assert not any("create" in call for call in calls)
-    assert result == prefix
-    assert (prefix / ".resagent2_env_ready").is_file()
-
-
-def test_environment_manager_partial_env_update_failure_does_not_mark_ready(
-    tmp_path,
-) -> None:
-    env_root = tmp_path / "resources" / "envs"
-    prefix = env_root / "resenv_x"
-    prefix.mkdir(parents=True)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "environment.yml").write_text(
-        "name: x\ndependencies:\n  - python\n", encoding="utf-8"
-    )
-    fake = tmp_path / "conda"
-    fake.write_text(
-        f"#!{sys.executable}\nimport sys\nsys.exit(1)\n", encoding="utf-8"
-    )
-    fake.chmod(0o755)
-    manager = EnvironmentManager(env_root=env_root, conda_exe=str(fake))
-
-    with pytest.raises(EnvironmentManagerError):
-        manager.ensure(identifier="resenv_x", repo_path=repo, python_version="3.12")
-
-    assert not (prefix / ".resagent2_env_ready").is_file()
-
-
-def test_environment_manager_partial_bare_env_repairs_python(tmp_path) -> None:
-    env_root = tmp_path / "resources" / "envs"
-    prefix = env_root / "resenv_x"
-    prefix.mkdir(parents=True)  # partial bare env, no marker, no dep files
-    repo = tmp_path / "repo"
-    repo.mkdir()  # no environment.yml, no requirements.txt
-    log = tmp_path / "conda_calls.txt"
-    manager = EnvironmentManager(
-        env_root=env_root, conda_exe=str(_recording_conda(tmp_path, log))
-    )
-
-    result = manager.ensure(
-        identifier="resenv_x", repo_path=repo, python_version="3.12"
-    )
-
-    calls = log.read_text(encoding="utf-8").splitlines()
-    assert any("install" in call for call in calls)
-    assert result == prefix
-    assert (prefix / ".resagent2_env_ready").is_file()

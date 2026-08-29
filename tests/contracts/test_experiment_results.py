@@ -12,7 +12,6 @@ def test_experiment_run_input_round_trips_fields() -> None:
         instructions="Run train.py",
         expected_metrics=["accuracy"],
         expected_artifacts=["metrics.json"],
-        python_version="3.11",
         confirm_before_experiment=True,
     )
 

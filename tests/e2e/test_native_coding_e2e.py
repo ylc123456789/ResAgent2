@@ -1,4 +1,5 @@
 import subprocess
+import sys
 
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
@@ -17,7 +18,27 @@ from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowSche
 from resagent2_runtime import ScriptedLLMClient
 
 
-def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
+def _fake_conda(tmp_path) -> str:
+    fake = tmp_path / "conda"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "args = sys.argv[1:]\n"
+        "if '-p' in args:\n"
+        "    prefix = args[args.index('-p') + 1]\n"
+        "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
+        "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
+        "print('created', flush=True)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    return str(fake)
+
+
+_PREPARE = {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}}
+
+
+def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -26,10 +47,12 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path) -> None:
     (repo / "util.py").write_text("VALUE = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "util.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", _fake_conda(tmp_path))
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {
                     "tool": "replace_text",
                     "arguments": {

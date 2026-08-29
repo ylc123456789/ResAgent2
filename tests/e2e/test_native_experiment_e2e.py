@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -15,7 +14,13 @@ from resagent2_contracts import (
     WorkspaceSpec,
 )
 from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowScheduler
-from resagent2_capabilities import WorkspaceBoundary
+from resagent2_capabilities import (
+    AuditEnvTool,
+    EnvironmentBinding,
+    PreparedEnvironment,
+    PrepareEnvironmentTool,
+    WorkspaceBoundary,
+)
 from resagent2_runtime import (
     AgentDefinition,
     AgentLoop,
@@ -28,13 +33,38 @@ from resagent2_runtime import (
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
 from resagent2_experiment.models import ExperimentAction
-from resagent2_experiment.tools import AuditEnvTool, RunCommandTool
+from resagent2_experiment.tools import RunCommandTool
+
+
+class _FakeManager:
+    def __init__(self, root: Path) -> None:
+        self.env_root = root
+        self.conda_exe = "conda"
+
+    def env_id(self, *, run_id: str, workspace_id: str) -> str:
+        return "resenv_x"
+
+    def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
+        prefix = self.env_root / "resenv_x"
+        prefix.mkdir(parents=True, exist_ok=True)
+        return PreparedEnvironment(
+            env_id="resenv_x", prefix=prefix, python_version=python_version
+        )
+
+    def audit(self, environment):
+        return {
+            "success": True,
+            "sys_prefix": str(environment.prefix),
+            "python_version": environment.python_version,
+            "pip_available": True,
+            "prefix_match": True,
+            "stderr_tail": "",
+        }
 
 
 class _FakeRunner:
-    def __init__(self, boundary: WorkspaceBoundary, env_prefix: Path) -> None:
+    def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
-        self.env_prefix = env_prefix
 
     def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
         stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
@@ -43,16 +73,10 @@ class _FakeRunner:
         stderr = self.boundary.resolve_system_write(stderr_rel)
         stdout.parent.mkdir(parents=True, exist_ok=True)
         stderr.parent.mkdir(parents=True, exist_ok=True)
-        if "audit_probe.py" in command:
-            stdout.write_text(
-                json.dumps({"sys_prefix": str(self.env_prefix), "python_version": "3.12"}),
-                encoding="utf-8",
-            )
-        else:
-            (self.boundary.root / "metrics.json").write_text(
-                '{"accuracy": 0.9}', encoding="utf-8"
-            )
-            stdout.write_text("accuracy=0.9", encoding="utf-8")
+        (self.boundary.root / "metrics.json").write_text(
+            '{"accuracy": 0.9}', encoding="utf-8"
+        )
+        stdout.write_text("accuracy=0.9", encoding="utf-8")
         stderr.write_text("", encoding="utf-8")
         return VerificationResult(
             command=command,
@@ -72,23 +96,22 @@ class _NativeExperimentPort:
 
     def invoke(self, request):
         boundary = WorkspaceBoundary(request.workspace)
-        env_prefix = Path(request.workspace.root) / "envs" / "resenv_x"
-        runner = _FakeRunner(boundary, env_prefix)
+        manager = _FakeManager(Path(request.workspace.root) / "envs")
+        binding = EnvironmentBinding(
+            manager,
+            run_id=request.run_id,
+            workspace_id=request.workspace_id or "default",
+        )
+        runner = _FakeRunner(boundary)
         tools = (
+            PrepareEnvironmentTool(binding),
+            AuditEnvTool(binding),
             RunCommandTool(
                 runner,
-                argv_prefix=[],
-                env_prefix=env_prefix,
+                binding,
                 confirm_before_experiment=False,
                 confirmed=True,
                 timeout_seconds=request.budget.timeout_seconds,
-            ),
-            AuditEnvTool(
-                runner,
-                boundary,
-                argv_prefix=[],
-                env_prefix=env_prefix,
-                timeout_seconds=min(request.budget.timeout_seconds, 180),
             ),
             FinishTool(),
         )
@@ -100,6 +123,7 @@ class _NativeExperimentPort:
             tools=tools,
             llm_client=ScriptedLLMClient(
                 [
+                    {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
                     {"tool": "audit_env", "arguments": {}},
                     {"tool": "run_command", "arguments": {"command": "python train.py"}},
                     {
@@ -131,11 +155,9 @@ class _NativeExperimentPort:
             request,
             session_id=f"session_{request.task_id}_{request.attempt_number}",
             initial_memory={
-                "environment": {"env_id": "resenv_x", "env_prefix": str(env_prefix)},
                 "hardware": "",
                 "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
                 "command_count": 0,
-                "env_certified": False,
                 "experiment_success_count": 0,
                 "workspace_baseline": {},
             },

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -26,6 +27,26 @@ def init_repo(root: Path) -> None:
     )
     subprocess.run(["git", "add", "util.py"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
+
+
+def _fake_conda(tmp_path: Path) -> Path:
+    fake = tmp_path / "conda"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "args = sys.argv[1:]\n"
+        "if '-p' in args:\n"
+        "    prefix = args[args.index('-p') + 1]\n"
+        "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
+        "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
+        "print('created', flush=True)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    return fake
+
+
+_PREPARE = {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}}
 
 
 def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
@@ -88,12 +109,14 @@ def test_read_only_profile_answers_with_observed_evidence_without_writes(tmp_pat
     ).stdout == ""
 
 
-def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path) -> None:
+def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatch) -> None:
     init_repo(tmp_path)
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", str(_fake_conda(tmp_path)))
     verify = "python -m py_compile util.py"
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {"tool": "read_file", "arguments": {"path": "util.py"}},
                 {
                     "tool": "replace_text",
@@ -130,11 +153,13 @@ def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path) -> None:
     assert "Return the sum" in (tmp_path / "util.py").read_text(encoding="utf-8")
 
 
-def test_new_file_becomes_a_code_artifact(tmp_path) -> None:
+def test_new_file_becomes_a_code_artifact(tmp_path, monkeypatch) -> None:
     init_repo(tmp_path)
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", str(_fake_conda(tmp_path)))
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {
                     "tool": "create_file",
                     "arguments": {"path": "new_helper.py", "content": "VALUE = 1\n"},
@@ -191,15 +216,17 @@ def test_failed_verification_cannot_complete_and_preserves_diagnostic_patch(tmp_
     assert result.artifacts[0].metadata["diagnostic"] is True
 
 
-def test_two_coding_tasks_share_workspace_and_isolate_artifacts(tmp_path) -> None:
+def test_two_coding_tasks_share_workspace_and_isolate_artifacts(tmp_path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_repo(repo)
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", str(_fake_conda(tmp_path)))
 
     # Task A modifies util.py and completes, leaving the workspace dirty.
     agent_a = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {
                     "tool": "replace_text",
                     "arguments": {
@@ -229,6 +256,7 @@ def test_two_coding_tasks_share_workspace_and_isolate_artifacts(tmp_path) -> Non
     agent_b = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {
                     "tool": "create_file",
                     "arguments": {"path": "helper.py", "content": "VALUE = 1\n"},
@@ -331,14 +359,16 @@ def test_read_only_action_schema_rejects_write_tool(tmp_path) -> None:
     assert (tmp_path / "util.py").read_text(encoding="utf-8").endswith("a + b\n")
 
 
-def test_audit_output_goes_to_output_dir_not_repo(tmp_path) -> None:
+def test_audit_output_goes_to_output_dir_not_repo(tmp_path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_repo(repo)
+    monkeypatch.setenv("RESAGENT2_CONDA_EXE", str(_fake_conda(tmp_path)))
     out = tmp_path / "out"
     agent = NativeCodingAgent(
         ScriptedLLMClient(
             [
+                _PREPARE,
                 {
                     "tool": "replace_text",
                     "arguments": {

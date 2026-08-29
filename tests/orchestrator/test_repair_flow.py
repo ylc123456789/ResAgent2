@@ -120,6 +120,19 @@ def test_compiler_rejects_cross_request_supersede() -> None:
         _reject_cross_request_mutations(patch)
 
 
+def test_compiler_rejects_empty_graph() -> None:
+    from resagent2_orchestrator.compiler import _reject_empty_graph
+
+    proposal = WorkflowProposal(
+        work_request_id="work_1",
+        summary="empty",
+        compilation_rationale="no work",
+        tasks=[],
+    )
+    with pytest.raises(CompilationError, match="empty task graph"):
+        _reject_empty_graph(proposal)
+
+
 def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
     # Round 1: a single experiment task that fails.
     proposal = WorkflowProposal(

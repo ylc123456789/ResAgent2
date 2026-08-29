@@ -196,6 +196,13 @@ def _reject_cross_request_mutations(patch: WorkflowPatch) -> None:
         )
 
 
+def _reject_empty_graph(proposal: WorkflowProposal | WorkflowPatch) -> None:
+    """Reject a graph with no tasks: a WorkRequest must produce at least one."""
+    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
+    if not tasks:
+        raise CompilationError("compiler produced an empty task graph")
+
+
 def _reject_undeclared_workspaces(
     proposal: WorkflowProposal | WorkflowPatch,
     workspace_ids: set[str],
@@ -249,6 +256,7 @@ class LLMWorkflowCompiler:
                 f"compiler produced an invalid {action_type.__name__}: {error}"
             ) from error
         _reject_undeclared_capabilities(proposal, registry)
+        _reject_empty_graph(proposal)
         if isinstance(proposal, WorkflowPatch):
             _reject_cross_request_mutations(proposal)
         if workspaces:

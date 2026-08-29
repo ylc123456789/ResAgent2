@@ -23,6 +23,11 @@ three control signals through the typed tools:
   capability names, task ids, paths, or execution fields.
 - ask_user: only missing information a user must supply can resolve this.
 
+Use ask_user when the goal explicitly reserves a decision for the user or
+forbids inferring a default (user preference, risk choice, cost limit,
+evaluation metric, or whether an external action is allowed). Do not replace
+an explicitly required user decision with request_work.
+
 WorkRequest rules:
 - Request only the next necessary round of work that the current evidence
   supports. Do not preemptively request repair or diagnosis before a failure has

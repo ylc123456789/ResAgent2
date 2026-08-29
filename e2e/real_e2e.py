@@ -739,9 +739,17 @@ def run_ask_start(workdir: Path) -> bool:
     repo = _repo(workdir)
     request = ResearchRequest(
         goal=(
-            "Compare two candidate methods on CIFAR-10. State which accuracy "
-            "metric should be reported before running."
+            "Compare ResNet18 and ResNet18+SE on CIFAR-10. The primary "
+            "evaluation metric must be selected by the user before running."
         ),
+        constraints=[
+            "The primary evaluation metric is a user preference that cannot be "
+            "inferred.",
+            "Ask the user which metric to report before requesting or executing "
+            "any work.",
+            "Do not choose a default metric and do not start an experiment until "
+            "the user answers.",
+        ],
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         budget=RunBudget(
             max_tasks=2, max_attempts_per_task=2, max_llm_calls=40, timeout_seconds=600

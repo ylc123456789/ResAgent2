@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 import json
 import os
+import time
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -95,19 +96,32 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except HTTPError as error:
-            detail = error.read(2000).decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM HTTP {error.code}: {detail}") from error
-        except (URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise RuntimeError(f"LLM request failed: {error}") from error
-        try:
-            content = payload["choices"][0]["message"]["content"].strip()
-            if content.startswith("```"):
-                content = content.removeprefix("```json").removeprefix("```")
-                content = content.removesuffix("```").strip()
-            return json.loads(content)
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-            raise RuntimeError("LLM response did not contain one JSON action") from error
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                time.sleep(1.0)
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except HTTPError as error:
+                detail = error.read(2000).decode("utf-8", errors="replace")
+                # A 4xx is a client error (auth/schema), not a transient one.
+                if error.code is not None and error.code < 500:
+                    raise RuntimeError(f"LLM HTTP {error.code}: {detail}") from error
+                last_error = error
+                continue
+            except (URLError, TimeoutError, json.JSONDecodeError) as error:
+                last_error = error
+                continue
+            try:
+                content = payload["choices"][0]["message"]["content"].strip()
+                if content.startswith("```"):
+                    content = content.removeprefix("```json").removeprefix("```")
+                    content = content.removesuffix("```").strip()
+                return json.loads(content)
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+                last_error = error
+                continue
+        raise RuntimeError(
+            f"LLM request failed after 3 attempts: {last_error}"
+        ) from last_error

@@ -119,9 +119,19 @@ def _compile_prompt(
             "Assign each task a workspace_id from the list above; do not invent ids."
         )
     if current is not None:
-        existing = ", ".join(task.id for task in current.tasks)
-        lines.append(f"Current workflow revision {current.revision}: {existing or '(empty)'}")
-        lines.append("Return a patch that only adds, supersedes, or updates pending tasks.")
+        existing = ", ".join(
+            f"{task.id}({task.status.value}, work_request={task.work_request_id})"
+            for task in current.tasks
+        )
+        lines.append(
+            f"Current workflow revision {current.revision} (existing tasks are "
+            f"immutable history): {existing or '(empty)'}"
+        )
+        lines.append(
+            "Return a patch that ONLY adds new tasks for this work request. Do "
+            "not supersede or update existing tasks: they belong to previous "
+            "work requests and cannot be modified."
+        )
     return "\n".join(lines)
 
 
@@ -158,6 +168,19 @@ def _reject_undeclared_capabilities(
     if undeclared:
         raise CompilationError(
             "compiler selected undeclared capabilities: " + ", ".join(undeclared)
+        )
+
+
+def _reject_cross_request_mutations(patch: WorkflowPatch) -> None:
+    """Reject supersede/update of existing tasks from a new WorkRequest.
+
+    The compiler is only ever invoked for a WorkRequest whose tasks are not yet
+    in the graph, so the existing tasks belong to previous work requests and are
+    immutable history. Surfacing this here keeps the error out of the scheduler.
+    """
+    if patch.supersede_task_ids or patch.pending_task_updates:
+        raise CompilationError(
+            "patch must only add tasks; supersede/update of existing tasks is forbidden"
         )
 
 
@@ -214,6 +237,8 @@ class LLMWorkflowCompiler:
                 f"compiler produced an invalid {action_type.__name__}: {error}"
             ) from error
         _reject_undeclared_capabilities(proposal, registry)
+        if isinstance(proposal, WorkflowPatch):
+            _reject_cross_request_mutations(proposal)
         if workspaces:
             _reject_undeclared_workspaces(
                 proposal, {item.workspace_id for item in workspaces}

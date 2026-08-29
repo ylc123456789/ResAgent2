@@ -1,12 +1,12 @@
-"""Real closed-loop test with native Coding/Experiment/Scientific agents.
+"""Real closed-loop tests with native Coding/Experiment/Scientific agents.
 
-Calls the Phase 5 native Coding Agent, the Phase 6 native Experiment Agent and
-the Phase 7 native Scientific Agent through the ResearchController, using the
-real DeepSeek LLM. The experiment environment is content-addressed; set
-RESAGENT2_RESOURCE_ROOT to a stable directory to reuse conda envs across runs
-(RESAGENT2_CONDA_EXE overrides conda).
+Drives the Phase 5-7 native agents through the ResearchController with the real
+DeepSeek LLM. Environments are bound to run_id + workspace_id (ADR-0009); set
+RESAGENT2_ENV_ROOT to a stable directory to reuse conda envs across runs
+(RESAGENT2_CONDA_EXE overrides conda, RESAGENT2_DATASET_ROOT points at datasets).
 
-Stages: ``python -m e2e.real_e2e code|experiment|full``.
+Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-resume|literature``
+(``full`` and ``code`` are legacy aliases for ``code-experiment``).
 """
 
 from __future__ import annotations
@@ -488,8 +488,9 @@ import json
 
 
 def main():
-    # BUG: references `accuracy` before it is assigned (a clear, fixable runtime error).
-    result = accuracy + 0.1
+    correct = 8
+    total = 10
+    result = correct / totla  # BUG: typo — should be `total`
     json.dump({"accuracy": result}, open("metrics.json", "w"))
 
 
@@ -704,7 +705,10 @@ def run_repair(workdir: Path) -> bool:
     """Scenario 3: a failed experiment is diagnosed, fixed and rerun."""
     repo = _repair_repo(workdir)
     request = ResearchRequest(
-        goal="Run train.py to measure the accuracy it produces.",
+        goal=(
+            "Run the existing train.py. If it fails, diagnose the error, fix it, "
+            "and rerun to obtain the accuracy."
+        ),
         budget=RunBudget(
             max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
         ),

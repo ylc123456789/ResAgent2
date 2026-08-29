@@ -45,6 +45,10 @@ Rules:
   RESAGENT2_DATASETS_JSON (a JSON object mapping each dataset id to its absolute
   path). Look up the dataset you need by id; do not assume a single default.
 - Inspect produced files to extract the actual metrics; do not invent numbers.
+- If the entry script itself has a code error you cannot modify (you have no
+  code-editing tools), finish with proposed_status="failed" and report the real
+  command error. Do not repeat the unchanged failing command, and do not
+  substitute an equivalent command to work around the bug.
 - Finish with result={summary, metrics, parameters, evidence_files, residual_risks}.
   evidence_files are workspace-relative paths to the result files you actually
   produced. The deterministic finalizer verifies files and expected deliverables.
@@ -58,9 +62,9 @@ Tool arguments:
 - run_setup: {"command": "python -m pip install -r requirements.txt"}
 - audit_env: {}
 - run_command: {"command": "python train.py --epochs 2"}
-- finish: {"result": {"summary": "...", "metrics": {"accuracy": 0.9},
-  "parameters": {"epochs": 2}, "evidence_files": ["metrics.json"],
-  "residual_risks": []}}
+- finish: {"proposed_status": "completed|failed", "result": {"summary": "...",
+  "metrics": {"accuracy": 0.9}, "parameters": {"epochs": 2},
+  "evidence_files": ["metrics.json"], "residual_risks": []}}
 """
 
 

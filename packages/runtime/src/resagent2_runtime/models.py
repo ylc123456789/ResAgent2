@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
+    ModuleError,
     QuestionDraft,
     RunId,
     SessionId,
@@ -82,13 +83,33 @@ class ToolObservation(RuntimeModel):
 
 
 class CompletionDecision(RuntimeModel):
-    """Deterministic finalizer decision for the current Agent state."""
+    """Deterministic finalizer decision for the current Agent state.
+
+    A finalizer can now express three outcomes, not two:
+
+    - ``complete=True``: the task succeeded; the loop returns a completed result;
+    - ``failure`` non-None: the task is deterministically verified to have
+      failed; the loop returns ``ModuleResult.failed`` immediately;
+    - neither: keep working (optionally with an actionable ``summary``).
+
+    ``failure`` is always a finalizer-built ``ModuleError`` (never taken from the
+    LLM verbatim), so a verified failure exit is a deterministic code decision,
+    not a way for the model to self-declare failure. ``complete`` and ``failure``
+    are mutually exclusive.
+    """
 
     complete: bool
     summary: str = ""
     payload: JsonValue | None = None
     artifacts: list[ArtifactCandidate] = Field(default_factory=list)
     warnings: list[WarningRecord] = Field(default_factory=list)
+    failure: ModuleError | None = None
+
+    @model_validator(mode="after")
+    def validate_failure_consistency(self) -> "CompletionDecision":
+        if self.complete and self.failure is not None:
+            raise ValueError("a completed decision cannot carry a failure")
+        return self
 
 
 class PermissionDecision(RuntimeModel):

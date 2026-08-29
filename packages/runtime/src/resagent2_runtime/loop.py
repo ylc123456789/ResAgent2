@@ -262,15 +262,21 @@ class AgentLoop:
                 if recent is not None:
                     sections.insert(0, recent)
                 if state.runtime_feedback is not None:
+                    content = (
+                        "Your previous action was rejected. Address this "
+                        "before retrying the same action:\n"
+                        f"{state.runtime_feedback.summary}"
+                    )
+                    if state.runtime_feedback.value is not None:
+                        content += (
+                            "\nRejection details:\n"
+                            + _trim_json(state.runtime_feedback.value, 800)
+                        )
                     sections.insert(
                         0,
                         ContextSection(
                             name="runtime_feedback",
-                            content=(
-                                "Your previous action was rejected. Address this "
-                                "before retrying the same action:\n"
-                                f"{state.runtime_feedback.summary}"
-                            ),
+                            content=content,
                             priority=1000,
                             required=True,
                         ),
@@ -481,6 +487,15 @@ class AgentLoop:
                     retryable=False,
                 )
 
+            if decision.failure is not None:
+                return self._failure(
+                    state,
+                    decision.failure.code,
+                    decision.failure.message,
+                    retryable=decision.failure.retryable,
+                    details=decision.failure.details,
+                )
+
             if decision.complete:
                 payload = decision.payload
                 if definition.result_type is not None:
@@ -529,17 +544,12 @@ class AgentLoop:
                     return failure
                 consecutive_failures += 1
 
-        details: dict = {}
-        if state.runtime_feedback is not None:
-            details["last_feedback"] = state.runtime_feedback.model_dump(mode="json")
-        elif state.last_observation is not None:
-            details["last_observation"] = state.last_observation.model_dump(mode="json")
         return self._failure(
             state,
             ErrorCode.BUDGET_EXHAUSTED,
             "Agent session exhausted step or LLM-call budget",
             retryable=False,
-            details=details,
+            details=self._failure_details(state),
         )
 
     def _append_event(
@@ -571,20 +581,34 @@ class AgentLoop:
         """Return a failure result once the recoverable-failure limit is hit."""
         if count + 1 < _CONSECUTIVE_FAILURE_LIMIT:
             return None
-        details: dict = {}
-        if state.runtime_feedback is not None:
-            details["last_feedback"] = state.runtime_feedback.summary
-        elif state.last_observation is not None:
-            details["last_observation"] = state.last_observation.model_dump(
-                mode="json"
-            )
         return self._failure(
             state,
             ErrorCode.TOOL_FAILED,
             "consecutive tool failures exceeded the recoverable limit",
             retryable=False,
-            details=details,
+            details=self._failure_details(state),
         )
+
+    @staticmethod
+    def _failure_details(state: AgentState) -> dict:
+        """Aggregate the durable feedback and the newest observation together.
+
+        Neither key may mask the other: an older completion rejection (kept in
+        ``runtime_feedback``) must not hide the newest command failure (in
+        ``last_observation``, which carries the real stderr), so both are always
+        preserved when present.
+        """
+        details: dict = {}
+        if state.runtime_feedback is not None:
+            details["runtime_feedback"] = {
+                "summary": state.runtime_feedback.summary,
+                "value": state.runtime_feedback.value,
+            }
+        if state.last_observation is not None:
+            details["last_observation"] = state.last_observation.model_dump(
+                mode="json"
+            )
+        return details
 
     @staticmethod
     def _recent_observations_section(

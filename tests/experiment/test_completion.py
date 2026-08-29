@@ -3,13 +3,14 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
+    ErrorCode,
     ExperimentResult,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSourceKind,
 )
 from resagent2_capabilities import WorkspaceBoundary
-from resagent2_runtime import AgentState, FinishCandidate
+from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
 
 from resagent2_experiment.completion import ExperimentCompletionCheck, snapshot_workspace
 
@@ -198,3 +199,61 @@ def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
 
     assert decision.complete is False
     assert "baseline" in decision.summary
+
+
+def _failed_command_event() -> AgentEvent:
+    return AgentEvent(
+        sequence=1,
+        step=1,
+        type="observation",
+        tool="run_command",
+        data={
+            "summary": "Command exited with code 1",
+            "ok": False,
+            "value": {
+                "command": "python train.py",
+                "exit_code": 1,
+                "timed_out": False,
+                "stdout_path": ".resagent2/experiment/commands/1.stdout.log",
+                "stderr_path": ".resagent2/experiment/commands/1.stderr.log",
+                "stderr_tail": "NameError: name 'totla' is not defined",
+            },
+        },
+        created_at=datetime.now(UTC),
+    )
+
+
+def test_failed_finish_with_verified_command_returns_failure(tmp_path) -> None:
+    check = _check(
+        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
+    )
+    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+    state.events.append(_failed_command_event())
+
+    decision = check.evaluate(
+        state,
+        FinishCandidate(proposed_status="failed", result={"summary": "train.py failed"}),
+    )
+
+    assert decision.complete is False
+    assert decision.failure is not None
+    assert decision.failure.code == ErrorCode.TOOL_FAILED
+    assert decision.failure.retryable is False
+    assert decision.failure.details["command"] == "python train.py"
+    assert decision.failure.details["exit_code"] == 1
+    assert decision.failure.details["stderr_path"].endswith("1.stderr.log")
+    assert decision.failure.details["stderr_tail"] == "NameError: name 'totla' is not defined"
+
+
+def test_failed_finish_without_evidence_is_rejected(tmp_path) -> None:
+    check = _check(tmp_path)
+    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+
+    decision = check.evaluate(
+        state,
+        FinishCandidate(proposed_status="failed", result={"summary": "I think it failed"}),
+    )
+
+    assert decision.complete is False
+    assert decision.failure is None
+    assert "no failed experiment command" in decision.summary

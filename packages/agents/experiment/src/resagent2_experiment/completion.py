@@ -9,7 +9,9 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     ArtifactCandidate,
+    ErrorCode,
     ExperimentResult,
+    ModuleError,
     WarningRecord,
 )
 from resagent2_capabilities import (
@@ -91,6 +93,8 @@ class ExperimentCompletionCheck:
     ) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
+        if candidate.proposed_status == "failed":
+            return self._evaluate_failure(state)
         try:
             finish = ExperimentFinish.model_validate(candidate.result)
         except ValidationError as error:
@@ -192,3 +196,70 @@ class ExperimentCompletionCheck:
             payload=payload.model_dump(mode="json"),
             artifacts=artifacts,
         )
+
+    def _evaluate_failure(self, state: AgentState) -> CompletionDecision:
+        """Accept a proposed ``failed`` finish only with verified command evidence.
+
+        The LLM may propose ``proposed_status="failed"``, but it cannot
+        self-declare failure: the deterministic finalizer only accepts it when a
+        real experiment command was observed to fail (non-zero exit or timeout)
+        with persistent stdout/stderr logs. Otherwise the proposal is rejected
+        like any other unverified finish.
+        """
+        evidence = self._last_failed_command(state)
+        if evidence is None:
+            return CompletionDecision(
+                complete=False,
+                summary=(
+                    "Proposed 'failed' status but no failed experiment command "
+                    "was observed; rerun the command or report its real error"
+                ),
+            )
+        if evidence["timed_out"]:
+            message = "Experiment command timed out"
+        else:
+            message = (
+                f"Experiment command failed with exit code {evidence['exit_code']}"
+            )
+        return CompletionDecision(
+            complete=False,
+            failure=ModuleError(
+                code=ErrorCode.TOOL_FAILED,
+                message=message,
+                retryable=False,
+                details=evidence,
+            ),
+        )
+
+    @staticmethod
+    def _last_failed_command(state: AgentState) -> dict | None:
+        """Find the most recent ``run_command`` observation that actually failed.
+
+        Returns the structured evidence (command, exit code, log paths and a
+        bounded stderr tail) for the failure exit, or None when no failed
+        experiment command was observed this session.
+        """
+        for event in reversed(state.events):
+            if event.type != "observation" or event.tool != "run_command":
+                continue
+            data = event.data if isinstance(event.data, dict) else {}
+            if data.get("ok", True):
+                continue
+            value = data.get("value")
+            if not isinstance(value, dict):
+                continue
+            exit_code = value.get("exit_code")
+            timed_out = bool(value.get("timed_out", False))
+            if exit_code is None or (exit_code == 0 and not timed_out):
+                continue
+            if not value.get("stdout_path") and not value.get("stderr_path"):
+                continue
+            return {
+                "command": value.get("command") or "",
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "stdout_path": value.get("stdout_path") or "",
+                "stderr_path": value.get("stderr_path") or "",
+                "stderr_tail": value.get("stderr_tail") or "",
+            }
+        return None

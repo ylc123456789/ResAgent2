@@ -38,7 +38,7 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
   → CompletionCheck
 ```
 
-Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果，由 AgentLoop 统一应用。`FinishTool` 只能产生 FinishCandidate，最终 ModuleStatus 由 CompletionCheck 决定。
+Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果，由 AgentLoop 统一应用。`FinishTool` 只能产生 FinishCandidate，最终 ModuleStatus 由 CompletionCheck 决定。CompletionCheck 的 `CompletionDecision` 支持三种结果：`complete=True` 得 completed；`failure` 非空得 failed（确定性失败出口，由 finalizer 用真实 Tool observation 验证，LLM 不能自证失败）；两者皆否时继续循环。
 
 ## 安装与测试
 

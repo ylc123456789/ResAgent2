@@ -6,6 +6,7 @@ from resagent2_contracts import (
     CodeModifyInput,
     CodeUnderstandInput,
     ErrorCode,
+    ModuleError,
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
@@ -519,3 +520,89 @@ def test_recent_observations_preserve_error_bodies() -> None:
     assert "recent_observations" in llm.contexts[2].included_sections
     assert errors[0] in llm.contexts[2].text
     assert errors[1] in llm.contexts[2].text
+
+
+class VerifiedFailure:
+    """Finalizer that returns a deterministic verified failure (not completion)."""
+
+    def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
+        return CompletionDecision(
+            complete=False,
+            failure=ModuleError(
+                code=ErrorCode.TOOL_FAILED,
+                message="Experiment command failed with exit code 1",
+                retryable=False,
+                details={
+                    "command": "python train.py",
+                    "exit_code": 1,
+                    "stderr_tail": "NameError: totla",
+                },
+            ),
+        )
+
+
+def test_deterministic_failure_exit_returns_failed() -> None:
+    store = InMemorySessionStore()
+    profile = definition(
+        name="verified-failure",
+        llm=ScriptedLLMClient(
+            [
+                AgentAction(
+                    tool="finish",
+                    arguments={"proposed_status": "failed", "result": {}},
+                )
+            ]
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+        completion_check=VerifiedFailure(),
+    )
+
+    result = AgentLoop(store=store).run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_verified_failure",
+    )
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error is not None
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert result.error.message == "Experiment command failed with exit code 1"
+    assert result.error.details["stderr_tail"] == "NameError: totla"
+    assert store.load("session_verified_failure").status.value == "failed"
+
+
+def test_failure_details_keep_both_feedback_and_observation() -> None:
+    """An older completion rejection must not mask the newest command failure."""
+    from datetime import UTC, datetime
+
+    from resagent2_runtime import ToolObservation
+    from resagent2_runtime.models import AgentState
+
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_details",
+        agent_name="test",
+        owner=AgentOwner.CODING,
+        run_id="run_details",
+        created_at=now,
+        updated_at=now,
+    )
+    state.runtime_feedback = ToolObservation(
+        summary="Run a successful experiment command before finishing", ok=False
+    )
+    state.last_observation = ToolObservation(
+        summary="Command exited with code 1",
+        ok=False,
+        value={
+            "command": "python train.py",
+            "exit_code": 1,
+            "stderr_tail": "NameError: totla",
+        },
+    )
+
+    details = AgentLoop._failure_details(state)
+
+    assert "runtime_feedback" in details
+    assert "last_observation" in details
+    assert details["last_observation"]["value"]["stderr_tail"] == "NameError: totla"

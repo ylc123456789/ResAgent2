@@ -31,8 +31,10 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
+    ScientificVerdict,
     TaskBudget,
     TaskStatus,
+    UserAnswer,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSourceKind,
@@ -419,6 +421,79 @@ def _owner_for(registry: CapabilityRegistry, capability: Capability) -> AgentOwn
     raise KeyError(f"no owner registered for capability {capability.value}")
 
 
+def _build_controller(workdir: Path, repo: Path | None):
+    """Assemble the registry, scheduler and controller for one E2E scenario."""
+    registry = _registry()
+    run_store = JsonRunStore(workdir / "state")
+    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
+    workspaces = {}
+    if repo is not None:
+        workspaces["ws_main"] = WorkspaceSpec(
+            workspace_id="ws_main",
+            source_kind=WorkspaceSourceKind.LOCAL,
+            location=str(repo),
+        )
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.CODE_MODIFY: ModuleBinding(
+                owner=_owner_for(registry, Capability.CODE_MODIFY),
+                port=_coding_agent(JsonSessionStore(workdir / "coding_sessions")),
+            ),
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
+                port=_experiment_agent(
+                    JsonSessionStore(workdir / "experiment_sessions"), resource_layout
+                ),
+            ),
+        },
+        store=run_store,
+        artifact_root=workdir / "artifacts",
+        data_root=workdir / "data",
+        workspaces=workspaces,
+    )
+    controller = ResearchController(
+        scientific_port=_scientific_agent(
+            _ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
+            JsonSessionStore(workdir / "scientific_sessions"),
+        ),
+        compiler=LLMWorkflowCompiler(
+            _CompilerClient(model=_MODEL, api_base=_API_BASE, api_key_env=_API_KEY_ENV)
+        ),
+        scheduler=scheduler,
+        registry=registry,
+    )
+    return controller, run_store
+
+
+_BUGGY_TRAIN_PY = """\
+import json
+
+
+def main():
+    # BUG: references `accuracy` before it is assigned (a clear, fixable runtime error).
+    result = accuracy + 0.1
+    json.dump({"accuracy": result}, open("metrics.json", "w"))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def _repair_repo(workdir: Path) -> Path:
+    repo = workdir / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "train.py").write_text(_BUGGY_TRAIN_PY, encoding="utf-8")
+    (repo / "requirements.txt").write_text("", encoding="utf-8")
+    if not (repo / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "e2e@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "e2e"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+    return repo
+
+
 def _real_e2e_succeeded(run) -> bool:
     """Require completed tasks, task-owned evidence and a final scientific opinion."""
     if run.status != RunStatus.COMPLETED or run.final_opinion is None:
@@ -523,44 +598,7 @@ def run_full(workdir: Path) -> bool:
             max_tasks=2, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
-    registry = _registry()
-    run_store = JsonRunStore(workdir / "state")
-    coding_store = JsonSessionStore(workdir / "coding_sessions")
-    experiment_store = JsonSessionStore(workdir / "experiment_sessions")
-    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
-    scheduler = WorkflowScheduler(
-        bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
-                owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=_coding_agent(coding_store),
-            ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
-                owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
-                port=_experiment_agent(experiment_store, resource_layout),
-            ),
-        },
-        store=run_store,
-        artifact_root=workdir / "artifacts",
-        data_root=workdir / "data",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(repo),
-            )
-        },
-    )
-    controller = ResearchController(
-        scientific_port=_scientific_agent(
-            _ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
-            JsonSessionStore(workdir / "scientific_sessions"),
-        ),
-        compiler=LLMWorkflowCompiler(
-            _CompilerClient(model=_MODEL, api_base=_API_BASE, api_key_env=_API_KEY_ENV)
-        ),
-        scheduler=scheduler,
-        registry=registry,
-    )
+    controller, _ = _build_controller(workdir, repo)
     run = controller.create_run("run_full_real", request)
     tasks = run.workflow.tasks if run.workflow is not None else []
     for task in tasks:
@@ -568,6 +606,161 @@ def run_full(workdir: Path) -> bool:
         print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
     return _real_e2e_succeeded(run)
+
+
+def _direct_succeeded(run) -> bool:
+    """Scenario 1 acceptance: completed, inconclusive, no task graph, final report."""
+    return (
+        run.status == RunStatus.COMPLETED
+        and run.final_opinion is not None
+        and run.final_opinion.verdict == ScientificVerdict.INCONCLUSIVE
+        and run.final_report_artifact_id is not None
+        and (run.workflow is None or not run.workflow.tasks)
+    )
+
+
+def _repair_succeeded(run) -> bool:
+    """Scenario 3 acceptance: completed with a preserved failed attempt + recovery."""
+    tasks = run.workflow.tasks if run.workflow is not None else []
+    had_failure = any(
+        any(a.status.value == "failed" for a in task.attempts) for task in tasks
+    )
+    return (
+        run.status == RunStatus.COMPLETED
+        and run.final_opinion is not None
+        and run.final_report_artifact_id is not None
+        and had_failure
+        and len(run.work_requests) >= 2
+    )
+
+
+def _ask_start_succeeded(run) -> bool:
+    """Scenario 4a acceptance: paused with a persisted pending question."""
+    return run.status == RunStatus.PAUSED and run.pending_question is not None
+
+
+def _ask_resume_succeeded(run) -> bool:
+    """Scenario 4b acceptance: resumed and completed with a final opinion."""
+    return run.status == RunStatus.COMPLETED and run.final_opinion is not None
+
+
+def _literature_succeeded(run) -> bool:
+    """Scenario 5 acceptance: opinion cites a registered literature artifact."""
+    cited = set(run.final_opinion.evidence_artifact_ids) if run.final_opinion else set()
+    literature_ids = [
+        a.id for a in run.artifacts.values() if a.kind == "literature_search"
+    ]
+    return (
+        run.status == RunStatus.COMPLETED
+        and run.final_opinion is not None
+        and run.final_report_artifact_id is not None
+        and bool(literature_ids)
+        and any(artifact_id in cited for artifact_id in literature_ids)
+    )
+
+
+def run_direct(workdir: Path) -> bool:
+    """Scenario 1: the Scientific Agent concludes inconclusive without any work."""
+    controller, _ = _build_controller(workdir, None)
+    request = ResearchRequest(
+        goal=(
+            "Determine whether the observed CIFAR-10 accuracy improvement is a "
+            "causal effect of the SE block or merely correlation."
+        ),
+        constraints=[
+            "Do not request experiments or any additional work; conclude from "
+            "the available evidence only."
+        ],
+        budget=RunBudget(
+            max_tasks=1, max_attempts_per_task=1, max_llm_calls=30, timeout_seconds=600
+        ),
+    )
+    run = controller.create_run("run_direct", request)
+    print(f"run status={run.status.value}")
+    if run.final_opinion is not None:
+        print(f"verdict={run.final_opinion.verdict.value}")
+    return _direct_succeeded(run)
+
+
+def run_repair(workdir: Path) -> bool:
+    """Scenario 3: a failed experiment is diagnosed, fixed and rerun."""
+    repo = _repair_repo(workdir)
+    request = ResearchRequest(
+        goal=(
+            "Run train.py to measure the accuracy it produces. If the run "
+            "fails, diagnose the error, fix the code, and rerun to obtain the "
+            "accuracy."
+        ),
+        budget=RunBudget(
+            max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
+        ),
+    )
+    controller, _ = _build_controller(workdir, repo)
+    run = controller.create_run("run_repair", request)
+    tasks = run.workflow.tasks if run.workflow is not None else []
+    for task in tasks:
+        attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
+        print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
+    print(f"run status={run.status.value} work_requests={len(run.work_requests)}")
+    return _repair_succeeded(run)
+
+
+def run_ask_start(workdir: Path) -> bool:
+    """Scenario 4a: pause on a Scientific question and persist the session."""
+    repo = _repo(workdir)
+    request = ResearchRequest(
+        goal=(
+            "Compare two candidate methods on CIFAR-10. State which accuracy "
+            "metric should be reported before running."
+        ),
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
+        budget=RunBudget(
+            max_tasks=2, max_attempts_per_task=2, max_llm_calls=40, timeout_seconds=600
+        ),
+    )
+    controller, _ = _build_controller(workdir, repo)
+    run = controller.create_run("run_ask", request)
+    print(f"run status={run.status.value}")
+    if run.pending_question is not None:
+        print(f"pending_question={run.pending_question.text}")
+        print(f"requested_fields={run.pending_question.requested_fields}")
+    return _ask_start_succeeded(run)
+
+
+def run_ask_resume(workdir: Path, answer_text: str) -> bool:
+    """Scenario 4b: resume the paused run in a fresh process and complete it."""
+    repo = _repo(workdir)
+    controller, run_store = _build_controller(workdir, repo)
+    run = run_store.load("run_ask")
+    question = run.pending_question
+    if question is None:
+        print("no pending question to answer")
+        return False
+    answer = UserAnswer(
+        question_id=question.id,
+        values={field: answer_text for field in question.requested_fields},
+    )
+    run = controller.answer_question("run_ask", answer)
+    print(f"run status={run.status.value}")
+    return _ask_resume_succeeded(run)
+
+
+def run_literature(workdir: Path) -> bool:
+    """Scenario 5: gather literature evidence and cite it in the opinion."""
+    controller, _ = _build_controller(workdir, None)
+    request = ResearchRequest(
+        goal=(
+            "What does the literature say about Squeeze-and-Excitation networks "
+            "improving image classification accuracy? Summarize the evidence "
+            "from the papers you retrieve."
+        ),
+        budget=RunBudget(
+            max_tasks=1, max_attempts_per_task=1, max_llm_calls=60, timeout_seconds=900
+        ),
+    )
+    run = controller.create_run("run_literature", request)
+    print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
+    return _literature_succeeded(run)
 
 
 def main() -> None:
@@ -586,8 +779,19 @@ def main() -> None:
         print(f"summary={result.summary}")
         print(f"payload={result.payload}")
         sys.exit(0 if result.status == ModuleStatus.COMPLETED else 1)
-    elif stage == "full":
+    elif stage in {"full", "code-experiment"}:
         sys.exit(0 if run_full(workdir) else 1)
+    elif stage == "direct":
+        sys.exit(0 if run_direct(workdir) else 1)
+    elif stage == "repair":
+        sys.exit(0 if run_repair(workdir) else 1)
+    elif stage == "ask-start":
+        sys.exit(0 if run_ask_start(workdir) else 1)
+    elif stage == "ask-resume":
+        answer_text = sys.argv[2] if len(sys.argv) > 2 else ""
+        sys.exit(0 if run_ask_resume(workdir, answer_text) else 1)
+    elif stage == "literature":
+        sys.exit(0 if run_literature(workdir) else 1)
     else:
         raise SystemExit(f"unknown stage: {stage}")
 

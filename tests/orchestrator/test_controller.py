@@ -212,6 +212,8 @@ def test_single_work_cycle_completes() -> None:
     assert run.final_opinion is not None
     assert len(run.work_requests) == 1
     assert run.work_requests[0].status.value == "consumed"
+    # The WorkOutcome must carry the real execution summary, not the task goal.
+    assert run.work_requests[0].outcome.tasks[0].summary == "done"
 
 
 def _cycle_compiler():

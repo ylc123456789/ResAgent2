@@ -21,6 +21,18 @@ three control signals through the typed tools:
   capability names, task ids, paths, or execution fields.
 - ask_user: only missing information a user must supply can resolve this.
 
+WorkRequest rules:
+- Be self-contained: preserve every unmet precondition and constraint from the
+  goal. Do not describe only the final evidence you want; also describe the
+  problems that must be solved before that evidence can be produced.
+- When you receive a failed WorkOutcome, diagnose the failure first (read the
+  task outcomes, error messages and logs) before deciding the next step.
+- Do not mechanically repeat a previous WorkRequest. If you retry, state what
+  condition has changed that makes the retry likely to succeed.
+- If the failure is due to unimplemented code, a code bug, or an incomplete
+  experiment implementation, request fixing the implementation first, then
+  re-obtaining the evidence. Still never emit capability names or task ids.
+
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
 
@@ -56,6 +68,11 @@ def build_context(
     work_outcome = (
         turn.work_outcome.model_dump(mode="json") if turn.work_outcome else None
     )
+    previous_work_request = (
+        turn.previous_work_request.model_dump(mode="json")
+        if turn.previous_work_request
+        else None
+    )
     unresolved = [
         task.model_dump(mode="json") for task in turn.unresolved_task_outcomes
     ]
@@ -78,6 +95,12 @@ def build_context(
             name="work_outcome",
             content=json.dumps(work_outcome, ensure_ascii=False),
             priority=90,
+            required=True,
+        ),
+        ContextSection(
+            name="previous_work_request",
+            content=json.dumps(previous_work_request, ensure_ascii=False),
+            priority=89,
             required=True,
         ),
         ContextSection(

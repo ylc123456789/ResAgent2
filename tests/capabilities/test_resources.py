@@ -369,6 +369,44 @@ def test_environment_manager_creates_prefix_via_conda(tmp_path) -> None:
     assert result == tmp_path / "resources" / "envs" / "resenv_x"
 
 
+def test_environment_manager_installs_requirements_txt(tmp_path) -> None:
+    prefix = tmp_path / "resources" / "envs" / "resenv_x"
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    called = tmp_path / "pip_called"
+    (bin_dir / "pip").write_text(f"#!/bin/sh\ntouch {called}\n", encoding="utf-8")
+    (bin_dir / "pip").chmod(0o755)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("torch>=2.0\n", encoding="utf-8")
+
+    manager = EnvironmentManager(
+        env_root=tmp_path / "resources" / "envs", conda_exe="unused"
+    )
+    result = manager.ensure(
+        identifier="resenv_x", repo_path=repo, python_version="3.12"
+    )
+
+    assert result == prefix
+    assert called.is_file()  # pip install -r was invoked
+    assert (prefix / ".resagent2_env_ready").is_file()  # ready marker written
+
+
+def test_environment_manager_reuses_ready_env_without_reinstall(tmp_path) -> None:
+    prefix = tmp_path / "resources" / "envs" / "resenv_x"
+    prefix.mkdir(parents=True)
+    (prefix / ".resagent2_env_ready").write_text("ready", encoding="utf-8")
+
+    manager = EnvironmentManager(
+        env_root=tmp_path / "resources" / "envs", conda_exe="unused"
+    )
+    result = manager.ensure(
+        identifier="resenv_x", repo_path=tmp_path, python_version="3.12"
+    )
+
+    assert result == prefix
+
+
 # ── DatasetCache / HardwareAudit ───────────────────────────────────
 
 

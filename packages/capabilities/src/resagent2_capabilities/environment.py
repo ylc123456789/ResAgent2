@@ -100,6 +100,14 @@ def _find_environment_yml(repo_path: Path) -> Path | None:
     return None
 
 
+def _find_requirements_txt(repo_path: Path) -> Path | None:
+    candidate = Path(repo_path) / "requirements.txt"
+    return candidate if candidate.is_file() else None
+
+
+_READY_MARKER = ".resagent2_env_ready"
+
+
 class EnvironmentManager:
     """Create or reuse a conda env whose prefix is derived from content identity."""
 
@@ -126,38 +134,62 @@ class EnvironmentManager:
         repo_path: Path,
         python_version: str,
     ) -> Path:
-        """Return the env prefix, creating the environment on first use."""
+        """Return the env prefix, creating it and installing declared deps on
+        first use.
+
+        A ready marker distinguishes a fully-installed environment from one
+        whose creation was interrupted halfway: a partial env is finished
+        (deps installed, marker written), never silently reused as complete.
+        """
         if self.conda_exe is None:
             raise EnvironmentManagerError(
                 "conda not found; set RESAGENT2_CONDA_EXE or install conda"
             )
         prefix = self.prefix(identifier)
-        if prefix.exists():
+        marker = prefix / _READY_MARKER
+        if marker.is_file():
             return prefix
         prefix.parent.mkdir(parents=True, exist_ok=True)
         env_file = _find_environment_yml(repo_path)
-        if env_file is not None:
-            command = [
-                self.conda_exe,
-                "env",
-                "create",
-                "-p",
-                str(prefix),
-                "-f",
-                str(env_file),
-            ]
-        else:
-            command = [
-                self.conda_exe,
-                "create",
-                "-p",
-                str(prefix),
-                f"python={python_version}",
-                "-y",
-            ]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise EnvironmentManagerError(
-                f"conda env creation failed: {(result.stderr or '').strip()}"
-            )
+        if not prefix.exists():
+            if env_file is not None:
+                command = [
+                    self.conda_exe,
+                    "env",
+                    "create",
+                    "-p",
+                    str(prefix),
+                    "-f",
+                    str(env_file),
+                ]
+            else:
+                command = [
+                    self.conda_exe,
+                    "create",
+                    "-p",
+                    str(prefix),
+                    f"python={python_version}",
+                    "-y",
+                ]
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise EnvironmentManagerError(
+                    f"conda env creation failed: {(result.stderr or '').strip()}"
+                )
+        # Install explicitly declared pip deps when no environment.yml did it.
+        if env_file is None:
+            requirements = _find_requirements_txt(repo_path)
+            if requirements is not None:
+                pip = prefix / "bin" / "pip"
+                result = subprocess.run(
+                    [str(pip), "install", "-r", str(requirements)],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    raise EnvironmentManagerError(
+                        "pip install -r failed: "
+                        + (result.stderr or result.stdout or "").strip()[-500:]
+                    )
+        marker.write_text("ready", encoding="utf-8")
         return prefix

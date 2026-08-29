@@ -496,6 +496,7 @@ class Attempt(ContractModel):
     artifact_ids: list[ArtifactId] = Field(default_factory=list)
     error: ModuleError | None = None
     payload: JsonValue | None = None
+    summary: NonEmptyStr | None = None
 
     @model_validator(mode="after")
     def validate_outcome(self) -> Attempt:
@@ -1009,6 +1010,7 @@ class ScientificTurnRequest(ContractModel):
     research: ResearchRequest
     authorized_artifacts: list[ArtifactRef] = Field(default_factory=list)
     work_outcome: WorkOutcome | None = None
+    previous_work_request: WorkRequestDraft | None = None
     unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
     answers: list[UserAnswer] = Field(default_factory=list)
     budget: TaskBudget
@@ -1021,6 +1023,8 @@ class ScientificTurnRequest(ContractModel):
                 raise ValueError("first call cannot carry work_outcome or answers")
         elif self.work_outcome is not None and self.answers:
             raise ValueError("resume cannot carry both work_outcome and answers")
+        if (self.previous_work_request is None) != (self.work_outcome is None):
+            raise ValueError("previous_work_request and work_outcome must be paired")
         artifact_ids = [artifact.id for artifact in self.authorized_artifacts]
         if len(artifact_ids) != len(set(artifact_ids)):
             raise ValueError("authorized_artifacts must have unique ids")

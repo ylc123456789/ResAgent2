@@ -112,6 +112,16 @@ class RunCommandTool:
         self.extra_env = extra_env
         self.log_dir = log_dir
 
+    def _tail(self, path_str: str, *, limit: int = 2000) -> str:
+        """Return a bounded tail of a command log, so failures are diagnosable."""
+        path = Path(path_str)
+        if not path.is_absolute():
+            path = self.runner.boundary.root / path
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+        except OSError:
+            return ""
+
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunCommandInput, arguments)
         if classify_command(args.command) == "experiment":
@@ -150,9 +160,12 @@ class RunCommandTool:
             )
         if mutates_environment(args.command) and result.exit_code == 0:
             memory_updates["env_certified"] = False
+        value = result.model_dump(mode="json")
+        value["stdout_tail"] = self._tail(result.stdout_path)
+        value["stderr_tail"] = self._tail(result.stderr_path)
         return ToolObservation(
             summary=f"Command exited with code {result.exit_code}",
-            value=result.model_dump(mode="json"),
+            value=value,
             memory_updates=memory_updates,
         )
 

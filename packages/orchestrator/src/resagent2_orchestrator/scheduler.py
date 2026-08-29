@@ -347,6 +347,7 @@ class WorkflowScheduler:
         attempt.session = result.session
         attempt.artifact_ids = artifact_ids
         attempt.payload = result.payload
+        attempt.summary = result.summary
 
         if result.status in {
             ModuleStatus.COMPLETED,
@@ -574,7 +575,7 @@ class WorkflowScheduler:
                 WorkTaskOutcome(
                     task_id=task.id,
                     status=outcome_status,
-                    summary=task.goal,
+                    summary=(last.summary if last and last.summary else task.goal),
                     artifact_ids=list(last.artifact_ids) if last else [],
                     error=last.error if last else None,
                     warnings=list(task.warnings),

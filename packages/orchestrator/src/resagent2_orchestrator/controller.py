@@ -138,10 +138,12 @@ class ResearchController:
 
     def _scientific_turn(self, run: ResearchRun) -> ScientificTurnResult:
         work_outcome = None
+        previous_work_request = None
         parent_session_id = run.scientific_session.id if run.scientific_session else None
         active = self._active_work_request(run)
         if active is not None and active.status == WorkRequestStatus.STABLE:
             work_outcome = active.outcome
+            previous_work_request = active.request
             parent_session_id = active.scientific_session_id
         remaining = max(
             1, run.request.budget.max_llm_calls - run.llm_calls_used
@@ -152,6 +154,7 @@ class ResearchController:
                 research=run.request,
                 authorized_artifacts=self._authorized_artifacts(run),
                 work_outcome=work_outcome,
+                previous_work_request=previous_work_request,
                 unresolved_task_outcomes=self._unresolved_tasks(run),
                 answers=self._pending_answers(run),
                 budget=TaskBudget(

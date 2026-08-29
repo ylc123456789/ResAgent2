@@ -470,11 +470,17 @@ class AgentLoop:
                     source="completion_check",
                 )
 
+        details: dict = {}
+        if state.runtime_feedback is not None:
+            details["last_feedback"] = state.runtime_feedback.model_dump(mode="json")
+        elif state.last_observation is not None:
+            details["last_observation"] = state.last_observation.model_dump(mode="json")
         return self._failure(
             state,
             ErrorCode.BUDGET_EXHAUSTED,
             "Agent session exhausted step or LLM-call budget",
             retryable=False,
+            details=details,
         )
 
     def _append_event(

@@ -103,6 +103,8 @@ def _compile_prompt(
         f"Constraints: {', '.join(request.request.constraints) or '(none)'}",
         f"Available capabilities: {capabilities or '(none)'}",
         "Use only capabilities from the list above; do not invent new ones.",
+        "Every prerequisite the request explicitly names must become a task in "
+        "the graph, ordered via dependencies before the evidence-producing tasks.",
         f"Max tasks: {budget.max_tasks}",
     ]
     if workspaces:

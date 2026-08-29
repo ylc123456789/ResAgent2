@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
@@ -18,6 +19,7 @@ from resagent2_contracts import (
     ScientificVerdict,
     TaskBudget,
     WorkOutcome,
+    WorkRequestDraft,
     WorkTaskOutcome,
 )
 from resagent2_scientific import ScientificAgent
@@ -39,15 +41,38 @@ def research_request() -> ResearchRequest:
 
 
 def turn(*, work_outcome=None, unresolved=(), parent=None, artifacts=()) -> ScientificTurnRequest:
+    previous = None
+    if work_outcome is not None:
+        previous = WorkRequestDraft(
+            objective="Produce evidence", expected_evidence=["metric"]
+        )
     return ScientificTurnRequest(
         run_id="run_example",
         research=research_request(),
         authorized_artifacts=list(artifacts),
         work_outcome=work_outcome,
+        previous_work_request=previous,
         unresolved_task_outcomes=list(unresolved),
         budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
         parent_session_id=parent,
     )
+
+
+def test_work_outcome_requires_previous_work_request() -> None:
+    outcome = WorkOutcome(
+        work_request_id="work_1",
+        workflow_revision=1,
+        summary="ran",
+        tasks=[WorkTaskOutcome(task_id="task_x", status="completed", summary="ran")],
+    )
+    with pytest.raises(ValidationError, match="paired"):
+        ScientificTurnRequest(
+            run_id="run_example",
+            research=research_request(),
+            work_outcome=outcome,
+            budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+            parent_session_id="session_x",
+        )
 
 
 def artifact(artifact_id: str, tmp_path: Path) -> ArtifactRef:

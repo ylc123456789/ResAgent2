@@ -359,14 +359,15 @@ class ExperimentResult:
     residual_risks: list[NonEmptyStr] = []
 ```
 
-`evidence_files` 是 workspace 相对路径，指向本 Attempt 实际产生的证据文件；每个文件由 finalizer 校验存在后才进入 payload，并作为 `experiment_result` ArtifactCandidate 登记。`repo_url` + `commit` 是 repo identity（不依赖 basename）；`env_id` 是内容寻址环境 id。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings，其 WarningRecord（code=`delivery_not_met`）的 message 记录 `[NOT MET] Missing required ...`。
+`evidence_files` 是 workspace 相对路径，指向本 Attempt 实际产生的证据文件；每个文件由 finalizer 校验存在后才进入 payload，并作为 `experiment_result` ArtifactCandidate 登记。`repo_url` + `commit` 是 repo identity（不依赖 basename）；`env_id` 是 `run_id + workspace_id` 绑定的基础环境 id（见 §23）。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings，其 WarningRecord（code=`delivery_not_met`）的 message 记录 `[NOT MET] Missing required ...`。
 
 `ExperimentRunInput` 在 7.7 Hardening 后只保留实验本身所需的输入字段：
 
 ```python
-python_version: str = "3.12"
 confirm_before_experiment: bool = False
 ```
+
+Python 版本改由 `ModuleTaskRequest.environment_spec`（`EnvironmentSpec.python_version`）承载，不再由 `ExperimentRunInput` 携带（见 §23）。
 
 仓库来源（`repository_url`/`copy_from`/`external_repo_path`）已删除，改由统一工作区上下文（`ModuleTaskRequest.workspace_spec`）提供，`RepoMaterializer` 在 Agent loop 前确定性 materialize；数据集/环境目录来自 `ResourceLayout`，实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。`ExperimentResult` 是既有 `ModuleResult.payload` 扩展点的新命名形状。Scheduler 仍只原样持久化 payload，不基于 payload 改状态。
 
@@ -1052,3 +1053,16 @@ AgentLoop 的反馈语义：
 - 可恢复失败（工具抛异常、参数校验失败、completion check 拒绝、未观察证据拒绝）落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它（`last_observation` 是独立槽位）。
 - `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保证末尾错误字段（如 `stderr_tail`）不丢；每条标注 ok/FAILED。
 - 连续失败计数：成功的非 finish 工具（`read_file`/`list_files`/`read_artifact` 等）重置；`ok=False` 累加；finish 工具的 `ok` 不重置（是否成功由 completion check 决定）；completion check 拒绝的 finish 也累加。连续 5 次失败返回 `TOOL_FAILED`，先于 step 预算。
+
+## 23. 共享环境契约（Agent 自主选型）
+
+环境能力由 Coding 与 Experiment 共用（ADR-0009）。契约要点：
+
+- `EnvironmentSpec.python_version: str | None = None`：有值表示用户/上游硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断。
+- `ModuleTaskRequest.environment_spec` 承载上游声明；删除 `ExperimentRunInput.python_version`（Experiment 专属字段收归通用 `environment_spec`）。
+- 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用）；不同 Workspace/Run 隔离；不跨 Run 复用可变环境。`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`。
+- `EnvironmentManager` 接口 `inspect`/`prepare`/`audit`；`PreparedEnvironment(env_id, prefix, python_version)` 是 capabilities 内部对象，不进公共导出。
+- 三个共享 Tool（capabilities，不进公共导出）：`prepare_environment`（校验版本、创建/复用并绑定环境）、`run_setup`（允许 `pip install -r`/`-e .`、`uv sync`、`poetry install`、`conda env update -f`；禁止 `sudo`、`conda create/remove`、指定其它 `--prefix/-p/--name/-n`）、`audit_env`（证明基础环境正确，不硬编码具体框架）。
+- Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
+- 半成品基础环境：目录不存在 → 创建；基础检查失败 → 确认在受管 env_root 内 → 删除 → 重建。marker `.resagent2_base_ready` 只表示基础 Python 健康，不代表项目依赖装完。
+- `run_setup` 成功修改环境后置 `env_certified=False`，须重新 `audit_env`。

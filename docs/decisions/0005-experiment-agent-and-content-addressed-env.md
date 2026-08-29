@@ -1,6 +1,7 @@
 # ADR-0005：Experiment Agent vNext 与内容寻址环境
 
 > 部分被 [ADR-0006](0006-runtime-capabilities-boundary.md) 取代：provisioning 语义不变，具体组件从 runtime 迁移到 capabilities。
+> 部分被 [ADR-0009](0009-shared-environment-capability.md) 取代：环境从「内容寻址复用」改为「run_id + workspace_id 绑定 + Agent 自主选型」。
 
 **状态**：accepted
 **日期**：2026-08-27

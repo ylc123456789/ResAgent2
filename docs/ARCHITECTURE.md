@@ -280,17 +280,17 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 8.3 Coding Agent
 
-负责准备或复用代码仓库、自己读项目结构、在授权范围内修改代码、根据项目实际选择验证命令、执行验证并按错误修复，最后交付 patch/变更文件/验证结果。它不作科学结论，不直接调用其他 Agent，不扩大 workspace 授权。
+负责准备或复用代码仓库、自己读项目结构（含 Python 与依赖要求）、在授权范围内修改代码、按需用共享环境工具（`prepare_environment`/`run_setup`/`audit_env`）准备并绑定环境、根据项目实际选择验证命令并在**绑定环境**中执行验证、按错误修复，最后交付 patch/变更文件/验证结果。它不作科学结论，不直接调用其他 Agent，不扩大 workspace 授权。
 
 ### 8.4 Experiment Agent
 
-负责在指定逻辑工作区运行实验（复用 Coding 已改过的代码）、管理实验环境和数据集、登记指标/日志和实验结果。它通过同一个 `workspace_id` 操作与 Coding 相同的 `WorkspaceRecord`，仓库来源来自统一工作区上下文而非 `ExperimentRunInput`。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
+负责在指定逻辑工作区运行实验（复用 Coding 已改过的代码）、通过共享环境工具（`prepare_environment`/`run_setup`/`audit_env`）准备环境、解析数据集引用、登记指标/日志和实验结果。它通过同一个 `workspace_id` 操作与 Coding 相同的 `WorkspaceRecord`，仓库来源来自统一工作区上下文而非 `ExperimentRunInput`。它不作最终科学结论，不直接调用 Coding Agent，也不自行创建 repair Task。
 
 ### 8.5 runtime 与 capabilities
 
 `runtime` 只回答“Agent 怎样运行”：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。
 
-`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment、dataset、hardware，以及 Phase 7 的 literature。它提供 `ResourceLayout`（共享 dataset/env 缓存的路径约定）；`RunLayout`（Run 数据目录约定）归 orchestrator。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
+`capabilities` 只回答“Agent 可以调用什么能力”：workspace、process、Artifact 读取、Git、repo materialization、environment（`EnvironmentManager` + `prepare_environment`/`run_setup`/`audit_env` 三个共享 Tool）、dataset、hardware，以及 Phase 7 的 literature。它提供 `ResourceLayout`（共享 dataset/env 缓存的路径约定）；`RunLayout`（Run 数据目录约定）归 orchestrator。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
 
 代码依赖为两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root 同时依赖 orchestrator 与具体 Agent，并通过 Port 注入。orchestrator 不 import 具体 Agent；runtime 不依赖 capabilities；capabilities 不依赖具体 Agent。
 
@@ -298,13 +298,13 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 9.1 Coding
 
-原生 Coding Agent 的 `code_understand` 与 `code_modify` 复用同一 AgentLoop，并在 loop 前确定性复用 `RepoMaterializer` 准备/复用仓库。`code_understand` 不注入写/进程 Tool并在结束时验证 Git 未改变；`code_modify` 的写入受 WorkspaceGrant 限制，验证命令由 Agent 根据项目实际自行选择（shell-free，经 ProcessRunner 的结构化解析与权限检查）。finalizer 以真实 Git diff 和命令结果生成 payload/ArtifactCandidate。
+原生 Coding Agent 的 `code_understand` 与 `code_modify` 复用同一 AgentLoop，并在 loop 前确定性复用 `RepoMaterializer` 准备/复用仓库。`code_understand` 不注入写/进程 Tool并在结束时验证 Git 未改变；`code_modify` 的写入受 WorkspaceGrant 限制，Agent 先读项目的 Python/依赖要求、按需用共享环境工具（`prepare_environment`/`run_setup`/`audit_env`）准备并绑定环境，验证命令由 Agent 根据项目实际自行选择（shell-free，经 ProcessRunner 的结构化解析与权限检查，在绑定环境执行）。finalizer 以真实 Git diff 和命令结果生成 payload/ArtifactCandidate。
 
 工作区允许共享且可含未提交改动：Attempt provenance 由 `GitBaseline`（临时 index + read-tree + add -u + write-tree）按 Attempt 隔离变更建立，不要求干净工作区。ProcessRunner 不是 OS 沙箱；可信调用方若提供过弱验证命令，系统不能证明代码真正满足自然语言目标。这些限制不会因 Phase 7 改变。
 
 ### 9.2 Experiment
 
-原生 Experiment Agent 实现 `experiment_run`：在统一工作区上由 RepoMaterializer 确认 source+commit，EnvironmentManager 使用内容寻址环境（env 目录来自 `ResourceLayout.env_root`），HardwareAudit 提供硬件上下文；任务级数据集经 `DatasetRef(dataset_id, relative_path)` 解析到 `ResourceLayout.dataset_root` 下的具体只读目录（两层模型：`dataset_root` 是公共根、`DatasetRef` 指向具体数据集），并经通用环境变量 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON`（id→路径映射）交给脚本，不绑定框架也不假定「第一个数据集」；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且 Artifact 必须相对本 Attempt 基线新增或改变。实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
+原生 Experiment Agent 实现 `experiment_run`：在统一工作区上由 RepoMaterializer 确认 source+commit，EnvironmentManager 用 `run_id + workspace_id` 绑定基础环境（`inspect`/`prepare`/`audit`，env 目录来自 `ResourceLayout.env_root`），依赖安装由共享 `run_setup` 完成，HardwareAudit 提供硬件上下文；任务级数据集经 `DatasetRef(dataset_id, relative_path)` 解析到 `ResourceLayout.dataset_root` 下的具体只读目录（两层模型：`dataset_root` 是公共根、`DatasetRef` 指向具体数据集），并经通用环境变量 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON`（id→路径映射）交给脚本，不绑定框架也不假定「第一个数据集」；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且 Artifact 必须相对本 Attempt 基线新增或改变。实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
 
 ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检查而非安全隔离；setup/experiment 分类也不是安全分类。详细约束见 ADR-0004、ADR-0005 和 contracts。
 

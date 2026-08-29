@@ -20,4 +20,5 @@ ADR 状态：
 - `0005-experiment-agent-and-content-addressed-env.md`；
 - `0006-runtime-capabilities-boundary.md`；
 - `0007-scientific-control-and-workflow-compilation.md`；
-- `0008-workspace-unification-and-coding-autonomy.md`。
+- `0008-workspace-unification-and-coding-autonomy.md`；
+- `0009-shared-environment-capability.md`。

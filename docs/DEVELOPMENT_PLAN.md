@@ -657,7 +657,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 
 ## 11. Phase 8：稳定化与按需高级能力
 
-只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证、内容寻址环境与镜像加速（国内网络下复用 conda 环境、减少重复下载）。
+只在有已复现需求时评估：长期 Conversation、Session 索引、并行 worker、Skill 原语、plugin 自动发现、云端 durable execution、多模型独立验证、镜像加速（国内网络下复用 pip/conda 下载缓存、减少重复下载）。
 
 每项必须先有：
 
@@ -688,7 +688,8 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 恢复闭环（信息不丢） | previous_work_request、真实 summary/stderr_tail、Experiment prompt 规则 | Phase 7.7 hardening | 已实现：Scientific 重发 self-contained WorkRequest、Experiment 先读接口不臆造 CLI、按错误改命令 |
 | 运行时反馈与连续失败保护 | ToolObservation.ok、runtime_feedback、recent_observations、连续失败上限 | Phase 7.7 hardening | 已实现：拒绝落 ok=False 持久反馈、有界最近历史 head+tail 截断、finish 由 completion check 判定、连续 5 次 TOOL_FAILED |
 | 数据集两层资源模型 | DatasetRef、dataset_refs、RESAGENT2_DATASETS_JSON/RESAGENT2_DATASET_ROOT | Phase 7.7 hardening | 已实现：dataset_root 是公共根、DatasetRef 指向具体只读目录、通用 id→路径映射、重复 id 拒绝 |
-| 环境中断恢复 | EnvironmentManager `.resagent2_env_ready` marker、conda env update/install | Phase 7.7 hardening | 已实现：半成品环境不直接标 ready——有 environment.yml 时 env update、无依赖文件时 conda install 补齐 python |
+| 环境中断恢复 | EnvironmentManager `.resagent2_base_ready` marker、删除重建 | Phase 7.7 hardening | 已实现：半成品基础环境确认在 env_root 内后删除重建，不静默复用 |
+| 共享环境能力与 Agent 自主选型 | EnvironmentSpec、environment_spec、prepare_environment/run_setup/audit_env、EnvironmentBinding | Phase 7.7 hardening（ADR-0009） | 已实现：环境归 run_id+workspace_id、Agent 选 Python/依赖、系统 inspect/prepare/audit、Coding/Experiment 共用、Manager 不自动装依赖 |
 
 ## 13. 文档同步检查
 
@@ -728,3 +729,4 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-28 | Phase 7.7 原子切换 | 未提交 | 本地 227 passed、1 skipped | 删除 PlanningPort/DeterministicPlanningPort/LegacyScientificAnalyzeAdapter 及全部 deprecated 类型与 enum 值；production 切到唯一 Scientific 路径；e2e 重写；scheduler 测试下游节点改写 code_understand；服务器真实 E2E 未跑 |
 | 2026-08-29 | Phase 7.7 Hardening（工作区/Coding 自主） | `9543ab7`, `5d1746d` | 本地 253 passed、1 skipped；mock E2E completed | 统一工作区（WorkspaceSourceKind/WorkspaceSpec/WorkspaceRecord + workspace_id）、Coding 自主验证命令、RepoMaterializer 元数据出仓、RunLayout/ResourceLayout 分离 Run 数据与共享缓存；服务器真实 E2E 未跑 |
 | 2026-08-29 | Phase 7.7 recovery-loop hardening 收尾 | `0a57b6c`, `812c0aa` + 本地未 push | 本地 281 passed、1 skipped；mock E2E completed；服务器真实 E2E 场景 2 completed（baseline 0.4367 → candidate 0.5079，verdict=supports） | 修 3 条 P1（数据集通用绑定、运行时 ok=False/completion rejection 计数、环境中断恢复）+ 恢复闭环（previous_work_request + 最近历史/连续失败保护 + prompt 规则）；全新 workdir 场景 2 跑通 |
+| 2026-08-29 | 共享环境能力改造（ADR-0009） | 本地未 push | 本地 287 passed、1 skipped；mock E2E completed | 环境改 run_id+workspace_id 绑定；EnvironmentSpec/environment_spec 取代 ExperimentRunInput.python_version；EnvironmentManager inspect/prepare/audit + PreparedEnvironment + EnvironmentBinding；三个共享工具 prepare_environment/run_setup/audit_env；Coding 接环境化 verification、Experiment 删私有环境逻辑；Manager 不自动装依赖；半成品删除重建 + `.resagent2_base_ready`；服务器 E2E 待重跑 |

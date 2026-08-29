@@ -12,7 +12,7 @@ Phase 6 用原生 Experiment Agent 替换 legacy reproagent adapter。Experiment
 
 ## 决策
 
-- 仓库、环境、数据集、硬件四个 provisioning 组件放 runtime：`RepoMaterializer` / `EnvironmentManager` / `DatasetCache` / `HardwareAudit`。本阶段只有 Experiment 一个真实使用者，Coding 在 Phase 8 的内容寻址环境复用成为第二个使用者；
+- 仓库、环境、数据集、硬件四个 provisioning 组件放 runtime：`RepoMaterializer` / `EnvironmentManager` / `DatasetCache` / `HardwareAudit`。本阶段只有 Experiment 一个真实使用者，Coding 在 Phase 8 的内容寻址环境复用成为第二个使用者；（`DatasetCache` 的模型/Hub 缓存混用已被后续数据集两层模型取代——只暴露 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON`，不设置 TORCH_HOME/HF_HOME 等）
 - 环境按内容寻址复用：`env_id = resenv_<slug>_<sha256(repo identity + env spec)[:12]>`，只做简单核心（无 manifest、锁或 drift 检测），drift 检测留待后续；
 - repo identity 用（repo source + commit hash），不依赖 basename；
 - 给已冻结的 `ExperimentRunInput` 加 5 个可选字段（repo source 三个 + python_version + confirm_before_experiment），wire schema 升 1.1；

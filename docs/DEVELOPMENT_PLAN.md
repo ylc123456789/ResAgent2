@@ -333,7 +333,7 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 
 ### 顺序
 
-1. runtime 抽四个可复用组件：`RepoMaterializer` / `EnvironmentManager` / `DatasetCache` / `HardwareAudit`；
+1. runtime 抽三个可复用组件：`RepoMaterializer` / `EnvironmentManager` / `HardwareAudit`；
 2. contracts：扩展 `ExperimentRunInput`，新增 `ExperimentResult`；
 3. 原生 Experiment Agent（`packages/agents/experiment/`）；
 4. delivery validation 黄金用例 + 删除 LegacyExperimentAdapter。
@@ -342,7 +342,7 @@ Phase 4 的 code Artifact retry 例外只保留为历史记录；Phase 5 真实 
 
 - `RepoMaterializer`：按 `WorkspaceSpec`（GIT 克隆 / COPY 复制 / LOCAL 就地绑定 / GENERATED 空受管）产出 workspace；repo identity 用 (source + commit hash)，不依赖 basename；
 - `EnvironmentManager`：读 env spec → 创建/绑定 conda env，按 `env_id` 内容寻址复用；
-- `DatasetCache`：共享 torchvision/HF/torch.hub 缓存目录 + 国内镜像 profile；
+- 数据集引用：`DatasetRef`/`resolve_dataset_refs` 解析到 `dataset_root` 下，经通用 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON` 交给脚本（不混入模型/Hub 缓存）；
 - `HardwareAudit`：`nvidia-smi` 等 GPU/硬件信息。
 
 共享目录默认 `.resagent2/data/resources/`（下分 `envs/` 与 `datasets/`），可用 `RESAGENT2_RESOURCE_ROOT` 覆盖；`data_root` 用 `RESAGENT2_DATA_ROOT` 覆盖。

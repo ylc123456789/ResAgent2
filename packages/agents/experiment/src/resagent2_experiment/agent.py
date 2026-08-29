@@ -20,7 +20,6 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     AuditEnvTool,
-    DatasetCache,
     DatasetResolutionError,
     dataset_env_overrides,
     EnvironmentBinding,
@@ -154,10 +153,7 @@ class NativeExperimentAgent:
         env_id = manager.env_id(run_id=request.run_id, workspace_id=workspace_id)
 
         confirmed = _confirmation_granted(request, inputs.confirm_before_experiment)
-        dataset_env = DatasetCache(root=resource_layout.dataset_root).env_overrides()
-        dataset_env.update(
-            dataset_env_overrides(resource_layout.dataset_root, datasets)
-        )
+        dataset_env = dataset_env_overrides(resource_layout.dataset_root, datasets)
 
         output_dir = request.output_dir
         command_log_dir = f"{output_dir}/commands"

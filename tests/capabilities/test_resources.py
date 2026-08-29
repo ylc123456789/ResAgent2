@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from resagent2_capabilities import (
-    DatasetCache,
     DatasetResolutionError,
     EnvironmentManager,
     EnvironmentManagerError,
@@ -471,15 +470,6 @@ def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
 # ── DatasetCache / HardwareAudit ───────────────────────────────────
 
 
-def test_dataset_cache_env_overrides_point_at_root(tmp_path) -> None:
-    cache = DatasetCache(root=tmp_path / "datasets")
-
-    overrides = cache.env_overrides()
-
-    assert overrides["TORCH_HOME"] == str(tmp_path / "datasets")
-    assert overrides["HF_HOME"] == str(tmp_path / "datasets")
-
-
 def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> None:
     root = tmp_path / "datasets"
     (root / "cifar10").mkdir(parents=True)
@@ -560,6 +550,10 @@ def test_dataset_env_overrides_are_generic(tmp_path) -> None:
     overrides = dataset_env_overrides(root, resolved)
 
     assert "TORCHVISION_DATASETS" not in overrides
+    assert "TORCH_HOME" not in overrides
+    assert "HF_HOME" not in overrides
+    assert "HUGGINGFACE_HUB_CACHE" not in overrides
+    assert "TORCH_HUB" not in overrides
     assert overrides["RESAGENT2_DATASET_ROOT"] == str(root.resolve())
     assert json.loads(overrides["RESAGENT2_DATASETS_JSON"]) == {
         "cifar10": str((root / "cifar10").resolve()),

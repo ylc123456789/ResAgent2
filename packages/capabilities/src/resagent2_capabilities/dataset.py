@@ -1,4 +1,4 @@
-"""Shared dataset cache directory and framework environment overrides."""
+"""Dataset reference resolution and generic environment overrides."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from resagent2_contracts import DatasetRef
 
 # Generic dataset hand-off surface. These are the only dataset-related env vars
 # the Experiment Agent promises to its scripts: nothing framework-specific and
-# no "first dataset" special-casing.
+# no "first dataset" special-casing. Model/Hub caches (TORCH_HOME/HF_HOME/...)
+# are deliberately kept out of the dataset root.
 RESAGENT2_DATASET_ROOT = "RESAGENT2_DATASET_ROOT"
 RESAGENT2_DATASETS_JSON = "RESAGENT2_DATASETS_JSON"
 
@@ -61,7 +62,7 @@ def dataset_env_overrides(
 
     No framework is named and no single dataset is preferred: the Experiment
     Agent passes this mapping through so a script can look up the dataset it
-    actually needs by id.
+    actually needs by id. Model/Hub cache variables are deliberately not set.
     """
     return {
         RESAGENT2_DATASET_ROOT: str(Path(dataset_root).expanduser().resolve()),
@@ -70,14 +71,6 @@ def dataset_env_overrides(
             ensure_ascii=False,
         ),
     }
-
-
-_CACHE_ENV_VARS = (
-    "TORCH_HOME",
-    "HF_HOME",
-    "HUGGINGFACE_HUB_CACHE",
-    "TORCH_HUB",
-)
 
 
 # Best-effort mirror acceleration profiles. These are operational overrides
@@ -91,17 +84,6 @@ _MIRROR_PROFILES: dict[str, dict[str, str]] = {
         "PIP_INDEX_URL": "https://mirrors.cloud.tencent.com/pypi/simple",
     },
 }
-
-
-class DatasetCache:
-    """Resolve a shared cache root and produce framework env overrides."""
-
-    def __init__(self, *, root: str | Path) -> None:
-        self.root = Path(root).expanduser()
-
-    def env_overrides(self) -> dict[str, str]:
-        """Point every supported framework cache at the shared root."""
-        return {name: str(self.root) for name in _CACHE_ENV_VARS}
 
 
 def mirror_env_overrides(profile: str) -> dict[str, str]:

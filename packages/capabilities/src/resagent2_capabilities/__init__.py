@@ -8,7 +8,6 @@ Agents assemble the subset they need through their Tool Profile.
 
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
 from .dataset import (
-    DatasetCache,
     DatasetResolutionError,
     dataset_env_overrides,
     mirror_env_overrides,
@@ -80,7 +79,6 @@ __all__ = [
     "CommandPermissionDecision",
     "CreateFileInput",
     "CreateFileTool",
-    "DatasetCache",
     "DatasetResolutionError",
     "EnvironmentBinding",
     "EnvironmentManager",

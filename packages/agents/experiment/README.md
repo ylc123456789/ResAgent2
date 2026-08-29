@@ -5,7 +5,7 @@
 输入：实验目标、WorkspaceGrant（统一工作区上下文）、环境/资源要求、expected metrics/artifacts。
 输出：ExperimentResult、命令证据、参数、指标、环境和 repo identity。
 
-复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Artifact 与 provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`DatasetCache`/`HardwareAudit`）。实验策略和 experiment evidence finalizer 属于本模块。
+复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Artifact 与 provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`HardwareAudit`）。实验策略和 experiment evidence finalizer 属于本模块。
 
 本模块是第二个完成重写的专业 Agent。Phase 6 的原生实现：
 

@@ -80,7 +80,7 @@ LLM 不能直接：
 - 绕过 Artifact 登记阶段已实现的 workspace 边界、hash 和 provenance 检查；
 - 绕过已经实现的 ScientificCompletionValidator 科学闭环复核。
 
-ScientificOpinion/final-report 完成门已在 Phase 7.6 实现并由 ResearchController 新路径调用：它只验证状态、ID、Artifact provenance、observation trace 和失败任务确认，不判断科学观点真假；final report 只从通过验证的类型化事实确定性渲染。Phase 7.7 已删除旧 PlanningPort 路径，production composition root 只保留这一条 Scientific 路径；服务器真实 E2E 场景 2 已在全新 workdir 跑通（baseline 0.4367 → candidate 0.5079，verdict=supports）。
+ScientificOpinion/final-report 完成门已在 Phase 7.6 实现并由 ResearchController 新路径调用：它只验证状态、ID、Artifact provenance、observation trace 和失败任务确认，不判断科学观点真假；final report 只从通过验证的类型化事实确定性渲染。Phase 7.7 已删除旧 PlanningPort 路径，production composition root 只保留这一条 Scientific 路径；环境能力已改为 Coding/Experiment 共享的通用能力（ADR-0009：`prepare_environment`/`run_setup`/`audit_env`，环境归 `run_id + workspace_id`）；服务器真实 E2E 场景 2 已在全新 workdir 跑通（verdict=supports，SE 块提升测试精度）。
 
 详细说明见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

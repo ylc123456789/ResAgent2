@@ -141,8 +141,9 @@ def _compile_prompt(
         )
         lines.append(
             "Return a patch that ONLY adds new tasks for this work request. Do "
-            "not supersede or update existing tasks: they belong to previous "
-            "work requests and cannot be modified."
+            "not supersede, update, or depend on existing tasks: they belong to "
+            "previous work requests and are immutable history. New tasks may "
+            "only depend on other new tasks in this patch."
         )
     return "\n".join(lines)
 

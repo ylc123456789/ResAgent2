@@ -256,13 +256,18 @@ class WorkflowScheduler:
         record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
         grant = self._grant(record, task.capability) if record is not None else None
         output_dir = str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
+        inputs = task.inputs
+        if task.capability == Capability.EXPERIMENT_RUN and run.request.dataset_refs:
+            inputs = inputs.model_copy(
+                update={"dataset_refs": list(run.request.dataset_refs)}
+            )
         module_request = ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,
             attempt_number=attempt_number,
             capability=task.capability,
             goal=task.goal,
-            inputs=task.inputs,
+            inputs=inputs,
             input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
             constraints=run.request.constraints,
             answers=[

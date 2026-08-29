@@ -20,6 +20,7 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     DatasetCache,
+    DatasetResolutionError,
     EnvironmentManager,
     EnvironmentManagerError,
     HardwareAudit,
@@ -32,6 +33,7 @@ from resagent2_capabilities import (
     RepoMaterializerError,
     ResourceLayout,
     SearchTextTool,
+    resolve_dataset_refs,
     WorkspaceBoundary,
     WorkspacePermissionError,
     env_id,
@@ -129,6 +131,12 @@ class NativeExperimentAgent:
             spec.location if spec.location else str(materialized.repo_path)
         )
         resource_layout = self.resource_layout
+        try:
+            datasets = resolve_dataset_refs(
+                resource_layout.dataset_root, list(inputs.dataset_refs)
+            )
+        except DatasetResolutionError as error:
+            return self._failure(str(error), blocked=True)
         env_spec_dict = env_spec(materialized.repo_path, inputs.python_version)
         identifier = env_id(source_ref, f"{source_ref}\0{materialized.commit}", env_spec_dict)
         try:
@@ -204,6 +212,7 @@ class NativeExperimentAgent:
         initial_memory = {
             "environment": {"env_id": identifier, "env_prefix": str(env_prefix)},
             "repo": {"repo_url": source_ref, "commit": materialized.commit},
+            "datasets": datasets,
             "hardware": HardwareAudit().text(),
             "command_count": 0,
             "env_certified": False,

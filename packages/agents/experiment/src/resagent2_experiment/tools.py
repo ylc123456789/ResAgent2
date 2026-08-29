@@ -166,6 +166,7 @@ class RunCommandTool:
         return ToolObservation(
             summary=f"Command exited with code {result.exit_code}",
             value=value,
+            ok=(result.exit_code == 0 and not result.timed_out),
             memory_updates=memory_updates,
         )
 

@@ -7,7 +7,12 @@ Agents assemble the subset they need through their Tool Profile.
 """
 
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
-from .dataset import DatasetCache, mirror_env_overrides
+from .dataset import (
+    DatasetCache,
+    DatasetResolutionError,
+    mirror_env_overrides,
+    resolve_dataset_refs,
+)
 from .environment import (
     EnvironmentManager,
     EnvironmentManagerError,
@@ -65,6 +70,7 @@ __all__ = [
     "CreateFileInput",
     "CreateFileTool",
     "DatasetCache",
+    "DatasetResolutionError",
     "EnvironmentManager",
     "EnvironmentManagerError",
     "GitBaseline",
@@ -106,4 +112,5 @@ __all__ = [
     "mirror_env_overrides",
     "parse_command",
     "project_slug",
+    "resolve_dataset_refs",
 ]

@@ -17,6 +17,21 @@ Rules:
 - Before any experiment command, call audit_env and ensure it reports success.
 - Run commands with run_command (one shell-free command per call). The system
   refuses experiment commands until the environment is certified.
+- Before running an unfamiliar entry script, confirm its interface first: read
+  the entry script or its README, or run it with --help.
+- Command-line flags must come from the entry code, documentation, or --help
+  output. Do not infer CLI flags from library API arguments: a
+  CIFAR10(download=True) call does NOT mean the script supports --download.
+- When a command fails, change your next action based on the error:
+  "unrecognized arguments" -> check --help or the source; "No such file" ->
+  check the path; "dataset not found" -> check the bound dataset; "No module
+  named X" -> check the environment/dependencies.
+- Do not repeat an unchanged failing command when the inputs, workspace and
+  context have not changed.
+- Available datasets (resolved, read-only) are listed in your context under
+  "datasets". Point the framework's dataset cache env var (e.g.
+  TORCHVISION_DATASETS for torchvision) to the relevant dataset's path before
+  running.
 - Inspect produced files to extract the actual metrics; do not invent numbers.
 - Finish with result={summary, metrics, parameters, evidence_files, residual_risks}.
   evidence_files are workspace-relative paths to the result files you actually
@@ -71,6 +86,11 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             name="repo",
             content=json.dumps(state.memory.get("repo", {}), ensure_ascii=False),
             priority=70,
+        ),
+        ContextSection(
+            name="datasets",
+            content=json.dumps(state.memory.get("datasets", []), ensure_ascii=False),
+            priority=65,
         ),
     ]
     if state.last_observation is not None:

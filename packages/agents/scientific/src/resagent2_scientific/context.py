@@ -33,6 +33,14 @@ WorkRequest rules:
   experiment implementation, request fixing the implementation first, then
   re-obtaining the evidence. Still never emit capability names or task ids.
 
+Evidence citation rules:
+- An Artifact id appearing in a WorkOutcome does NOT mean you have observed its
+  contents. If your judgment relies on an artifact's contents, call
+  read_artifact first.
+- If your judgment relies only on the WorkOutcome's status and summary, do not
+  fill that artifact id into your evidence list.
+- Never cite an unread artifact just to make the assessment look complete.
+
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
 

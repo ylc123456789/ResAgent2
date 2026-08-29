@@ -4,6 +4,42 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from resagent2_contracts import DatasetRef
+
+
+class DatasetResolutionError(ValueError):
+    """Raised when a task-level dataset reference cannot be safely resolved."""
+
+
+def resolve_dataset_refs(
+    dataset_root: str | Path, refs: list[DatasetRef]
+) -> list[dict]:
+    """Resolve task-level dataset references to read-only paths under the root.
+
+    Each reference's ``relative_path`` is joined under ``dataset_root``, then
+    checked for directory escape (``..`` / absolute) and existence. The result
+    is a list of ``{dataset_id, path, access}`` entries; the dataset root is the
+    shared "all datasets" directory, never one specific dataset.
+    """
+    root = Path(dataset_root).expanduser().resolve()
+    resolved: list[dict] = []
+    for ref in refs:
+        candidate = (root / ref.relative_path).resolve()
+        if not candidate.is_relative_to(root):
+            raise DatasetResolutionError(
+                f"dataset relative_path escapes the root: {ref.relative_path!r}"
+            )
+        if not candidate.is_dir():
+            raise DatasetResolutionError(f"dataset path does not exist: {candidate}")
+        resolved.append(
+            {
+                "dataset_id": ref.dataset_id,
+                "path": str(candidate),
+                "access": "read_only",
+            }
+        )
+    return resolved
+
 
 _CACHE_ENV_VARS = (
     "TORCH_HOME",

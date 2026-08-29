@@ -64,10 +64,17 @@ class FinishCandidate(RuntimeModel):
 
 
 class ToolObservation(RuntimeModel):
-    """Normalized output from one Tool without direct state mutation."""
+    """Normalized output from one Tool without direct state mutation.
+
+    ``ok`` is a machine-readable success flag: it is True for a successful
+    read/command and False for a failed command (non-zero exit), rejected
+    argument, missing path, or other recoverable failure. Downstream code must
+    not infer failure by parsing ``summary`` text.
+    """
 
     summary: NonEmptyStr
     value: JsonValue | None = None
+    ok: bool = True
     memory_updates: dict[str, JsonValue] = Field(default_factory=dict)
     finish_candidate: FinishCandidate | None = None
     question: QuestionDraft | None = None

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from resagent2_capabilities import (
     DatasetCache,
+    DatasetResolutionError,
     EnvironmentManager,
     HardwareAudit,
     RepoMaterializer,
@@ -17,9 +18,10 @@ from resagent2_capabilities import (
     env_spec,
     find_conda,
     project_slug,
+    resolve_dataset_refs,
 )
 from resagent2_capabilities.process import _descendant_pids
-from resagent2_contracts import WorkspaceSourceKind, WorkspaceSpec
+from resagent2_contracts import DatasetRef, WorkspaceSourceKind, WorkspaceSpec
 
 
 def _init_repo(root: Path, *, commit_file: str = "tracked.txt") -> str:
@@ -417,6 +419,38 @@ def test_dataset_cache_env_overrides_point_at_root(tmp_path) -> None:
 
     assert overrides["TORCH_HOME"] == str(tmp_path / "datasets")
     assert overrides["HF_HOME"] == str(tmp_path / "datasets")
+
+
+def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    (root / "cifar10").mkdir(parents=True)
+    (root / "mnist").mkdir(parents=True)
+    refs = [
+        DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
+        DatasetRef(dataset_id="mnist", relative_path="mnist"),
+    ]
+
+    resolved = resolve_dataset_refs(root, refs)
+
+    assert [entry["dataset_id"] for entry in resolved] == ["cifar10", "mnist"]
+    assert resolved[0]["path"] == str((root / "cifar10").resolve())
+    assert resolved[1]["path"] == str((root / "mnist").resolve())
+    assert all(entry["access"] == "read_only" for entry in resolved)
+
+
+def test_resolve_dataset_refs_rejects_missing_path(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    root.mkdir()
+
+    with pytest.raises(DatasetResolutionError, match="does not exist"):
+        resolve_dataset_refs(
+            root, [DatasetRef(dataset_id="x", relative_path="missing")]
+        )
+
+
+def test_dataset_ref_rejects_escaping_relative_path() -> None:
+    with pytest.raises(ValidationError, match="relative"):
+        DatasetRef(dataset_id="x", relative_path="../escape")
 
 
 def test_hardware_audit_returns_structured_summary() -> None:

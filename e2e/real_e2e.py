@@ -23,6 +23,7 @@ from resagent2_contracts import (
     CapabilityDefinition,
     CapabilityRegistry,
     CodeModifyInput,
+    DatasetRef,
     ExperimentRunInput,
     ModuleResult,
     ModuleStatus,
@@ -477,6 +478,7 @@ def run_experiment(workdir: Path) -> ModuleResult:
             ),
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
+            dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         ),
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
@@ -506,6 +508,7 @@ def run_full(workdir: Path) -> bool:
             "be changed. Conclude whether the SE block improves accuracy over "
             "the baseline."
         ),
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         budget=RunBudget(
             max_tasks=2, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
@@ -38,6 +39,19 @@ from .models import (
 )
 from .store import InMemorySessionStore, SessionStore
 from .tools import Tool, ToolNotFoundError, ToolRegistry
+
+_CONSECUTIVE_FAILURE_LIMIT = 5
+_RECENT_OBSERVATION_LIMIT = 6
+
+
+def _trim_json(value, limit: int) -> str:
+    """Serialize ``value`` to a bounded string for context injection."""
+    if value is None:
+        return ""
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return text
 
 
 class ContextBuilder(Protocol):
@@ -224,6 +238,7 @@ class AgentLoop:
         started = self.clock()
         llm_calls = 0
         attempt_steps = 0
+        consecutive_failures = 0
         while (
             attempt_steps < request.budget.max_steps
             and llm_calls < request.budget.max_llm_calls
@@ -238,6 +253,9 @@ class AgentLoop:
 
             try:
                 sections = list(definition.context_builder(request, state))
+                recent = self._recent_observations_section(state)
+                if recent is not None:
+                    sections.insert(0, recent)
                 if state.runtime_feedback is not None:
                     sections.insert(
                         0,
@@ -352,6 +370,10 @@ class AgentLoop:
                     + str(self._validation_details(error)),
                     tool=action.tool,
                 )
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
                 continue
             except ToolNotFoundError:
                 self._feedback(
@@ -359,6 +381,10 @@ class AgentLoop:
                     f"unknown tool: {action.tool}",
                     tool=action.tool,
                 )
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
                 continue
             except PermissionError as error:
                 self._feedback(
@@ -366,6 +392,10 @@ class AgentLoop:
                     f"Tool execution denied: {error}",
                     tool=action.tool,
                 )
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
                 continue
             except Exception as error:
                 self._feedback(
@@ -373,6 +403,10 @@ class AgentLoop:
                     f"Tool execution failed: {error}",
                     tool=action.tool,
                 )
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
                 continue
 
             state.memory.update(observation.memory_updates)
@@ -387,6 +421,14 @@ class AgentLoop:
                 data=observation.model_dump(mode="json"),
             )
             self._save(state)
+
+            if observation.ok:
+                consecutive_failures = 0
+            else:
+                failure = self._note_failure(state, consecutive_failures)
+                if failure is not None:
+                    return failure
+                consecutive_failures += 1
 
             if self.clock() - started >= request.budget.timeout_seconds:
                 return self._failure(
@@ -505,6 +547,55 @@ class AgentLoop:
     def _save(self, state: AgentState) -> None:
         state.updated_at = datetime.now(UTC)
         self.store.save(state)
+
+    def _note_failure(
+        self, state: AgentState, count: int
+    ) -> ModuleResult | None:
+        """Return a failure result once the recoverable-failure limit is hit."""
+        if count + 1 < _CONSECUTIVE_FAILURE_LIMIT:
+            return None
+        details: dict = {}
+        if state.runtime_feedback is not None:
+            details["last_feedback"] = state.runtime_feedback.summary
+        elif state.last_observation is not None:
+            details["last_observation"] = state.last_observation.model_dump(
+                mode="json"
+            )
+        return self._failure(
+            state,
+            ErrorCode.TOOL_FAILED,
+            "consecutive tool failures exceeded the recoverable limit",
+            retryable=False,
+            details=details,
+        )
+
+    @staticmethod
+    def _recent_observations_section(
+        state: AgentState,
+        *,
+        limit: int = _RECENT_OBSERVATION_LIMIT,
+        value_chars: int = 400,
+    ) -> ContextSection | None:
+        """Build a bounded recent tool history for the LLM context."""
+        observations = [e for e in state.events if e.type == "observation"]
+        if not observations:
+            return None
+        recent = observations[-limit:]
+        lines: list[str] = []
+        for index, event in enumerate(recent, start=1):
+            data = event.data if isinstance(event.data, dict) else {}
+            summary = data.get("summary", "")
+            ok = data.get("ok", True)
+            lines.append(
+                f"{index}. {event.tool}: {summary} [{'ok' if ok else 'FAILED'}]"
+                f"\n   {_trim_json(data.get('value'), value_chars)}"
+            )
+        return ContextSection(
+            name="recent_observations",
+            content="Recent tool history (oldest first):\n" + "\n".join(lines),
+            priority=950,
+            required=False,
+        )
 
     def _feedback(
         self,

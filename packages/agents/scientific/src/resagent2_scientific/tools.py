@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from resagent2_contracts import QuestionDraft
 from resagent2_runtime import AgentState, FinishCandidate, ToolObservation
 
+from .completion import _observed_artifact_ids
 from .models import AskUserInput, RequestWorkInput, ScientificFinish
 
 
@@ -44,6 +45,20 @@ class RequestWorkTool:
         args = cast(RequestWorkInput, arguments)
         if not args.work_request.expected_evidence:
             raise ValueError("request_work requires at least one expected_evidence")
+        unobserved = self._unobserved_evidence(
+            state, args.assessment.evidence_artifact_ids
+        )
+        if unobserved:
+            return ToolObservation(
+                summary=(
+                    "Cannot submit this WorkRequest yet. The following evidence "
+                    "artifacts have not been observed: " + ", ".join(unobserved)
+                    + ". Call read_artifact first, or remove these ids if the "
+                    "assessment does not rely on their contents."
+                ),
+                ok=False,
+                value={"unobserved_artifact_ids": unobserved},
+            )
         return ToolObservation(
             summary="Requesting more execution work",
             request_work={
@@ -55,6 +70,11 @@ class RequestWorkTool:
             },
         )
 
+    @staticmethod
+    def _unobserved_evidence(state: AgentState, cited_ids: list[str]) -> list[str]:
+        observed = set(_observed_artifact_ids(state))
+        return sorted(set(cited_ids) - observed)
+
 
 class AskUserTool:
     """Ask the user while carrying the current scientific assessment."""
@@ -64,6 +84,18 @@ class AskUserTool:
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(AskUserInput, arguments)
+        unobserved = RequestWorkTool._unobserved_evidence(
+            state, args.assessment.evidence_artifact_ids
+        )
+        if unobserved:
+            return ToolObservation(
+                summary=(
+                    "Cannot ask the user yet: the assessment cites evidence not "
+                    "observed by any Tool: " + ", ".join(unobserved)
+                ),
+                ok=False,
+                value={"unobserved_artifact_ids": unobserved},
+            )
         return ToolObservation(
             summary="User input is required",
             question=QuestionDraft(

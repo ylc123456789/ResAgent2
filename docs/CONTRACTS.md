@@ -513,6 +513,7 @@ Phase 7.1 已把 `SCHEMA_VERSION` 切到 `"2.0"` 并在同一原子变更中删�
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput |
+| 数据集引用 | DatasetRef（`ExperimentRunInput.dataset_refs`、`ResearchRequest.dataset_refs`） |
 | Coding payload | VerificationResult、CodeUnderstandResult、CodeModifyResult |
 | Experiment payload | ExperimentResult |
 | 工作流 | TaskProposal、WorkflowProposal、Attempt、WorkflowTask、Workflow、PendingTaskUpdate、WorkflowPatch |
@@ -1035,3 +1036,7 @@ class CodeModifyInput(ContractModel):
 `RunLayout` 只负责根据 `data_root` + `run_id` 返回标准目录（`runs/{run_id}/state`、`runs/{run_id}/workspaces/{ws}/`、`runs/{run_id}/attempts/{task}/attempt_{n}/`、`scientific/sessions/`、`artifacts/`），归 orchestrator；`ResourceLayout` 负责共享缓存目录（`resource_root`、`dataset_root`、`env_root`，`models/` 预留），归 capabilities。contracts 只保留跨模块数据模型，不读取环境变量、不决定物理目录。它们不承载调度逻辑，RunLayout 不管数据集，ResourceLayout 不管 Run 状态。
 
 `RepoMaterializer` 的来源元数据不再写进目标源码仓库（删除 `.resagent2/materialized_source.json`），改写到 `runs/{run_id}/workspaces/{workspace_id}/workspace.json`。
+
+### 21.5 数据集引用
+
+`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」，不表示某个具体数据集。任务级数据集用 `DatasetRef(dataset_id, relative_path)` 声明：运行时把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸、检查存在、默认只读，再把解析结果传给 Experiment Agent。用户可在 `ResearchRequest.dataset_refs` 声明，Scheduler 调度 experiment 任务时注入 `ExperimentRunInput.dataset_refs`。

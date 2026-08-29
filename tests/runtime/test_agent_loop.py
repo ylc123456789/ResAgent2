@@ -5,6 +5,7 @@ from resagent2_contracts import (
     Capability,
     CodeModifyInput,
     CodeUnderstandInput,
+    ErrorCode,
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
@@ -367,3 +368,61 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     assert flaky.calls == 2
     # The first failure was recorded as durable feedback before the recovery.
     assert store.load("session_recover_tool").runtime_feedback is None
+
+
+def test_consecutive_failures_stop_before_budget() -> None:
+    from resagent2_runtime import ToolObservation
+
+    class AlwaysFailTool:
+        name = "always_fail"
+        input_model = FinishTool.input_model
+
+        def execute(self, state, arguments):
+            return ToolObservation(summary="failed", ok=False, value={})
+
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    profile = definition(
+        name="always-fail",
+        llm=ScriptedLLMClient(
+            [AgentAction(tool="always_fail", arguments={"result": {}})] * 50
+        ),
+        tools=(AlwaysFailTool(), FinishTool()),
+        allowed_tools={"always_fail", "finish"},
+    )
+    req = ModuleTaskRequest(
+        run_id="run_x",
+        task_id="task_x",
+        attempt_number=1,
+        capability=Capability.CODE_MODIFY,
+        goal="g",
+        inputs=CodeModifyInput(instructions="i"),
+        budget=TaskBudget(max_steps=50, max_llm_calls=50, timeout_seconds=60),
+    )
+    result = loop.run(profile, req, session_id="session_fail")
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    # It stopped at the recoverable-failure limit, not by exhausting 50 steps.
+    assert store.load("session_fail").step < 50
+
+
+def test_recent_observations_are_injected() -> None:
+    store = InMemorySessionStore()
+    loop = AgentLoop(store=store)
+    llm = ScriptedLLMClient(
+        [
+            AgentAction(tool="write_value", arguments={"key": "a", "value": 1}),
+            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+        ]
+    )
+    profile = definition(
+        name="recent",
+        llm=llm,
+        tools=(WriteValueTool(), FinishTool()),
+        allowed_tools={"write_value", "finish"},
+    )
+    loop.run(profile, request(Capability.CODE_MODIFY), session_id="session_recent")
+
+    # The second turn's context carries the recent tool history.
+    assert "recent_observations" in llm.contexts[1].included_sections

@@ -363,6 +363,9 @@ def test_budget_exhaustion_returns_failed(tmp_path: Path) -> None:
 
 
 def test_request_work_assessment_cannot_cite_unobserved_evidence() -> None:
+    # Unobserved evidence is now a recoverable tool-level rejection (ok=False),
+    # not a hard post-loop contract error. With no corrective action left, the
+    # scripted client exhausts.
     agent = ScientificAgent(
         ScriptedLLMClient(
             [
@@ -385,7 +388,36 @@ def test_request_work_assessment_cannot_cite_unobserved_evidence() -> None:
     result = agent.run(turn())
 
     assert result.status == "failed"
-    assert result.error.code == ErrorCode.CONTRACT_ERROR
+    assert result.error.code == ErrorCode.TOOL_FAILED
+
+
+def test_unobserved_evidence_can_be_recovered_by_reading(tmp_path) -> None:
+    artifact_ref = artifact("artifact_1", tmp_path)
+    request = {
+        "tool": "request_work",
+        "arguments": {
+            "assessment": {
+                "statement": "need more evidence",
+                "evidence_artifact_ids": ["artifact_1"],
+            },
+            "work_request": {
+                "objective": "Run experiment",
+                "expected_evidence": ["accuracy"],
+            },
+        },
+    }
+    agent = ScientificAgent(
+        ScriptedLLMClient(
+            [
+                request,
+                {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_1"}},
+                request,
+            ]
+        )
+    )
+    result = agent.run(turn(artifacts=[artifact_ref]))
+
+    assert result.status == "request_work"
 
 
 def test_unknown_acknowledged_task_id_is_rejected() -> None:

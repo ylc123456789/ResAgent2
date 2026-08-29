@@ -322,6 +322,7 @@ class ResearchRequest(ContractModel):
     context: str = ""
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     budget: RunBudget
 
 
@@ -441,6 +442,23 @@ class CodeModifyResult(ContractModel):
         return self
 
 
+class DatasetRef(ContractModel):
+    """A task-level reference to one dataset under the shared dataset root.
+
+    ``relative_path`` is resolved against the ResourceLayout dataset root at
+    runtime; it is the dataset's directory relative to that root (never an
+    absolute path, never containing ``..``).
+    """
+
+    dataset_id: NonEmptyStr
+    relative_path: str
+
+    @field_validator("relative_path")
+    @classmethod
+    def validate_relative(cls, value: str) -> str:
+        return _validate_relative_path(value)
+
+
 class ExperimentRunInput(ContractModel):
     """Inputs for running an experiment and collecting named evidence.
 
@@ -453,6 +471,7 @@ class ExperimentRunInput(ContractModel):
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
     expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     python_version: str = "3.12"
     confirm_before_experiment: bool = False
 

@@ -41,6 +41,7 @@ from resagent2_orchestrator import (
 )
 from resagent2_orchestrator.compiler import (
     CompilationDraft,
+    CompilationReview,
     _materialize_draft,
 )
 
@@ -181,30 +182,38 @@ def current_workflow() -> Workflow:
 
 
 class _FakeCompilerLLM:
-    """Returns one fixed raw dict, recording prompts and target schemas."""
+    """Returns one fixed raw draft and accepts the semantic review by default."""
 
-    def __init__(self, raw: dict) -> None:
+    def __init__(self, raw: dict, review: dict | None = None) -> None:
         self._raw = raw
+        self._review = review if review is not None else {"accepted": True}
         self.prompts: list[str] = []
         self.schemas: list[type[BaseModel]] = []
 
     def next_action(self, prompt: str, action_type: type[BaseModel]) -> dict:
         self.prompts.append(prompt)
         self.schemas.append(action_type)
+        if action_type is CompilationReview:
+            return self._review
         return self._raw
 
 
 class _ScriptedCompilerLLM:
-    """Returns a scripted sequence of raw drafts, one per call."""
+    """Returns scripted drafts (and optional reviews), keyed by action type."""
 
-    def __init__(self, drafts: list[dict]) -> None:
+    def __init__(self, drafts: list[dict], reviews: list[dict] | None = None) -> None:
         self._drafts = list(drafts)
+        self._reviews = list(reviews) if reviews is not None else []
         self.prompts: list[str] = []
         self.schemas: list[type[BaseModel]] = []
 
     def next_action(self, prompt: str, action_type: type[BaseModel]) -> dict:
         self.prompts.append(prompt)
         self.schemas.append(action_type)
+        if action_type is CompilationReview:
+            if self._reviews:
+                return self._reviews.pop(0)
+            return {"accepted": True}
         if not self._drafts:
             raise AssertionError("no more scripted drafts")
         return self._drafts.pop(0)
@@ -438,7 +447,7 @@ def test_retry_recovers_from_empty_draft() -> None:
         work_request(), current=None, registry=registry(), budget=budget()
     )
     assert isinstance(result, WorkflowProposal)
-    assert len(llm.prompts) == 2
+    assert len(llm.prompts) == 3  # draft[bad], draft[corrected], review
     # The second prompt carries the rejection feedback.
     assert "rejected by the deterministic validator" in llm.prompts[1]
 
@@ -452,7 +461,7 @@ def test_retry_recovers_from_bad_dependency() -> None:
         work_request(), current=None, registry=registry(), budget=budget()
     )
     assert isinstance(result, WorkflowProposal)
-    assert len(llm.prompts) == 2
+    assert len(llm.prompts) == 3  # draft[bad], draft[corrected], review
 
 
 def test_retry_fails_after_two_attempts() -> None:
@@ -464,13 +473,14 @@ def test_retry_fails_after_two_attempts() -> None:
         )
 
 
-def test_compile_calls_llm_once_when_valid() -> None:
+def test_compile_calls_llm_twice_when_valid() -> None:
     llm = _FakeCompilerLLM(raw_experiment("run"))
     compiler = LLMWorkflowCompiler(llm)
     compiler.compile(work_request(), current=None, registry=registry(), budget=budget())
-    assert len(llm.prompts) == 1
-    # The LLM was asked for a CompilationDraft, not a Proposal/Patch.
+    # One draft call + one semantic review call.
+    assert len(llm.prompts) == 2  # one draft call + one review call
     assert llm.schemas[0] is CompilationDraft
+    assert llm.schemas[1] is CompilationReview
 
 
 def test_compile_rejects_invalid_draft_after_retry() -> None:
@@ -558,4 +568,94 @@ def test_compiler_proposal_over_budget_is_rejected() -> None:
                 ),
             ),
             over_budget,
+        )
+
+
+# --- Compiler boundary: no fabricated code details + semantic review ---------
+
+
+def test_materialize_strips_suggested_paths_for_code_modify() -> None:
+    raw = {
+        "summary": "implement",
+        "rationale": "needed",
+        "tasks": [
+            {
+                "key": "implement",
+                "capability": "code_modify",
+                "goal": "Implement the missing behavior",
+                "rationale": "fix",
+                "inputs": {
+                    "capability": "code_modify",
+                    "instructions": "Implement the missing behavior",
+                    "suggested_paths": ["models/selayer.py"],
+                },
+            }
+        ],
+    }
+    result = materialize(raw)
+    assert isinstance(result, WorkflowProposal)
+    assert result.tasks[0].inputs.suggested_paths == []
+
+
+def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
+    incomplete = raw_experiment("run")
+    corrected = {
+        "summary": "implement then run",
+        "rationale": "implement before the experiment",
+        "tasks": [
+            {
+                "key": "implement",
+                "capability": "code_modify",
+                "goal": "Implement the missing behavior",
+                "rationale": "prerequisite",
+                "inputs": {"capability": "code_modify", "instructions": "Implement it"},
+            },
+            {
+                "key": "run",
+                "capability": "experiment_run",
+                "goal": "Run the experiment",
+                "rationale": "evidence",
+                "depends_on": ["implement"],
+                "inputs": {"capability": "experiment_run", "instructions": "Run it"},
+            },
+        ],
+    }
+    llm = _ScriptedCompilerLLM(
+        drafts=[incomplete, corrected],
+        reviews=[
+            {"accepted": False, "missing_requirements": ["implement before the experiment"]},
+            {"accepted": True},
+        ],
+    )
+    compiler = LLMWorkflowCompiler(llm)
+    result = compiler.compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    )
+    assert isinstance(result, WorkflowProposal)
+    assert [task.capability.value for task in result.tasks] == ["code_modify", "experiment_run"]
+    assert result.tasks[1].depends_on == [result.tasks[0].id]
+
+
+def test_semantic_review_accepts_experiment_only_request() -> None:
+    llm = _FakeCompilerLLM(raw_experiment("run"), review={"accepted": True})
+    compiler = LLMWorkflowCompiler(llm)
+    result = compiler.compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    )
+    assert isinstance(result, WorkflowProposal)
+    assert [task.capability.value for task in result.tasks] == ["experiment_run"]
+
+
+def test_semantic_review_rejects_twice_then_fails() -> None:
+    llm = _ScriptedCompilerLLM(
+        drafts=[raw_experiment("run"), raw_experiment("run")],
+        reviews=[
+            {"accepted": False, "missing_requirements": ["implement first"]},
+            {"accepted": False, "missing_requirements": ["implement first"]},
+        ],
+    )
+    compiler = LLMWorkflowCompiler(llm)
+    with pytest.raises(CompilationError, match="incomplete after review"):
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget()
         )

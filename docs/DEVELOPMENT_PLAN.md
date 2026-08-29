@@ -628,7 +628,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 - [x] PlanningPort、`LegacyScientificAnalyzeAdapter` 和旧 scientific task capability 删除；
 - [x] production composition root 只有一条 Scientific 路径；
 - [x] ModuleBinding.owner 与 CapabilityRegistry.definitions[capability].owner 同源（否则 completed Task 被 ScientificCompletionValidator 误判 inconsistent_task_result，见 CONTRACTS §20.10.2 owner 单一来源约束）；
-- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（场景 3 repair 三连跑已通过（v5/v6/v7）；根因三连修：① ADR-0010 编译器收敛 ② Runtime `CompletionDecision.failure` 确定性失败出口 + Experiment finalizer 用真实 `run_command` observation 验证失败证据 + `_note_failure` 不再 if/elif 遮蔽最新 stderr ③ 共享 LLM 客户端传输重试。本地 327 tests 通过。场景 2 code-experiment 仍有既有波动——DeepSeek 编译器偶尔漏编 code_modify / Coding Agent 预算耗尽——非本次回归，尚未达标；场景 1/4/5 此前通过）
+- [ ] 全仓测试、mock E2E、服务器真实 E2E、`git diff --check` 通过；（场景 3 repair 三连跑已通过；场景 2 的两个根因已分别修：① Compiler 不再编造文件路径/命令——`code_modify` 物化时强制清空 `suggested_paths`，并新增一次有界语义完整性审查（`CompilationReview`）兜底“漏编前置任务” ② Coding Agent 的「修改后必须验证」从提示文本升级为确定性 `CodeControlState` 每轮注入。本地 336 tests 通过，待服务器场景 2 三连跑 + 五场景全量回归后勾选）
 - [x] ARCHITECTURE、CONTRACTS、DEVELOPMENT_PLAN、README 和包级 README 同步。
 
 ### 10.6 Phase 7.7 Hardening：工作区、CodingAgent 与路径管理

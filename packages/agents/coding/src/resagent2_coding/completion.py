@@ -14,6 +14,7 @@ from resagent2_contracts import (
     VerificationResult,
 )
 from resagent2_capabilities import (
+    EnvironmentBinding,
     GitBaseline,
     GitWorkspace,
     WorkspaceBoundary,
@@ -183,3 +184,33 @@ class CodeModifyCompletionCheck:
             payload=payload.model_dump(mode="json"),
             artifacts=artifacts,
         )
+
+
+def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict:
+    """Derive the Coding "modify—verify" control state from facts, not the LLM.
+
+    The Coding Agent must not rely on its own memory that a change is still
+    unverified: an unverified edit is an outstanding obligation, and the model
+    can lose it under a flood of later observations. This state is recomputed
+    every turn and injected as the highest-priority context section, so the
+    obligation stays visible until verification actually covers the latest edit.
+    """
+    edit_revision = int(state.memory.get("edit_revision", 0))
+    verification_revision = state.memory.get("verification_revision")
+    verified_revision = (
+        verification_revision if verification_revision is not None else 0
+    )
+    workspace_changed = edit_revision > verified_revision
+    environment_certified = bool(binding.certified)
+    if not workspace_changed:
+        required_next_action = "make_the_required_change"
+    elif not environment_certified:
+        required_next_action = "audit_env"
+    else:
+        required_next_action = "run_verification"
+    return {
+        "workspace_changed": workspace_changed,
+        "verification_required": workspace_changed,
+        "environment_certified": environment_certified,
+        "required_next_action": required_next_action,
+    }

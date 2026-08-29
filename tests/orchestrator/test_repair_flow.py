@@ -245,12 +245,16 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
 
 
 class _ScriptedCompilerLLM:
-    """Return a scripted sequence of CompilationDraft raw dicts."""
+    """Return scripted drafts and auto-accept semantic reviews."""
 
     def __init__(self, drafts: list[dict]) -> None:
         self._drafts = list(drafts)
 
     def next_action(self, prompt, action_type):
+        from resagent2_orchestrator.compiler import CompilationReview
+
+        if action_type is CompilationReview:
+            return {"accepted": True}
         if not self._drafts:
             raise AssertionError("no more scripted drafts")
         return self._drafts.pop(0)

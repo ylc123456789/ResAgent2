@@ -56,7 +56,12 @@ Tool arguments:
 """
 
 
-def build_context(request: ModuleTaskRequest, state: AgentState) -> list[ContextSection]:
+def build_context(
+    request: ModuleTaskRequest,
+    state: AgentState,
+    *,
+    control_state: dict | None = None,
+) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
         {
@@ -85,6 +90,20 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             required=True,
         )
     ]
+    if control_state is not None:
+        sections.insert(
+            0,
+            ContextSection(
+                name="control_state",
+                content=(
+                    "Current coding control state (deterministic — do not "
+                    "invent your own):\n"
+                    + json.dumps(control_state, ensure_ascii=False)
+                ),
+                priority=1000,
+                required=True,
+            ),
+        )
     if state.last_observation is not None:
         sections.append(
             ContextSection(

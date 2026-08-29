@@ -52,7 +52,11 @@ from resagent2_runtime import (
     SessionStore,
 )
 
-from .completion import CodeModifyCompletionCheck, CodeUnderstandCompletionCheck
+from .completion import (
+    CodeModifyCompletionCheck,
+    CodeUnderstandCompletionCheck,
+    derive_control_state,
+)
 from .context import MODIFY_PROMPT, UNDERSTAND_PROMPT, build_context
 from .models import CodeModifyAction, CodeUnderstandAction
 
@@ -185,13 +189,19 @@ class NativeCodingAgent:
                 ),
             )
             tools = (*common_tools, *write_tools)
+
+            def context_builder(request, state):
+                return build_context(
+                    request, state, control_state=derive_control_state(state, binding)
+                )
+
             definition = AgentDefinition(
                 name="coding-modify",
                 owner=AgentOwner.CODING,
                 system_prompt=MODIFY_PROMPT,
                 tools=tools,
                 llm_client=self.llm_client,
-                context_builder=build_context,
+                context_builder=context_builder,
                 permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
                 completion_check=CodeModifyCompletionCheck(
                     repository,

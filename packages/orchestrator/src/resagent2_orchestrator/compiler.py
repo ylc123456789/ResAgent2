@@ -128,6 +128,21 @@ class CompilationDraft(BaseModel):
     tasks: list[CompilationTaskDraft] = Field(min_length=1)
 
 
+class CompilationReview(BaseModel):
+    """Bounded semantic-completeness verdict for one draft.
+
+    ``accepted=True`` means the draft covers every prerequisite the request
+    explicitly names; otherwise ``missing_requirements`` names the concrete
+    prerequisite(s) that must be added. This is a short evaluator call inside the
+    compiler, not a new Agent or module (ADR-0010 §5).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    accepted: bool
+    missing_requirements: list[str] = Field(default_factory=list)
+
+
 class DeterministicWorkflowCompiler:
     """Test fixture that returns a fixed proposal, and optionally a fixed patch."""
 
@@ -210,6 +225,10 @@ def _compile_prompt(
             "Do NOT emit a global task id, a work request id, a workflow revision, a "
             "status, an attempt, or any reference to a task from a previous work "
             "request. The system assigns those.",
+            "Describe each task's goal and inputs as a semantic objective (what to "
+            "implement, fix or run), not as specific file paths, function "
+            "locations, CLI flags or verification commands: the Coding/Experiment "
+            "Agent inspects the workspace and decides those details itself.",
         ]
     )
     if current is not None:
@@ -240,6 +259,41 @@ def _compile_prompt(
         lines.append("")
         lines.append(feedback)
     return "\n".join(lines)
+
+
+def _sanitize_inputs(capability: Capability, inputs):
+    """Strip code-location hints the Compiler must never fabricate.
+
+    The Compiler has not read the workspace, so it cannot know file paths, CLI
+    flags or verification commands. It states only the semantic objective; the
+    Coding Agent discovers the concrete location and approach itself. The public
+    ``suggested_paths`` field remains for callers that do supply trusted hints.
+    """
+    if capability == Capability.CODE_MODIFY:
+        return inputs.model_copy(update={"suggested_paths": []})
+    return inputs
+
+
+def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
+    """Ask a short, bounded semantic-completeness review of one draft."""
+    tasks = [f"- {task.capability.value}: {task.goal}" for task in draft.tasks]
+    return (
+        "Review whether this task draft is semantically complete for the work "
+        "request.\n\n"
+        f"Work request objective: {request.request.objective}\n"
+        f"Expected evidence: {', '.join(request.request.expected_evidence)}\n"
+        f"Constraints: {', '.join(request.request.constraints) or '(none)'}\n\n"
+        "Draft tasks:\n"
+        + ("\n".join(tasks) or "(none)")
+        + "\n\n"
+        "Decide: does the draft include every prerequisite the request explicitly "
+        "names, in the right order (e.g. an implementation/fix step before a "
+        "dependent experiment)? Do NOT demand extra tasks the request does not "
+        "call for.\n"
+        "Return accepted=true only when the draft is complete; otherwise "
+        "accepted=false with missing_requirements listing the concrete missing "
+        "prerequisite(s)."
+    )
 
 
 def _reject_cycle(keys: list[str], dependencies: dict[str, list[str]]) -> None:
@@ -378,7 +432,7 @@ def _materialize_draft(
             rationale=task.rationale,
             depends_on=[key_to_id[dep] for dep in task.depends_on],
             workspace_id=workspace,
-            inputs=task.inputs,
+            inputs=_sanitize_inputs(task.capability, task.inputs),
         )
         for task, workspace in zip(draft.tasks, resolved)
     ]
@@ -403,7 +457,7 @@ def _reject_undeclared_capabilities(
 ) -> None:
     """Reject any task whose capability the registry does not declare.
 
-    Kept as a final defense over the materialized output (ADR-0010 §5); the
+    Kept as a final defense over the materialized output (ADR-0010 §7); the
     deterministic materializer already enforces this, and the scheduler has its
     own binding check.
     """
@@ -489,14 +543,34 @@ def _compact_error(error: Exception) -> str:
     return str(error)
 
 
+def _rejection_feedback(error: Exception) -> str:
+    """Feedback for a structurally invalid draft."""
+    return (
+        "The previous draft was rejected by the deterministic validator.\n"
+        f"Reason: {_compact_error(error)}\n"
+        "Return a corrected draft."
+    )
+
+
+def _incomplete_feedback(missing: list[str]) -> str:
+    """Feedback for a semantically incomplete draft."""
+    return (
+        "The previous draft was semantically incomplete.\n"
+        "Missing requirements: " + "; ".join(missing) + "\n"
+        "Return a corrected draft that includes these prerequisites."
+    )
+
+
 class LLMWorkflowCompiler:
     """Compile a WorkRequest through a semantic draft, then materialize it.
 
     The LLM produces a local ``CompilationDraft``; ``_materialize_draft``
     deterministically assigns global identity and scope and emits a valid
-    Proposal or append-only Patch. On validator rejection, one bounded
-    recompilation is attempted with the exact reason as feedback; a second
-    rejection fails the compile (CONTRACTS §20.9).
+    Proposal or append-only Patch. A structurally invalid draft is retried once
+    with the validator reason as feedback. A structurally valid but semantically
+    incomplete draft (a prerequisite is missing) is caught by one bounded
+    semantic review and retried once with the missing requirements as feedback
+    (ADR-0010 §5). A second failure of either kind fails the compile.
     """
 
     def __init__(self, client: CompilerLLM) -> None:
@@ -528,19 +602,25 @@ class LLMWorkflowCompiler:
                     budget=budget,
                     workspaces=workspaces,
                 )
+                review = self._review_draft(request, draft)
             except (ValidationError, CompilationError) as error:
                 if attempt == 1:
                     raise CompilationError(
                         "compiler failed after 2 attempts: " + _compact_error(error)
                     ) from error
-                feedback = (
-                    "The previous draft was rejected by the deterministic validator.\n"
-                    f"Reason: {_compact_error(error)}\n"
-                    "Return a corrected draft."
-                )
+                feedback = _rejection_feedback(error)
                 continue
 
-            # Final defense over the materialized output (ADR-0010 §5). These are
+            if not review.accepted:
+                if attempt == 1:
+                    raise CompilationError(
+                        "compiler draft incomplete after review: "
+                        + "; ".join(review.missing_requirements)
+                    )
+                feedback = _incomplete_feedback(review.missing_requirements)
+                continue
+
+            # Final defense over the materialized output (ADR-0010 §7). These are
             # all guaranteed by _materialize_draft, but kept so a future change to
             # the materializer cannot silently bypass them.
             _reject_undeclared_capabilities(compiled, registry)
@@ -556,3 +636,17 @@ class LLMWorkflowCompiler:
 
         # Unreachable: attempt 1 always returns or raises.
         raise CompilationError("compiler failed after 2 attempts")
+
+    def _review_draft(
+        self, request: WorkRequest, draft: CompilationDraft
+    ) -> CompilationReview:
+        """Run one bounded semantic-completeness review of the draft."""
+        raw = self._client.next_action(
+            _review_prompt(request, draft), CompilationReview
+        )
+        try:
+            return CompilationReview.model_validate(raw)
+        except ValidationError as error:
+            raise CompilationError(
+                f"semantic review returned an invalid result: {_compact_error(error)}"
+            ) from error

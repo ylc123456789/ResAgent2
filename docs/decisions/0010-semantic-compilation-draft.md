@@ -45,6 +45,8 @@ class CompilationDraft(BaseModel):
 
 LLM **不再输出**：全局 TaskId、WorkRequestId、workflow revision、status、Attempt、旧 Task ID、supersede/update、全局依赖，以及单工作区情况下的 workspace_id。这些一律由代码生成。
 
+LLM **也不输出代码细节**：具体文件路径（如 `models/selayer.py`）、函数位置、CLI 参数、验证命令。Compiler 没有读过工作区，不可能知道这些；它只描述“要实现/修复/运行什么”的语义目标。物化器对 `code_modify` 强制清空 `suggested_paths`（该公开字段保留给确实提供可信提示的调用方），Coding Agent 自己进入工作区决定“在哪里、怎么做”。
+
 ### 2. 确定性物化负责所有运行时身份
 
 新增纯函数 `_materialize_draft`，把草图变成合法的 `WorkflowProposal`（首轮）或只追加的 `WorkflowPatch`（修复轮），并依次检查：
@@ -62,7 +64,7 @@ LLM **不再输出**：全局 TaskId、WorkRequestId、workflow revision、statu
 11. 统一绑定 `work_request_id = request.id`；
 12. 生成最终契约对象。
 
-`current is None` 时生成 `WorkflowProposal`；否则生成 `WorkflowPatch(add_tasks=[...], supersede_task_ids=[], pending_task_updates=[])`——production Compiler 永远只产生 append-only patch。
+`current is None` 时生成 `WorkflowProposal`；否则生成 `WorkflowPatch(add_tasks=[...], supersede_task_ids=[], pending_task_updates=[])`——production Compiler 永远只产生 append-only patch。`code_modify` 任务的 `inputs.suggested_paths` 在物化时被强制清空（§1），Compiler 不会把它未读过的路径传给 Coding Agent。
 
 ### 3. 一次有界纠错重编译
 
@@ -80,20 +82,47 @@ LLM **不再输出**：全局 TaskId、WorkRequestId、workflow revision、statu
 
 修复轮 Compiler 只被告知：这是追加工作、剩余 Task 预算、旧执行是不可修改历史、本轮只能生成新的局部任务。不再提供 `task_initial_run(failed, work_request=work_1)` 这类旧 Task 列表——WorkRequest 已包含 Scientific Agent 对失败的语义总结，旧 Task ID 对任务分解无帮助，只会诱导模型生成跨 WorkRequest 依赖。
 
-### 5. 保留防御层
+### 5. 一次有界语义完整性审查
+
+结构校验只能判断图“格式合法”，不能判断“有没有漏事”。例如 `experiment_run` 单独一张图格式完全合法，但对“先实现 SE，再做实验”这种请求，它在语义上不完整。
+
+因此 Compiler 在结构校验通过后，再做**一次短小的语义审查**（evaluator-optimizer 压缩进 Compiler 内部，不是新 Agent、不加新模块）：
+
+- 输入是 WorkRequest 的 objective/evidence/constraints 和草图的 capability+goal 列表；
+- 输出只有 `CompilationReview(accepted: bool, missing_requirements: list[str])`；
+- `accepted=false` 时，把 `missing_requirements` 交给现有的“一次纠错重编译”，重新生成草图；
+- 第二次仍不完整才失败。
+
+为什么用 LLM 审查：判断“是否漏了科学/代码前置条件”是语义问题，固定代码难以可靠判断；不能写 `if "implement" in request: require_code_modify()` 这类会无限膨胀的关键词规则。确定性代码检查结构，LLM 检查语义完整性，最多纠错一次。
+
+### 6. Coding Agent 自主探索 + 确定性控制状态
+
+Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作区、决定改哪里、怎么验证。但 Coding Agent 容易在大量 observation 中丢失“代码已改、还欠一次验证”这个关键义务，导致反复 list/read 而不验证。
+
+因此给 Coding Agent 增加一个**由代码派生、每轮持续注入**的 `CodeControlState`（不放进跨模块 contracts）：
+
+- `workspace_changed = edit_revision > verification_revision`；
+- `verification_required = workspace_changed`；
+- `environment_certified = environment_binding.certified`；
+- `required_next_action`：未改→改代码；已改未审计→`audit_env`；已改已审计未验证→`run_verification`。
+
+这些值不由 LLM 填写，而是从 Git 编辑 revision、验证 revision、环境绑定状态派生，作为最高优先级 context 每轮注入。`CompletionCheck` 仍是最终硬 gate，不替 Agent 自动执行验证。这是把“修改后必须验证”从提示文本升级为确定性状态，不给 Coding 加固定工作流。
+
+### 7. 保留防御层
 
 现有 `_reject_undeclared_capabilities`、空图检查、workspace 检查、跨 WorkRequest mutation 检查继续保留，并在物化后的输出上再跑一次；Scheduler 的同类检查（budget、Workflow Pydantic DAG、binding、跨 WorkRequest mutation）也保持不变。物化器防止错误进入调度器，调度器则不信任任何调用者。
 
 ## 为什么不用其它方案
 
-- **不引入 LLMCompiler / LangGraph / Magentic-One 框架**：它们的价值在分层思想，不在组件本身；这里只需 2 个内部模型 + 1 个纯函数 + 1 个最多两次的循环。
-- **不做多候选投票或反思**：成本/复杂度远超收益；一次精确反馈重编足以覆盖空图与跨请求依赖这两类可被 validator 精确描述的失败。
-- **不新增 Agent / 服务 / 状态机 / 包**：问题在编译器输出契约与重试，不在控制流架构。
+- **不引入 LLMCompiler / LangGraph / Magentic-One 框架**：它们的价值在分层思想，不在组件本身；这里只需几个内部模型 + 一个纯函数物化器 + 有界的“草图 + 审查”循环。
+- **不做多候选投票或无限反思**：成本/复杂度远超收益；结构拒绝用一次精确反馈重编，语义不完整用一次缺失项反馈重编，各最多一次。
+- **语义审查不是新 Agent**：它是 Compiler 内部的一次短 LLM 调用，输出只有 `accepted`/`missing_requirements`，不新增 Planner/Reviewer Agent、不加包、不改状态机。
+- **Coding 控制状态不是固定工作流**：确定性代码只告诉 Coding 当前还有“必须验证最新修改”这一项责任，不限制它看哪些文件、怎么改、用什么验证命令。
 
 ## 不变的原则
 
 - Workflow 的接受、状态转换和 Artifact 登记仍由确定性代码决定；
-- Scientific / Coding / Experiment Agent、Agentic Loop、Scheduler 状态机、ArtifactRegistry、Workspace/Environment、公共 schema 版本均不改；
+- Scientific / Experiment Agent、Agentic Loop、Scheduler 状态机、ArtifactRegistry、Workspace/Environment、公共 schema 版本均不改；Coding Agent 的自主性（自己探索、自己验证）和最终硬 gate 不变，只新增由确定性代码派生的控制状态；
 - WorkflowProposal / WorkflowPatch 仍存在，仍是 typed boundary；
 - LLM 不直接修改 RunStatus、TaskStatus 或历史 Attempt。
 
@@ -104,21 +133,25 @@ LLM **不再输出**：全局 TaskId、WorkRequestId、workflow revision、statu
 - 空图和跨 WorkRequest 依赖从根源上被消除：LLM 只输出本轮的局部语义，代码保证身份和范围；
 - 偶发的非法草稿通过一次反馈重编恢复，而不是让整个 Run 失败；
 - Compiler 的输出契约变窄，更易测试（物化器是纯函数）；
-- 全局 TaskId / WorkRequestId 的 traceability 成为代码保证，不依赖模型。
+- 全局 TaskId / WorkRequestId 的 traceability 成为代码保证，不依赖模型；
+- “漏编前置任务”（如只生成 experiment_run 而漏掉 code_modify）由语义审查兜底，一次缺失项反馈重编即可补上；
+- Coding 的“修改后必须验证”从提示文本变成每轮注入的确定性状态，不再依赖模型临时记忆。
 
 代价：
 
 - Compiler 内部多一层“草图 → 物化”的转换；
-- 需要一套针对草图与物化器的定向测试（重复 key、未知依赖、环、能力/inputs 不一致、预算、工作区、重试）；
+- 每次编译多一次语义审查 LLM 调用（有界，最多两轮）；
+- 需要一套针对草图、物化器与语义审查的定向测试；
 - 保留的 `_reject_*` 与物化器存在一定冗余（这是刻意为之的 defense-in-depth）。
 
 ## 明确不做
 
-- 不把 `CompilationDraft` 提升为公共 contract 或新包；
+- 不把 `CompilationDraft` / `CompilationReview` 提升为公共 contract 或新包；
 - 不做投票、树搜索、多候选或无限反思；
 - 不为 Compiler 建立 Session 或持久化其 LLM 调用历史；
 - 不修改 `llm_calls_used` 的统计语义（CONTRACTS 只统计 ScientificPort）；
-- 不在 Phase 7 内继续扩大 Compiler 职责（不扫描源码、不指定文件、不生成验证命令）。
+- 不让 Compiler 扫描源码、指定文件、决定验证命令或把工作区文件列表塞给它；
+- 不新增 Planner/Reviewer Agent、不新增停滞检测器、不自动替 Coding 执行验证、不为 SE/CIFAR/train.py 写规则、不调大 Coding 步数或任务总预算。
 
 ## 参考的设计原则
 

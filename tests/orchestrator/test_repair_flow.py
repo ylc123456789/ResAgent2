@@ -133,6 +133,29 @@ def test_compiler_rejects_empty_graph() -> None:
         _reject_empty_graph(proposal)
 
 
+def test_compiler_rejects_cross_request_dependency() -> None:
+    from resagent2_orchestrator.compiler import _reject_cross_request_dependencies
+
+    patch = WorkflowPatch(
+        work_request_id="work_2",
+        based_on_revision=1,
+        reason="repair",
+        add_tasks=[
+            TaskProposal(
+                id="task_exp2",
+                work_request_id="work_2",
+                capability=Capability.EXPERIMENT_RUN,
+                goal="Rerun",
+                rationale="re-obtain evidence",
+                depends_on=["task_exp"],  # a prior work request's failed task
+                inputs=ExperimentRunInput(instructions="Rerun"),
+            )
+        ],
+    )
+    with pytest.raises(CompilationError, match="outside the patch"):
+        _reject_cross_request_dependencies(patch)
+
+
 def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
     # Round 1: a single experiment task that fails.
     proposal = WorkflowProposal(

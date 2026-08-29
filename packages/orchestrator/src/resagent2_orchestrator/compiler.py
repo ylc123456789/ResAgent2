@@ -203,6 +203,23 @@ def _reject_empty_graph(proposal: WorkflowProposal | WorkflowPatch) -> None:
         raise CompilationError("compiler produced an empty task graph")
 
 
+def _reject_cross_request_dependencies(patch: WorkflowPatch) -> None:
+    """Reject add_tasks that depend on a task outside the patch.
+
+    Existing workflow tasks are immutable history (completed or failed); a new
+    WorkRequest's tasks may only depend on other tasks it adds itself, never on
+    a prior task (a failed prior task would make the new task forever blocked).
+    """
+    add_ids = {task.id for task in patch.add_tasks}
+    for task in patch.add_tasks:
+        foreign = [dep for dep in task.depends_on if dep not in add_ids]
+        if foreign:
+            raise CompilationError(
+                f"add task {task.id} depends on tasks outside the patch: "
+                + ", ".join(foreign)
+            )
+
+
 def _reject_undeclared_workspaces(
     proposal: WorkflowProposal | WorkflowPatch,
     workspace_ids: set[str],
@@ -259,6 +276,7 @@ class LLMWorkflowCompiler:
         _reject_empty_graph(proposal)
         if isinstance(proposal, WorkflowPatch):
             _reject_cross_request_mutations(proposal)
+            _reject_cross_request_dependencies(proposal)
         if workspaces:
             _reject_undeclared_workspaces(
                 proposal, {item.workspace_id for item in workspaces}

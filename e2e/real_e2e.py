@@ -400,6 +400,14 @@ def _registry() -> CapabilityRegistry:
     return CapabilityRegistry(
         definitions=[
             CapabilityDefinition(
+                capability=Capability.CODE_UNDERSTAND,
+                owner=AgentOwner.CODING,
+                request_model="CodeUnderstandInput",
+                result_model="CodeUnderstandResult",
+                permission_policy="read_only_workspace",
+                completion_evidence=[],
+            ),
+            CapabilityDefinition(
                 capability=Capability.CODE_MODIFY,
                 owner=AgentOwner.CODING,
                 request_model="CodeModifyInput",
@@ -441,6 +449,10 @@ def _build_controller(workdir: Path, repo: Path | None):
         )
     scheduler = WorkflowScheduler(
         bindings={
+            Capability.CODE_UNDERSTAND: ModuleBinding(
+                owner=_owner_for(registry, Capability.CODE_UNDERSTAND),
+                port=_coding_agent(JsonSessionStore(workdir / "coding_sessions")),
+            ),
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_MODIFY),
                 port=_coding_agent(JsonSessionStore(workdir / "coding_sessions")),
@@ -692,11 +704,7 @@ def run_repair(workdir: Path) -> bool:
     """Scenario 3: a failed experiment is diagnosed, fixed and rerun."""
     repo = _repair_repo(workdir)
     request = ResearchRequest(
-        goal=(
-            "Run train.py to measure the accuracy it produces. If the run "
-            "fails, diagnose the error, fix the code, and rerun to obtain the "
-            "accuracy."
-        ),
+        goal="Run train.py to measure the accuracy it produces.",
         budget=RunBudget(
             max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
         ),

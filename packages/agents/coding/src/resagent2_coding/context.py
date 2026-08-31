@@ -104,21 +104,4 @@ def build_context(
                 required=True,
             ),
         )
-    if state.last_observation is not None:
-        sections.append(
-            ContextSection(
-                name="last_observation",
-                content=state.last_observation.model_dump_json(),
-                priority=90,
-                required=True,
-            )
-        )
-    if state.memory:
-        sections.append(
-            ContextSection(
-                name="audit_memory",
-                content=json.dumps(state.memory, ensure_ascii=False),
-                priority=50,
-            )
-        )
     return sections

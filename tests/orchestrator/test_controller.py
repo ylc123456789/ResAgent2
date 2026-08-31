@@ -555,8 +555,8 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> Non
             request=research_request(),
             status=RunStatus.RUNNING,
             work_requests=[compiling],
-            created_at=NOW,
-            updated_at=NOW,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
     )
     # Simulate the crash: scheduler acceptance is durable, but the controller

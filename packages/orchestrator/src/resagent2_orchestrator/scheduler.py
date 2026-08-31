@@ -417,6 +417,8 @@ class WorkflowScheduler:
             )
 
         finished = datetime.now(UTC)
+        # Accumulate this attempt's real LLM calls into the run ledger (ADR-0011 §7).
+        run.llm_calls_used += result.llm_calls
         attempt.session = result.session
         attempt.artifact_ids = artifact_ids
         attempt.payload = result.payload

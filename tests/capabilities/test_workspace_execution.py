@@ -9,6 +9,7 @@ import pytest
 from resagent2_contracts import (
     AgentOwner,
     ArtifactRef,
+    VerificationResult,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSourceKind,
@@ -21,6 +22,7 @@ from resagent2_capabilities import (
     ReadFileTool,
     RegisteredArtifactReader,
     ReplaceTextTool,
+    RunVerificationTool,
     UnsafeCommandError,
     VerificationCommandPolicy,
     WorkspaceBoundary,
@@ -393,3 +395,43 @@ def test_replace_text_rejects_empty_old_text(tmp_path) -> None:
 
     with pytest.raises(Exception, match="old_text must not be empty"):
         tool.input_model(path="m.py", old_text="", new_text="y")
+
+
+class _FailingVerificationRunner:
+    def __init__(self, boundary) -> None:
+        self.boundary = boundary
+
+    def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None):
+        root = Path(log_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        stdout = root / f"command_{index:02d}.stdout"
+        stderr = root / f"command_{index:02d}.stderr"
+        stdout.write_text("", encoding="utf-8")
+        stderr.write_text("boom", encoding="utf-8")
+        return VerificationResult(
+            command=command,
+            exit_code=1,
+            timed_out=False,
+            stdout_path=str(stdout),
+            stderr_path=str(stderr),
+            duration_seconds=0.0,
+        )
+
+
+def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
+    init_repo(tmp_path)
+    boundary = WorkspaceBoundary(grant(tmp_path))
+    repository = GitWorkspace(boundary)
+    tool = RunVerificationTool(
+        _FailingVerificationRunner(boundary),
+        repository,
+        log_root=str(tmp_path / "verification"),
+        timeout_seconds=10,
+    )
+
+    observation = tool.execute(
+        _agent_state(), tool.input_model(commands=["python -m py_compile missing.py"])
+    )
+
+    assert observation.ok is False
+    assert observation.value["passed"] is False

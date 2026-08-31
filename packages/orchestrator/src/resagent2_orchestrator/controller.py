@@ -129,6 +129,15 @@ class ResearchController:
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
 
+            # Wall-clock deadline: fail deterministically when the run budget is
+            # exhausted (ADR-0011 §7.3). Preemptive per-tool cancellation is out
+            # of scope; this is the run-level remaining-timeout gate.
+            elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
+            if elapsed >= run.request.budget.timeout_seconds:
+                run.status = RunStatus.FAILED
+                self._save(run)
+                return run
+
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
                 run.status = RunStatus.FAILED
                 self._save(run)

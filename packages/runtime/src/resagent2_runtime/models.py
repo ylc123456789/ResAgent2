@@ -141,6 +141,7 @@ class AgentState(RuntimeModel):
     attempt_number: int | None = Field(default=None, ge=1)
     status: SessionStatus = SessionStatus.ACTIVE
     step: int = Field(default=0, ge=0)
+    llm_calls_used: int = Field(default=0, ge=0)
     memory: dict[str, JsonValue] = Field(default_factory=dict)
     last_observation: ToolObservation | None = None
     runtime_feedback: ToolObservation | None = None

@@ -120,6 +120,7 @@ class RunCommandTool:
         if not self.binding.certified:
             return ToolObservation(
                 summary="Experiment command blocked: run audit_env first",
+                ok=False,
                 value={"blocked": True, "reason": "environment not certified"},
             )
         if self.confirm_before_experiment and not self.confirmed:

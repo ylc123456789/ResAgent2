@@ -633,3 +633,34 @@ def test_malformed_action_is_recoverable() -> None:
         session_id="session_recover_invalid_action",
     )
     assert result.status == ModuleStatus.COMPLETED
+
+
+def test_llm_calls_counts_malformed_actions() -> None:
+    """A malformed action still consumed an LLM call, so it must count toward the
+    reported total (ADR-0011 §7); the Scientific Agent no longer infers this
+    from the step counter, which does not advance on schema errors."""
+    store = InMemorySessionStore()
+    profile = definition(
+        name="count-calls",
+        llm=ScriptedLLMClient(
+            [
+                {
+                    "tool": "finish",
+                    "arguments": {"result": {}},
+                    "undocumented_field": True,
+                },
+                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            ]
+        ),
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+    )
+    result = AgentLoop(store=store).run(
+        profile,
+        request(Capability.CODE_MODIFY),
+        session_id="session_count_calls",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == 2
+    assert store.load("session_count_calls").llm_calls_used == 2

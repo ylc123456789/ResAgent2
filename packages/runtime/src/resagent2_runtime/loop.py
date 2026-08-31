@@ -159,6 +159,7 @@ class AgentLoop:
         self.store = store or InMemorySessionStore()
         self.context_composer = context_composer or ContextComposer()
         self.clock = clock
+        self._run_llm_calls = 0
 
     def run(
         self,
@@ -170,6 +171,7 @@ class AgentLoop:
     ) -> ModuleResult:
         """Run one new Agent session until completion, pause, or structured failure."""
 
+        self._run_llm_calls = 0
         now = datetime.now(UTC)
         resume_id = request.parent_session_id
         if resume_id is not None:
@@ -241,12 +243,11 @@ class AgentLoop:
             )
 
         started = self.clock()
-        llm_calls = 0
         attempt_steps = 0
         consecutive_failures = 0
         while (
             attempt_steps < request.budget.max_steps
-            and llm_calls < request.budget.max_llm_calls
+            and self._run_llm_calls < request.budget.max_llm_calls
         ):
             if self.clock() - started >= request.budget.timeout_seconds:
                 return self._failure(
@@ -315,7 +316,8 @@ class AgentLoop:
                     context,
                     definition.action_type,
                 )
-                llm_calls += 1
+                self._run_llm_calls += 1
+                state.llm_calls_used += 1
                 action = definition.action_type.model_validate(raw_action)
             except ValidationError as error:
                 validator = getattr(definition.llm_client, "record_validation", None)
@@ -486,6 +488,7 @@ class AgentLoop:
                     summary=observation.summary,
                     question=observation.question,
                     session=self._session_ref(state),
+                    llm_calls=self._run_llm_calls,
                 )
 
             if observation.request_work is not None:
@@ -496,6 +499,7 @@ class AgentLoop:
                     summary=observation.summary,
                     request_work=observation.request_work,
                     session=self._session_ref(state),
+                    llm_calls=self._run_llm_calls,
                 )
 
             try:
@@ -551,6 +555,7 @@ class AgentLoop:
                     artifacts=decision.artifacts,
                     warnings=decision.warnings,
                     session=self._session_ref(state),
+                    llm_calls=self._run_llm_calls,
                 )
             if decision.summary:
                 self._feedback(
@@ -718,6 +723,7 @@ class AgentLoop:
             summary=message,
             error=error,
             session=self._session_ref(state),
+            llm_calls=self._run_llm_calls,
         )
 
     @staticmethod

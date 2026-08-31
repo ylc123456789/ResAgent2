@@ -174,20 +174,12 @@ def build_context(
             required=True,
         ),
     ]
-    if state.last_observation is not None:
+    summaries = state.memory.get("read_artifact_summaries", {})
+    if isinstance(summaries, dict) and summaries:
         sections.append(
             ContextSection(
-                name="last_observation",
-                content=state.last_observation.model_dump_json(),
-                priority=70,
-                required=True,
-            )
-        )
-    if state.memory:
-        sections.append(
-            ContextSection(
-                name="observed_evidence",
-                content=json.dumps(state.memory, ensure_ascii=False),
+                name="read_artifact_summaries",
+                content=json.dumps(summaries, ensure_ascii=False),
                 priority=50,
             )
         )

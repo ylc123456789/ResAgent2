@@ -111,21 +111,4 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             priority=65,
         ),
     ]
-    if state.last_observation is not None:
-        sections.append(
-            ContextSection(
-                name="last_observation",
-                content=state.last_observation.model_dump_json(),
-                priority=60,
-                required=True,
-            )
-        )
-    if state.memory:
-        sections.append(
-            ContextSection(
-                name="audit_memory",
-                content=json.dumps(state.memory, ensure_ascii=False),
-                priority=50,
-            )
-        )
     return sections

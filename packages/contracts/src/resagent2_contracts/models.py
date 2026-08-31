@@ -833,6 +833,7 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
     request_work: JsonValue | None = None
     error: ModuleError | None = None
     warnings: list[WarningRecord] = Field(default_factory=list)
+    llm_calls: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> ModuleResult[PayloadT]:

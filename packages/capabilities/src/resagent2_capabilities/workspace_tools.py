@@ -12,6 +12,7 @@ from typing import cast
 
 from pydantic import BaseModel, Field, field_validator
 
+from resagent2_contracts import VerificationResult
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
@@ -352,11 +353,28 @@ class RunVerificationTool:
 
         before_digest = _digest()
         deadline = monotonic() + self.timeout_seconds
-        results = []
+        results: list[VerificationResult] = []
         for index, command in enumerate(args.commands, start=1):
             remaining = deadline - monotonic()
             if remaining <= 0:
-                break
+                # A command that never ran must still produce a failure record,
+                # so a partial verification pass can never be mistaken for
+                # success (ADR-0011 §3).
+                results.append(
+                    VerificationResult(
+                        command=command,
+                        exit_code=1,
+                        timed_out=True,
+                        stdout_path=(
+                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stdout"
+                        ),
+                        stderr_path=(
+                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stderr"
+                        ),
+                        duration_seconds=0.0,
+                    )
+                )
+                continue
             results.append(
                 self.runner.run(
                     command,
@@ -369,18 +387,26 @@ class RunVerificationTool:
         after_digest = _digest()
         workspace_unchanged = before_digest == after_digest
         payload = [result.model_dump(mode="json") for result in results]
-        passed = workspace_unchanged and all(
-            result.exit_code == 0 and not result.timed_out for result in results
+        passed = (
+            len(results) == len(args.commands)
+            and workspace_unchanged
+            and all(
+                result.exit_code == 0 and not result.timed_out for result in results
+            )
         )
         observations = [
             {
                 **result.model_dump(mode="json"),
                 "stdout_tail": (
                     self.runner.boundary.root / result.stdout_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:],
+                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
+                if Path(result.stdout_path).exists()
+                else "",
                 "stderr_tail": (
                     self.runner.boundary.root / result.stderr_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:],
+                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
+                if Path(result.stderr_path).exists()
+                else "",
             }
             for result in results
         ]
@@ -389,6 +415,7 @@ class RunVerificationTool:
                 f"Verification {'passed' if passed else 'failed'} at revision {revision}; "
                 f"workspace_unchanged={workspace_unchanged}"
             ),
+            ok=passed,
             value={
                 "passed": passed,
                 "workspace_unchanged": workspace_unchanged,

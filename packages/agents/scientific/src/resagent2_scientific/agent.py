@@ -125,7 +125,6 @@ class ScientificAgent:
         if cached is not None:
             return cached
 
-        step_before = self._step(session_id)
         loop_request = _LoopRequest(
             run_id=request.run_id,
             budget=request.budget,
@@ -137,7 +136,7 @@ class ScientificAgent:
             session_id=session_id,
             initial_memory={},
         )
-        llm_calls = self._step(session_id) - step_before
+        llm_calls = result.llm_calls
         turn_result = self._to_turn_result(request, result, session_id, llm_calls)
         self._cache_turn_result(session_id, idem_key, turn_result)
         return turn_result
@@ -264,12 +263,6 @@ class ScientificAgent:
         except Exception:
             return []
         return _observed_artifact_ids(state)
-
-    def _step(self, session_id: str) -> int:
-        try:
-            return self.store.load(session_id).step
-        except Exception:
-            return 0
 
     _turn_result_adapter = TypeAdapter(ScientificTurnResult)
 

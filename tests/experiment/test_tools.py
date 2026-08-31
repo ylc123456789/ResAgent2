@@ -110,6 +110,7 @@ def test_run_command_blocks_experiment_before_certification(tmp_path) -> None:
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 
+    assert observation.ok is False
     assert observation.value["blocked"] is True
     assert "audit_env" in observation.summary
 

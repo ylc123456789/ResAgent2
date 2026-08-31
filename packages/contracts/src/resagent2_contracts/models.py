@@ -314,6 +314,21 @@ class TaskBudget(ContractModel):
     timeout_seconds: int = Field(ge=1)
 
 
+class ArtifactImport(ContractModel):
+    """Minimal caller-supplied input that becomes a frozen orchestrator Artifact.
+
+    Unlike an ``ArtifactRef`` it carries no provenance or hash yet: the
+    ResearchController validates the local URI, freezes a copy, verifies the
+    optional hash and emits an ``orchestrator/import`` ArtifactRef (ADR-0011 §4).
+    """
+
+    uri: NonEmptyStr
+    kind: NonEmptyStr
+    media_type: NonEmptyStr
+    summary: NonEmptyStr
+    expected_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
+
+
 class ResearchRequest(ContractModel):
     """User-confirmed research objective and run-wide boundaries."""
 
@@ -321,7 +336,7 @@ class ResearchRequest(ContractModel):
     hypothesis: NonEmptyStr | None = None
     context: str = ""
     constraints: list[NonEmptyStr] = Field(default_factory=list)
-    input_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    input_artifacts: list[ArtifactImport] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
     budget: RunBudget
 
@@ -483,7 +498,6 @@ class ExperimentRunInput(ContractModel):
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
     expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
-    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     confirm_before_experiment: bool = False
 
 
@@ -737,6 +751,7 @@ class WorkspaceSpec(ContractModel):
     workspace_id: WorkspaceId
     source_kind: WorkspaceSourceKind
     location: str | None = None
+    environment: EnvironmentSpec | None = None
 
     @model_validator(mode="after")
     def validate_location(self) -> WorkspaceSpec:
@@ -787,6 +802,7 @@ class ModuleTaskRequest(ContractModel):
     goal: NonEmptyStr
     inputs: CapabilityInput
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     answers: list[UserAnswer] = Field(default_factory=list)
     budget: TaskBudget

@@ -21,6 +21,7 @@ ALLOWED_IMPORT_ROOTS = {
     "sys",
     "tempfile",
     "typing",
+    "urllib",
     "pydantic",
     "resagent2_contracts",
 }

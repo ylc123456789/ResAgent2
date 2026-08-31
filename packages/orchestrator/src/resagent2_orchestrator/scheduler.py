@@ -11,6 +11,7 @@ from resagent2_contracts import (
     Attempt,
     AttemptStatus,
     Capability,
+    EnvironmentSpec,
     ErrorCode,
     ModuleError,
     ModuleResult,
@@ -314,19 +315,20 @@ class WorkflowScheduler:
         record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
         grant = self._grant(record, task.capability) if record is not None else None
         output_dir = str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
-        inputs = task.inputs
-        if task.capability == Capability.EXPERIMENT_RUN and run.request.dataset_refs:
-            inputs = inputs.model_copy(
-                update={"dataset_refs": list(run.request.dataset_refs)}
-            )
+        environment_spec = (
+            record.source.environment
+            if record is not None and record.source.environment is not None
+            else EnvironmentSpec()
+        )
         return ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,
             attempt_number=attempt_number,
             capability=task.capability,
             goal=task.goal,
-            inputs=inputs,
+            inputs=task.inputs,
             input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
+            dataset_refs=list(run.request.dataset_refs),
             constraints=task.constraints,
             answers=[
                 answer
@@ -341,6 +343,7 @@ class WorkflowScheduler:
             workspace=grant,
             workspace_id=task.workspace_id,
             workspace_spec=record.source if record is not None else None,
+            environment_spec=environment_spec,
             output_dir=output_dir,
             parent_session_id=parent_session_id,
         )

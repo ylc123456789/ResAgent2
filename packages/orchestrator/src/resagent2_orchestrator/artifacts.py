@@ -8,10 +8,13 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
+    ArtifactImport,
     ArtifactRef,
     RunId,
     SessionId,
@@ -30,6 +33,16 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _resolve_import_uri(uri: str) -> Path:
+    """Resolve a caller-supplied import URI to a local file path."""
+    parsed = urlparse(uri)
+    if parsed.scheme == "file":
+        return Path(url2pathname(parsed.path)).expanduser().resolve()
+    if parsed.scheme == "":
+        return Path(parsed.path).expanduser().resolve()
+    raise ArtifactRegistrationError(f"unsupported import uri scheme: {parsed.scheme!r}")
 
 
 class ArtifactRegistry:
@@ -124,6 +137,60 @@ class ArtifactRegistry:
             media_type=candidate.media_type,
             summary=candidate.summary,
             metadata=candidate.metadata,
+        )
+
+    def register_import(
+        self,
+        spec: ArtifactImport,
+        *,
+        run_id: RunId,
+    ) -> ArtifactRef:
+        """Freeze a caller-supplied local input into an orchestrator Artifact.
+
+        The controller validates the local URI, copies it into the run's frozen
+        artifact directory, verifies the optional hash and returns an
+        ``orchestrator/import`` ArtifactRef (ADR-0011 §4). Callers must never
+        pass a self-built ArtifactRef as input.
+        """
+        source = _resolve_import_uri(spec.uri)
+        if not source.is_file():
+            raise ArtifactRegistrationError(
+                f"import uri is not a readable file: {spec.uri}"
+            )
+        digest = _sha256(source)
+        if spec.expected_sha256 is not None and spec.expected_sha256 != digest:
+            raise ArtifactRegistrationError(
+                f"import sha256 mismatch for {spec.uri}: "
+                f"expected {spec.expected_sha256}, got {digest}"
+            )
+        artifact_id = f"artifact_import_{digest[:16]}"
+        destination_dir = self.root / run_id / artifact_id
+        destination = destination_dir / source.name
+        if not destination.exists():
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    dir=destination_dir, delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                shutil.rmtree(destination_dir, ignore_errors=True)
+                raise
+        return ArtifactRef(
+            id=artifact_id,
+            kind=spec.kind,
+            producer=AgentOwner.ORCHESTRATOR,
+            run_id=run_id,
+            uri=destination.as_uri(),
+            sha256=digest,
+            media_type=spec.media_type,
+            summary=spec.summary,
+            metadata={"source_type": "import"},
         )
 
     def register_scientific(

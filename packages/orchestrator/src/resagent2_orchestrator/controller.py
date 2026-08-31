@@ -98,6 +98,13 @@ class ResearchController:
             created_at=now,
             updated_at=now,
         )
+        # Freeze caller-supplied inputs into registered orchestrator Artifacts
+        # before any Scientific turn or task can observe them (ADR-0011 §4).
+        for spec in request.input_artifacts:
+            artifact = self.scheduler.artifact_registry.register_import(
+                spec, run_id=run_id
+            )
+            run.artifacts[artifact.id] = artifact
         self._save(run)
         return self.run_until_stable(run_id)
 

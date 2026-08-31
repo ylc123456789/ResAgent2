@@ -255,3 +255,56 @@ def test_managed_workspace_root_is_under_data_root(tmp_path) -> None:
     )
     assert run.workspaces["ws_a"].root == str(expected)
     assert run.workspaces["ws_a"].managed is True
+
+
+def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -> None:
+    from resagent2_contracts import DatasetRef, EnvironmentSpec
+
+    port = ScriptedModulePort(
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="ok")]
+    )
+    engine = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT, port=port
+            )
+        },
+        store=InMemoryRunStore(),
+        workspaces={
+            "ws_main": WorkspaceSpec(
+                workspace_id="ws_main",
+                source_kind=WorkspaceSourceKind.LOCAL,
+                location=str(tmp_path),
+                environment=EnvironmentSpec(python_version="3.10"),
+            )
+        },
+    )
+    request = ResearchRequest(
+        goal="Run",
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
+        budget=RunBudget(
+            max_tasks=5, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60
+        ),
+    )
+    proposal = WorkflowProposal(
+        work_request_id="work_1",
+        summary="one",
+        compilation_rationale="r",
+        tasks=[
+            TaskProposal(
+                id="task_exp",
+                work_request_id="work_1",
+                capability=Capability.EXPERIMENT_RUN,
+                goal="Run",
+                rationale="r",
+                workspace_id="ws_main",
+                inputs=ExperimentRunInput(instructions="Run"),
+            )
+        ],
+    )
+    _create_run(engine, "run_env", request, proposal)
+    engine.run_until_stable("run_env")
+
+    req = port.requests[0]
+    assert req.environment_spec.python_version == "3.10"
+    assert req.dataset_refs == [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]

@@ -89,7 +89,8 @@ class ResearchRequest:
     hypothesis: NonEmptyStr | None = None
     context: str = ""
     constraints: list[NonEmptyStr] = []
-    input_artifacts: list[ArtifactRef] = []
+    input_artifacts: list[ArtifactImport] = []
+    dataset_refs: list[DatasetRef] = []
     budget: RunBudget
 ```
 
@@ -99,7 +100,8 @@ class ResearchRequest:
 | hypothesis | 要被证据支持或反对的命题；可为空 |
 | context | 已确认背景，不包含未授权文件内容 |
 | constraints | 整个 Run 必须遵守的限制 |
-| input_artifacts | 用户明确授权的已登记输入 |
+| input_artifacts | 用户提供的**最小输入**（`ArtifactImport`），由 Controller 创建 Run 时验证本地 URI、冻结复制、校验 hash 并生成 `orchestrator/import` ArtifactRef（ADR-0011 §4） |
+| dataset_refs | 整个 Run 的唯一数据集注册表 |
 | budget | max_tasks、max_attempts_per_task、max_llm_calls、timeout_seconds |
 
 ## 6. 当前 Planning Port 契约（schema 1.1，Phase 7 将取代）
@@ -1047,7 +1049,7 @@ class CodeModifyInput(ContractModel):
 
 ### 21.5 数据集引用
 
-`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」，不表示某个具体数据集。任务级数据集用 `DatasetRef(dataset_id, relative_path)` 声明：运行时把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸、检查存在、默认只读，再把解析结果传给 Experiment Agent。用户可在 `ResearchRequest.dataset_refs` 声明，Scheduler 调度 experiment 任务时注入 `ExperimentRunInput.dataset_refs`。
+`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」，不表示某个具体数据集。任务级数据集用 `DatasetRef(dataset_id, relative_path)` 声明：运行时把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸、检查存在、默认只读，再把解析结果传给 Experiment Agent。`ResearchRequest.dataset_refs` 是**唯一数据集注册表**，Scheduler 经 `ModuleTaskRequest.dataset_refs` 传给 Experiment Agent；`ExperimentRunInput` 不再携带 `dataset_refs`，避免静默覆盖（ADR-0011 §4）。
 
 解析结果是 `{dataset_id, path, access="read_only"}` 列表；重复的 `dataset_id` 直接拒绝（同一 id 不得解析到两个路径）。Experiment Agent 用通用环境变量把映射交给脚本——`RESAGENT2_DATASET_ROOT`（公共根目录）与 `RESAGENT2_DATASETS_JSON`（`{dataset_id: 绝对路径}` 的 JSON）——核心代码不绑定任何框架，也不假定存在「第一个/默认数据集」；脚本按 `dataset_id` 查表取用所需数据集。
 

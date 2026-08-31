@@ -133,7 +133,7 @@ class NativeExperimentAgent:
         resource_layout = self.resource_layout
         try:
             datasets = resolve_dataset_refs(
-                resource_layout.dataset_root, list(inputs.dataset_refs)
+                resource_layout.dataset_root, list(request.dataset_refs)
             )
         except DatasetResolutionError as error:
             return self._failure(str(error), blocked=True)

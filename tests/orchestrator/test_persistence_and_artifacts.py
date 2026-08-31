@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
+    ArtifactImport,
     Capability,
     ErrorCode,
     ExperimentRunInput,
@@ -25,6 +27,8 @@ from resagent2_contracts import (
     CodeUnderstandInput,
 )
 from resagent2_orchestrator import (
+    ArtifactRegistrationError,
+    ArtifactRegistry,
     JsonRunStore,
     ModuleBinding,
     OrchestrationError,
@@ -339,3 +343,43 @@ def test_unknown_capability_is_rejected_by_the_contract() -> None:
 
     with pytest.raises(ValueError, match="unknown_capability"):
         WorkflowProposal.model_validate(raw)
+
+
+def test_register_import_freezes_copies_and_hashes(tmp_path: Path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 evidence")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+
+    artifact = registry.register_import(
+        ArtifactImport(
+            uri=str(source),
+            kind="paper",
+            media_type="application/pdf",
+            summary="A paper",
+            expected_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        ),
+        run_id="run_import",
+    )
+
+    assert artifact.producer == AgentOwner.ORCHESTRATOR
+    assert artifact.metadata == {"source_type": "import"}
+    assert artifact.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert Path(artifact.uri.removeprefix("file://")).is_file()
+
+
+def test_register_import_rejects_hash_mismatch(tmp_path: Path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"evidence")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+
+    with pytest.raises(ArtifactRegistrationError, match="mismatch"):
+        registry.register_import(
+            ArtifactImport(
+                uri=str(source),
+                kind="paper",
+                media_type="application/pdf",
+                summary="A paper",
+                expected_sha256="a" * 64,
+            ),
+            run_id="run_import",
+        )

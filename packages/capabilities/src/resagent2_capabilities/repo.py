@@ -217,10 +217,18 @@ class RepoMaterializer:
                 raise RepoMaterializerError(
                     f"git clone failed: {(result.stderr or '').strip() or 'unknown error'}"
                 )
+            # Persist metadata BEFORE the atomic rename, so a crash can only
+            # leave "metadata without repo" (recoverable), never "repo without
+            # metadata" (unrecoverable).
+            _write_metadata(
+                metadata_path,
+                WorkspaceSourceKind.GIT.value,
+                repo_url,
+                _git_commit(staging),
+            )
 
         self._stage(workspace, build)
         commit = _git_commit(workspace)
-        _write_metadata(metadata_path, WorkspaceSourceKind.GIT.value, repo_url, commit)
         return MaterializedRepo(workspace, commit, "git")
 
     def _copy(
@@ -238,12 +246,17 @@ class RepoMaterializer:
             raise RepoMaterializerError(
                 f"cannot copy into non-empty workspace: {workspace}"
             )
-        self._stage(
-            workspace,
-            lambda staging: shutil.copytree(str(src), str(staging), symlinks=True),
-        )
+        def build(staging: Path) -> None:
+            shutil.copytree(str(src), str(staging), symlinks=True)
+            _write_metadata(
+                metadata_path,
+                WorkspaceSourceKind.COPY.value,
+                source,
+                _git_commit(staging),
+            )
+
+        self._stage(workspace, build)
         commit = _git_commit(workspace)
-        _write_metadata(metadata_path, WorkspaceSourceKind.COPY.value, source, commit)
         return MaterializedRepo(workspace, commit, "copy")
 
     def _bind(self, source: str) -> MaterializedRepo:
@@ -277,9 +290,7 @@ class RepoMaterializer:
                 raise RepoMaterializerError(
                     f"git init failed: {(result.stderr or '').strip() or 'unknown error'}"
                 )
+            _write_metadata(metadata_path, WorkspaceSourceKind.GENERATED.value, "", "")
 
         self._stage(workspace, build)
-        _write_metadata(
-            metadata_path, WorkspaceSourceKind.GENERATED.value, "", ""
-        )
         return MaterializedRepo(workspace, "", "generated")

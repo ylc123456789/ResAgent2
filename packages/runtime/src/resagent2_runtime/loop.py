@@ -316,8 +316,9 @@ class AgentLoop:
                     context,
                     definition.action_type,
                 )
-                self._run_llm_calls += 1
-                state.llm_calls_used += 1
+                attempts = getattr(definition.llm_client, "last_attempts", 1)
+                self._run_llm_calls += attempts
+                state.llm_calls_used += attempts
                 action = definition.action_type.model_validate(raw_action)
             except ValidationError as error:
                 validator = getattr(definition.llm_client, "record_validation", None)
@@ -351,6 +352,11 @@ class AgentLoop:
                     details={"component": "llm"},
                 )
             except Exception as error:
+                # The transport failed after one or more real HTTP attempts;
+                # those attempts still count toward the Run ledger.
+                attempts = getattr(definition.llm_client, "last_attempts", 1)
+                self._run_llm_calls += attempts
+                state.llm_calls_used += attempts
                 return self._failure(
                     state,
                     ErrorCode.TOOL_FAILED,

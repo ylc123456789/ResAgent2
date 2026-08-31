@@ -277,8 +277,8 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     run.pending_question = None
     run.status = RunStatus.RUNNING
     run.answer_task_ids[answer.question_id] = "task_experiment"
+    engine.resume_task_in_place(run, "task_experiment")
     engine.store.save(run)
-    engine.resume_task("run_question", "task_experiment")
     final = engine.run_until_stable("run_question")
 
     assert final.workflow.tasks[0].status == TaskStatus.COMPLETED

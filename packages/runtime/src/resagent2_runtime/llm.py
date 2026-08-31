@@ -74,6 +74,7 @@ class OpenAICompatibleClient:
         self._trace_context: dict = {}
         self._trace_seq = 0
         self._last_call_id: str | None = None
+        self.last_attempts = 1
 
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
@@ -241,6 +242,7 @@ class OpenAICompatibleClient:
             except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
                 last_error = error
                 continue
+        self.last_attempts = retry_number + 1
         self._write_trace(
             self._trace_record(
                 context, message, parsed_action, raw_response_text,

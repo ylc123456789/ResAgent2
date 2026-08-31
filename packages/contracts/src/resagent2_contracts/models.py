@@ -433,7 +433,7 @@ class CodeModifyResult(ContractModel):
     changed_files: list[str]
     deleted_files: list[str] = Field(default_factory=list)
     patch_path: NonEmptyStr
-    verification_results: list[VerificationResult] = Field(default_factory=list)
+    verification_results: list[VerificationResult] = Field(min_length=1)
     verification_passed: bool
     residual_risks: list[NonEmptyStr] = Field(default_factory=list)
 

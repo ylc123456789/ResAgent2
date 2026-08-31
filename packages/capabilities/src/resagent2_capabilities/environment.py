@@ -400,7 +400,12 @@ class EnvironmentManager:
         return plan
 
     def apply_environment_cleanup(self, plan: list[dict]) -> list[str]:
-        """Delete planned environments after re-verifying marker and containment."""
+        """Delete planned environments after re-verifying marker and containment.
+
+        The directory may have been replaced by another ResAgent2 environment
+        since the plan was built; refuse to delete unless the identity fields
+        still match the plan (ADR-0011 §7.1).
+        """
         deleted: list[str] = []
         for environment in plan:
             prefix = Path(environment["prefix"]).resolve()
@@ -408,9 +413,16 @@ class EnvironmentManager:
                 raise EnvironmentManagerError(
                     f"refusing to delete prefix outside env_root: {prefix}"
                 )
-            if self._read_marker(prefix) is None:
+            current = self._read_marker(prefix)
+            if current is None:
                 # No longer a ResAgent2-managed environment; skip it.
                 continue
+            for field in ("env_id", "run_id", "workspace_id"):
+                if str(current.get(field, "")) != str(environment.get(field, "")):
+                    raise EnvironmentManagerError(
+                        f"refusing to delete {prefix}: {field} changed "
+                        f"({environment.get(field)!r} -> {current.get(field)!r})"
+                    )
             shutil.rmtree(prefix)
             deleted.append(str(environment.get("env_id", prefix)))
         return deleted

@@ -125,9 +125,10 @@ class ResearchController:
         task_id = question.task_id
         if task_id is not None:
             run.answer_task_ids[answer.question_id] = task_id
+            # Resume the paused task in the SAME ResearchRun object so the answer
+            # and the task transition are saved atomically in one snapshot.
+            self.scheduler.resume_task_in_place(run, task_id)
         self._save(run)
-        if task_id is not None:
-            self.scheduler.resume_task(run_id, task_id)
         return self.run_until_stable(run_id)
 
     def run_until_stable(self, run_id: str) -> ResearchRun:
@@ -176,6 +177,8 @@ class ResearchController:
         remaining = max(
             1, run.request.budget.max_llm_calls - run.llm_calls_used
         )
+        elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
+        remaining_timeout = max(1, int(run.request.budget.timeout_seconds - elapsed))
         return self.scientific_port.run(
             ScientificTurnRequest(
                 run_id=run.run_id,
@@ -188,7 +191,7 @@ class ResearchController:
                 budget=TaskBudget(
                     max_steps=remaining,
                     max_llm_calls=remaining,
-                    timeout_seconds=run.request.budget.timeout_seconds,
+                    timeout_seconds=remaining_timeout,
                 ),
                 parent_session_id=parent_session_id,
             )
@@ -316,12 +319,16 @@ class ResearchController:
                 return self.scheduler.run_until_stable(run_id)
 
         # REQUESTED or COMPILING: the compiler is stateless, so a crash after
-        # marking COMPILING is safely retried (CONTRACTS §20.3).
-        _transition_work_request(active, WorkRequestStatus.COMPILING)
-        self._save(run)
+        # marking COMPILING is safely retried. Only REQUESTED needs a
+        # transition; an already-COMPILING request (crash between the COMPILING
+        # save and the compile) is recompiled directly, never via a forbidden
+        # COMPILING -> COMPILING migration.
+        if active.status == WorkRequestStatus.REQUESTED:
+            _transition_work_request(active, WorkRequestStatus.COMPILING)
+            self._save(run)
 
         try:
-            compiled = self.compiler.compile(
+            compilation = self.compiler.compile(
                 active,
                 current=run.workflow,
                 registry=self.registry,
@@ -342,11 +349,13 @@ class ResearchController:
             self._save(run)
             return run
 
+        run.llm_calls_used += compilation.llm_calls
+        self._save(run)
         try:
             if run.workflow is None:
-                self.scheduler.accept_proposal(run_id, compiled)
+                self.scheduler.accept_proposal(run_id, compilation.output)
             else:
-                self.scheduler.apply_patch(run_id, compiled)
+                self.scheduler.apply_patch(run_id, compilation.output)
         except Exception as error:
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)

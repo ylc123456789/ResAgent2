@@ -27,6 +27,7 @@ so a compiler can never smuggle a bad graph past it).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
@@ -46,6 +47,18 @@ from resagent2_contracts import (
 )
 
 
+@dataclass(frozen=True)
+class CompilationResult:
+    """A compiled graph plus the exact number of LLM calls the compiler made.
+
+    The Run usage ledger (ADR-0011 §7) counts the compiler's draft/review
+    calls, so the compiler reports them here instead of dropping them.
+    """
+
+    output: WorkflowProposal | WorkflowPatch
+    llm_calls: int = 0
+
+
 class WorkflowCompiler(Protocol):
     """Translate one WorkRequest into a Proposal or a Patch."""
 
@@ -57,7 +70,7 @@ class WorkflowCompiler(Protocol):
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
-    ) -> WorkflowProposal | WorkflowPatch:
+    ) -> CompilationResult:
         """Return a Proposal when ``current`` is None, else a Patch."""
 
 
@@ -162,12 +175,12 @@ class DeterministicWorkflowCompiler:
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
-    ) -> WorkflowProposal | WorkflowPatch:
+    ) -> CompilationResult:
         if current is None:
-            return self._proposal
+            return CompilationResult(self._proposal)
         if self._patch is None:
             raise CompilationError("no patch configured for an existing workflow")
-        return self._patch
+        return CompilationResult(self._patch)
 
 
 def _compile_prompt(
@@ -567,6 +580,7 @@ class LLMWorkflowCompiler:
 
     def __init__(self, client: CompilerLLM) -> None:
         self._client = client
+        self._llm_calls = 0
 
     def compile(
         self,
@@ -576,8 +590,9 @@ class LLMWorkflowCompiler:
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
-    ) -> WorkflowProposal | WorkflowPatch:
+    ) -> CompilationResult:
         workspaces = workspaces or []
+        self._llm_calls = 0
         feedback: str | None = None
         for attempt in (0, 1):
             prompt = _compile_prompt(
@@ -591,6 +606,7 @@ class LLMWorkflowCompiler:
                     work_request_id=request.id,
                 )
             raw = self._client.next_action(prompt, CompilationDraft)
+            self._llm_calls += 1
             try:
                 draft = CompilationDraft.model_validate(raw)
                 compiled = _materialize_draft(
@@ -630,7 +646,7 @@ class LLMWorkflowCompiler:
                 _reject_undeclared_workspaces(
                     compiled, {item.workspace_id for item in workspaces}
                 )
-            return compiled
+            return CompilationResult(compiled, self._llm_calls)
 
         # Unreachable: attempt 1 always returns or raises.
         raise CompilationError("compiler failed after 2 attempts")
@@ -650,6 +666,7 @@ class LLMWorkflowCompiler:
         raw = self._client.next_action(
             _review_prompt(request, draft), CompilationReview
         )
+        self._llm_calls += 1
         try:
             return CompilationReview.model_validate(raw)
         except ValidationError as error:

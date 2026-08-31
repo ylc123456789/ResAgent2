@@ -33,6 +33,7 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
+    CompilationResult,
     DeterministicWorkflowCompiler,
     InMemoryRunStore,
     JsonRunStore,
@@ -223,21 +224,23 @@ def _cycle_compiler():
     class _CycleCompiler:
         def compile(self, request, *, current, registry, budget, workspaces=None):
             if current is None:
-                return proposal(request.id)
+                return CompilationResult(proposal(request.id))
             # A new request on an existing workflow becomes a patch adding one task.
-            return WorkflowPatch(
-                work_request_id=request.id,
-                based_on_revision=current.revision,
-                reason="request alternative work",
-                add_tasks=[
-                    TaskProposal(
-                        id=f"task_{request.id}",
-                        work_request_id=request.id,
-                        capability=Capability.EXPERIMENT_RUN,
-                        goal=f"Run for {request.id}",
-                        inputs=ExperimentRunInput(instructions="Run once"),
-                    )
-                ],
+            return CompilationResult(
+                WorkflowPatch(
+                    work_request_id=request.id,
+                    based_on_revision=current.revision,
+                    reason="request alternative work",
+                    add_tasks=[
+                        TaskProposal(
+                            id=f"task_{request.id}",
+                            work_request_id=request.id,
+                            capability=Capability.EXPERIMENT_RUN,
+                            goal=f"Run for {request.id}",
+                            inputs=ExperimentRunInput(instructions="Run once"),
+                        )
+                    ],
+                )
             )
 
     return _CycleCompiler()
@@ -857,3 +860,103 @@ def test_budget_overrun_does_not_complete(tmp_path) -> None:
 
     assert run.status == RunStatus.FAILED
     assert run.llm_calls_used >= tiny.budget.max_llm_calls
+
+
+def test_compiling_restart_recompiles_without_workflow() -> None:
+    """A crash after saving COMPILING but before accepting the workflow must not
+    fail on a forbidden COMPILING -> COMPILING migration; the compiler is
+    stateless, so the request is simply recompiled."""
+    store = InMemoryRunStore()
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=store,
+    )
+    completed_session = SessionRef(
+        id="session_sci",
+        module=AgentOwner.SCIENTIFIC,
+        state_uri="memory://session_sci",
+        status=SessionStatus.COMPLETED,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    class _FinishingPort:
+        def run(self, request):
+            return ScientificCompletedResult(
+                status="completed",
+                opinion=ScientificOpinion(
+                    verdict=ScientificVerdict.INCONCLUSIVE,
+                    statement="Execution completed without decisive evidence.",
+                ),
+                session=completed_session,
+                llm_calls=1,
+            )
+
+    compiling = WorkRequest(
+        id="work_1",
+        run_id="run_compile_restart",
+        scientific_session_id="session_sci",
+        request=WorkRequestDraft(
+            objective="Run the experiment",
+            expected_evidence=["metric"],
+        ),
+        status=WorkRequestStatus.COMPILING,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    store.save(
+        ResearchRun(
+            run_id="run_compile_restart",
+            request=research_request(),
+            status=RunStatus.RUNNING,
+            work_requests=[compiling],
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    )
+    controller = ResearchController(
+        scientific_port=_FinishingPort(),
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.run_until_stable("run_compile_restart")
+
+    assert run.status == RunStatus.COMPLETED
+
+
+def test_compiler_llm_calls_enter_the_run_ledger() -> None:
+    class _CountingCompiler:
+        def compile(self, request, *, current, registry, budget, workspaces=None):
+            return CompilationResult(proposal(request.id), llm_calls=7)
+
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    controller = ResearchController(
+        scientific_port=ScientificAgent(
+            ScriptedLLMClient([request_work_action(), finish_action()]),
+            store=InMemorySessionStore(),
+        ),
+        compiler=_CountingCompiler(),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    run = controller.create_run("run_compiler_calls", research_request())
+
+    assert run.status == RunStatus.COMPLETED
+    # 7 compiler calls + 2 Scientific calls (request_work + finish).
+    assert run.llm_calls_used == 9

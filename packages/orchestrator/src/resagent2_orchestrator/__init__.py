@@ -3,6 +3,7 @@
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
 from .compiler import (
     CompilationError,
+    CompilationResult,
     CompilerLLM,
     DeterministicWorkflowCompiler,
     LLMWorkflowCompiler,
@@ -26,6 +27,7 @@ __all__ = [
     "ArtifactRegistrationError",
     "ArtifactRegistry",
     "CompilationError",
+    "CompilationResult",
     "CompletionValidation",
     "CompletionViolation",
     "CompletionViolationCode",

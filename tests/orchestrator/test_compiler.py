@@ -250,7 +250,7 @@ def test_deterministic_compiler_returns_proposal_for_new_graph() -> None:
     compiler = DeterministicWorkflowCompiler(proposal("task_experiment"))
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert result.work_request_id == "work_round1"
 
@@ -264,7 +264,7 @@ def test_deterministic_compiler_returns_patch_for_existing_graph() -> None:
     compiler = DeterministicWorkflowCompiler(proposal("task_experiment"), patch)
     result = compiler.compile(
         work_request(), current=current_workflow(), registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowPatch)
     assert result.based_on_revision == 1
 
@@ -405,7 +405,7 @@ def test_compile_produces_proposal() -> None:
     compiler = LLMWorkflowCompiler(_FakeCompilerLLM(raw_experiment("run")))
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert result.work_request_id == "work_round1"
     assert [task.id for task in result.tasks] == ["task_run"]
@@ -415,7 +415,7 @@ def test_compile_produces_append_only_patch() -> None:
     compiler = LLMWorkflowCompiler(_FakeCompilerLLM(raw_repair()))
     result = compiler.compile(
         work_request(), current=current_workflow(), registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowPatch)
     assert result.based_on_revision == 1
     assert [task.id for task in result.add_tasks] == ["task_fix", "task_rerun"]
@@ -449,7 +449,7 @@ def test_retry_recovers_from_empty_draft() -> None:
     compiler = LLMWorkflowCompiler(llm)
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert len(llm.prompts) == 3  # draft[bad], draft[corrected], review
     # The second prompt carries the rejection feedback.
@@ -463,7 +463,7 @@ def test_retry_recovers_from_bad_dependency() -> None:
     compiler = LLMWorkflowCompiler(llm)
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert len(llm.prompts) == 3  # draft[bad], draft[corrected], review
 
@@ -518,7 +518,7 @@ def test_compiler_proposal_traces_to_workflow_created_from() -> None:
     request = work_request()
     compiled = DeterministicWorkflowCompiler(proposal("task_experiment")).compile(
         request, current=None, registry=registry(), budget=budget()
-    )
+    ).output
     engine = WorkflowScheduler(
         bindings={
             Capability.EXPERIMENT_RUN: ModuleBinding(
@@ -631,7 +631,7 @@ def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
     compiler = LLMWorkflowCompiler(llm)
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert [task.capability.value for task in result.tasks] == ["code_modify", "experiment_run"]
     assert result.tasks[1].depends_on == [result.tasks[0].id]
@@ -642,7 +642,7 @@ def test_semantic_review_accepts_experiment_only_request() -> None:
     compiler = LLMWorkflowCompiler(llm)
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
-    )
+    ).output
     assert isinstance(result, WorkflowProposal)
     assert [task.capability.value for task in result.tasks] == ["experiment_run"]
 

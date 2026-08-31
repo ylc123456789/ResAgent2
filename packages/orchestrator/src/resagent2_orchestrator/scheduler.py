@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from resagent2_contracts import (
+    AgentOwner,
     Attempt,
     AttemptStatus,
     Capability,
@@ -262,6 +263,12 @@ class WorkflowScheduler:
         attempt_number = len(task.attempts) + 1
         if attempt_number > run.request.budget.max_attempts_per_task:
             raise OrchestrationError("task attempt budget is exhausted")
+        import_artifacts = [
+            artifact_id
+            for artifact_id, artifact in run.artifacts.items()
+            if artifact.producer == AgentOwner.ORCHESTRATOR
+            and artifact.metadata.get("source_type") == "import"
+        ]
         inherited_artifacts = [
             artifact_id
             for dependency_id in task.depends_on
@@ -270,8 +277,12 @@ class WorkflowScheduler:
             in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
             for artifact_id in dependency_attempt.artifact_ids
         ]
+        # Imported input artifacts are authorized to every task; dependency
+        # artifacts are added on top (ADR-0011 §4).
         task.input_artifacts = list(
-            dict.fromkeys([*task.input_artifacts, *inherited_artifacts])
+            dict.fromkeys(
+                [*task.input_artifacts, *import_artifacts, *inherited_artifacts]
+            )
         )
         started = datetime.now(UTC)
         task.status = TaskStatus.RUNNING
@@ -336,8 +347,16 @@ class WorkflowScheduler:
             ],
             budget=TaskBudget(
                 max_steps=50,
-                max_llm_calls=min(50, run.request.budget.max_llm_calls),
-                timeout_seconds=run.request.budget.timeout_seconds,
+                max_llm_calls=max(
+                    1, min(50, run.request.budget.max_llm_calls - run.llm_calls_used)
+                ),
+                timeout_seconds=max(
+                    1,
+                    int(
+                        run.request.budget.timeout_seconds
+                        - (datetime.now(UTC) - run.created_at).total_seconds()
+                    ),
+                ),
             ),
             workspace=grant,
             workspace_id=task.workspace_id,
@@ -488,21 +507,19 @@ class WorkflowScheduler:
                 return run
             self.execute_task(run_id, ready[0])
 
-    def resume_task(self, run_id: str, task_id: str) -> ResearchRun:
-        """Resume a task paused for user input on the same Attempt (ADR-0011 §2).
+    def resume_task_in_place(self, run: ResearchRun, task_id: str) -> None:
+        """Resume a paused task by mutating ``run`` in place (no reload/save).
 
-        This is an internal transition invoked by ``ResearchController.answer_question``
-        after it has validated and recorded the answer; it only moves the task
-        back into the ready set. The controller owns run-level answer state.
+        Called by ``ResearchController.answer_question`` so the answer and the
+        task transition are persisted atomically in one ResearchRun snapshot;
+        a crash between the two can never leave a question cleared while its
+        task stays paused (ADR-0011 §1).
         """
 
-        run = self.store.load(run_id)
         task = self._task(run, task_id)
         if task.status != TaskStatus.NEEDS_USER_INPUT:
             raise OrchestrationError("question task is not awaiting user input")
         task.status = TaskStatus.PENDING
-        self._save(run)
-        return run.model_copy(deep=True)
 
     def retry_task(self, run_id: str, task_id: str) -> ResearchRun:
         """Explicitly retry a failed or blocked task after external recovery."""

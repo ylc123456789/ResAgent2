@@ -96,30 +96,26 @@ class ArtifactRegistry:
                 raise ArtifactRegistrationError("artifact path is inside denied_paths")
 
         destination_dir = self.root / run_id / artifact_id
-        destination_dir.mkdir(parents=True, exist_ok=False)
-        destination = destination_dir / (
+        filename = (
             Path(candidate.path).name if candidate.content is not None else source.name
         )
-        temporary: Path | None = None
+        staging = destination_dir.parent / f".{destination_dir.name}.staging"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=False)
         try:
+            staged_file = staging / filename
             if candidate.content is not None:
-                with tempfile.NamedTemporaryFile(
-                    dir=destination_dir, delete=False
-                ) as handle:
-                    temporary = Path(handle.name)
-                    handle.write(candidate.content.encode("utf-8"))
+                staged_file.write_text(candidate.content, encoding="utf-8")
             else:
-                with tempfile.NamedTemporaryFile(
-                    dir=destination_dir, delete=False
-                ) as handle:
-                    temporary = Path(handle.name)
-                shutil.copyfile(source, temporary)
-            os.replace(temporary, destination)
-            digest = _sha256(destination)
+                shutil.copyfile(source, staged_file)
+            digest = _sha256(staged_file)
+            # Atomically promote the complete staging directory to the formal
+            # artifact directory, so a crash only ever leaves a staging dir
+            # (cleaned up on the next attempt), never a half-built formal one.
+            os.replace(staging, destination_dir)
         except Exception:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-            shutil.rmtree(destination_dir, ignore_errors=True)
+            shutil.rmtree(staging, ignore_errors=True)
             raise
 
         return ArtifactRef(
@@ -129,7 +125,7 @@ class ArtifactRegistry:
             run_id=run_id,
             task_id=task_id,
             attempt_number=attempt_number,
-            uri=destination.as_uri(),
+            uri=(destination_dir / filename).as_uri(),
             sha256=digest,
             media_type=candidate.media_type,
             summary=candidate.summary,

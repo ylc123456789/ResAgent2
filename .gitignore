@@ -6,3 +6,4 @@ __pycache__/
 .resagent2/
 build/
 dist/
+.vscode/

@@ -310,7 +310,7 @@ class RunVerificationTool:
         log_root: str,
         timeout_seconds: int,
         permission_policy: VerificationCommandPolicy | None = None,
-        baseline: GitBaseline | None = None,
+        baseline: GitBaseline,
         env_binding: EnvironmentBinding | None = None,
     ) -> None:
         self.runner = runner
@@ -344,11 +344,7 @@ class RunVerificationTool:
         revision = int(state.memory.get("edit_revision", 0))
 
         def _digest() -> str:
-            diff = (
-                self.repository.diff_since(self.baseline)
-                if self.baseline is not None
-                else self.repository.diff()
-            )
+            diff = self.repository.diff_since(self.baseline)
             return hashlib.sha256(diff.encode("utf-8")).hexdigest()
 
         before_digest = _digest()
@@ -439,27 +435,22 @@ class GitDiffInput(RuntimeModel):
 class GitDiffTool:
     """Expose the Attempt-relative Git patch (the increment since baseline).
 
-    When no baseline is supplied it falls back to the HEAD-relative diff; the
-    Coding Agent always supplies its Attempt baseline so the Agent sees the same
-    increment the deterministic finalizer attributes (ADR-0011 §4).
+    The Coding Agent always supplies its Attempt baseline, so the Agent sees the
+    same increment the deterministic finalizer attributes (ADR-0011 §4).
     """
 
     name = "git_diff"
     input_model = GitDiffInput
 
     def __init__(
-        self, repository: GitWorkspace, *, baseline: GitBaseline | None = None
+        self, repository: GitWorkspace, *, baseline: GitBaseline
     ) -> None:
         self.repository = repository
         self.baseline = baseline
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(GitDiffInput, arguments)
-        diff = (
-            self.repository.diff_since(self.baseline)
-            if self.baseline is not None
-            else self.repository.diff()
-        )
+        diff = self.repository.diff_since(self.baseline)
         truncated = len(diff) > args.max_chars
         return ToolObservation(
             summary="Read current Git diff",

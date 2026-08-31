@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -16,7 +14,8 @@ from resagent2_contracts import (
     WarningRecord,
 )
 from resagent2_capabilities import (
-    WorkspaceBoundary,
+    WorkspaceObserver,
+    WorkspaceSnapshot,
     media_type_for,
 )
 from resagent2_runtime import (
@@ -43,28 +42,12 @@ def _metric_is_present(expected: str, metrics: dict) -> bool:
     return False
 
 
-def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def snapshot_workspace(boundary: WorkspaceBoundary) -> dict[str, str]:
-    """Hash every readable workspace file to form an Attempt baseline."""
-    snapshot: dict[str, str] = {}
-    for relative in boundary.iter_files():
-        try:
-            resolved = boundary.resolve_read_file(relative)
-        except (OSError, PermissionError):
-            continue
-        snapshot[relative] = _sha256_file(resolved)
-    return snapshot
-
-
 class ExperimentCompletionCheck:
     """Finalize an experiment, requiring a successful command and fresh evidence."""
 
     def __init__(
         self,
-        boundary: WorkspaceBoundary,
+        observer: WorkspaceObserver,
         *,
         expected_metrics: list[str],
         expected_artifacts: list[str],
@@ -72,20 +55,21 @@ class ExperimentCompletionCheck:
         repo_url: str,
         commit: str,
     ) -> None:
-        self.boundary = boundary
+        self.observer = observer
+        self.boundary = observer.boundary
         self.expected_metrics = expected_metrics
         self.expected_artifacts = expected_artifacts
         self.env_id = env_id
         self.repo_url = repo_url
         self.commit = commit
 
-    def _resolve_evidence(self, path: str) -> tuple[str, str] | None:
-        """Return (normalized relative path, sha256) for a readable file, else None."""
+    def _resolve_path(self, path: str) -> str | None:
+        """Return the normalized relative path for a readable file, else None."""
         try:
             resolved = self.boundary.resolve_read_file(path)
         except (OSError, PermissionError):
             return None
-        return self.boundary.relative(resolved), _sha256_file(resolved)
+        return self.boundary.relative(resolved)
 
     def _metrics_from_evidence(self, evidence: list[str]) -> dict:
         """Read top-level numeric fields from the Agent's JSON evidence files.
@@ -108,6 +92,16 @@ class ExperimentCompletionCheck:
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     metrics[_metric_key(key)] = value
         return metrics
+
+    @staticmethod
+    def _workspace_snapshot(state: AgentState) -> WorkspaceSnapshot | None:
+        raw = state.memory.get("workspace_snapshot")
+        if raw is None:
+            return None
+        try:
+            return WorkspaceSnapshot.from_memory(raw)
+        except ValueError:
+            return None
 
     def evaluate(
         self,
@@ -132,20 +126,20 @@ class ExperimentCompletionCheck:
                 summary="Run at least one successful experiment command before finishing",
             )
 
-        baseline = state.memory.get("workspace_baseline")
-        if baseline is None:
+        snapshot = self._workspace_snapshot(state)
+        if snapshot is None:
             return CompletionDecision(
                 complete=False,
                 summary="Workspace baseline is missing; cannot verify evidence ownership",
             )
+        changed = set(self.observer.changed_paths(snapshot))
 
         evidence: list[str] = []
         for path in finish.evidence_files:
-            info = self._resolve_evidence(path)
-            if info is None:
+            normalized = self._resolve_path(path)
+            if normalized is None:
                 continue
-            normalized, current_hash = info
-            if baseline.get(normalized) != current_hash and normalized not in evidence:
+            if normalized in changed and normalized not in evidence:
                 evidence.append(normalized)
 
         metrics = self._metrics_from_evidence(evidence)
@@ -155,12 +149,11 @@ class ExperimentCompletionCheck:
             if not _metric_is_present(name, metrics)
         ]
         for name in self.expected_artifacts:
-            info = self._resolve_evidence(name)
-            if info is None:
+            normalized = self._resolve_path(name)
+            if normalized is None:
                 issues.append(f"Missing required artifact: {name}")
                 continue
-            normalized, current_hash = info
-            if baseline.get(normalized) == current_hash:
+            if normalized not in changed:
                 issues.append(f"Required artifact {normalized} is unchanged from this attempt")
                 continue
             if normalized not in evidence:

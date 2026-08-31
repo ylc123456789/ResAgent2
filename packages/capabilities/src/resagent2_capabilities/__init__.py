@@ -49,6 +49,7 @@ from .process import (
 )
 from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .resources import ResourceLayout
+from .snapshot import WorkspaceObserver, WorkspaceSnapshot, snapshot_workspace
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 from .workspace_tools import (
     CreateFileInput,
@@ -120,11 +121,14 @@ __all__ = [
     "SetupCommandPolicy",
     "UnsafeCommandError",
     "WorkspaceBoundary",
+    "WorkspaceObserver",
     "WorkspacePermissionError",
+    "WorkspaceSnapshot",
     "dataset_env_overrides",
     "find_conda",
     "media_type_for",
     "mirror_env_overrides",
     "parse_command",
     "resolve_dataset_refs",
+    "snapshot_workspace",
 ]

@@ -67,19 +67,6 @@ class GitWorkspace:
         }
         return not ignored_parts.intersection(Path(path).parts)
 
-    def _untracked_paths(self) -> list[str]:
-        return self._run(
-            ["ls-files", "--others", "--exclude-standard", "-z"]
-        ).stdout.split("\0")
-
-    def _all_changed_paths(self) -> list[str]:
-        tracked = self._run(["diff", "--name-only", "-z", "HEAD"]).stdout.split("\0")
-        return sorted(
-            path
-            for path in set([*tracked, *self._untracked_paths()])
-            if path and self._visible(path)
-        )
-
     def _write_tree(self) -> str:
         """Return a tree hash of the complete visible working-directory state.
 
@@ -125,44 +112,6 @@ class GitWorkspace:
         """Capture the current working-directory content as an Attempt baseline."""
         return GitBaseline(tree_hash=self._write_tree())
 
-    # ── HEAD-relative observations (legacy; retain for direct callers/tests) ──
-
-    def changed_paths(self) -> list[str]:
-        return [
-            path for path in self._all_changed_paths() if self.boundary.allows_read(path)
-        ]
-
-    def require_clean(self) -> None:
-        changed = self._all_changed_paths()
-        if changed:
-            raise GitWorkspaceError(
-                "workspace is not clean; changed paths: " + ", ".join(changed[:10])
-            )
-
-    def deleted_paths(self) -> list[str]:
-        return [
-            path for path in self.changed_paths() if not (self.boundary.root / path).exists()
-        ]
-
-    def diff(self) -> str:
-        changed = self.changed_paths()
-        tracked_paths = set(
-            path for path in self._run(["ls-files", "-z"]).stdout.split("\0") if path
-        )
-        tracked = [path for path in changed if path in tracked_paths]
-        chunks: list[str] = []
-        if tracked:
-            chunks.append(self._run(["diff", "--binary", "HEAD", "--", *tracked]).stdout)
-        for relative in changed:
-            if relative in tracked_paths or not (self.boundary.root / relative).is_file():
-                continue
-            result = self._run(
-                ["diff", "--no-index", "--binary", "--", os.devnull, relative],
-                accepted=(0, 1),
-            )
-            chunks.append(result.stdout)
-        return "".join(chunks)
-
     # ── Attempt-baseline-relative observations ────────────────────────────────
 
     def changed_paths_since(self, baseline: GitBaseline) -> list[str]:
@@ -206,16 +155,6 @@ class GitWorkspace:
                 ).stdout
             )
         return "".join(patches)
-
-    def write_patch(self, path: Path) -> str:
-        """Write the current HEAD-relative diff to an absolute ``path``."""
-        patch = self.diff()
-        if not patch:
-            raise GitWorkspaceError("workspace has no code diff")
-        destination = Path(path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(patch, encoding="utf-8")
-        return str(destination)
 
     def write_patch_since(self, baseline: GitBaseline, path: Path) -> str:
         """Write the Attempt-increment diff to an absolute ``path``."""

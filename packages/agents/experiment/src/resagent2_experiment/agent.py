@@ -38,6 +38,7 @@ from resagent2_capabilities import (
     SearchTextTool,
     resolve_dataset_refs,
     WorkspaceBoundary,
+    WorkspaceObserver,
     WorkspacePermissionError,
 )
 from resagent2_runtime import (
@@ -51,7 +52,7 @@ from resagent2_runtime import (
     SessionStore,
 )
 
-from .completion import ExperimentCompletionCheck, snapshot_workspace
+from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
 from .tools import RunCommandTool
@@ -126,6 +127,7 @@ class NativeExperimentAgent:
             return self._failure(
                 "materialized repository is not the granted workspace root", blocked=True
             )
+        observer = WorkspaceObserver(boundary)
 
         source_ref = (
             spec.location if spec.location else str(materialized.repo_path)
@@ -194,7 +196,7 @@ class NativeExperimentAgent:
             context_builder=build_context,
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
-                boundary,
+                observer,
                 expected_metrics=list(inputs.expected_metrics),
                 expected_artifacts=list(inputs.expected_artifacts),
                 env_id=env_id,
@@ -210,8 +212,13 @@ class NativeExperimentAgent:
             "hardware": HardwareAudit().text(),
             "command_count": 0,
             "experiment_success_count": 0,
-            "workspace_baseline": snapshot_workspace(boundary),
         }
+        if request.parent_session_id is None:
+            # The Attempt-start baseline is persisted once; on resume the loop
+            # reloads it from Session memory instead of re-snapshotting, so a
+            # pre-pause command's output is not mistaken for the starting state
+            # (ADR-0011 §2).
+            initial_memory["workspace_snapshot"] = observer.snapshot().to_memory()
         return self.loop.run(
             definition,
             request,

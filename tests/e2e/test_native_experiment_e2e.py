@@ -41,6 +41,7 @@ from resagent2_capabilities import (
     PreparedEnvironment,
     PrepareEnvironmentTool,
     WorkspaceBoundary,
+    WorkspaceObserver,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -164,7 +165,7 @@ class _NativeExperimentPort:
             context_builder=build_context,
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
-                boundary,
+                WorkspaceObserver(boundary),
                 expected_metrics=list(inputs.expected_metrics),
                 expected_artifacts=list(inputs.expected_artifacts),
                 env_id="resenv_x",
@@ -182,7 +183,7 @@ class _NativeExperimentPort:
                 "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
                 "command_count": 0,
                 "experiment_success_count": 0,
-                "workspace_baseline": {},
+                "workspace_snapshot": {"kind": "files", "file_hashes": {}},
             },
         )
 

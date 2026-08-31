@@ -17,7 +17,6 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     ArtifactReadError,
     GitWorkspace,
-    GitWorkspaceError,
     ProcessRunner,
     ReadFileTool,
     RegisteredArtifactReader,
@@ -147,14 +146,14 @@ def test_process_runner_marks_timeout_and_stops_process(tmp_path) -> None:
     assert result.exit_code != 0
 
 
-def test_git_workspace_requires_clean_baseline_and_includes_new_files(tmp_path) -> None:
+def test_git_workspace_snapshot_detects_new_files(tmp_path) -> None:
     init_repo(tmp_path)
     repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
-    repository.require_clean()
+    baseline = repository.snapshot()
     (tmp_path / "new.py").write_text("value = 1\n", encoding="utf-8")
 
-    assert repository.changed_paths() == ["new.py"]
-    assert "new.py" in repository.diff()
+    assert repository.changed_paths_since(baseline) == ["new.py"]
+    assert "new.py" in repository.diff_since(baseline)
 
 
 def test_git_baseline_isolates_attempt_increment(tmp_path) -> None:
@@ -225,14 +224,6 @@ def test_git_baseline_detects_untracked_file_deletion(tmp_path) -> None:
     assert "-H=1" in patch
 
 
-def test_require_clean_rejects_dirty_workspace(tmp_path) -> None:
-    init_repo(tmp_path)
-    (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
-    repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))
-    with pytest.raises(GitWorkspaceError, match="clean"):
-        repository.require_clean()
-
-
 def test_symlink_cannot_bypass_denied_paths(tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
@@ -293,11 +284,13 @@ def test_git_diff_respects_denied_paths(tmp_path) -> None:
     (root / "denied").mkdir()
     (root / "denied" / "secret.txt").write_text("secret content\n", encoding="utf-8")
     repository = GitWorkspace(WorkspaceBoundary(grant(root)))
+    baseline = repository.snapshot()
     (root / "tracked.txt").write_text("changed\n", encoding="utf-8")
 
-    assert "tracked.txt" in repository.changed_paths()
-    assert "denied/secret.txt" not in repository.changed_paths()
-    assert "secret content" not in repository.diff()
+    changed = repository.changed_paths_since(baseline)
+    assert "tracked.txt" in changed
+    assert "denied/secret.txt" not in changed
+    assert "secret content" not in repository.diff_since(baseline)
 
 
 def test_resolve_system_write_ignores_allowed_paths(tmp_path) -> None:
@@ -427,6 +420,7 @@ def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
         repository,
         log_root=str(tmp_path / "verification"),
         timeout_seconds=10,
+        baseline=repository.snapshot(),
     )
 
     observation = tool.execute(

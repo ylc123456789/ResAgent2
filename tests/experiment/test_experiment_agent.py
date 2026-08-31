@@ -18,6 +18,7 @@ from resagent2_capabilities import (
     PreparedEnvironment,
     PrepareEnvironmentTool,
     WorkspaceBoundary,
+    WorkspaceObserver,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -131,7 +132,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         context_builder=build_context,
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(
-            boundary,
+            WorkspaceObserver(boundary),
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
             env_id="resenv_x",
@@ -162,7 +163,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
             "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
             "command_count": 0,
             "experiment_success_count": 0,
-            "workspace_baseline": {},
+            "workspace_snapshot": {"kind": "files", "file_hashes": {}},
         },
     )
 

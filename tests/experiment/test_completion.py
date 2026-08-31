@@ -9,10 +9,14 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSourceKind,
 )
-from resagent2_capabilities import WorkspaceBoundary
+from resagent2_capabilities import (
+    WorkspaceBoundary,
+    WorkspaceObserver,
+    snapshot_workspace,
+)
 from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
 
-from resagent2_experiment.completion import ExperimentCompletionCheck, snapshot_workspace
+from resagent2_experiment.completion import ExperimentCompletionCheck
 
 
 def _state(memory=None) -> AgentState:
@@ -26,7 +30,8 @@ def _state(memory=None) -> AgentState:
         attempt_number=1,
         created_at=now,
         updated_at=now,
-        memory=memory or {"experiment_success_count": 1, "workspace_baseline": {}},
+        memory=memory
+        or {"experiment_success_count": 1, "workspace_snapshot": {"kind": "files", "file_hashes": {}}},
     )
 
 
@@ -43,7 +48,7 @@ def _boundary(root: Path) -> WorkspaceBoundary:
 
 def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> ExperimentCompletionCheck:
     return ExperimentCompletionCheck(
-        _boundary(root),
+        WorkspaceObserver(_boundary(root)),
         expected_metrics=expected_metrics or [],
         expected_artifacts=expected_artifacts or [],
         env_id="resenv_x",
@@ -96,7 +101,7 @@ def test_partial_delivery_downgrades_to_warnings(tmp_path) -> None:
         expected_metrics=["accuracy"],
         expected_artifacts=["metrics.json", "report.json"],
     )
-    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
 
     decision = check.evaluate(state, _finish(evidence_files=["metrics.json"]))
 
@@ -120,7 +125,7 @@ def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
 def test_no_experiment_run_cannot_complete(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
 
     decision = check.evaluate(
         state, _finish(evidence_files=["metrics.json"])
@@ -134,7 +139,7 @@ def test_preexisting_unchanged_evidence_is_not_claimable(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     baseline = snapshot_workspace(_boundary(tmp_path))
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
 
     decision = check.evaluate(
         state, _finish(evidence_files=["metrics.json"])
@@ -152,7 +157,7 @@ def test_changed_evidence_file_completes(tmp_path) -> None:
     # The current attempt updates the file.
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
 
     decision = check.evaluate(
         state, _finish(evidence_files=["metrics.json"])
@@ -167,7 +172,7 @@ def test_leftover_from_previous_attempt_is_not_claimable(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     baseline = snapshot_workspace(_boundary(tmp_path))
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 0, "workspace_baseline": baseline})
+    state = _state({"experiment_success_count": 0, "workspace_snapshot": baseline.to_memory()})
 
     decision = check.evaluate(
         state, _finish(evidence_files=["metrics.json"])
@@ -180,7 +185,7 @@ def test_preexisting_evidence_cannot_be_claimed_via_path_alias(tmp_path) -> None
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     baseline = snapshot_workspace(_boundary(tmp_path))
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
+    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
 
     decision = check.evaluate(
         state, _finish(evidence_files=["./metrics.json"])
@@ -193,7 +198,7 @@ def test_preexisting_evidence_cannot_be_claimed_via_path_alias(tmp_path) -> None
 def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1})  # no workspace_baseline key
+    state = _state({"experiment_success_count": 1})  # no workspace_snapshot key
 
     decision = check.evaluate(
         state, _finish(evidence_files=["metrics.json"])
@@ -229,7 +234,7 @@ def test_failed_finish_with_verified_command_returns_failure(tmp_path) -> None:
     check = _check(
         tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
     )
-    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
     state.events.append(_failed_command_event())
 
     decision = check.evaluate(
@@ -249,7 +254,7 @@ def test_failed_finish_with_verified_command_returns_failure(tmp_path) -> None:
 
 def test_failed_finish_without_evidence_is_rejected(tmp_path) -> None:
     check = _check(tmp_path)
-    state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
+    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
 
     decision = check.evaluate(
         state,

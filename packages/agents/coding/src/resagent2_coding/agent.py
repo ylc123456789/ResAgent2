@@ -22,7 +22,6 @@ from resagent2_capabilities import (
     CreateFileTool,
     EnvironmentBinding,
     EnvironmentManager,
-    GitBaseline,
     GitDiffTool,
     GitWorkspace,
     GitWorkspaceError,
@@ -41,6 +40,7 @@ from resagent2_capabilities import (
     SearchTextTool,
     WorkspaceBoundary,
     WorkspacePermissionError,
+    WorkspaceSnapshot,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -137,15 +137,21 @@ class NativeCodingAgent:
                 prior = self.loop.store.load(request.parent_session_id)
             except Exception:
                 prior = None
-            tree = prior.memory.get("git_baseline_tree") if prior is not None else None
-            if not isinstance(tree, str) or not tree:
+            raw = prior.memory.get("workspace_snapshot") if prior is not None else None
+            try:
+                snapshot = WorkspaceSnapshot.from_memory(raw)
+            except ValueError:
+                snapshot = None
+            if snapshot is None or snapshot.git_baseline is None:
                 return self._failure(
                     "resumed Coding Attempt has no persisted Git baseline",
                     blocked=True,
                 )
-            baseline = GitBaseline(tree_hash=tree)
+            baseline = snapshot.git_baseline
         else:
-            initial_memory["git_baseline_tree"] = baseline.tree_hash
+            initial_memory["workspace_snapshot"] = WorkspaceSnapshot(
+                tree_hash=baseline.tree_hash
+            ).to_memory()
 
         common_tools = (
             ListFilesTool(boundary),

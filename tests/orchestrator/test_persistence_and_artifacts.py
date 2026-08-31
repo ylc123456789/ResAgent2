@@ -75,7 +75,6 @@ def proposal() -> WorkflowProposal:
                 work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run a tiny experiment",
-                rationale="Produce one evidence file",
                 inputs=ExperimentRunInput(instructions="Run once"),
             )
         ],
@@ -157,7 +156,6 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         work_request_id="work_legacy_initial",
         capability=Capability.CODE_UNDERSTAND,
         goal="Analyze evidence",
-        rationale="Close the evidence loop",
         depends_on=["task_experiment"],
         inputs=CodeUnderstandInput(question="What happened?"),
     )
@@ -242,7 +240,6 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         work_request_id="work_legacy_initial",
         capability=Capability.CODE_UNDERSTAND,
         goal="Analyze evidence",
-        rationale="Only verified evidence may cross the boundary",
         depends_on=["task_experiment"],
         inputs=CodeUnderstandInput(question="What happened?"),
     )

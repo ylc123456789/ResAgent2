@@ -108,19 +108,6 @@ def _finish() -> dict:
     }
 
 
-def test_compiler_rejects_cross_request_supersede() -> None:
-    patch = WorkflowPatch(
-        work_request_id="work_2",
-        based_on_revision=1,
-        reason="repair",
-        supersede_task_ids=["task_exp"],
-    )
-    from resagent2_orchestrator.compiler import _reject_cross_request_mutations
-
-    with pytest.raises(CompilationError, match="only add tasks"):
-        _reject_cross_request_mutations(patch)
-
-
 def test_compiler_rejects_empty_graph() -> None:
     from resagent2_orchestrator.compiler import _reject_empty_graph
 
@@ -147,7 +134,6 @@ def test_compiler_rejects_cross_request_dependency() -> None:
                 work_request_id="work_2",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Rerun",
-                rationale="re-obtain evidence",
                 depends_on=["task_exp"],  # a prior work request's failed task
                 inputs=ExperimentRunInput(instructions="Rerun"),
             )
@@ -169,7 +155,6 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
                 work_request_id="work_1",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run the experiment",
-                rationale="evidence",
                 inputs=ExperimentRunInput(instructions="Run the experiment"),
             )
         ],
@@ -185,7 +170,6 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
                 work_request_id="work_2",
                 capability=Capability.CODE_MODIFY,
                 goal="Fix the bug",
-                rationale="repair",
                 inputs=CodeModifyInput(instructions="Fix the bug"),
             ),
             TaskProposal(
@@ -193,7 +177,6 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
                 work_request_id="work_2",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Rerun the experiment",
-                rationale="re-obtain evidence",
                 inputs=ExperimentRunInput(instructions="Rerun"),
             ),
         ],
@@ -269,7 +252,6 @@ def _proposal_draft() -> dict:
                 "key": "run_initial",
                 "capability": "experiment_run",
                 "goal": "Run the experiment",
-                "rationale": "evidence",
                 "inputs": {"capability": "experiment_run", "instructions": "Run the experiment"},
             }
         ],
@@ -285,14 +267,12 @@ def _repair_draft() -> dict:
                 "key": "fix",
                 "capability": "code_modify",
                 "goal": "Fix the bug",
-                "rationale": "repair",
                 "inputs": {"capability": "code_modify", "instructions": "Fix the bug"},
             },
             {
                 "key": "rerun",
                 "capability": "experiment_run",
                 "goal": "Rerun the experiment",
-                "rationale": "re-obtain evidence",
                 "depends_on": ["fix"],
                 "inputs": {"capability": "experiment_run", "instructions": "Rerun"},
             },

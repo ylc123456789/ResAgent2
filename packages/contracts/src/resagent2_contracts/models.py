@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "3.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -49,7 +49,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["2.0"] = SCHEMA_VERSION
+    schema_version: Literal["3.0"] = SCHEMA_VERSION
 
 
 class Capability(StrEnum):
@@ -583,9 +583,7 @@ class TaskProposal(ContractModel):
     work_request_id: WorkRequestId
     capability: Capability
     goal: NonEmptyStr
-    rationale: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
-    required: bool = True
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     inputs: CapabilityInput
@@ -605,7 +603,6 @@ class WorkflowTask(ContractModel):
     goal: NonEmptyStr
     inputs: CapabilityInput
     depends_on: list[TaskId] = Field(default_factory=list)
-    required: bool = True
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
@@ -686,43 +683,23 @@ class Workflow(ContractModel):
         return self
 
 
-class PendingTaskUpdate(ContractModel):
-    """Requested input or dependency replacement for one pending task."""
-
-    task_id: TaskId
-    inputs: CapabilityInput | None = None
-    depends_on: list[TaskId] | None = None
-
-    @model_validator(mode="after")
-    def require_change(self) -> PendingTaskUpdate:
-        if self.inputs is None and self.depends_on is None:
-            raise ValueError("pending task update must change inputs or depends_on")
-        return self
-
-
 class WorkflowPatch(ContractModel):
-    """Revision-bound proposal to extend or supersede pending workflow work."""
+    """Append-only revision-bound proposal for extending the workflow.
+
+    A patch only ever adds new tasks; existing tasks are immutable history, so
+    supersede/update fields were removed in schema 3.0 (ADR-0011 §5).
+    """
 
     work_request_id: WorkRequestId
     based_on_revision: int = Field(ge=1)
     reason: NonEmptyStr
     add_tasks: list[TaskProposal] = Field(default_factory=list)
-    supersede_task_ids: list[TaskId] = Field(default_factory=list)
-    pending_task_updates: list[PendingTaskUpdate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_local_ids(self) -> WorkflowPatch:
         added = [task.id for task in self.add_tasks]
-        superseded = self.supersede_task_ids
-        updated = [update.task_id for update in self.pending_task_updates]
         if len(added) != len(set(added)):
             raise ValueError("duplicate task id in add_tasks")
-        if len(superseded) != len(set(superseded)):
-            raise ValueError("duplicate task id in supersede_task_ids")
-        if len(updated) != len(set(updated)):
-            raise ValueError("duplicate task id in pending_task_updates")
-        if set(added) & set(superseded):
-            raise ValueError("new task cannot also be superseded")
         for task in self.add_tasks:
             if task.work_request_id != self.work_request_id:
                 raise ValueError(

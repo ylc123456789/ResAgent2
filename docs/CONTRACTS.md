@@ -4,7 +4,7 @@
 
 **语义上级**：`ARCHITECTURE.md`；本文件不得改变其中的模块职责和控制流
 
-**当前实现**：`resagent2-contracts 0.1.0`，wire schema `2.0`（`SCHEMA_VERSION="2.0"`，Phase 7.1 起）
+**当前实现**：`resagent2-contracts 0.1.0`，wire schema `3.0`（`SCHEMA_VERSION="3.0"`，Stabilization 3.0 起；§17 记录 1.0/2.0 演进）
 
 **Phase 7 目标**：§20 的 7.1—7.7 已实现（Scientific control 类型、ArtifactRef 三态 provenance、work_request_id 追溯、ResearchRun 字段、ScientificCompletionValidator、确定性 final report，以及 7.7 删除旧 PlanningPort/deprecated 类型后 production 切到唯一 Scientific 路径）；schema 2.0 在服务器真实 E2E 通过后冻结
 

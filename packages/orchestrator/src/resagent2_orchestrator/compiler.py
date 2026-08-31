@@ -107,7 +107,6 @@ class CompilationTaskDraft(BaseModel):
     key: DraftKey
     capability: Capability
     goal: NonEmpty
-    rationale: NonEmpty
     depends_on: list[DraftKey] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmpty] = Field(default_factory=list)
@@ -215,7 +214,6 @@ def _compile_prompt(
             '      "key": "<short snake_case id, unique within this draft>",',
             '      "capability": "<one of the capabilities above>",',
             '      "goal": "<what this task does>",',
-            '      "rationale": "<why this task is needed>",',
             '      "depends_on": ["<another key in this draft>", ...],',
             '      "workspace_id": "<only if multiple workspaces; omit for one>",',
             '      "constraints": ["<task-specific constraint>", ...],',
@@ -436,7 +434,6 @@ def _materialize_draft(
             work_request_id=request.id,
             capability=task.capability,
             goal=task.goal,
-            rationale=task.rationale,
             depends_on=[key_to_id[dep] for dep in task.depends_on],
             workspace_id=workspace,
             constraints=list(task.constraints),
@@ -477,19 +474,6 @@ def _reject_undeclared_capabilities(
     if undeclared:
         raise CompilationError(
             "compiler selected undeclared capabilities: " + ", ".join(undeclared)
-        )
-
-
-def _reject_cross_request_mutations(patch: WorkflowPatch) -> None:
-    """Reject supersede/update of existing tasks from a new WorkRequest.
-
-    The compiler is only ever invoked for a WorkRequest whose tasks are not yet
-    in the graph, so the existing tasks belong to previous work requests and are
-    immutable history. Surfacing this here keeps the error out of the scheduler.
-    """
-    if patch.supersede_task_ids or patch.pending_task_updates:
-        raise CompilationError(
-            "patch must only add tasks; supersede/update of existing tasks is forbidden"
         )
 
 
@@ -641,7 +625,6 @@ class LLMWorkflowCompiler:
             _reject_undeclared_capabilities(compiled, registry)
             _reject_empty_graph(compiled)
             if isinstance(compiled, WorkflowPatch):
-                _reject_cross_request_mutations(compiled)
                 _reject_cross_request_dependencies(compiled)
             if workspaces:
                 _reject_undeclared_workspaces(

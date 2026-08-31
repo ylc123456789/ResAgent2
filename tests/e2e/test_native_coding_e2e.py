@@ -149,7 +149,6 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
                 work_request_id="work_legacy_initial",
                 capability=Capability.CODE_MODIFY,
                 goal="Change VALUE from 1 to 2",
-                rationale="Test native code modification",
                 inputs=CodeModifyInput(
                     instructions="Change VALUE from 1 to 2",
                 ),

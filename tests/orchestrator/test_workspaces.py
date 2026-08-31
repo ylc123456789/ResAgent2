@@ -50,7 +50,6 @@ def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
                 work_request_id="work_1",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run",
-                rationale="evidence",
                 workspace_id=workspace_id,
                 inputs=ExperimentRunInput(instructions="Run"),
             )
@@ -200,7 +199,6 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
                 work_request_id="work_1",
                 capability=Capability.CODE_MODIFY,
                 goal="Code",
-                rationale="x",
                 workspace_id="ws_main",
                 inputs=CodeModifyInput(instructions="i"),
             ),
@@ -209,7 +207,6 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
                 work_request_id="work_1",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Exp",
-                rationale="x",
                 workspace_id="ws_main",
                 depends_on=["task_code"],
                 inputs=ExperimentRunInput(instructions="i"),
@@ -296,7 +293,6 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
                 work_request_id="work_1",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run",
-                rationale="r",
                 workspace_id="ws_main",
                 inputs=ExperimentRunInput(instructions="Run"),
             )

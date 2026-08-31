@@ -83,7 +83,6 @@ def proposal() -> WorkflowProposal:
                 work_request_id=WORK_REQUEST_ID,
                 capability=Capability.CODE_MODIFY,
                 goal="Prepare the method implementation",
-                rationale="Produce a verified code change",
                 inputs=CodeModifyInput(instructions="Prepare the method"),
             ),
             TaskProposal(
@@ -91,7 +90,6 @@ def proposal() -> WorkflowProposal:
                 work_request_id=WORK_REQUEST_ID,
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run the experiment and record metrics",
-                rationale="Produce evidence for the conclusion",
                 depends_on=["task_code"],
                 inputs=ExperimentRunInput(
                     instructions="Run the experiment and record metrics",

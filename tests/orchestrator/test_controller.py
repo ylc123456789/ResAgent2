@@ -86,7 +86,6 @@ def proposal(work_request_id: str) -> WorkflowProposal:
                 work_request_id=work_request_id,
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run the experiment",
-                rationale="produce metrics",
                 inputs=ExperimentRunInput(instructions="Run once"),
             )
         ],
@@ -236,7 +235,6 @@ def _cycle_compiler():
                         work_request_id=request.id,
                         capability=Capability.EXPERIMENT_RUN,
                         goal=f"Run for {request.id}",
-                        rationale="produce evidence",
                         inputs=ExperimentRunInput(instructions="Run once"),
                     )
                 ],

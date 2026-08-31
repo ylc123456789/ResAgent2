@@ -38,7 +38,7 @@ from .models import (
     ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
-from .tools import Tool, ToolNotFoundError, ToolRegistry
+from .tools import Tool, ToolRegistry
 
 _CONSECUTIVE_FAILURE_LIMIT = 5
 _RECENT_OBSERVATION_LIMIT = 6
@@ -405,17 +405,6 @@ class AgentLoop:
                     state,
                     "Tool arguments did not match the input schema: "
                     + str(self._validation_details(error)),
-                    tool=action.tool,
-                )
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
-                continue
-            except ToolNotFoundError:
-                self._feedback(
-                    state,
-                    f"unknown tool: {action.tool}",
                     tool=action.tool,
                 )
                 failure = self._note_failure(state, consecutive_failures)

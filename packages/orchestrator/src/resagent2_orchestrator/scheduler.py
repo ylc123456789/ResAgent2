@@ -154,7 +154,6 @@ class WorkflowScheduler:
                 goal=item.goal,
                 inputs=item.inputs,
                 depends_on=item.depends_on,
-                required=item.required,
                 workspace_id=self._resolve_workspace_id(item),
                 constraints=list(item.constraints),
             )
@@ -531,28 +530,6 @@ class WorkflowScheduler:
             raise OrchestrationError("patched workflow exceeds max_tasks budget")
         self._require_bindings(task.capability for task in patch.add_tasks)
         tasks = [task.model_copy(deep=True) for task in run.workflow.tasks]
-        by_id = {task.id: task for task in tasks}
-        for task_id in patch.supersede_task_ids:
-            target = by_id.get(task_id)
-            if target is None or target.status != TaskStatus.PENDING:
-                raise OrchestrationError("only existing pending tasks can be superseded")
-            if target.work_request_id != patch.work_request_id:
-                raise OrchestrationError(
-                    "patch cannot supersede a task from another work request"
-                )
-            target.status = TaskStatus.SUPERSEDED
-        for update in patch.pending_task_updates:
-            target = by_id.get(update.task_id)
-            if target is None or target.status != TaskStatus.PENDING:
-                raise OrchestrationError("only existing pending tasks can be updated")
-            if target.work_request_id != patch.work_request_id:
-                raise OrchestrationError(
-                    "patch cannot update a task from another work request"
-                )
-            if update.inputs is not None:
-                target.inputs = update.inputs
-            if update.depends_on is not None:
-                target.depends_on = update.depends_on
         for item in patch.add_tasks:
             tasks.append(
                 WorkflowTask(
@@ -562,7 +539,6 @@ class WorkflowScheduler:
                     goal=item.goal,
                     inputs=item.inputs,
                     depends_on=item.depends_on,
-                    required=item.required,
                     workspace_id=self._resolve_workspace_id(item),
                     constraints=list(item.constraints),
                 )

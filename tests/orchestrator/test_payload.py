@@ -44,7 +44,6 @@ def proposal() -> WorkflowProposal:
                 work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Produce metrics",
-                rationale="Return a structured payload",
                 inputs=ExperimentRunInput(instructions="Run once"),
             )
         ],

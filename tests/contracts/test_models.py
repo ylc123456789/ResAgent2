@@ -81,7 +81,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "2.0"
+    assert restored.schema_version == "3.0"
 
 
 @pytest.mark.parametrize(
@@ -133,7 +133,6 @@ def test_proposal_rejects_duplicate_task_ids() -> None:
         work_request_id="work_test",
         capability=Capability.CODE_UNDERSTAND,
         goal="Inspect the entry point",
-        rationale="Locate the code to change.",
         inputs=CodeUnderstandInput(question="Where is the entry point?"),
     )
 

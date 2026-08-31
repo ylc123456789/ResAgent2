@@ -54,7 +54,6 @@ def task(
     capability: Capability,
     depends_on=(),
     *,
-    required: bool = True,
     work_request_id: str = "work_legacy_initial",
 ) -> TaskProposal:
     if capability == Capability.CODE_UNDERSTAND:
@@ -68,9 +67,7 @@ def task(
         work_request_id=work_request_id,
         capability=capability,
         goal=f"Complete {task_id}",
-        rationale="Required by the test workflow",
         depends_on=list(depends_on),
-        required=required,
         inputs=inputs,
     )
 
@@ -401,7 +398,7 @@ def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
     assert created.workflow.tasks[0].attempts == []
 
 
-def test_patch_cannot_supersede_task_from_another_work_request() -> None:
+def test_patch_is_append_only() -> None:
     engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
     _create_run(engine,
         "run_isolate",
@@ -413,13 +410,13 @@ def test_patch_cannot_supersede_task_from_another_work_request() -> None:
             tasks=[task("task_a", Capability.EXPERIMENT_RUN, work_request_id="work_a")],
         ),
     )
-    with pytest.raises(OrchestrationError, match="another work request"):
-        engine.apply_patch(
-            "run_isolate",
-            WorkflowPatch(
-                work_request_id="work_b",
-                based_on_revision=1,
-                reason="cross-request supersede",
-                supersede_task_ids=["task_a"],
-            ),
-        )
+    patched = engine.apply_patch(
+        "run_isolate",
+        WorkflowPatch(
+            work_request_id="work_b",
+            based_on_revision=1,
+            reason="append a follow-up task",
+            add_tasks=[task("task_b", Capability.EXPERIMENT_RUN, work_request_id="work_b")],
+        ),
+    )
+    assert [t.id for t in patched.workflow.tasks] == ["task_a", "task_b"]

@@ -124,7 +124,6 @@ def proposal(*task_ids: str) -> WorkflowProposal:
             work_request_id="work_round1",
             capability=Capability.EXPERIMENT_RUN,
             goal=f"Run {task_id}",
-            rationale="required evidence",
             inputs=ExperimentRunInput(instructions=f"Run {task_id}"),
         )
         for task_id in task_ids
@@ -149,7 +148,6 @@ def raw_experiment(key: str = "run") -> dict:
                 "key": key,
                 "capability": "experiment_run",
                 "goal": f"Run {key}",
-                "rationale": "required evidence",
                 "inputs": {"capability": "experiment_run", "instructions": f"Run {key}"},
             }
         ],
@@ -165,14 +163,12 @@ def raw_repair() -> dict:
                 "key": "fix",
                 "capability": "code_modify",
                 "goal": "Fix the bug",
-                "rationale": "repair",
                 "inputs": {"capability": "code_modify", "instructions": "Fix the bug"},
             },
             {
                 "key": "rerun",
                 "capability": "experiment_run",
                 "goal": "Rerun",
-                "rationale": "re-obtain evidence",
                 "depends_on": ["fix"],
                 "inputs": {"capability": "experiment_run", "instructions": "Rerun"},
             },
@@ -295,7 +291,6 @@ def test_draft_rejects_unknown_top_level_field() -> None:
         CompilationDraft.model_validate(
             {
                 "summary": "s",
-                "rationale": "r",
                 "work_request_id": "work_1",
                 "tasks": [raw_experiment()["tasks"][0]],
             }
@@ -328,7 +323,6 @@ def test_materialize_rejects_cycle() -> None:
                 "key": "a",
                 "capability": "experiment_run",
                 "goal": "A",
-                "rationale": "x",
                 "depends_on": ["b"],
                 "inputs": {"capability": "experiment_run", "instructions": "A"},
             },
@@ -336,7 +330,6 @@ def test_materialize_rejects_cycle() -> None:
                 "key": "b",
                 "capability": "experiment_run",
                 "goal": "B",
-                "rationale": "x",
                 "depends_on": ["a"],
                 "inputs": {"capability": "experiment_run", "instructions": "B"},
             },
@@ -355,7 +348,6 @@ def test_materialize_rejects_undeclared_capability() -> None:
                 "key": "understand",
                 "capability": "code_understand",
                 "goal": "Inspect",
-                "rationale": "evidence",
                 "inputs": {"capability": "code_understand", "question": "Where?"},
             }
         ],
@@ -373,7 +365,6 @@ def test_materialize_rejects_capability_input_mismatch() -> None:
                 "key": "bad",
                 "capability": "code_modify",
                 "goal": "Fix",
-                "rationale": "repair",
                 "inputs": {"capability": "experiment_run", "instructions": "Run"},
             }
         ],
@@ -389,7 +380,6 @@ def test_materialize_rejects_over_budget() -> None:
             "key": "b",
             "capability": "experiment_run",
             "goal": "B",
-            "rationale": "x",
             "inputs": {"capability": "experiment_run", "instructions": "B"},
         }
     )
@@ -428,8 +418,6 @@ def test_compile_produces_append_only_patch() -> None:
     )
     assert isinstance(result, WorkflowPatch)
     assert result.based_on_revision == 1
-    assert result.supersede_task_ids == []
-    assert result.pending_task_updates == []
     assert [task.id for task in result.add_tasks] == ["task_fix", "task_rerun"]
 
 
@@ -599,7 +587,6 @@ def test_materialize_strips_suggested_paths_for_code_modify() -> None:
                 "key": "implement",
                 "capability": "code_modify",
                 "goal": "Implement the missing behavior",
-                "rationale": "fix",
                 "inputs": {
                     "capability": "code_modify",
                     "instructions": "Implement the missing behavior",
@@ -623,14 +610,12 @@ def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
                 "key": "implement",
                 "capability": "code_modify",
                 "goal": "Implement the missing behavior",
-                "rationale": "prerequisite",
                 "inputs": {"capability": "code_modify", "instructions": "Implement it"},
             },
             {
                 "key": "run",
                 "capability": "experiment_run",
                 "goal": "Run the experiment",
-                "rationale": "evidence",
                 "depends_on": ["implement"],
                 "inputs": {"capability": "experiment_run", "instructions": "Run it"},
             },
@@ -686,7 +671,6 @@ def test_materialize_carries_task_constraints() -> None:
                 "key": "implement",
                 "capability": "code_modify",
                 "goal": "Implement the missing behavior",
-                "rationale": "fix",
                 "constraints": ["Use accuracy as the primary metric"],
                 "inputs": {"capability": "code_modify", "instructions": "Implement"},
             }
@@ -719,7 +703,6 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
                 work_request_id="work_1",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run",
-                rationale="evidence",
                 constraints=["use accuracy"],
                 inputs=ExperimentRunInput(instructions="Run"),
             )

@@ -227,7 +227,6 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
                 work_request_id="work_legacy_initial",
                 capability=Capability.EXPERIMENT_RUN,
                 goal="Run train.py and record accuracy",
-                rationale="Test native experiment execution",
                 inputs=ExperimentRunInput(
                     instructions="Run train.py and record accuracy",
                     expected_metrics=["accuracy"],

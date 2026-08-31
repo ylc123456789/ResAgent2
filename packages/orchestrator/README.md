@@ -39,9 +39,13 @@ Phase 7.7 原子切换后，production composition root 走 `ResearchController`
 ## 最小使用方式
 
 ```python
-scheduler = WorkflowScheduler(bindings={...}, store=JsonRunStore("state"))
-scheduler.create_run("run_demo", request, proposal)
-run = scheduler.run_until_stable("run_demo")
+controller = ResearchController(
+    scientific_port=scientific,
+    compiler=compiler,
+    scheduler=WorkflowScheduler(bindings={...}, store=JsonRunStore("state")),
+    registry=registry,
+)
+run = controller.create_run("run_demo", request)  # 唯一 production 入口
 ```
 
-`run_until_stable` 只执行确定性的 ready Task，这是直接驱动 Scheduler 的内部/测试用法。production 入口是自然语言 `create_run(request)`：ResearchController 调用 Scientific Agent，接收 WorkRequest，再由 WorkflowCompiler 产生 Proposal/Patch；Scheduler 仍不调用 LLM 决定普通状态转换。
+`ResearchController.create_run` 是唯一 production 入口：调用 Scientific Agent，接收 WorkRequest，由 WorkflowCompiler 产生 Proposal/Patch，再由 Scheduler 执行 Coding/Experiment 图。Scheduler 自身只执行确定性的 ready Task（`run_until_stable`），不再提供 `create_run`，也不决定 Run 完成（ADR-0011 §1）。

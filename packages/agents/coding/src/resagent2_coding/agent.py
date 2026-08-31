@@ -152,7 +152,7 @@ class NativeCodingAgent:
             ReadFileTool(boundary),
             SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts)),
-            GitDiffTool(repository),
+            GitDiffTool(repository, baseline=baseline),
             AskUserTool(),
             FinishTool(),
         )

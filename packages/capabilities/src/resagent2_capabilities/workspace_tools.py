@@ -437,17 +437,29 @@ class GitDiffInput(RuntimeModel):
 
 
 class GitDiffTool:
-    """Expose the current read-only Git patch observation."""
+    """Expose the Attempt-relative Git patch (the increment since baseline).
+
+    When no baseline is supplied it falls back to the HEAD-relative diff; the
+    Coding Agent always supplies its Attempt baseline so the Agent sees the same
+    increment the deterministic finalizer attributes (ADR-0011 §4).
+    """
 
     name = "git_diff"
     input_model = GitDiffInput
 
-    def __init__(self, repository: GitWorkspace) -> None:
+    def __init__(
+        self, repository: GitWorkspace, *, baseline: GitBaseline | None = None
+    ) -> None:
         self.repository = repository
+        self.baseline = baseline
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(GitDiffInput, arguments)
-        diff = self.repository.diff()
+        diff = (
+            self.repository.diff_since(self.baseline)
+            if self.baseline is not None
+            else self.repository.diff()
+        )
         truncated = len(diff) > args.max_chars
         return ToolObservation(
             summary="Read current Git diff",

@@ -726,7 +726,7 @@ class AgentLoop:
         return SessionRef(
             id=state.session_id,
             module=state.owner,
-            state_uri=f"memory://sessions/{state.session_id}",
+            state_uri=f"session://{state.session_id}",
             status=state.status,
             created_at=state.created_at,
             updated_at=state.updated_at,

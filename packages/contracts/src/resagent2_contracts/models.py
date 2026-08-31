@@ -88,7 +88,6 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     NEEDS_USER_INPUT = "needs_user_input"
-    SUPERSEDED = "superseded"
 
 
 class AttemptStatus(StrEnum):
@@ -984,7 +983,7 @@ class WorkTaskOutcome(ContractModel):
     """Factual summary of one task's outcome within a completed work request."""
 
     task_id: TaskId
-    status: Literal["completed", "failed", "blocked", "superseded"]
+    status: Literal["completed", "failed", "blocked"]
     summary: NonEmptyStr
     artifact_ids: list[ArtifactId] = Field(default_factory=list)
     error: ModuleError | None = None

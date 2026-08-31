@@ -620,7 +620,6 @@ class WorkflowScheduler:
             TaskStatus.COMPLETED: "completed",
             TaskStatus.FAILED: "failed",
             TaskStatus.BLOCKED: "blocked",
-            TaskStatus.SUPERSEDED: "superseded",
         }
         tasks: list[WorkTaskOutcome] = []
         for task in run.workflow.tasks:

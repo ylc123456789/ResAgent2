@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .resources import ResourceLayout
@@ -163,7 +164,13 @@ class EnvironmentManager:
                 and version_matches(python_version, probe["python_version"])
             )
             if reusable:
-                self._write_marker(prefix, env_id, probe["python_version"])
+                self._write_marker(
+                    prefix,
+                    env_id=env_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    python_version=probe["python_version"],
+                )
                 return PreparedEnvironment(
                     env_id=env_id,
                     prefix=prefix,
@@ -195,7 +202,13 @@ class EnvironmentManager:
                 + (audit.get("stderr_tail", "").strip())
             )
         actual_version = audit["python_version"]
-        self._write_marker(prefix, env_id, actual_version)
+        self._write_marker(
+            prefix,
+            env_id=env_id,
+            run_id=run_id,
+            workspace_id=workspace_id,
+            python_version=actual_version,
+        )
         return PreparedEnvironment(
             env_id=env_id, prefix=prefix, python_version=actual_version
         )
@@ -285,24 +298,46 @@ class EnvironmentManager:
             "stderr_tail": (result.stderr or "")[-2000:],
         }
 
-    def _marker_python(self, prefix: Path) -> str:
+    def _read_marker(self, prefix: Path) -> dict | None:
         marker = prefix / _BASE_MARKER
         try:
             info = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            return None
+        return info if isinstance(info, dict) else None
+
+    def _marker_python(self, prefix: Path) -> str:
+        info = self._read_marker(prefix)
+        if info is None:
             return ""
         return str(info.get("python_version", "") or "")
 
-    def _write_marker(self, prefix: Path, env_id: str, python_version: str) -> None:
-        """Atomically persist the ready marker with the *actual* interpreter."""
+    def _write_marker(
+        self,
+        prefix: Path,
+        *,
+        env_id: str,
+        run_id: str,
+        workspace_id: str,
+        python_version: str,
+    ) -> None:
+        """Atomically persist the ready marker with the *actual* interpreter.
+
+        ``created_at`` is preserved on reuse; ``last_used_at`` always advances.
+        """
+        previous = self._read_marker(prefix) or {}
         marker = prefix / _BASE_MARKER
         temporary = marker.with_suffix(".json.tmp")
+        now = datetime.now(UTC).isoformat()
         temporary.write_text(
             json.dumps(
                 {
-                    "python_version": python_version,
                     "env_id": env_id,
-                    "prefix": str(prefix),
+                    "run_id": run_id,
+                    "workspace_id": workspace_id,
+                    "python_version": python_version,
+                    "created_at": previous.get("created_at") or now,
+                    "last_used_at": now,
                 }
             ),
             encoding="utf-8",
@@ -327,6 +362,58 @@ class EnvironmentManager:
             shutil.rmtree(resolved)
         except OSError as error:
             raise EnvironmentManagerError(f"failed to delete environment: {error}") from error
+
+    def list_managed_environments(self) -> list[dict]:
+        """List every managed environment under ``env_root`` with its marker."""
+        environments: list[dict] = []
+        if not self.env_root.is_dir():
+            return environments
+        for entry in sorted(self.env_root.iterdir()):
+            if not entry.is_dir():
+                continue
+            info = self._read_marker(entry)
+            if info is None:
+                continue
+            environments.append({**info, "prefix": str(entry)})
+        return environments
+
+    def plan_environment_cleanup(
+        self,
+        *,
+        completed_run_ids: set[str] | None = None,
+        older_than: str | None = None,
+    ) -> list[dict]:
+        """Return environments eligible for deletion, without deleting anything.
+
+        Eligibility: the environment's run is in ``completed_run_ids``, or its
+        ``last_used_at`` is older than ``older_than`` (ISO timestamp).
+        """
+        completed = completed_run_ids or set()
+        plan: list[dict] = []
+        for environment in self.list_managed_environments():
+            run_id = str(environment.get("run_id", ""))
+            last_used = str(environment.get("last_used_at", ""))
+            if run_id in completed or (
+                older_than and last_used and last_used < older_than
+            ):
+                plan.append(environment)
+        return plan
+
+    def apply_environment_cleanup(self, plan: list[dict]) -> list[str]:
+        """Delete planned environments after re-verifying marker and containment."""
+        deleted: list[str] = []
+        for environment in plan:
+            prefix = Path(environment["prefix"]).resolve()
+            if prefix == self.env_root or self.env_root not in prefix.parents:
+                raise EnvironmentManagerError(
+                    f"refusing to delete prefix outside env_root: {prefix}"
+                )
+            if self._read_marker(prefix) is None:
+                # No longer a ResAgent2-managed environment; skip it.
+                continue
+            shutil.rmtree(prefix)
+            deleted.append(str(environment.get("env_id", prefix)))
+        return deleted
 
 
 class EnvironmentBinding:

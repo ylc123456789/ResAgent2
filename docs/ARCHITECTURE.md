@@ -2,9 +2,7 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）
 
-**当前基线**：Phase 6 已完成；Phase 7 代码完成（7.1—7.7 已实现并通过本地测试，production composition root 已切到唯一 Scientific 路径）
-
-**目标基线**：本文件中标为“Phase 7 目标”的部分在 Phase 7 服务器真实 E2E 验收后才成为已发布事实；当前只剩服务器真实 E2E 与 schema 2.0 冻结尚未完成
+**当前基线**：Stabilization 3.0（ADR-0011）已完成，wire schema `3.0`。`ResearchController` 是研究 Run 唯一入口与状态负责人；`WorkflowScheduler` 只执行任务图、不决定 Run 完成；pause/resume 走同一 Attempt；dataset / environment / input artifact / workspace 各有唯一权威来源；公共契约只保留有 production producer+consumer 的字段。
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 

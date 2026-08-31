@@ -384,3 +384,42 @@ def test_conda_update_uses_manager_conda_and_single_prefix(tmp_path) -> None:
     assert command.startswith("/opt/conda/bin/conda ")
     assert command.count(prefix) == 1
     assert "-p " + prefix in command
+
+
+def test_environment_cleanup_selects_only_managed(tmp_path) -> None:
+    import json
+
+    from resagent2_capabilities import EnvironmentManager
+    from resagent2_capabilities.environment import _BASE_MARKER
+
+    env_root = tmp_path / "envs"
+    manager = EnvironmentManager(env_root=env_root, conda_exe="conda")
+
+    managed = env_root / "resenv_managed"
+    managed.mkdir(parents=True)
+    (managed / _BASE_MARKER).write_text(
+        json.dumps(
+            {
+                "env_id": "resenv_managed",
+                "run_id": "run_a",
+                "workspace_id": "ws_a",
+                "python_version": "3.12.4",
+                "created_at": "2026-08-01T00:00:00+00:00",
+                "last_used_at": "2026-08-01T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # An unmanaged directory with no ResAgent2 marker must never be selected.
+    (env_root / "resenv_unmanaged").mkdir(parents=True)
+
+    listed = manager.list_managed_environments()
+    assert [entry["env_id"] for entry in listed] == ["resenv_managed"]
+
+    plan = manager.plan_environment_cleanup(completed_run_ids={"run_a"})
+    assert [entry["env_id"] for entry in plan] == ["resenv_managed"]
+
+    deleted = manager.apply_environment_cleanup(plan)
+    assert deleted == ["resenv_managed"]
+    assert not (env_root / "resenv_managed").exists()
+    assert (env_root / "resenv_unmanaged").exists()

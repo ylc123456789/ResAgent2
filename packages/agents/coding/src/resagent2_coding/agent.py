@@ -22,6 +22,7 @@ from resagent2_capabilities import (
     CreateFileTool,
     EnvironmentBinding,
     EnvironmentManager,
+    GitBaseline,
     GitDiffTool,
     GitWorkspace,
     GitWorkspaceError,
@@ -124,8 +125,27 @@ class NativeCodingAgent:
             return self._failure(str(error), blocked=True)
 
         # Capture this Attempt's baseline: previous tasks' accepted changes are
-        # the starting state, and only this Attempt's increment counts.
+        # the starting state, and only this Attempt's increment counts. On
+        # resume the baseline is restored from persisted Session memory, never
+        # re-snapshotted, so edits made before the pause are not mistaken for
+        # the Attempt's starting state (ADR-0011 §2).
         baseline = repository.snapshot()
+        initial_memory: dict = {"edit_revision": 0}
+        if request.parent_session_id is not None:
+            prior = None
+            try:
+                prior = self.loop.store.load(request.parent_session_id)
+            except Exception:
+                prior = None
+            tree = prior.memory.get("git_baseline_tree") if prior is not None else None
+            if not isinstance(tree, str) or not tree:
+                return self._failure(
+                    "resumed Coding Attempt has no persisted Git baseline",
+                    blocked=True,
+                )
+            baseline = GitBaseline(tree_hash=tree)
+        else:
+            initial_memory["git_baseline_tree"] = baseline.tree_hash
 
         common_tools = (
             ListFilesTool(boundary),
@@ -217,7 +237,7 @@ class NativeCodingAgent:
             definition,
             request,
             session_id=f"session_{request.task_id}_{request.attempt_number}",
-            initial_memory={"edit_revision": 0},
+            initial_memory=initial_memory,
         )
         if (
             request.capability == Capability.CODE_MODIFY

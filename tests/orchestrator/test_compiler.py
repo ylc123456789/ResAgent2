@@ -21,6 +21,7 @@ from resagent2_contracts import (
     ModuleStatus,
     ResearchRequest,
     RunBudget,
+    RunStatus,
     Workflow,
     WorkflowPatch,
     WorkflowProposal,
@@ -36,6 +37,7 @@ from resagent2_orchestrator import (
     InMemoryRunStore,
     LLMWorkflowCompiler,
     ModuleBinding,
+    ResearchRun,
     ScriptedModulePort,
     WorkflowScheduler,
 )
@@ -46,6 +48,20 @@ from resagent2_orchestrator.compiler import (
 )
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
+
+
+def _create_run(engine, run_id, request, proposal):
+    now = datetime.now(UTC)
+    engine.store.save(
+        ResearchRun(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return engine.accept_proposal(run_id, proposal)
 
 WS_MAIN = WorkspaceDescriptor(workspace_id="ws_main", source_kind=WorkspaceSourceKind.LOCAL)
 WS_ALT = WorkspaceDescriptor(
@@ -526,7 +542,7 @@ def test_compiler_proposal_traces_to_workflow_created_from() -> None:
         },
         store=InMemoryRunStore(),
     )
-    run = engine.create_run(
+    run = _create_run(engine,
         request.run_id,
         ResearchRequest(
             goal="Measure",
@@ -556,7 +572,7 @@ def test_compiler_proposal_over_budget_is_rejected() -> None:
     from resagent2_orchestrator import OrchestrationError
 
     with pytest.raises(OrchestrationError, match="max_tasks"):
-        engine.create_run(
+        _create_run(engine,
             "run_example",
             ResearchRequest(
                 goal="Measure",
@@ -718,7 +734,7 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
         },
         store=InMemoryRunStore(),
     )
-    scheduler.create_run(
+    _create_run(scheduler,
         "run_x",
         ResearchRequest(
             goal="g",

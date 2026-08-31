@@ -367,7 +367,7 @@ WorkRequest 执行期间 Run 仍为 running；无需增加 planning 或 waiting_
 
 ### 11.3 当前实现与目标差异
 
-Phase 7.7 原子切换后，production composition root 走 `ResearchController`：`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 WorkflowProposal/Patch，`WorkflowScheduler` 执行 Coding/Experiment 图，`WorkOutcome` 回传 Scientific Session 再形成最终 `ScientificOpinion`，经 `ScientificCompletionValidator` 后写 completed。旧的 PlanningPort 与 `LegacyScientificAnalyzeAdapter` 已删除。Scheduler 仍保留「无 WorkRequest 的 scheduler 驱动 run 走 required-task 完成语义」，供直接驱动 scheduler 的单元测试使用，不走 ResearchController。
+Phase 7.7 原子切换后，production composition root 走 `ResearchController`：`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 WorkflowProposal/Patch，`WorkflowScheduler` 执行 Coding/Experiment 图，`WorkOutcome` 回传 Scientific Session 再形成最终 `ScientificOpinion`，经 `ScientificCompletionValidator` 后写 completed。旧的 PlanningPort 与 `LegacyScientificAnalyzeAdapter` 已删除。Stabilization 3.0（ADR-0011）起，`WorkflowScheduler` 只执行任务图、不再决定 ResearchRun 完成；`ResearchController` 是唯一的 Run 创建/回答/完成入口，任务级 ask/resume 在同一 Attempt 上继续。
 
 ## 12. Artifact 与安全边界
 

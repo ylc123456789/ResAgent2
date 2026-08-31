@@ -17,7 +17,6 @@ from resagent2_contracts import (
     ModuleStatus,
     ModuleTaskRequest,
     PendingQuestion,
-    ResearchRequest,
     RunStatus,
     TaskBudget,
     TaskProposal,
@@ -48,6 +47,63 @@ class OrchestrationError(ValueError):
     """Raised when a requested orchestration transition is invalid."""
 
 
+def _validate_answer(question: PendingQuestion | None, answer: UserAnswer) -> None:
+    """Validate one answer against the pending question (shared by both layers)."""
+    if question is None or answer.question_id != question.id:
+        raise OrchestrationError("answer does not match pending question")
+    missing = set(question.requested_fields) - set(answer.values)
+    if missing:
+        raise OrchestrationError(f"answer is missing fields: {sorted(missing)}")
+
+
+_WORK_REQUEST_TRANSITIONS: dict[WorkRequestStatus, frozenset[WorkRequestStatus]] = {
+    WorkRequestStatus.REQUESTED: frozenset(
+        {WorkRequestStatus.COMPILING, WorkRequestStatus.FAILED}
+    ),
+    WorkRequestStatus.COMPILING: frozenset(
+        {WorkRequestStatus.EXECUTING, WorkRequestStatus.FAILED}
+    ),
+    WorkRequestStatus.EXECUTING: frozenset(
+        {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}
+    ),
+    WorkRequestStatus.STABLE: frozenset(
+        {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED}
+    ),
+    WorkRequestStatus.CONSUMED: frozenset(),
+    WorkRequestStatus.FAILED: frozenset(),
+}
+
+
+def _transition_work_request(
+    work_request: WorkRequest,
+    status: WorkRequestStatus,
+    *,
+    workflow_revision: int | None = None,
+    outcome: WorkOutcome | None = None,
+    error: ModuleError | None = None,
+) -> None:
+    """Centralize the legal WorkRequest transitions and the ``updated_at`` stamp.
+
+    The only legal path is ``requested → compiling → executing → stable →
+    consumed``, with ``failed`` reachable from any non-terminal state. Each
+    transition also stamps ``updated_at`` (ADR-0011 §1).
+    """
+    allowed = _WORK_REQUEST_TRANSITIONS.get(work_request.status, frozenset())
+    if status not in allowed:
+        raise OrchestrationError(
+            f"illegal work request transition: "
+            f"{work_request.status.value} -> {status.value}"
+        )
+    work_request.status = status
+    work_request.updated_at = datetime.now(UTC)
+    if workflow_revision is not None:
+        work_request.workflow_revision = workflow_revision
+    if outcome is not None:
+        work_request.outcome = outcome
+    if error is not None:
+        work_request.error = error
+
+
 class WorkflowScheduler:
     """Deterministically execute accepted WorkflowTasks through ModulePorts."""
 
@@ -65,36 +121,6 @@ class WorkflowScheduler:
         self.artifact_registry = ArtifactRegistry(artifact_root)
         self.run_layout = RunLayout(data_root) if data_root else RunLayout.from_env()
         self.workspace_specs = dict(workspaces or {})
-
-    def create_run(
-        self,
-        run_id: str,
-        request: ResearchRequest,
-        proposal: WorkflowProposal,
-    ) -> ResearchRun:
-        if self.store.exists(run_id):
-            raise OrchestrationError(f"run already exists: {run_id}")
-        if len(proposal.tasks) > request.budget.max_tasks:
-            raise OrchestrationError("workflow exceeds run max_tasks budget")
-        self._require_bindings(task.capability for task in proposal.tasks)
-        tasks = self._tasks_from_proposal(proposal)
-        now = datetime.now(UTC)
-        run = ResearchRun(
-            run_id=run_id,
-            request=request,
-            status=RunStatus.RUNNING,
-            workflow=Workflow(
-                run_id=run_id,
-                revision=1,
-                tasks=tasks,
-                created_from=proposal.work_request_id,
-            ),
-            workspaces=self._resolve_workspaces(run_id),
-            created_at=now,
-            updated_at=now,
-        )
-        self._save(run)
-        return run.model_copy(deep=True)
 
     def accept_proposal(
         self,
@@ -213,7 +239,12 @@ class WorkflowScheduler:
         ]
 
     def execute_task(self, run_id: str, task_id: str) -> ResearchRun:
-        """Execute exactly one ready task and persist every transition."""
+        """Execute or resume one ready task and persist every transition.
+
+        A task whose last Attempt is paused for user input is resumed on the
+        same Attempt (number, Session, output_dir, baseline); any other ready
+        task starts a fresh Attempt (ADR-0011 §2).
+        """
 
         run = self.store.load(run_id)
         if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED}:
@@ -221,8 +252,16 @@ class WorkflowScheduler:
         if task_id not in self._ready_task_ids(run):
             raise OrchestrationError(f"task is not ready: {task_id}")
         task = self._task(run, task_id)
-        binding = self.bindings[task.capability]
+        last = task.attempts[-1] if task.attempts else None
+        if last is not None and last.status == AttemptStatus.NEEDS_USER_INPUT:
+            return self._resume_task(run, task, last)
+        return self._start_task(run, task)
+
+    def _start_task(self, run: ResearchRun, task: WorkflowTask) -> ResearchRun:
+        """Start a new Attempt for a fresh or retried task."""
         attempt_number = len(task.attempts) + 1
+        if attempt_number > run.request.budget.max_attempts_per_task:
+            raise OrchestrationError("task attempt budget is exhausted")
         inherited_artifacts = [
             artifact_id
             for dependency_id in task.depends_on
@@ -236,24 +275,42 @@ class WorkflowScheduler:
         )
         started = datetime.now(UTC)
         task.status = TaskStatus.RUNNING
-        task.attempts.append(
-            Attempt(
-                number=attempt_number,
-                status=AttemptStatus.RUNNING,
-                started_at=started,
-            )
+        attempt = Attempt(
+            number=attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=started,
         )
+        task.attempts.append(attempt)
         run.status = RunStatus.RUNNING
         self._save(run)
-
-        previous_attempt = task.attempts[-2] if len(task.attempts) > 1 else None
-        previous_session = (
-            previous_attempt.session.id
-            if previous_attempt is not None
-            and previous_attempt.status == AttemptStatus.NEEDS_USER_INPUT
-            and previous_attempt.session is not None
-            else None
+        module_request = self._module_request(
+            run, task, attempt_number, parent_session_id=None
         )
+        return self._invoke(run, task, attempt, module_request)
+
+    def _resume_task(
+        self, run: ResearchRun, task: WorkflowTask, attempt: Attempt
+    ) -> ResearchRun:
+        """Resume a paused Attempt on the same number, Session and output_dir."""
+        if attempt.session is None:
+            raise OrchestrationError("paused attempt has no session to resume")
+        attempt.status = AttemptStatus.RUNNING
+        task.status = TaskStatus.RUNNING
+        run.status = RunStatus.RUNNING
+        self._save(run)
+        module_request = self._module_request(
+            run, task, attempt.number, parent_session_id=attempt.session.id
+        )
+        return self._invoke(run, task, attempt, module_request)
+
+    def _module_request(
+        self,
+        run: ResearchRun,
+        task: WorkflowTask,
+        attempt_number: int,
+        *,
+        parent_session_id: str | None,
+    ) -> ModuleTaskRequest:
         record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
         grant = self._grant(record, task.capability) if record is not None else None
         output_dir = str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
@@ -262,7 +319,7 @@ class WorkflowScheduler:
             inputs = inputs.model_copy(
                 update={"dataset_refs": list(run.request.dataset_refs)}
             )
-        module_request = ModuleTaskRequest(
+        return ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,
             attempt_number=attempt_number,
@@ -285,8 +342,20 @@ class WorkflowScheduler:
             workspace_id=task.workspace_id,
             workspace_spec=record.source if record is not None else None,
             output_dir=output_dir,
-            parent_session_id=previous_session,
+            parent_session_id=parent_session_id,
         )
+
+    def _invoke(
+        self,
+        run: ResearchRun,
+        task: WorkflowTask,
+        attempt: Attempt,
+        module_request: ModuleTaskRequest,
+    ) -> ResearchRun:
+        """Invoke the bound port, register artifacts and finalize the Attempt."""
+        binding = self.bindings[task.capability]
+        record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
+        grant = self._grant(record, task.capability) if record is not None else None
         try:
             result = ModuleResult.model_validate(binding.port.invoke(module_request))
         except ValidationError as error:
@@ -330,7 +399,7 @@ class WorkflowScheduler:
                     producer=binding.owner,
                     run_id=run.run_id,
                     task_id=task.id,
-                    attempt_number=attempt_number,
+                    attempt_number=attempt.number,
                     index=index,
                     existing_ids=set(run.artifacts),
                 )
@@ -348,8 +417,6 @@ class WorkflowScheduler:
             )
 
         finished = datetime.now(UTC)
-        attempt = task.attempts[-1]
-        attempt.finished_at = finished
         attempt.session = result.session
         attempt.artifact_ids = artifact_ids
         attempt.payload = result.payload
@@ -359,6 +426,7 @@ class WorkflowScheduler:
             ModuleStatus.COMPLETED,
             ModuleStatus.COMPLETED_WITH_WARNINGS,
         }:
+            attempt.finished_at = finished
             attempt.status = (
                 AttemptStatus.COMPLETED_WITH_WARNINGS
                 if result.status == ModuleStatus.COMPLETED_WITH_WARNINGS
@@ -367,22 +435,25 @@ class WorkflowScheduler:
             task.status = TaskStatus.COMPLETED
             task.warnings.extend(result.warnings)
         elif result.status == ModuleStatus.FAILED:
+            attempt.finished_at = finished
             attempt.status = AttemptStatus.FAILED
             attempt.error = result.error
             can_retry = (
                 result.error is not None
                 and result.error.retryable
-                and attempt_number < run.request.budget.max_attempts_per_task
+                and attempt.number < run.request.budget.max_attempts_per_task
             )
             task.status = TaskStatus.PENDING if can_retry else TaskStatus.FAILED
         elif result.status == ModuleStatus.BLOCKED:
+            attempt.finished_at = finished
             attempt.status = AttemptStatus.BLOCKED
             attempt.error = result.error
             task.status = TaskStatus.BLOCKED
         else:
+            attempt.finished_at = None
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
-            question_id = f"question_{task.id.removeprefix('task_')}_{attempt_number}"
+            question_id = f"question_{task.id.removeprefix('task_')}_{attempt.number}"
             draft = result.question
             if draft is None:
                 raise OrchestrationError("needs_user_input result has no question")
@@ -413,25 +484,19 @@ class WorkflowScheduler:
                 return run
             self.execute_task(run_id, ready[0])
 
-    def answer_question(self, run_id: str, answer: UserAnswer) -> ResearchRun:
-        """Validate one answer, clear the pause and make its task pending again."""
+    def resume_task(self, run_id: str, task_id: str) -> ResearchRun:
+        """Resume a task paused for user input on the same Attempt (ADR-0011 §2).
+
+        This is an internal transition invoked by ``ResearchController.answer_question``
+        after it has validated and recorded the answer; it only moves the task
+        back into the ready set. The controller owns run-level answer state.
+        """
 
         run = self.store.load(run_id)
-        question = run.pending_question
-        if question is None or answer.question_id != question.id:
-            raise OrchestrationError("answer does not match pending question")
-        missing = set(question.requested_fields) - set(answer.values)
-        if missing:
-            raise OrchestrationError(f"answer is missing fields: {sorted(missing)}")
-        run.answers.append(answer)
-        run.answer_task_ids[answer.question_id] = question.task_id
-        if question.task_id is not None:
-            task = self._task(run, question.task_id)
-            if task.status != TaskStatus.NEEDS_USER_INPUT:
-                raise OrchestrationError("question task is not awaiting user input")
-            task.status = TaskStatus.PENDING
-        run.pending_question = None
-        run.status = RunStatus.RUNNING
+        task = self._task(run, task_id)
+        if task.status != TaskStatus.NEEDS_USER_INPUT:
+            raise OrchestrationError("question task is not awaiting user input")
+        task.status = TaskStatus.PENDING
         self._save(run)
         return run.model_copy(deep=True)
 
@@ -525,32 +590,21 @@ class WorkflowScheduler:
             run.status = RunStatus.RUNNING
             return
 
-        # Execution graph is stable. With an active work request, freeze a
-        # WorkOutcome and mark it stable so the controller can resume the
-        # Scientific Session. A work request already stable is left for the
-        # controller. Without any work request (a scheduler-driven run that
-        # never went through the ResearchController), fall back to required-task
-        # completion semantics.
+        # The execution graph is stable. The scheduler never decides that a
+        # ResearchRun has completed: that is the controller's job (ADR-0011 §1).
+        # With an active executing work request, freeze a WorkOutcome and mark it
+        # stable so the controller can resume the Scientific Session. Otherwise
+        # there is nothing left for the scheduler to do, and the run stays
+        # running until the controller decides the next step.
         active = self._active_work_request(run)
         if active is not None and active.status == WorkRequestStatus.EXECUTING:
-            active.workflow_revision = run.workflow.revision
-            active.outcome = self._build_work_outcome(run, active.id)
-            active.status = WorkRequestStatus.STABLE
-            run.status = RunStatus.RUNNING
-            return
-        if active is not None and active.status == WorkRequestStatus.STABLE:
-            run.status = RunStatus.RUNNING
-            return
-
-        required = [
-            task
-            for task in run.workflow.tasks
-            if task.required and task.status != TaskStatus.SUPERSEDED
-        ]
-        if all(task.status == TaskStatus.COMPLETED for task in required):
-            run.status = RunStatus.COMPLETED
-        else:
-            run.status = RunStatus.FAILED
+            _transition_work_request(
+                active,
+                WorkRequestStatus.STABLE,
+                workflow_revision=run.workflow.revision,
+                outcome=self._build_work_outcome(run, active.id),
+            )
+        run.status = RunStatus.RUNNING
 
     @staticmethod
     def _active_work_request(run: ResearchRun):

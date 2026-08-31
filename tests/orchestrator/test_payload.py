@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from resagent2_contracts import (
     AgentOwner,
     Capability,
@@ -6,12 +8,14 @@ from resagent2_contracts import (
     ModuleStatus,
     ResearchRequest,
     RunBudget,
+    RunStatus,
     TaskProposal,
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
     InMemoryRunStore,
     ModuleBinding,
+    ResearchRun,
     ScriptedModulePort,
     WorkflowScheduler,
 )
@@ -47,6 +51,20 @@ def proposal() -> WorkflowProposal:
     )
 
 
+def _create_run(engine, run_id, request, proposal):
+    now = datetime.now(UTC)
+    engine.store.save(
+        ResearchRun(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return engine.accept_proposal(run_id, proposal)
+
+
 def test_attempt_persists_module_payload() -> None:
     result = ModuleResult(
         status=ModuleStatus.COMPLETED,
@@ -62,7 +80,7 @@ def test_attempt_persists_module_payload() -> None:
         },
         store=InMemoryRunStore(),
     )
-    engine.create_run("run_payload", request(), proposal())
+    _create_run(engine, "run_payload", request(), proposal())
     run = engine.run_until_stable("run_payload")
 
     attempt = run.workflow.tasks[0].attempts[0]

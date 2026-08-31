@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from resagent2_contracts import (
     ModuleStatus,
     ResearchRequest,
     RunBudget,
+    RunStatus,
     TaskProposal,
     WorkflowPatch,
     WorkflowProposal,
@@ -26,9 +28,24 @@ from resagent2_orchestrator import (
     JsonRunStore,
     ModuleBinding,
     OrchestrationError,
+    ResearchRun,
     ScriptedModulePort,
     WorkflowScheduler,
 )
+
+
+def _create_run(engine, run_id, request, proposal):
+    now = datetime.now(UTC)
+    engine.store.save(
+        ResearchRun(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return engine.accept_proposal(run_id, proposal)
 
 
 def request() -> ResearchRequest:
@@ -95,7 +112,7 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
             )
         },
     )
-    engine.create_run("run_artifact", request(), proposal())
+    _create_run(engine, "run_artifact", request(), proposal())
 
     run = engine.run_until_stable("run_artifact")
     artifact = next(iter(run.artifacts.values()))
@@ -167,7 +184,7 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         compilation_rationale="Evidence must cross the module boundary",
         tasks=[experiment, analyze],
     )
-    engine.create_run("run_forward", request(), combined)
+    _create_run(engine, "run_forward", request(), combined)
     engine.run_until_stable("run_forward")
 
     assert len(analyze_port.requests[0].input_artifacts) == 1
@@ -252,7 +269,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         compilation_rationale="A retried task must not leak its failed evidence",
         tasks=[experiment, analyze],
     )
-    engine.create_run("run_retry", request(), combined)
+    _create_run(engine, "run_retry", request(), combined)
     run = engine.run_until_stable("run_retry")
 
     assert len(run.artifacts) == 2
@@ -271,7 +288,7 @@ def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:
         store=store,
         artifact_root=tmp_path / "artifacts",
     )
-    first.create_run("run_restart", request(), proposal())
+    _create_run(first, "run_restart", request(), proposal())
 
     second = WorkflowScheduler(
         bindings={Capability.EXPERIMENT_RUN: binding},
@@ -280,7 +297,7 @@ def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:
     )
     recovered = second.run_until_stable("run_restart")
 
-    assert recovered.status.value == "completed"
+    assert recovered.workflow.tasks[0].status.value == "completed"
     assert recovered.workflow.tasks[0].attempts[0].number == 1
 
 
@@ -291,7 +308,7 @@ def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path)
         artifact_root=tmp_path / "artifacts",
     )
     with pytest.raises(OrchestrationError, match="no ModulePort"):
-        engine.create_run("run_invalid", request(), proposal())
+        _create_run(engine, "run_invalid", request(), proposal())
 
     valid = WorkflowScheduler(
         bindings={
@@ -303,7 +320,7 @@ def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path)
         store=JsonRunStore(tmp_path / "valid-state"),
         artifact_root=tmp_path / "artifacts",
     )
-    valid.create_run("run_patch", request(), proposal())
+    _create_run(valid, "run_patch", request(), proposal())
     with pytest.raises(OrchestrationError, match="revision"):
         valid.apply_patch(
             "run_patch",

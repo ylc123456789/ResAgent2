@@ -28,6 +28,7 @@ from resagent2_orchestrator import (
     InMemoryRunStore,
     ModuleBinding,
     OrchestrationError,
+    ResearchRun,
     ScriptedModulePort,
     WorkflowScheduler,
 )
@@ -94,6 +95,20 @@ def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowSchedule
     return WorkflowScheduler(bindings=bindings, store=InMemoryRunStore())
 
 
+def _create_run(engine, run_id, request, proposal):
+    now = datetime.now(UTC)
+    engine.store.save(
+        ResearchRun(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return engine.accept_proposal(run_id, proposal)
+
+
 def test_linear_workflow_runs_to_completion() -> None:
     workflow = WorkflowProposal(
         work_request_id="work_legacy_initial",
@@ -113,10 +128,10 @@ def test_linear_workflow_runs_to_completion() -> None:
         }
     )
 
-    engine.create_run("run_linear", research_request(), workflow)
+    _create_run(engine, "run_linear", research_request(), workflow)
     result = engine.run_until_stable("run_linear")
 
-    assert result.status == RunStatus.COMPLETED
+    assert result.status == RunStatus.RUNNING  # the scheduler never completes a run
     assert [item.status for item in result.workflow.tasks] == [
         TaskStatus.COMPLETED,
         TaskStatus.COMPLETED,
@@ -146,7 +161,7 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
             Capability.CODE_UNDERSTAND: [completed()],
         }
     )
-    engine.create_run("run_parallel", research_request(), proposal)
+    _create_run(engine, "run_parallel", research_request(), proposal)
 
     assert engine.ready_task_ids("run_parallel") == [
         "task_baseline",
@@ -182,10 +197,9 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
         compilation_rationale="Exercise explicit recovery",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
-    engine.create_run("run_repair", research_request(), proposal)
+    _create_run(engine, "run_repair", research_request(), proposal)
 
     first = engine.run_until_stable("run_repair")
-    assert first.status == RunStatus.FAILED
     assert first.workflow.tasks[0].status == TaskStatus.BLOCKED
 
     patched = engine.apply_patch(
@@ -203,7 +217,7 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
     final = engine.run_until_stable("run_repair")
 
     experiment = next(item for item in final.workflow.tasks if item.id == "task_experiment")
-    assert final.status == RunStatus.COMPLETED
+    assert experiment.status == TaskStatus.COMPLETED
     assert [attempt.number for attempt in experiment.attempts] == [1, 2]
     assert experiment.attempts[0].status.value == "blocked"
     assert experiment.attempts[1].status.value == "completed"
@@ -243,22 +257,39 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
         compilation_rationale="Ask for missing input",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
-    engine.create_run("run_question", research_request(), proposal)
+    _create_run(engine, "run_question", research_request(), proposal)
 
     paused = engine.run_until_stable("run_question")
     assert paused.status == RunStatus.PAUSED
     assert paused.pending_question is not None
+    # The paused Attempt is non-terminal: no finished_at, and it resumes on the
+    # same Attempt number (ADR-0011 §2).
+    attempt = paused.workflow.tasks[0].attempts[0]
+    assert attempt.status.value == "needs_user_input"
+    assert attempt.finished_at is None
+
     answer = UserAnswer(
         question_id=paused.pending_question.id,
         values={"dataset": "demo"},
         answered_at=NOW,
     )
-    engine.answer_question("run_question", answer)
+    # The controller owns run-level answer state; the scheduler only moves the
+    # task back into the ready set.
+    run = engine.store.load("run_question")
+    run.answers.append(answer)
+    run.pending_question = None
+    run.status = RunStatus.RUNNING
+    run.answer_task_ids[answer.question_id] = "task_experiment"
+    engine.store.save(run)
+    engine.resume_task("run_question", "task_experiment")
     final = engine.run_until_stable("run_question")
 
-    assert final.status == RunStatus.COMPLETED
+    assert final.workflow.tasks[0].status == TaskStatus.COMPLETED
+    # The same Attempt resumed, not a new one.
+    assert [attempt.number for attempt in final.workflow.tasks[0].attempts] == [1]
     assert port.requests[1].answers == [answer]
     assert port.requests[1].parent_session_id == "session_child"
+    assert port.requests[1].attempt_number == 1
 
 
 def test_failed_payload_cannot_be_promoted_to_completed() -> None:
@@ -273,7 +304,7 @@ def test_failed_payload_cannot_be_promoted_to_completed() -> None:
         ),
     )
     engine = scheduler({Capability.EXPERIMENT_RUN: [failed]})
-    engine.create_run(
+    _create_run(engine,
         "run_failed_payload",
         research_request(),
         WorkflowProposal(
@@ -286,7 +317,6 @@ def test_failed_payload_cannot_be_promoted_to_completed() -> None:
 
     run = engine.run_until_stable("run_failed_payload")
 
-    assert run.status == RunStatus.FAILED
     assert run.workflow.tasks[0].status == TaskStatus.FAILED
 
 
@@ -303,7 +333,7 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
     engine = scheduler(
         {Capability.EXPERIMENT_RUN: [retryable, completed("retry worked")]}
     )
-    engine.create_run(
+    _create_run(engine,
         "run_auto_retry",
         research_request(),
         WorkflowProposal(
@@ -316,7 +346,7 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
 
     run = engine.run_until_stable("run_auto_retry")
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert [item.number for item in run.workflow.tasks[0].attempts] == [1, 2]
 
 
@@ -334,7 +364,7 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
         },
         store=InMemoryRunStore(),
     )
-    engine.create_run(
+    _create_run(engine,
         "run_invalid_port",
         research_request(),
         WorkflowProposal(
@@ -348,14 +378,14 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
     run = engine.run_until_stable("run_invalid_port")
 
     error = run.workflow.tasks[0].attempts[0].error
-    assert run.status == RunStatus.FAILED
+    assert run.workflow.tasks[0].status == TaskStatus.FAILED
     assert error is not None
     assert error.code == ErrorCode.CONTRACT_ERROR
 
 
 def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
     engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
-    created = engine.create_run(
+    created = _create_run(engine,
         "run_ready_gate",
         research_request(),
         WorkflowProposal(
@@ -371,64 +401,9 @@ def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
     assert created.workflow.tasks[0].attempts == []
 
 
-def test_finish_gate_uses_only_required_non_superseded_tasks() -> None:
-    optional_failure = ModuleResult(
-        status=ModuleStatus.FAILED,
-        summary="optional task failed",
-        error=ModuleError(
-            code=ErrorCode.TOOL_FAILED,
-            message="optional evidence unavailable",
-            retryable=False,
-        ),
-    )
-    engine = scheduler(
-        {
-            Capability.EXPERIMENT_RUN: [optional_failure],
-            Capability.CODE_MODIFY: [completed("replacement completed")],
-        }
-    )
-    engine.create_run(
-        "run_required_gate",
-        research_request(),
-        WorkflowProposal(
-            work_request_id="work_legacy_initial",
-            summary="required gate",
-            compilation_rationale="Only active required tasks gate completion",
-            tasks=[
-                task("task_old", Capability.EXPERIMENT_RUN),
-                task(
-                    "task_optional",
-                    Capability.EXPERIMENT_RUN,
-                    required=False,
-                ),
-            ],
-        ),
-    )
-    engine.apply_patch(
-        "run_required_gate",
-        WorkflowPatch(
-            work_request_id="work_legacy_initial",
-            based_on_revision=1,
-            reason="Replace the old required task",
-            supersede_task_ids=["task_old"],
-            add_tasks=[task("task_replacement", Capability.CODE_MODIFY)],
-        ),
-    )
-
-    run = engine.run_until_stable("run_required_gate")
-    states = {item.id: item.status for item in run.workflow.tasks}
-
-    assert run.status == RunStatus.COMPLETED
-    assert states == {
-        "task_old": TaskStatus.SUPERSEDED,
-        "task_optional": TaskStatus.FAILED,
-        "task_replacement": TaskStatus.COMPLETED,
-    }
-
-
 def test_patch_cannot_supersede_task_from_another_work_request() -> None:
     engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
-    engine.create_run(
+    _create_run(engine,
         "run_isolate",
         research_request(),
         WorkflowProposal(

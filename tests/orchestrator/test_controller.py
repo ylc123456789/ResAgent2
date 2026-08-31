@@ -15,6 +15,7 @@ from resagent2_contracts import (
     ModuleError,
     ModuleResult,
     ModuleStatus,
+    QuestionDraft,
     ResearchRequest,
     RunBudget,
     RunStatus,
@@ -338,6 +339,123 @@ def test_paused_question_then_answer_resumes() -> None:
     run = controller.answer_question("run_paused", answer)
 
     assert run.status == RunStatus.COMPLETED
+
+
+def _task_question_result() -> ModuleResult:
+    return ModuleResult(
+        status=ModuleStatus.NEEDS_USER_INPUT,
+        summary="Which dataset?",
+        question=QuestionDraft(
+            text="Which dataset?",
+            requested_fields=["dataset"],
+            reason="No dataset was selected",
+        ),
+        session=SessionRef(
+            id="session_task_child",
+            module=AgentOwner.EXPERIMENT,
+            state_uri="memory://session_task_child",
+            status=SessionStatus.PAUSED,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+    )
+
+
+def test_task_question_resumes_same_attempt_via_controller() -> None:
+    """A task-level question pauses the run; the answer resumes the same Attempt.
+
+    This is the cross-layer fix for P1-1: the controller (not a separate
+    scheduler answer path) routes the answer back to the paused task, which
+    resumes on the same Attempt number instead of starting a new one.
+    """
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([_task_question_result(), completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(
+        ScriptedLLMClient([request_work_action(), finish_action()]),
+        store=InMemorySessionStore(),
+    )
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    paused = controller.create_run("run_task_question", research_request())
+
+    assert paused.status == RunStatus.PAUSED
+    assert paused.pending_question is not None
+    assert paused.pending_question.task_id == "task_experiment"
+    task = paused.workflow.tasks[0]
+    assert task.status.value == "needs_user_input"
+    assert task.attempts[0].status.value == "needs_user_input"
+    assert task.attempts[0].finished_at is None
+
+    answer = UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset": "demo"},
+        answered_at=NOW,
+    )
+    run = controller.answer_question("run_task_question", answer)
+
+    assert run.status == RunStatus.COMPLETED
+    task = run.workflow.tasks[0]
+    # The same Attempt resumed, not a new one.
+    assert [attempt.number for attempt in task.attempts] == [1]
+    assert task.attempts[0].status.value == "completed"
+    assert run.work_requests[0].status.value == "consumed"
+
+
+def test_task_question_resume_does_not_consume_attempt_budget() -> None:
+    """max_attempts_per_task=1 must still allow a pause/resume round-trip."""
+    request = ResearchRequest(
+        goal="Evaluate",
+        budget=RunBudget(
+            max_tasks=5,
+            max_attempts_per_task=1,
+            max_llm_calls=50,
+            timeout_seconds=60,
+        ),
+    )
+    scheduler = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([_task_question_result(), completed_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    scientific = ScientificAgent(
+        ScriptedLLMClient([request_work_action(), finish_action()]),
+        store=InMemorySessionStore(),
+    )
+    controller = ResearchController(
+        scientific_port=scientific,
+        compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
+        scheduler=scheduler,
+        registry=registry(),
+    )
+
+    paused = controller.create_run("run_task_question_1", request)
+    assert paused.status == RunStatus.PAUSED
+
+    answer = UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset": "demo"},
+        answered_at=NOW,
+    )
+    run = controller.answer_question("run_task_question_1", answer)
+
+    assert run.status == RunStatus.COMPLETED
+    assert [attempt.number for attempt in run.workflow.tasks[0].attempts] == [1]
 
 
 def test_json_store_recovers_run_boundary(tmp_path) -> None:

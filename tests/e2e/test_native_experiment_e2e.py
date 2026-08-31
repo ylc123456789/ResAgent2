@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from resagent2_contracts import (
@@ -8,12 +9,32 @@ from resagent2_contracts import (
     RunBudget,
     RunStatus,
     TaskProposal,
+    TaskStatus,
     VerificationResult,
     WorkflowProposal,
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_orchestrator import InMemoryRunStore, ModuleBinding, WorkflowScheduler
+from resagent2_orchestrator import (
+    InMemoryRunStore,
+    ModuleBinding,
+    ResearchRun,
+    WorkflowScheduler,
+)
+
+
+def _create_run(engine, run_id, request, proposal):
+    now = datetime.now(UTC)
+    engine.store.save(
+        ResearchRun(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    return engine.accept_proposal(run_id, proposal)
 from resagent2_capabilities import (
     AuditEnvTool,
     EnvironmentBinding,
@@ -217,10 +238,10 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
         ],
     )
 
-    scheduler.create_run("run_native_experiment", request, proposal)
+    _create_run(scheduler, "run_native_experiment", request, proposal)
     run = scheduler.run_until_stable("run_native_experiment")
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     artifacts = list(run.artifacts.values())
     assert {artifact.kind for artifact in artifacts} == {"experiment_result"}
     assert all(len(artifact.sha256) == 64 for artifact in artifacts)

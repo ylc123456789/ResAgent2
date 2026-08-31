@@ -532,9 +532,14 @@ class Attempt(ContractModel):
     def validate_outcome(self) -> Attempt:
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("finished_at cannot be earlier than started_at")
-        if self.status == AttemptStatus.RUNNING:
+        # A running attempt and one paused for user input are both non-terminal:
+        # neither carries finished_at or error. The paused attempt resumes on the
+        # same Attempt number (ADR-0011 §2), so it is not a terminal outcome.
+        if self.status in {AttemptStatus.RUNNING, AttemptStatus.NEEDS_USER_INPUT}:
             if self.finished_at is not None or self.error is not None:
-                raise ValueError("running attempt cannot have finished_at or error")
+                raise ValueError(
+                    f"{self.status.value} attempt cannot have finished_at or error"
+                )
             return self
         if self.finished_at is None:
             raise ValueError("terminal attempt requires finished_at")

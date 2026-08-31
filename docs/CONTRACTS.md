@@ -394,9 +394,9 @@ class SessionRef:
     updated_at: datetime
 ```
 
-Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry 是同一 Task 的新 Attempt，默认新 Session；resume 是新 Attempt 引用旧 Session；repair 是新 WorkflowTask。
+Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry（failed/blocked 后重试）是同一 Task 的新 Attempt，默认新 Session；pause/resume 是**同一 Attempt** 的暂停与继续，不增加 Attempt number，复用 Session/output_dir/workspace baseline（ADR-0011 §2）；repair 是新 WorkflowTask。
 
-running Attempt 不能有 finished_at/error；终态必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败/契约错误路径天然为 None。
+`running` 与 `needs_user_input` 都是非终态：不能有 finished_at/error；终态（completed/completed_with_warnings/failed/blocked）必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败/契约错误路径天然为 None。
 
 ## 12. Question 与 Answer
 

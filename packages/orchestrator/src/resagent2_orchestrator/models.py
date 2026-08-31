@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from resagent2_contracts import (
     ArtifactId,
@@ -21,6 +21,7 @@ from resagent2_contracts import (
     UserAnswer,
     Workflow,
     WorkRequest,
+    WorkRequestStatus,
     WorkspaceRecord,
     TaskId,
 )
@@ -77,3 +78,21 @@ class ResearchRun(OrchestratorModel):
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_active_work_requests(self) -> "ResearchRun":
+        """A run may have at most one active work request (ADR-0011 §1)."""
+        active = [
+            item.id
+            for item in self.work_requests
+            if item.status
+            in {
+                WorkRequestStatus.REQUESTED,
+                WorkRequestStatus.COMPILING,
+                WorkRequestStatus.EXECUTING,
+                WorkRequestStatus.STABLE,
+            }
+        ]
+        if len(active) > 1:
+            raise ValueError(f"at most one active work request is allowed: {active}")
+        return self

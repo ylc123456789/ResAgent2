@@ -40,7 +40,11 @@ from .completion import (
     ScientificCompletionValidator,
 )
 from .models import ResearchRun
-from .scheduler import WorkflowScheduler
+from .scheduler import (
+    WorkflowScheduler,
+    _transition_work_request,
+    _validate_answer,
+)
 
 
 class ScientificPort(Protocol):
@@ -98,17 +102,25 @@ class ResearchController:
         return self.run_until_stable(run_id)
 
     def answer_question(self, run_id: str, answer: UserAnswer) -> ResearchRun:
+        """The single user-answer entry (ADR-0011 §1).
+
+        A Scientific question (``task_id is None``) only feeds the Scientific
+        turn; a task question also resumes the paused Attempt on the same
+        number, Session and output_dir.
+        """
         run = self.scheduler.store.load(run_id)
         question = run.pending_question
-        if question is None or answer.question_id != question.id:
-            raise ValueError("answer does not match pending question")
-        missing = set(question.requested_fields) - set(answer.values)
-        if missing:
-            raise ValueError(f"answer is missing fields: {sorted(missing)}")
+        _validate_answer(question, answer)
+        assert question is not None
         run.answers.append(answer)
         run.pending_question = None
         run.status = RunStatus.RUNNING
+        task_id = question.task_id
+        if task_id is not None:
+            run.answer_task_ids[answer.question_id] = task_id
         self._save(run)
+        if task_id is not None:
+            self.scheduler.resume_task(run_id, task_id)
         return self.run_until_stable(run_id)
 
     def run_until_stable(self, run_id: str) -> ResearchRun:
@@ -175,7 +187,7 @@ class ResearchController:
         # ScientificPort idempotency returns the same result).
         for work_request in run.work_requests:
             if work_request.status == WorkRequestStatus.STABLE:
-                work_request.status = WorkRequestStatus.CONSUMED
+                _transition_work_request(work_request, WorkRequestStatus.CONSUMED)
 
         violations = self._review_observed(run, result.observed_artifact_ids)
         if violations:
@@ -279,14 +291,17 @@ class ResearchController:
             if accepted:
                 # Recovery window: the graph was durably accepted immediately
                 # before the WorkRequest transition was saved.
-                active.status = WorkRequestStatus.EXECUTING
-                active.workflow_revision = run.workflow.revision
+                _transition_work_request(
+                    active,
+                    WorkRequestStatus.EXECUTING,
+                    workflow_revision=run.workflow.revision,
+                )
                 self._save(run)
                 return self.scheduler.run_until_stable(run_id)
 
         # REQUESTED or COMPILING: the compiler is stateless, so a crash after
         # marking COMPILING is safely retried (CONTRACTS §20.3).
-        active.status = WorkRequestStatus.COMPILING
+        _transition_work_request(active, WorkRequestStatus.COMPILING)
         self._save(run)
 
         try:
@@ -298,11 +313,14 @@ class ResearchController:
                 workspaces=self._workspace_descriptors(),
             )
         except Exception as error:
-            active.status = WorkRequestStatus.FAILED
-            active.error = ModuleError(
-                code=ErrorCode.CONTRACT_ERROR,
-                message=f"compilation failed: {error}",
-                retryable=False,
+            _transition_work_request(
+                active,
+                WorkRequestStatus.FAILED,
+                error=ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message=f"compilation failed: {error}",
+                    retryable=False,
+                ),
             )
             run.status = RunStatus.FAILED
             self._save(run)
@@ -317,11 +335,14 @@ class ResearchController:
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)
             if active is not None:
-                active.status = WorkRequestStatus.FAILED
-                active.error = ModuleError(
-                    code=ErrorCode.CONTRACT_ERROR,
-                    message=f"compiled workflow was rejected: {error}",
-                    retryable=False,
+                _transition_work_request(
+                    active,
+                    WorkRequestStatus.FAILED,
+                    error=ModuleError(
+                        code=ErrorCode.CONTRACT_ERROR,
+                        message=f"compiled workflow was rejected: {error}",
+                        retryable=False,
+                    ),
                 )
             run.status = RunStatus.FAILED
             self._save(run)
@@ -332,8 +353,11 @@ class ResearchController:
             run.status = RunStatus.FAILED
             self._save(run)
             return run
-        active.status = WorkRequestStatus.EXECUTING
-        active.workflow_revision = run.workflow.revision
+        _transition_work_request(
+            active,
+            WorkRequestStatus.EXECUTING,
+            workflow_revision=run.workflow.revision,
+        )
         self._save(run)
 
         return self.scheduler.run_until_stable(run_id)
@@ -367,10 +391,20 @@ class ResearchController:
 
     def _pending_answers(self, run: ResearchRun) -> list[UserAnswer]:
         delivered = set(run.delivered_answer_ids)
-        return [a for a in run.answers if a.question_id not in delivered]
+        # Task-level answers are delivered to their task via answer_task_ids,
+        # never to the Scientific turn (ADR-0011 §1).
+        return [
+            a
+            for a in run.answers
+            if a.question_id not in delivered and a.question_id not in run.answer_task_ids
+        ]
 
     def _mark_answers_delivered(self, run: ResearchRun) -> None:
-        run.delivered_answer_ids = [a.question_id for a in run.answers]
+        run.delivered_answer_ids = [
+            a.question_id
+            for a in run.answers
+            if a.question_id not in run.answer_task_ids
+        ]
 
     def _accumulate_llm_calls(self, run: ResearchRun, calls: int) -> None:
         run.llm_calls_used += calls

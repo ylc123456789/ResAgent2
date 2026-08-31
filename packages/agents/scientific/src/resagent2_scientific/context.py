@@ -55,7 +55,7 @@ Evidence citation rules:
 Acknowledged-task rule:
 - acknowledged_task_ids must list exactly the failed/blocked task ids from the
   unresolved task outcomes. If no task failed or was blocked, use []. Never
-  include completed or superseded tasks.
+  include completed tasks.
 
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.

@@ -9,14 +9,13 @@ from pydantic import BaseModel
 from resagent2_contracts import QuestionDraft
 from resagent2_runtime import AgentState, FinishCandidate, ToolObservation
 
-from .completion import _observed_artifact_ids
+from .completion import _observed_artifact_ids, unobserved_artifact_ids
 from .models import AskUserInput, RequestWorkInput, ScientificFinish
 
 
 def _unobserved_evidence(state: AgentState, cited_ids: list[str]) -> list[str]:
     """Return the cited artifact ids that were not observed by any Tool."""
-    observed = set(_observed_artifact_ids(state))
-    return sorted(set(cited_ids) - observed)
+    return unobserved_artifact_ids(cited_ids, _observed_artifact_ids(state))
 
 
 class FinishTool:

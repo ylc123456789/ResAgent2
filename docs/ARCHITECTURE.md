@@ -338,7 +338,6 @@ ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检�
 stateDiagram-v2
     [*] --> pending
     pending --> running: scheduler creates Attempt
-    pending --> superseded: accepted WorkflowPatch
     running --> completed: completed result
     running --> failed: terminal failed result
     running --> blocked: blocked result

@@ -66,10 +66,10 @@ pending | running | paused | completed | failed
 ### 4.2 TaskStatus
 
 ```text
-pending | running | completed | failed | blocked | needs_user_input | superseded
+pending | running | completed | failed | blocked | needs_user_input
 ```
 
-由 Scheduler 写入。`superseded` 表示尚未开始的 Task 被新 Workflow revision 取代；schema 中不存在 `skipped`。
+由 Scheduler 写入。
 
 ### 4.3 AttemptStatus 与 ModuleStatus
 
@@ -643,7 +643,7 @@ model validator 必须按 producer 选择上述唯一分支；混合字段、缺
 ```python
 class WorkTaskOutcome:
     task_id: TaskId
-    status: Literal["completed", "failed", "blocked", "superseded"]
+    status: Literal["completed", "failed", "blocked"]
     summary: NonEmptyStr
     artifact_ids: list[ArtifactId] = []
     error: ModuleError | None = None
@@ -656,7 +656,7 @@ class WorkOutcome:
     tasks: list[WorkTaskOutcome]
 ```
 
-tasks 至少一项且 TaskId 不重复。每个 Task 必须属于对应 Workflow revision，且 Task 的 `work_request_id` 等于本 WorkOutcome 的 work_request_id。failed/blocked 必须有 error；completed/superseded 不能有 error。artifact_ids 只能包含该 Task Attempt 已登记的 Artifact，包括成功证据和明确标记的诊断证据；失败 Task 不能因为产出诊断 Artifact 就被写成 completed。
+tasks 至少一项且 TaskId 不重复。每个 Task 必须属于对应 Workflow revision，且 Task 的 `work_request_id` 等于本 WorkOutcome 的 work_request_id。failed/blocked 必须有 error；completed 不能有 error。artifact_ids 只能包含该 Task Attempt 已登记的 Artifact，包括成功证据和明确标记的诊断证据；失败 Task 不能因为产出诊断 Artifact 就被写成 completed。
 
 WorkOutcome 是执行事实摘要，不判断实验是否支持假设。`summary` 不能覆盖结构化 status/error/warnings。即使含 failed/blocked Task，也可以返回 Scientific Agent；由 Scientific Agent 决定请求替代工作、修改观点或以局限形式结束。
 
@@ -677,7 +677,7 @@ class ScientificOpinion:
 
 最终 evidence 可以为空，只允许观点明确说明当前没有可用证据且 verdict 为 inconclusive 或 not_applicable；任何 supports/refutes 意见必须至少引用一个 ArtifactId。
 
-`acknowledged_task_ids` 不是“已成功任务”列表，而是 Scientific Agent 已明确纳入判断的 failed/blocked Task。最终 gate 要求 Run 中所有仍 failed/blocked 的 TaskId 都出现在该列表；列表非空时 limitations 也必须非空。completed/superseded Task 不得出现在该列表。
+`acknowledged_task_ids` 不是“已成功任务”列表，而是 Scientific Agent 已明确纳入判断的 failed/blocked Task。最终 gate 要求 Run 中所有仍 failed/blocked 的 TaskId 都出现在该列表；列表非空时 limitations 也必须非空。completed Task 不得出现在该列表。
 
 ### 20.6 ScientificTurnRequest
 

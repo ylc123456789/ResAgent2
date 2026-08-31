@@ -49,7 +49,11 @@ from resagent2_runtime import (
     SessionStore,
 )
 
-from .completion import ScientificCompletionCheck, _observed_artifact_ids
+from .completion import (
+    ScientificCompletionCheck,
+    _observed_artifact_ids,
+    unobserved_artifact_ids,
+)
 from .context import SCIENTIFIC_PROMPT, build_context
 from .models import ScientificAction
 from .tools import AskUserTool, FinishTool, RequestWorkTool
@@ -313,7 +317,7 @@ class ScientificAgent:
     @staticmethod
     def _unobserved_evidence(cited: list[str], observed: list[str]) -> bool:
         """Return True when an assessment cites evidence no Tool observed."""
-        return bool(set(cited) - set(observed))
+        return bool(unobserved_artifact_ids(cited, observed))
 
     @staticmethod
     def _validated_opinion(payload) -> ScientificOpinion | None:

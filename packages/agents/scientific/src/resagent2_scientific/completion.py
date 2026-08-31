@@ -32,6 +32,16 @@ def _observed_artifact_ids(state: AgentState) -> list[str]:
     return seen
 
 
+def unobserved_artifact_ids(cited: list[str], observed: list[str]) -> list[str]:
+    """Return the cited artifact ids absent from the observed set.
+
+    This is the single pure helper shared by the Tool layer, the Session
+    finalizer and the orchestrator gate (ADR-0011 §5.3), so the three layers no
+    longer each re-implement the same set subtraction.
+    """
+    return sorted(set(cited) - set(observed))
+
+
 class ScientificCompletionCheck:
     """Finalize a finish candidate into a validated ScientificOpinion."""
 

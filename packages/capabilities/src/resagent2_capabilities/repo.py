@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -171,6 +172,27 @@ class RepoMaterializer:
                 f"requested {expected_location!r}"
             )
 
+    def _stage(self, workspace: Path, builder) -> None:
+        """Materialize into a sibling staging dir, then atomically promote it.
+
+        A failed clone/copy/generate only ever leaves the staging directory,
+        which is removed on error, so a retry never sees a half-built workspace
+        (ADR-0011 §7.2).
+        """
+        workspace.parent.mkdir(parents=True, exist_ok=True)
+        staging = workspace.parent / f".{workspace.name}.resagent2-staging"
+        if staging.exists():
+            shutil.rmtree(staging)
+        try:
+            builder(staging)
+            if workspace.exists() and not _has_content(workspace):
+                workspace.rmdir()
+            os.replace(staging, workspace)
+        except Exception:
+            if staging.exists():
+                shutil.rmtree(staging)
+            raise
+
     def _clone(
         self, workspace: Path, repo_url: str, metadata_path: Path
     ) -> MaterializedRepo:
@@ -183,17 +205,20 @@ class RepoMaterializer:
             raise RepoMaterializerError(
                 f"cannot clone into non-empty workspace: {workspace}"
             )
-        workspace.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--single-branch", repo_url, str(workspace)],
-            text=True,
-            capture_output=True,
-            timeout=self.clone_timeout_seconds,
-        )
-        if result.returncode != 0:
-            raise RepoMaterializerError(
-                f"git clone failed: {(result.stderr or '').strip() or 'unknown error'}"
+
+        def build(staging: Path) -> None:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "--single-branch", repo_url, str(staging)],
+                text=True,
+                capture_output=True,
+                timeout=self.clone_timeout_seconds,
             )
+            if result.returncode != 0:
+                raise RepoMaterializerError(
+                    f"git clone failed: {(result.stderr or '').strip() or 'unknown error'}"
+                )
+
+        self._stage(workspace, build)
         commit = _git_commit(workspace)
         _write_metadata(metadata_path, WorkspaceSourceKind.GIT.value, repo_url, commit)
         return MaterializedRepo(workspace, commit, "git")
@@ -213,10 +238,10 @@ class RepoMaterializer:
             raise RepoMaterializerError(
                 f"cannot copy into non-empty workspace: {workspace}"
             )
-        if workspace.exists():
-            workspace.rmdir()  # shutil.copytree requires a non-existent destination
-        workspace.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(str(src), str(workspace), symlinks=True)
+        self._stage(
+            workspace,
+            lambda staging: shutil.copytree(str(src), str(staging), symlinks=True),
+        )
         commit = _git_commit(workspace)
         _write_metadata(metadata_path, WorkspaceSourceKind.COPY.value, source, commit)
         return MaterializedRepo(workspace, commit, "copy")
@@ -239,17 +264,21 @@ class RepoMaterializer:
             raise RepoMaterializerError(
                 f"cannot generate into non-empty workspace: {workspace}"
             )
-        workspace.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["git", "init", "-q", str(workspace)],
-            text=True,
-            capture_output=True,
-            timeout=self.clone_timeout_seconds,
-        )
-        if result.returncode != 0:
-            raise RepoMaterializerError(
-                f"git init failed: {(result.stderr or '').strip() or 'unknown error'}"
+
+        def build(staging: Path) -> None:
+            staging.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["git", "init", "-q", str(staging)],
+                text=True,
+                capture_output=True,
+                timeout=self.clone_timeout_seconds,
             )
+            if result.returncode != 0:
+                raise RepoMaterializerError(
+                    f"git init failed: {(result.stderr or '').strip() or 'unknown error'}"
+                )
+
+        self._stage(workspace, build)
         _write_metadata(
             metadata_path, WorkspaceSourceKind.GENERATED.value, "", ""
         )

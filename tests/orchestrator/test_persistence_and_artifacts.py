@@ -383,3 +383,27 @@ def test_register_import_rejects_hash_mismatch(tmp_path: Path) -> None:
             ),
             run_id="run_import",
         )
+
+
+def test_rejected_candidate_leaves_no_residue_directory(tmp_path: Path) -> None:
+    """A candidate rejected before validation leaves no artifact directory, so a
+    retry with the same id is not poisoned by a residue from the first attempt."""
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    candidate = ArtifactCandidate(
+        kind="experiment_result",
+        path="metrics.json",
+        media_type="application/json",
+        summary="no grant",
+    )
+    with pytest.raises(ArtifactRegistrationError, match="grant"):
+        registry.register(
+            candidate,
+            grant=None,
+            producer=AgentOwner.EXPERIMENT,
+            run_id="run_x",
+            task_id="task_x",
+            attempt_number=1,
+            index=1,
+            existing_ids=set(),
+        )
+    assert not (tmp_path / "artifacts" / "run_x" / "artifact_x_1_1").exists()

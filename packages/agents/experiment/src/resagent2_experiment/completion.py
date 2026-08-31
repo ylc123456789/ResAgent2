@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -86,6 +87,28 @@ class ExperimentCompletionCheck:
             return None
         return self.boundary.relative(resolved), _sha256_file(resolved)
 
+    def _metrics_from_evidence(self, evidence: list[str]) -> dict:
+        """Read top-level numeric fields from the Agent's JSON evidence files.
+
+        The typed ``metrics`` in the payload come only from evidence the Agent
+        actually produced; the LLM cannot self-certify a number (ADR-0011 §5.2).
+        """
+        metrics: dict = {}
+        for path in evidence:
+            if not path.lower().endswith(".json"):
+                continue
+            try:
+                resolved = self.boundary.resolve_read_file(path)
+                data = json.loads(resolved.read_text(encoding="utf-8"))
+            except (OSError, PermissionError, ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            for key, value in data.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    metrics[_metric_key(key)] = value
+        return metrics
+
     def evaluate(
         self,
         state: AgentState,
@@ -125,10 +148,11 @@ class ExperimentCompletionCheck:
             if baseline.get(normalized) != current_hash and normalized not in evidence:
                 evidence.append(normalized)
 
+        metrics = self._metrics_from_evidence(evidence)
         issues = [
             f"Missing required metric: {name}"
             for name in self.expected_metrics
-            if not _metric_is_present(name, finish.metrics)
+            if not _metric_is_present(name, metrics)
         ]
         for name in self.expected_artifacts:
             info = self._resolve_evidence(name)
@@ -146,7 +170,7 @@ class ExperimentCompletionCheck:
         # actually produce results; reject it instead of completing with
         # warnings that could mask a total failure.
         metrics_delivered = any(
-            _metric_is_present(name, finish.metrics) for name in self.expected_metrics
+            _metric_is_present(name, metrics) for name in self.expected_metrics
         )
         if (
             (self.expected_metrics or self.expected_artifacts)
@@ -159,8 +183,7 @@ class ExperimentCompletionCheck:
             )
 
         payload = ExperimentResult(
-            metrics=finish.metrics,
-            parameters=finish.parameters,
+            metrics=metrics,
             evidence_files=evidence,
             repo_url=self.repo_url,
             commit=self.commit,

@@ -69,27 +69,11 @@ class ArtifactRegistry:
         if artifact_id in existing_ids:
             raise ArtifactRegistrationError(f"artifact id already exists: {artifact_id}")
 
-        destination_dir = self.root / run_id / artifact_id
-        destination_dir.mkdir(parents=True, exist_ok=False)
-
-        if candidate.content is not None:
-            # Content-carried artifact (e.g. a patch living in the Run data
-            # directory): write bytes directly, no workspace containment check.
-            destination = destination_dir / Path(candidate.path).name
-            encoded = candidate.content.encode("utf-8")
-            temporary: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
-                    temporary = Path(handle.name)
-                    handle.write(encoded)
-                os.replace(temporary, destination)
-                digest = _sha256(destination)
-            except Exception:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
-                shutil.rmtree(destination_dir, ignore_errors=True)
-                raise
-        else:
+        # Validate candidate/grant/source/path BEFORE creating any directory, so
+        # a rejected candidate cannot leave a residue directory that would break
+        # a later retry of the same id (ADR-0011 §5.1).
+        source: Path | None = None
+        if candidate.content is None:
             if grant is None:
                 raise ArtifactRegistrationError(
                     "workspace-file ArtifactCandidate requires a workspace grant"
@@ -111,19 +95,32 @@ class ArtifactRegistry:
             ):
                 raise ArtifactRegistrationError("artifact path is inside denied_paths")
 
-            destination = destination_dir / source.name
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+        destination_dir = self.root / run_id / artifact_id
+        destination_dir.mkdir(parents=True, exist_ok=False)
+        destination = destination_dir / (
+            Path(candidate.path).name if candidate.content is not None else source.name
+        )
+        temporary: Path | None = None
+        try:
+            if candidate.content is not None:
+                with tempfile.NamedTemporaryFile(
+                    dir=destination_dir, delete=False
+                ) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(candidate.content.encode("utf-8"))
+            else:
+                with tempfile.NamedTemporaryFile(
+                    dir=destination_dir, delete=False
+                ) as handle:
                     temporary = Path(handle.name)
                 shutil.copyfile(source, temporary)
-                os.replace(temporary, destination)
-                digest = _sha256(destination)
-            except Exception:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
-                shutil.rmtree(destination_dir, ignore_errors=True)
-                raise
+            os.replace(temporary, destination)
+            digest = _sha256(destination)
+        except Exception:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            shutil.rmtree(destination_dir, ignore_errors=True)
+            raise
 
         return ArtifactRef(
             id=artifact_id,

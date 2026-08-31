@@ -155,7 +155,6 @@ class _NativeExperimentPort:
                         "arguments": {
                             "result": {
                                 "summary": "done",
-                                "metrics": {"accuracy": 0.9},
                                 "evidence_files": ["metrics.json"],
                             }
                         },

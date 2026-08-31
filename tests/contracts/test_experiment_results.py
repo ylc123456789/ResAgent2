@@ -34,7 +34,6 @@ def test_experiment_run_input_rejects_repository_source_fields() -> None:
 def test_experiment_result_round_trips() -> None:
     result = ExperimentResult(
         metrics={"accuracy": 0.9},
-        parameters={"epochs": 2},
         evidence_files=["metrics.json"],
         repo_url="https://example.com/repo.git",
         commit="abc123",

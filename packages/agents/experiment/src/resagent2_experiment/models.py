@@ -28,10 +28,13 @@ class ExperimentAction(AgentAction):
 
 
 class ExperimentFinish(RuntimeModel):
-    """LLM-proposed experiment result; the finalizer derives the real facts."""
+    """LLM-proposed experiment result; the finalizer derives the real facts.
+
+    The Agent reports only summary, evidence_files and residual_risks; typed
+    metrics are derived by the deterministic finalizer from JSON evidence, not
+    supplied by the model (ADR-0011 §5.2).
+    """
 
     summary: NonEmptyStr
-    metrics: dict[str, JsonValue] = Field(default_factory=dict)
-    parameters: dict[str, JsonValue] = Field(default_factory=dict)
     evidence_files: list[NonEmptyStr] = Field(default_factory=list)
     residual_risks: list[NonEmptyStr] = Field(default_factory=list)

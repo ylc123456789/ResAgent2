@@ -49,9 +49,11 @@ Rules:
   code-editing tools), finish with proposed_status="failed" and report the real
   command error. Do not repeat the unchanged failing command, and do not
   substitute an equivalent command to work around the bug.
-- Finish with result={summary, metrics, parameters, evidence_files, residual_risks}.
-  evidence_files are workspace-relative paths to the result files you actually
-  produced. The deterministic finalizer verifies files and expected deliverables.
+- Finish with result={summary, evidence_files, residual_risks}. evidence_files are
+  workspace-relative paths to the result files you actually produced; include the
+  JSON file(s) that hold your measured numbers. The deterministic finalizer reads
+  those JSON files to derive the typed metrics and verifies the expected
+  deliverables; do not report metric values yourself.
 
 Tool arguments:
 - list_files: {"path": ".", "max_files": 200}
@@ -63,7 +65,6 @@ Tool arguments:
 - audit_env: {}
 - run_command: {"command": "python train.py --epochs 2"}
 - finish: {"proposed_status": "completed|failed", "result": {"summary": "...",
-  "metrics": {"accuracy": 0.9}, "parameters": {"epochs": 2},
   "evidence_files": ["metrics.json"], "residual_risks": []}}
 """
 

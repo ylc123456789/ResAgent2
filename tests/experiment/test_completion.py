@@ -52,9 +52,9 @@ def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> Exp
     )
 
 
-def _finish(*, metrics=None, evidence_files=None) -> FinishCandidate:
+def _finish(*, evidence_files=None) -> FinishCandidate:
     return FinishCandidate(
-        result={"summary": "done", "metrics": metrics or {}, "evidence_files": evidence_files or []}
+        result={"summary": "done", "evidence_files": evidence_files or []}
     )
 
 
@@ -63,7 +63,7 @@ def test_golden_case_new_evidence_completes(tmp_path) -> None:
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
 
     decision = check.evaluate(
-        _state(), _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        _state(), _finish(evidence_files=["metrics.json"])
     )
 
     assert decision.complete is True
@@ -88,17 +88,21 @@ def test_missing_all_evidence_is_rejected(tmp_path) -> None:
 def test_partial_delivery_downgrades_to_warnings(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     baseline = snapshot_workspace(_boundary(tmp_path))
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
+    # This attempt changes metrics.json (so the metric is derivable from
+    # evidence) but never produces the second required artifact.
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.95}', encoding="utf-8")
+    check = _check(
+        tmp_path,
+        expected_metrics=["accuracy"],
+        expected_artifacts=["metrics.json", "report.json"],
+    )
     state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
 
-    # The metric is claimed but the artifact file is unchanged from the baseline.
-    decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
-    )
+    decision = check.evaluate(state, _finish(evidence_files=["metrics.json"]))
 
     assert decision.complete is True
     assert len(decision.warnings) == 1
-    assert "unchanged" in decision.warnings[0].message
+    assert "report.json" in decision.warnings[0].message
 
 
 def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
@@ -106,7 +110,7 @@ def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
 
     decision = check.evaluate(
-        _state(), _finish(metrics={"accuracy": 0.9}, evidence_files=[])
+        _state(), _finish(evidence_files=[])
     )
 
     payload = ExperimentResult.model_validate(decision.payload)
@@ -119,7 +123,7 @@ def test_no_experiment_run_cannot_complete(tmp_path) -> None:
     state = _state({"experiment_success_count": 0, "workspace_baseline": {}})
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        state, _finish(evidence_files=["metrics.json"])
     )
 
     assert decision.complete is False
@@ -133,13 +137,13 @@ def test_preexisting_unchanged_evidence_is_not_claimable(tmp_path) -> None:
     state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        state, _finish(evidence_files=["metrics.json"])
     )
 
-    assert decision.artifacts == []
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.evidence_files == []
-    assert any("unchanged" in issue for issue in payload.delivery_issues)
+    # Unchanged evidence yields no derivable metric, so it cannot be claimed;
+    # the run is rejected rather than completed with an empty claim.
+    assert decision.complete is False
+    assert "No required metric or artifact" in decision.summary
 
 
 def test_changed_evidence_file_completes(tmp_path) -> None:
@@ -151,7 +155,7 @@ def test_changed_evidence_file_completes(tmp_path) -> None:
     state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        state, _finish(evidence_files=["metrics.json"])
     )
 
     assert decision.complete is True
@@ -166,7 +170,7 @@ def test_leftover_from_previous_attempt_is_not_claimable(tmp_path) -> None:
     state = _state({"experiment_success_count": 0, "workspace_baseline": baseline})
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        state, _finish(evidence_files=["metrics.json"])
     )
 
     assert decision.complete is False
@@ -179,13 +183,11 @@ def test_preexisting_evidence_cannot_be_claimed_via_path_alias(tmp_path) -> None
     state = _state({"experiment_success_count": 1, "workspace_baseline": baseline})
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["./metrics.json"])
+        state, _finish(evidence_files=["./metrics.json"])
     )
 
-    assert decision.artifacts == []
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.evidence_files == []
-    assert any("unchanged" in issue for issue in payload.delivery_issues)
+    assert decision.complete is False
+    assert "No required metric or artifact" in decision.summary
 
 
 def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
@@ -194,7 +196,7 @@ def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
     state = _state({"experiment_success_count": 1})  # no workspace_baseline key
 
     decision = check.evaluate(
-        state, _finish(metrics={"accuracy": 0.9}, evidence_files=["metrics.json"])
+        state, _finish(evidence_files=["metrics.json"])
     )
 
     assert decision.complete is False

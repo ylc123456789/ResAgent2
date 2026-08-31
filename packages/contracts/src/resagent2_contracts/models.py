@@ -502,10 +502,13 @@ class ExperimentRunInput(ContractModel):
 
 
 class ExperimentResult(ContractModel):
-    """Typed payload returned by the native Experiment Agent."""
+    """Typed payload returned by the native Experiment Agent.
+
+    ``metrics`` are derived by the deterministic finalizer from JSON evidence
+    files, never taken from the LLM verbatim (ADR-0011 §5.2).
+    """
 
     metrics: dict[str, JsonValue] = Field(default_factory=dict)
-    parameters: dict[str, JsonValue] = Field(default_factory=dict)
     evidence_files: list[str] = Field(default_factory=list)
     repo_url: str = ""
     commit: str = ""

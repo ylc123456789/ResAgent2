@@ -176,7 +176,6 @@ _GOLDEN_ACTIONS = [
         "arguments": {
             "result": {
                 "summary": "trained and evaluated",
-                "metrics": {"accuracy": 0.9},
                 "evidence_files": ["metrics.json"],
             }
         },
@@ -207,7 +206,6 @@ def test_direct_finish_without_experiment_cannot_complete(tmp_path) -> None:
                 "arguments": {
                     "result": {
                         "summary": "done without running",
-                        "metrics": {"accuracy": 0.9},
                         "evidence_files": ["metrics.json"],
                     }
                 },

@@ -54,7 +54,7 @@
 
 ## 7. 看一个 Agent 怎么组装
 
-读 `packages/agents/coding/src/resagent2_coding/agent.py`：一个 Agent = prompt + tools + context builder + permission policy + deterministic finalizer，全部通过 `AgentDefinition` 注入共享 `AgentLoop`。`CodeModifyCompletionCheck` 用 `GitBaseline` 隔离 Attempt 增量，验证失败/漏跑命令不能 completed。
+读 `packages/agents/coding/src/resagent2_coding/agent.py`：一个 Agent = prompt + tools + context builder + permission policy + deterministic finalizer，全部通过 `AgentDefinition` 注入共享 `AgentLoop`。`CodeModifyCompletionCheck` 用 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline`）隔离 Attempt 增量，验证失败/漏跑命令不能 completed。
 
 ## 8. 看领域差异
 
@@ -63,7 +63,7 @@
 
 ## 9. 按需读 capabilities
 
-`workspace.py`（边界）、`git.py`（GitBaseline）、`process.py`（shell-free 执行）、`environment.py`（env 生命周期与 cleanup）、`dataset.py`、`artifacts.py`、`repo.py`（staging 物化）、`literature.py`。
+`workspace.py`（边界）、`git.py`（GitBaseline）+ `snapshot.py`（统一 WorkspaceSnapshot）、`process.py`（shell-free 执行）、`environment.py`（env 生命周期与 cleanup）、`dataset.py`、`artifacts.py`、`repo.py`（staging 物化）、`literature.py`。
 
 ## 10. 看组合根
 

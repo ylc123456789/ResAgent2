@@ -456,6 +456,33 @@ def test_retry_recovers_from_empty_draft() -> None:
     assert "rejected by the deterministic validator" in llm.prompts[1]
 
 
+def test_compiler_stops_at_remaining_calls() -> None:
+    """The compiler must not make a 6th call when only 5 are budgeted."""
+    from resagent2_orchestrator.compiler import CompilationReview
+
+    class _CountingLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def next_action(self, prompt, action_type):
+            self.calls += 1
+            if action_type is CompilationReview:
+                return {"accepted": True}
+            return raw_experiment("run")
+
+    llm = _CountingLLM()
+    compiler = LLMWorkflowCompiler(llm)
+    with pytest.raises(CompilationError, match="budget exhausted"):
+        compiler.compile(
+            work_request(),
+            current=None,
+            registry=registry(),
+            budget=budget(),
+            remaining_calls=1,
+        )
+    assert llm.calls == 1
+
+
 def test_retry_recovers_from_bad_dependency() -> None:
     bad = raw_experiment("run")
     bad["tasks"][0]["depends_on"] = ["nope"]

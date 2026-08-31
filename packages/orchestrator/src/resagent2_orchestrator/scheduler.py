@@ -347,8 +347,8 @@ class WorkflowScheduler:
             ],
             budget=TaskBudget(
                 max_steps=50,
-                max_llm_calls=max(
-                    1, min(50, run.request.budget.max_llm_calls - run.llm_calls_used)
+                max_llm_calls=min(
+                    50, run.request.budget.max_llm_calls - run.llm_calls_used
                 ),
                 timeout_seconds=max(
                     1,
@@ -499,6 +499,12 @@ class WorkflowScheduler:
         while True:
             run = self.store.load(run_id)
             if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED}:
+                return run
+            # Stop executing tasks once the run budget is spent; the controller
+            # decides the run has failed (ADR-0011 §7).
+            if run.llm_calls_used >= run.request.budget.max_llm_calls:
+                return run
+            if (datetime.now(UTC) - run.created_at).total_seconds() >= run.request.budget.timeout_seconds:
                 return run
             ready = self._ready_task_ids(run)
             if not ready:

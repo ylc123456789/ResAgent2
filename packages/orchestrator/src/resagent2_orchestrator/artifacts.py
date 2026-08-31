@@ -99,6 +99,38 @@ class ArtifactRegistry:
         filename = (
             Path(candidate.path).name if candidate.content is not None else source.name
         )
+        final_destination = destination_dir / filename
+        expected_digest = (
+            hashlib.sha256(candidate.content.encode("utf-8")).hexdigest()
+            if candidate.content is not None
+            else _sha256(source)
+        )
+
+        def make_ref(uri: Path, digest: str) -> ArtifactRef:
+            return ArtifactRef(
+                id=artifact_id,
+                kind=candidate.kind,
+                producer=producer,
+                run_id=run_id,
+                task_id=task_id,
+                attempt_number=attempt_number,
+                uri=uri.as_uri(),
+                sha256=digest,
+                media_type=candidate.media_type,
+                summary=candidate.summary,
+                metadata=candidate.metadata,
+            )
+
+        # Idempotent recovery: a crash after promoting the staging dir but before
+        # saving the ArtifactRef leaves a complete formal dir on disk. Reuse it
+        # when the content matches, rather than failing the retry.
+        if final_destination.is_file():
+            if _sha256(final_destination) != expected_digest:
+                raise ArtifactRegistrationError(
+                    f"artifact id already exists with different content: {artifact_id}"
+                )
+            return make_ref(final_destination, expected_digest)
+
         staging = destination_dir.parent / f".{destination_dir.name}.staging"
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
@@ -118,19 +150,7 @@ class ArtifactRegistry:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
-        return ArtifactRef(
-            id=artifact_id,
-            kind=candidate.kind,
-            producer=producer,
-            run_id=run_id,
-            task_id=task_id,
-            attempt_number=attempt_number,
-            uri=(destination_dir / filename).as_uri(),
-            sha256=digest,
-            media_type=candidate.media_type,
-            summary=candidate.summary,
-            metadata=candidate.metadata,
-        )
+        return make_ref(final_destination, digest)
 
     def register_import(
         self,

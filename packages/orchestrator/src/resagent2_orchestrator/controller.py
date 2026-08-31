@@ -174,9 +174,7 @@ class ResearchController:
             work_outcome = active.outcome
             previous_work_request = active.request
             parent_session_id = active.scientific_session_id
-        remaining = max(
-            1, run.request.budget.max_llm_calls - run.llm_calls_used
-        )
+        remaining = run.request.budget.max_llm_calls - run.llm_calls_used
         elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
         remaining_timeout = max(1, int(run.request.budget.timeout_seconds - elapsed))
         return self.scientific_port.run(
@@ -327,6 +325,12 @@ class ResearchController:
             _transition_work_request(active, WorkRequestStatus.COMPILING)
             self._save(run)
 
+        remaining_calls = run.request.budget.max_llm_calls - run.llm_calls_used
+        if remaining_calls <= 0:
+            run.status = RunStatus.FAILED
+            self._save(run)
+            return run
+
         try:
             compilation = self.compiler.compile(
                 active,
@@ -334,8 +338,11 @@ class ResearchController:
                 registry=self.registry,
                 budget=run.request.budget,
                 workspaces=self._workspace_descriptors(),
+                remaining_calls=remaining_calls,
             )
         except Exception as error:
+            # Preserve the compiler's consumed calls even when it fails.
+            run.llm_calls_used += getattr(self.compiler, "llm_calls", 0)
             _transition_work_request(
                 active,
                 WorkRequestStatus.FAILED,

@@ -222,7 +222,7 @@ def _cycle_compiler():
     a fresh task) for every subsequent request on the same workflow."""
 
     class _CycleCompiler:
-        def compile(self, request, *, current, registry, budget, workspaces=None):
+        def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
             if current is None:
                 return CompilationResult(proposal(request.id))
             # A new request on an existing workflow becomes a patch adding one task.
@@ -933,7 +933,7 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
 
 def test_compiler_llm_calls_enter_the_run_ledger() -> None:
     class _CountingCompiler:
-        def compile(self, request, *, current, registry, budget, workspaces=None):
+        def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
             return CompilationResult(proposal(request.id), llm_calls=7)
 
     scheduler = WorkflowScheduler(

@@ -70,6 +70,7 @@ class WorkflowCompiler(Protocol):
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
+        remaining_calls: int | None = None,
     ) -> CompilationResult:
         """Return a Proposal when ``current`` is None, else a Patch."""
 
@@ -175,6 +176,7 @@ class DeterministicWorkflowCompiler:
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
+        remaining_calls: int | None = None,
     ) -> CompilationResult:
         if current is None:
             return CompilationResult(self._proposal)
@@ -580,7 +582,8 @@ class LLMWorkflowCompiler:
 
     def __init__(self, client: CompilerLLM) -> None:
         self._client = client
-        self._llm_calls = 0
+        self.llm_calls = 0
+        self._remaining_calls: int | None = None
 
     def compile(
         self,
@@ -590,11 +593,14 @@ class LLMWorkflowCompiler:
         registry: CapabilityRegistry,
         budget: RunBudget,
         workspaces: list[WorkspaceDescriptor] | None = None,
+        remaining_calls: int | None = None,
     ) -> CompilationResult:
         workspaces = workspaces or []
-        self._llm_calls = 0
+        self.llm_calls = 0
+        self._remaining_calls = remaining_calls
         feedback: str | None = None
         for attempt in (0, 1):
+            self._check_budget()
             prompt = _compile_prompt(
                 request, current, registry, budget, workspaces, feedback=feedback
             )
@@ -605,8 +611,10 @@ class LLMWorkflowCompiler:
                     run_id=request.run_id,
                     work_request_id=request.id,
                 )
-            raw = self._client.next_action(prompt, CompilationDraft)
-            self._llm_calls += 1
+            try:
+                raw = self._client.next_action(prompt, CompilationDraft)
+            finally:
+                self.llm_calls += getattr(self._client, "last_attempts", 1)
             try:
                 draft = CompilationDraft.model_validate(raw)
                 compiled = _materialize_draft(
@@ -646,10 +654,15 @@ class LLMWorkflowCompiler:
                 _reject_undeclared_workspaces(
                     compiled, {item.workspace_id for item in workspaces}
                 )
-            return CompilationResult(compiled, self._llm_calls)
+            return CompilationResult(compiled, self.llm_calls)
 
         # Unreachable: attempt 1 always returns or raises.
         raise CompilationError("compiler failed after 2 attempts")
+
+    def _check_budget(self) -> None:
+        """Fail before the next LLM call once the remaining budget is spent."""
+        if self._remaining_calls is not None and self.llm_calls >= self._remaining_calls:
+            raise CompilationError("compiler LLM budget exhausted")
 
     def _review_draft(
         self, request: WorkRequest, draft: CompilationDraft
@@ -663,10 +676,13 @@ class LLMWorkflowCompiler:
                 work_request_id=request.id,
                 step="review",
             )
-        raw = self._client.next_action(
-            _review_prompt(request, draft), CompilationReview
-        )
-        self._llm_calls += 1
+        self._check_budget()
+        try:
+            raw = self._client.next_action(
+                _review_prompt(request, draft), CompilationReview
+            )
+        finally:
+            self.llm_calls += getattr(self._client, "last_attempts", 1)
         try:
             return CompilationReview.model_validate(raw)
         except ValidationError as error:

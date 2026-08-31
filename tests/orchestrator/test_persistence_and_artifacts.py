@@ -404,3 +404,41 @@ def test_rejected_candidate_leaves_no_residue_directory(tmp_path: Path) -> None:
             existing_ids=set(),
         )
     assert not (tmp_path / "artifacts" / "run_x" / "artifact_x_1_1").exists()
+
+
+def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
+    """A crash after the staging dir was promoted but before the run index was
+    saved must be recovered idempotently: re-registering reuses the same file."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    grant = WorkspaceGrant(
+        root=str(workspace),
+        mode=WorkspaceMode.READ_WRITE,
+        allowed_paths=["."],
+        source=WorkspaceSourceKind.LOCAL,
+    )
+    candidate = ArtifactCandidate(
+        kind="experiment_result",
+        path="metrics.json",
+        media_type="application/json",
+        summary="metrics",
+    )
+    kwargs = dict(
+        grant=grant,
+        producer=AgentOwner.EXPERIMENT,
+        run_id="run_x",
+        task_id="task_x",
+        attempt_number=1,
+        index=1,
+        existing_ids=set(),
+    )
+
+    first = registry.register(candidate, **kwargs)
+    # Simulate the crash: the formal dir exists but the run index did not persist.
+    second = registry.register(candidate, **kwargs)
+
+    assert second.id == first.id
+    assert second.sha256 == first.sha256
+    assert Path(second.uri.removeprefix("file://")).is_file()

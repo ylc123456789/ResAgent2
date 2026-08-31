@@ -408,6 +408,10 @@ class _CompilerClient:
     def set_trace_context(self, **kwargs) -> None:
         self._client.set_trace_context(**kwargs)
 
+    @property
+    def last_attempts(self) -> int:
+        return self._client.last_attempts
+
     def next_action(self, prompt: str, action_type):
         context = ComposedContext(
             text=prompt,

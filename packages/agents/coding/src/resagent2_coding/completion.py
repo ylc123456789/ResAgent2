@@ -200,17 +200,22 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict
     verified_revision = (
         verification_revision if verification_revision is not None else 0
     )
-    workspace_changed = edit_revision > verified_revision
+    unverified_edit = edit_revision > verified_revision
     environment_certified = bool(binding.certified)
-    if not workspace_changed:
-        required_next_action = "make_the_required_change"
-    elif not environment_certified:
-        required_next_action = "audit_env"
+    if unverified_edit:
+        required_next_action = (
+            "audit_env" if not environment_certified else "run_verification"
+        )
+    elif edit_revision > 0:
+        # The latest edit is already verified: there is no outstanding
+        # obligation, so the Agent must finish rather than re-apply an edit
+        # that already succeeded (the re-apply would fail as "found 0").
+        required_next_action = "finish"
     else:
-        required_next_action = "run_verification"
+        required_next_action = "make_the_required_change"
     return {
-        "workspace_changed": workspace_changed,
-        "verification_required": workspace_changed,
+        "workspace_changed": unverified_edit,
+        "verification_required": unverified_edit,
         "environment_certified": environment_certified,
         "required_next_action": required_next_action,
     }

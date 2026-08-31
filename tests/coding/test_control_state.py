@@ -57,7 +57,7 @@ def test_after_verification_obligation_clears() -> None:
     )
     assert control["workspace_changed"] is False
     assert control["verification_required"] is False
-    assert control["required_next_action"] == "make_the_required_change"
+    assert control["required_next_action"] == "finish"
 
 
 def test_newer_edit_reopens_verification() -> None:

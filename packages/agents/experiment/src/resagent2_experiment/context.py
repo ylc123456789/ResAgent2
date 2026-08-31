@@ -69,6 +69,36 @@ Tool arguments:
 """
 
 
+def _read_file_contents(
+    state: AgentState, *, limit: int = 4, max_chars: int = 6000
+) -> dict[str, str]:
+    """Collect the most recent ``read_file`` contents for context injection.
+
+    The Runtime's bounded ``recent_observations`` truncates each observation
+    value, so a file the Experiment Agent just read (e.g. a produced
+    ``metrics.json``) would otherwise appear only as a few hundred characters
+    and the model re-reads it forever (ADR-0011 §3.6).
+    """
+    contents: dict[str, str] = {}
+    for event in reversed(state.events):
+        if event.type != "observation" or event.tool != "read_file":
+            continue
+        data = event.data if isinstance(event.data, dict) else {}
+        value = data.get("value")
+        if not isinstance(value, dict):
+            continue
+        path = value.get("path")
+        content = value.get("content")
+        if not isinstance(path, str) or not isinstance(content, str):
+            continue
+        if path in contents:
+            continue
+        contents[path] = content[:max_chars]
+        if len(contents) >= limit:
+            break
+    return contents
+
+
 def build_context(request: ModuleTaskRequest, state: AgentState) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
@@ -112,4 +142,13 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             priority=65,
         ),
     ]
+    read_files = _read_file_contents(state)
+    if read_files:
+        sections.append(
+            ContextSection(
+                name="read_files",
+                content=json.dumps(read_files, ensure_ascii=False),
+                priority=60,
+            )
+        )
     return sections

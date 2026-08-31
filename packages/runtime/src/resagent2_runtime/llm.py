@@ -74,7 +74,14 @@ class OpenAICompatibleClient:
         self._trace_context: dict = {}
         self._trace_seq = 0
         self._last_call_id: str | None = None
-        self.last_attempts = 1
+        self.last_attempts = 0
+        self._attempt_limit: int | None = None
+
+    def set_attempt_limit(self, max_attempts: int) -> None:
+        """Limit provider attempts for the next call only."""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        self._attempt_limit = max_attempts
 
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
@@ -169,6 +176,9 @@ class OpenAICompatibleClient:
         context: ComposedContext,
         action_type: type[AgentAction],
     ) -> AgentAction | dict:
+        attempt_limit = min(3, self._attempt_limit or 3)
+        self._attempt_limit = None
+        self.last_attempts = 0
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
@@ -205,7 +215,8 @@ class OpenAICompatibleClient:
         raw_response_text: str | None = None
         parsed_action = None
         usage = None
-        for attempt in range(3):
+        for attempt in range(attempt_limit):
+            self.last_attempts = attempt + 1
             if attempt:
                 time.sleep(1.0)
                 retry_number = attempt
@@ -242,7 +253,6 @@ class OpenAICompatibleClient:
             except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
                 last_error = error
                 continue
-        self.last_attempts = retry_number + 1
         self._write_trace(
             self._trace_record(
                 context, message, parsed_action, raw_response_text,
@@ -252,6 +262,6 @@ class OpenAICompatibleClient:
         )
         if last_error is not None:
             raise RuntimeError(
-                f"LLM request failed after 3 attempts: {last_error}"
+                f"LLM request failed after {self.last_attempts} attempts: {last_error}"
             ) from last_error
         return parsed_action

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from math import ceil
 
-from .models import ComposedContext, ContextSection
+from .models import AgentState, ComposedContext, ContextSection
 
 
 class ContextBudgetExceeded(ValueError):
@@ -73,3 +73,61 @@ class ContextComposer:
             omitted_sections=omitted,
             estimated_tokens=used,
         )
+
+
+def recent_tool_text_values(
+    state: AgentState,
+    *,
+    tool: str,
+    identity_key: str,
+    text_key: str,
+    limit: int = 4,
+    max_total_chars: int = 6000,
+) -> dict[str, str]:
+    """Return recent unique tool text under one total context budget.
+
+    Agent-owned context builders use this to retain domain observations such as
+    file contents that the generic Runtime history intentionally abbreviates.
+    The bound applies to the whole returned mapping, not independently to every
+    item, so callers can safely make the resulting section required.
+    """
+    if limit < 1 or max_total_chars < 1:
+        raise ValueError("limit and max_total_chars must be positive")
+
+    recent: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for event in reversed(state.events):
+        if event.type != "observation" or event.tool != tool:
+            continue
+        data = event.data if isinstance(event.data, dict) else {}
+        value = data.get("value")
+        if not isinstance(value, dict):
+            continue
+        identity = value.get(identity_key)
+        content = value.get(text_key)
+        if not isinstance(identity, str) or not isinstance(content, str):
+            continue
+        if identity in seen:
+            continue
+        recent.append((identity, content))
+        seen.add(identity)
+        if len(recent) >= limit:
+            break
+
+    if not recent:
+        return {}
+    share = max(1, max_total_chars // len(recent))
+    return {identity: _head_tail(content, share) for identity, content in recent}
+
+
+def _head_tail(text: str, max_chars: int) -> str:
+    """Bound text while preserving both its beginning and end."""
+    if len(text) <= max_chars:
+        return text
+    marker = "\n... [truncated] ...\n"
+    if max_chars <= len(marker):
+        return text[:max_chars]
+    available = max_chars - len(marker)
+    head = (available + 1) // 2
+    tail = available // 2
+    return text[:head] + marker + text[-tail:]

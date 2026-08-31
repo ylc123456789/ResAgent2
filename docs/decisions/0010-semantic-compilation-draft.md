@@ -89,8 +89,9 @@ LLM **也不输出代码细节**：具体文件路径（如 `models/selayer.py`�
 因此 Compiler 在结构校验通过后，再做**一次短小的语义审查**（evaluator-optimizer 压缩进 Compiler 内部，不是新 Agent、不加新模块）：
 
 - 输入是 WorkRequest 的 objective/evidence/constraints 和草图的 capability+goal 列表；
-- 输出只有 `CompilationReview(accepted: bool, missing_requirements: list[str])`；
-- `accepted=false` 时，把 `missing_requirements` 交给现有的“一次纠错重编译”，重新生成草图；
+- 一个草图只描述当前可执行的一轮；不得提前加入依赖本轮失败才需要的 diagnose/fix/rerun，失败事实返回 Scientific 后另建 WorkRequest；
+- 输出只有 `CompilationReview(accepted: bool, issues: list[str])`；
+- `accepted=false` 时，把遗漏前置条件或多余条件任务写入 `issues`，交给现有的“一次纠错重编译”；
 - 第二次仍不完整才失败。
 
 为什么用 LLM 审查：判断“是否漏了科学/代码前置条件”是语义问题，固定代码难以可靠判断；不能写 `if "implement" in request: require_code_modify()` 这类会无限膨胀的关键词规则。确定性代码检查结构，LLM 检查语义完整性，最多纠错一次。
@@ -104,7 +105,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 - `workspace_changed = edit_revision > verification_revision`；
 - `verification_required = workspace_changed`；
 - `environment_certified = environment_binding.certified`；
-- `required_next_action`：未改→改代码；已改未审计→`audit_env`；已改已审计未验证→`run_verification`。
+- `required_next_action`：未改→改代码；已改未审计→`audit_env`；已改已审计未验证→`run_verification`；最新修改已验证→`finish`。
 
 这些值不由 LLM 填写，而是从 Git 编辑 revision、验证 revision、环境绑定状态派生，作为最高优先级 context 每轮注入。`CompletionCheck` 仍是最终硬 gate，不替 Agent 自动执行验证。这是把“修改后必须验证”从提示文本升级为确定性状态，不给 Coding 加固定工作流。
 
@@ -116,7 +117,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 
 - **不引入 LLMCompiler / LangGraph / Magentic-One 框架**：它们的价值在分层思想，不在组件本身；这里只需几个内部模型 + 一个纯函数物化器 + 有界的“草图 + 审查”循环。
 - **不做多候选投票或无限反思**：成本/复杂度远超收益；结构拒绝用一次精确反馈重编，语义不完整用一次缺失项反馈重编，各最多一次。
-- **语义审查不是新 Agent**：它是 Compiler 内部的一次短 LLM 调用，输出只有 `accepted`/`missing_requirements`，不新增 Planner/Reviewer Agent、不加包、不改状态机。
+- **语义审查不是新 Agent**：它是 Compiler 内部的一次短 LLM 调用，输出只有 `accepted`/`issues`，不新增 Planner/Reviewer Agent、不加包、不改状态机。
 - **Coding 控制状态不是固定工作流**：确定性代码只告诉 Coding 当前还有“必须验证最新修改”这一项责任，不限制它看哪些文件、怎么改、用什么验证命令。
 
 ## 不变的原则

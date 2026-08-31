@@ -30,7 +30,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 from resagent2_contracts import (
     Capability,
@@ -143,18 +150,27 @@ class CompilationDraft(BaseModel):
 
 
 class CompilationReview(BaseModel):
-    """Bounded semantic-completeness verdict for one draft.
+    """Bounded semantic verdict for one immediately executable draft.
 
-    ``accepted=True`` means the draft covers every prerequisite the request
-    explicitly names; otherwise ``missing_requirements`` names the concrete
-    prerequisite(s) that must be added. This is a short evaluator call inside the
-    compiler, not a new Agent or module (ADR-0010 §5).
+    ``accepted=True`` means the draft covers the request's present requirements
+    without pre-compiling work that is conditional on a future failure. Otherwise
+    ``issues`` names the concrete omissions or speculative tasks to correct. This
+    is a short evaluator call inside the compiler, not a new Agent or module
+    (ADR-0010 §5).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     accepted: bool
-    missing_requirements: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_verdict(self) -> "CompilationReview":
+        if self.accepted and self.issues:
+            raise ValueError("an accepted review cannot carry issues")
+        if not self.accepted and not self.issues:
+            raise ValueError("a rejected review requires at least one issue")
+        return self
 
 
 class DeterministicWorkflowCompiler:
@@ -217,8 +233,13 @@ def _compile_prompt(
             "one agent's internal work into separate tasks: code_modify already "
             "reads and diagnoses the code before editing, and experiment_run "
             "already prepares the environment before running.",
-            "Every prerequisite the request explicitly names must become a task in "
-            "the graph, ordered via dependencies before the evidence-producing tasks.",
+            "This draft is ONE currently executable round. Include prerequisites "
+            "that are already known to be necessary, ordered before their consumers. "
+            "Do not add diagnose/fix/rerun tasks whose need depends on a task in this "
+            "draft failing. A failure is returned to the Scientific Agent, which may "
+            "request a separate repair round. Even when the objective mentions an "
+            "if-failure contingency, compile only the work needed before that failure "
+            "has actually been observed.",
             "",
             "Return a JSON draft with this exact shape:",
             "{",
@@ -296,7 +317,11 @@ def _sanitize_inputs(capability: Capability, inputs):
 
 def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
     """Ask a short, bounded semantic-completeness review of one draft."""
-    tasks = [f"- {task.capability.value}: {task.goal}" for task in draft.tasks]
+    tasks = [
+        f"- {task.key} [{task.capability.value}]: {task.goal}; "
+        f"depends_on={task.depends_on or []}"
+        for task in draft.tasks
+    ]
     return (
         "Review whether this task draft is semantically complete for the work "
         "request.\n\n"
@@ -306,13 +331,15 @@ def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
         "Draft tasks:\n"
         + ("\n".join(tasks) or "(none)")
         + "\n\n"
-        "Decide: does the draft include every prerequisite the request explicitly "
-        "names, in the right order (e.g. an implementation/fix step before a "
-        "dependent experiment)? Do NOT demand extra tasks the request does not "
-        "call for.\n"
-        "Return accepted=true only when the draft is complete; otherwise "
-        "accepted=false with missing_requirements listing the concrete missing "
-        "prerequisite(s)."
+        "Decide whether this is the minimal CURRENTLY EXECUTABLE round. It must "
+        "include every prerequisite already known to be necessary, in the right "
+        "order. It must not include diagnose/fix/rerun work whose need is conditional "
+        "on another task in this same draft failing: failures return to the Scientific "
+        "Agent and repair is compiled as a new WorkRequest. Do not demand unrelated "
+        "extra work.\n"
+        "Return accepted=true only when both completeness and the one-round rule "
+        "hold; otherwise accepted=false with issues listing concrete missing or "
+        "speculative tasks."
     )
 
 
@@ -559,12 +586,12 @@ def _rejection_feedback(error: Exception) -> str:
     )
 
 
-def _incomplete_feedback(missing: list[str]) -> str:
-    """Feedback for a semantically incomplete draft."""
+def _review_feedback(issues: list[str]) -> str:
+    """Feedback for a draft rejected by the bounded semantic review."""
     return (
-        "The previous draft was semantically incomplete.\n"
-        "Missing requirements: " + "; ".join(missing) + "\n"
-        "Return a corrected draft that includes these prerequisites."
+        "The previous draft failed semantic review.\n"
+        "Issues: " + "; ".join(issues) + "\n"
+        "Return a corrected, minimal, currently executable round."
     )
 
 
@@ -575,9 +602,9 @@ class LLMWorkflowCompiler:
     deterministically assigns global identity and scope and emits a valid
     Proposal or append-only Patch. A structurally invalid draft is retried once
     with the validator reason as feedback. A structurally valid but semantically
-    incomplete draft (a prerequisite is missing) is caught by one bounded
-    semantic review and retried once with the missing requirements as feedback
-    (ADR-0010 §5). A second failure of either kind fails the compile.
+    invalid draft (a prerequisite is missing or speculative conditional work was
+    added) is caught by one bounded semantic review and retried once with its
+    issues as feedback (ADR-0010 §5). A second failure of either kind fails.
     """
 
     def __init__(self, client: CompilerLLM) -> None:
@@ -601,6 +628,7 @@ class LLMWorkflowCompiler:
         feedback: str | None = None
         for attempt in (0, 1):
             self._check_budget()
+            self._limit_next_call()
             prompt = _compile_prompt(
                 request, current, registry, budget, workspaces, feedback=feedback
             )
@@ -637,10 +665,10 @@ class LLMWorkflowCompiler:
             if not review.accepted:
                 if attempt == 1:
                     raise CompilationError(
-                        "compiler draft incomplete after review: "
-                        + "; ".join(review.missing_requirements)
+                        "compiler draft rejected after review: "
+                        + "; ".join(review.issues)
                     )
-                feedback = _incomplete_feedback(review.missing_requirements)
+                feedback = _review_feedback(review.issues)
                 continue
 
             # Final defense over the materialized output (ADR-0010 §7). These are
@@ -664,6 +692,14 @@ class LLMWorkflowCompiler:
         if self._remaining_calls is not None and self.llm_calls >= self._remaining_calls:
             raise CompilationError("compiler LLM budget exhausted")
 
+    def _limit_next_call(self) -> None:
+        """Bound provider retries by the Run's remaining real-call budget."""
+        if self._remaining_calls is None:
+            return
+        setter = getattr(self._client, "set_attempt_limit", None)
+        if setter is not None:
+            setter(self._remaining_calls - self.llm_calls)
+
     def _review_draft(
         self, request: WorkRequest, draft: CompilationDraft
     ) -> CompilationReview:
@@ -677,6 +713,7 @@ class LLMWorkflowCompiler:
                 step="review",
             )
         self._check_budget()
+        self._limit_next_call()
         try:
             raw = self._client.next_action(
                 _review_prompt(request, draft), CompilationReview

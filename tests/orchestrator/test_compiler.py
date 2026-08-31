@@ -483,6 +483,31 @@ def test_compiler_stops_at_remaining_calls() -> None:
     assert llm.calls == 1
 
 
+def test_compiler_passes_decreasing_attempt_budget_to_client() -> None:
+    class BudgetAwareCompilerLLM:
+        def __init__(self) -> None:
+            self.attempt_limits: list[int] = []
+            self.last_attempts = 1
+
+        def set_attempt_limit(self, max_attempts: int) -> None:
+            self.attempt_limits.append(max_attempts)
+
+        def next_action(self, prompt, action_type):
+            if action_type is CompilationReview:
+                return {"accepted": True}
+            return raw_experiment("run")
+
+    llm = BudgetAwareCompilerLLM()
+    LLMWorkflowCompiler(llm).compile(
+        work_request(),
+        current=None,
+        registry=registry(),
+        budget=budget(),
+        remaining_calls=2,
+    )
+    assert llm.attempt_limits == [2, 1]
+
+
 def test_retry_recovers_from_bad_dependency() -> None:
     bad = raw_experiment("run")
     bad["tasks"][0]["depends_on"] = ["nope"]
@@ -651,7 +676,7 @@ def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
     llm = _ScriptedCompilerLLM(
         drafts=[incomplete, corrected],
         reviews=[
-            {"accepted": False, "missing_requirements": ["implement before the experiment"]},
+            {"accepted": False, "issues": ["implement before the experiment"]},
             {"accepted": True},
         ],
     )
@@ -674,19 +699,76 @@ def test_semantic_review_accepts_experiment_only_request() -> None:
     assert [task.capability.value for task in result.tasks] == ["experiment_run"]
 
 
+def test_compilation_review_verdict_and_issues_are_consistent() -> None:
+    with pytest.raises(ValidationError, match="accepted review cannot carry issues"):
+        CompilationReview(accepted=True, issues=["unexpected"])
+    with pytest.raises(ValidationError, match="rejected review requires"):
+        CompilationReview(accepted=False)
+
+
 def test_semantic_review_rejects_twice_then_fails() -> None:
     llm = _ScriptedCompilerLLM(
         drafts=[raw_experiment("run"), raw_experiment("run")],
         reviews=[
-            {"accepted": False, "missing_requirements": ["implement first"]},
-            {"accepted": False, "missing_requirements": ["implement first"]},
+            {"accepted": False, "issues": ["implement first"]},
+            {"accepted": False, "issues": ["implement first"]},
         ],
     )
     compiler = LLMWorkflowCompiler(llm)
-    with pytest.raises(CompilationError, match="incomplete after review"):
+    with pytest.raises(CompilationError, match="rejected after review"):
         compiler.compile(
             work_request(), current=None, registry=registry(), budget=budget()
         )
+
+
+def test_semantic_review_rejects_speculative_repair_round_then_recovers() -> None:
+    speculative = {
+        "summary": "run and conditionally repair",
+        "rationale": "precompile every possible branch",
+        "tasks": [
+            *raw_experiment("run")["tasks"],
+            {
+                "key": "diagnose",
+                "capability": "code_modify",
+                "goal": "If the run fails, diagnose and fix it",
+                "depends_on": ["run"],
+                "inputs": {
+                    "capability": "code_modify",
+                    "instructions": "Diagnose and fix a failure if it occurs",
+                },
+            },
+            {
+                "key": "rerun",
+                "capability": "experiment_run",
+                "goal": "Rerun after a fix",
+                "depends_on": ["diagnose"],
+                "inputs": {
+                    "capability": "experiment_run",
+                    "instructions": "Rerun after the fix",
+                },
+            },
+        ],
+    }
+    llm = _ScriptedCompilerLLM(
+        drafts=[speculative, raw_experiment("run")],
+        reviews=[
+            {
+                "accepted": False,
+                "issues": [
+                    "diagnose and rerun are conditional on a failure not yet observed"
+                ],
+            },
+            {"accepted": True},
+        ],
+    )
+    result = LLMWorkflowCompiler(llm).compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    ).output
+    assert isinstance(result, WorkflowProposal)
+    assert [task.capability for task in result.tasks] == [Capability.EXPERIMENT_RUN]
+    assert "ONE currently executable round" in llm.prompts[0]
+    assert "conditional on a failure not yet observed" in llm.prompts[2]
+    assert "depends_on=['run']" in llm.prompts[1]
 
 
 def test_materialize_carries_task_constraints() -> None:

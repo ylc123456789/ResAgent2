@@ -67,10 +67,10 @@ Phase 7 主链已跑通，五个服务器真实 E2E 场景有验收记录。但�
 1. 为所有 ToolObservation 做参数化契约测试（可恢复拒绝必须 `ok=False`）；
 2. `run_verification` 必须执行全部命令，或者为未执行命令生成失败记录；
 3. verification passed 必须同时满足：至少一条命令、result 数量等于 command 数量、全部 exit 0 且未 timeout、workspace digest 未变化；
-4. `AgentState` 增加持久化 `llm_calls_used`，每次 provider call 发出后立即递增，schema 错误也计数；
+4. `AgentState` 增加持久化 `llm_calls_used`，每次 provider call 发出后立即递增，schema 错误也计数；shared client 的下一次 transport retry 次数受调用方剩余预算约束，不能用一次逻辑调用越过 Run 硬上限；
 5. `ModuleResult` 返回本 Attempt 的真实 `llm_calls_used`，Scientific 不再用 step 差推导；
 6. Runtime 唯一注入 `runtime_feedback` 和 `recent_observations`；Agent context 删除 required `last_observation` 和整份 memory dump；
-7. Agent 只注入经过白名单和限长的领域 memory。
+7. Agent 只注入经过白名单和限长的领域 memory；文件正文等大观察通过 runtime 共享纯函数按一个 section 总预算保留，不能在多个 Agent 复制提取逻辑或按每文件上限无限放大。
 
 ### 4. 资源单一权威（根因 D：资源和约束没有唯一权威来源）
 

@@ -408,6 +408,9 @@ class _CompilerClient:
     def set_trace_context(self, **kwargs) -> None:
         self._client.set_trace_context(**kwargs)
 
+    def set_attempt_limit(self, max_attempts: int) -> None:
+        self._client.set_attempt_limit(max_attempts)
+
     @property
     def last_attempts(self) -> int:
         return self._client.last_attempts

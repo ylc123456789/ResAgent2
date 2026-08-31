@@ -311,6 +311,9 @@ class AgentLoop:
                     agent=definition.name,
                     step=state.step,
                 )
+            limiter = getattr(definition.llm_client, "set_attempt_limit", None)
+            if limiter is not None:
+                limiter(request.budget.max_llm_calls - self._run_llm_calls)
             try:
                 raw_action = definition.llm_client.next_action(
                     context,

@@ -206,13 +206,13 @@ WorkflowCompiler 不是第三种循环。它把一次 `WorkRequest` 翻译成一
 WorkRequest + 能力注册表 + 当前 Workflow 摘要 + Run 约束
   → (LLM 只输出) CompilationDraft —— summary/rationale + 局部 task key + 局部依赖 + capability + inputs
   → (确定性 _materialize_draft) 结构校验 + 分配全局 TaskId、绑定 work_request_id、解析 workspace、转换局部依赖
-  → (LLM 一次短审查) CompilationReview —— accepted / missing_requirements
+  → (LLM 一次短审查) CompilationReview —— accepted / issues
   → WorkflowProposal（尚无图）或只追加的 WorkflowPatch（已有图）
 ```
 
 LLM 只负责语义：做什么、任务之间有什么关系。所有运行时身份、作用域和状态由代码决定——LLM 不输出全局 TaskId、WorkRequestId、revision、status 或旧 Task 引用，也不输出代码细节（文件路径、函数位置、CLI 参数、验证命令）；`code_modify` 的 `suggested_paths` 在物化时被强制清空，Coding Agent 自己探索工作区决定「在哪里、怎么做」。允许它使用结构化 LLM 调用，因为自然语言证据需求到具体 capability 的映射需要语义理解；但它必须无长期 Session、不调用专业 Agent、不形成科学结论、不改持久化状态，并把结果交给确定性 validator。它只选择任务类型、目标、依赖和逻辑 `workspace_id`；不扫描源码、不指定文件、不生成验证命令、不决定物理目录、不执行 `git clone`。
 
-结构校验通过后，Compiler 再做一次短小的**语义完整性审查**（`CompilationReview`）：判断草图有没有漏掉请求明确要求的前置任务。结构拒绝与语义不完整各自最多带精确反馈重编一次，第二次仍失败才把 WorkRequest/Run 置为 failed。现有 `_reject_*` 校验作为最终防御继续在物化结果上执行，Scheduler 保留同等检查。测试中可由 `DeterministicWorkflowCompiler` 替代。
+结构校验通过后，Compiler 再做一次短小的**语义审查**（`CompilationReview`）：判断草图有没有漏掉当前已知前置任务，以及是否提前加入了“只有本轮失败后才需要”的诊断、修复或重跑。一个 WorkRequest 只物化当前可执行的一轮；失败事实经 WorkOutcome 返回 Scientific，再由新的 WorkRequest 进入修复轮。结构拒绝与语义拒绝各自最多带精确反馈重编一次，第二次仍失败才把 WorkRequest/Run 置为 failed。现有 `_reject_*` 校验作为最终防御继续在物化结果上执行，Scheduler 保留同等检查。测试中可由 `DeterministicWorkflowCompiler` 替代。
 
 下游任务的约束只来自 `WorkflowTask.constraints`——由 Compiler 从最新 WorkRequest 分配给每个 Task；Scheduler 只传 `task.constraints`，不再把 `ResearchRequest.constraints` 原样广播给每个子 Agent。
 
@@ -295,7 +295,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 8.5 runtime 与 capabilities
 
-`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。
+`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。共享 `recent_tool_text_values` 按一个总字符预算提取 Agent 白名单领域观察；Coding/Experiment 用它把最近 `read_file` 片段作为有界 required context，而不是各维护一套或依赖会截断的通用历史。共享 LLM client 的 provider retry 每次都计入调用总账，并由调用方剩余预算限制下一次真实尝试数。
 
 `capabilities` 只回答「Agent 可以调用什么能力」：workspace、process、Artifact 读取、Git、repo materialization、environment（`EnvironmentManager` + `prepare_environment`/`run_setup`/`audit_env` 三个共享 Tool）、dataset、hardware、literature，以及内部的 `WorkspaceSnapshot`。它提供 `ResourceLayout`（共享 dataset/env 缓存的路径约定）；`RunLayout`（Run 数据目录约定）归 orchestrator。它们提供物理边界和可审计执行，不包含科学决策或 Workflow 调度。
 

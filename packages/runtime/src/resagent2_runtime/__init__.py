@@ -7,7 +7,7 @@ process, repository, environment, dataset, hardware) live in
 ``resagent2_capabilities``, which Agents assemble through their Tool Profile.
 """
 
-from .context import ContextBudgetExceeded, ContextComposer
+from .context import ContextBudgetExceeded, ContextComposer, recent_tool_text_values
 from .llm import (
     LLMClient,
     LLMExhaustedError,
@@ -76,6 +76,7 @@ __all__ = [
     "PermissionPolicy",
     "ReadValueInput",
     "ReadValueTool",
+    "recent_tool_text_values",
     "ScriptedLLMClient",
     "SessionStore",
     "Tool",

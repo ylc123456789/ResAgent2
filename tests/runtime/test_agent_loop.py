@@ -664,3 +664,36 @@ def test_llm_calls_counts_malformed_actions() -> None:
     assert result.status == ModuleStatus.COMPLETED
     assert result.llm_calls == 2
     assert store.load("session_count_calls").llm_calls_used == 2
+
+
+def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
+    class BudgetAwareLLM(ScriptedLLMClient):
+        def __init__(self) -> None:
+            super().__init__([AgentAction(tool="finish", arguments={"result": {}})])
+            self.attempt_limits: list[int] = []
+
+        def set_attempt_limit(self, max_attempts: int) -> None:
+            self.attempt_limits.append(max_attempts)
+
+    llm = BudgetAwareLLM()
+    profile = definition(
+        name="bounded-client",
+        llm=llm,
+        tools=(FinishTool(),),
+        allowed_tools={"finish"},
+    )
+    bounded_request = request(Capability.CODE_MODIFY).model_copy(
+        update={
+            "budget": TaskBudget(
+                max_steps=1, max_llm_calls=1, timeout_seconds=60
+            )
+        }
+    )
+    result = AgentLoop(store=InMemorySessionStore()).run(
+        profile,
+        bounded_request,
+        session_id="session_bounded_client",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert llm.attempt_limits == [1]

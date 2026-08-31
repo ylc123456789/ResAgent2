@@ -1,8 +1,9 @@
 """Bounded transient-failure retry for the OpenAI-compatible LLM client."""
 
 import json
+from io import BytesIO
 from unittest import mock
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -157,6 +158,43 @@ def test_transient_failure_exhausts_retries(monkeypatch) -> None:
     ):
         with pytest.raises(RuntimeError, match="3 attempts"):
             client.next_action(_context(), AgentAction)
+
+
+def test_attempt_limit_caps_transient_retries(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    client.set_attempt_limit(1)
+    with mock.patch(
+        "resagent2_runtime.llm.urlopen", side_effect=URLError("boom")
+    ) as urlopen_mock:
+        with pytest.raises(RuntimeError, match="after 1 attempts"):
+            client.next_action(_context(), AgentAction)
+    assert urlopen_mock.call_count == 1
+    assert client.last_attempts == 1
+
+
+def test_client_error_counts_one_attempt_after_prior_retry(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    ok = _FakeResponse(
+        {"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]}
+    )
+    with (
+        mock.patch("resagent2_runtime.llm.time.sleep"),
+        mock.patch("resagent2_runtime.llm.urlopen", side_effect=[URLError("boom"), ok]),
+    ):
+        client.next_action(_context(), AgentAction)
+    assert client.last_attempts == 2
+
+    error = HTTPError(
+        url="https://example.com",
+        code=400,
+        msg="bad request",
+        hdrs=None,
+        fp=BytesIO(b"invalid"),
+    )
+    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=error):
+        with pytest.raises(RuntimeError, match="LLM HTTP 400"):
+            client.next_action(_context(), AgentAction)
+    assert client.last_attempts == 1
 
 
 def test_malformed_json_is_retried(monkeypatch) -> None:

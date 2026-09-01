@@ -1,4 +1,20 @@
-"""Public data contracts shared by every ResAgent2 package."""
+"""Public data contracts shared by every ResAgent2 package.
+
+The declarations are grouped by the boundary they describe:
+
+1. contract foundations and identifiers;
+2. routing and lifecycle vocabulary;
+3. shared diagnostics, sessions, and artifacts;
+4. run entry, budgets, and user interaction;
+5. capability-specific inputs and results;
+6. task attempts and workflow graphs;
+7. workspaces and the uniform child-module boundary;
+8. capability registry;
+9. scientific control-loop contracts.
+
+This file defines valid data shapes and cross-field invariants. State-transition
+policy and execution behavior remain in the orchestrator and Agent packages.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +32,11 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+# ---------------------------------------------------------------------------
+# 1. Contract foundations and stable identifiers
+# ---------------------------------------------------------------------------
 
 
 SCHEMA_VERSION = "3.0"
@@ -50,6 +71,11 @@ class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["3.0"] = SCHEMA_VERSION
+
+
+# ---------------------------------------------------------------------------
+# 2. Routing, ownership, and lifecycle vocabulary
+# ---------------------------------------------------------------------------
 
 
 class Capability(StrEnum):
@@ -164,6 +190,11 @@ class ScientificVerdict(StrEnum):
     REFUTES = "refutes"
     INCONCLUSIVE = "inconclusive"
     NOT_APPLICABLE = "not_applicable"
+
+
+# ---------------------------------------------------------------------------
+# 3. Shared diagnostics, resumable sessions, and immutable evidence
+# ---------------------------------------------------------------------------
 
 
 class ModuleError(ContractModel):
@@ -296,6 +327,11 @@ class ArtifactCandidate(ContractModel):
         return _validate_relative_path(value)
 
 
+# ---------------------------------------------------------------------------
+# 4. Run entry, budgets, imported inputs, and user interaction
+# ---------------------------------------------------------------------------
+
+
 class RunBudget(ContractModel):
     """Hard orchestration limits for one research run."""
 
@@ -365,6 +401,11 @@ class UserAnswer(ContractModel):
     question_id: QuestionId
     values: dict[NonEmptyStr, str]
     answered_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# 5. Capability-specific inputs, outputs, and resource declarations
+# ---------------------------------------------------------------------------
 
 
 class CodeUnderstandInput(ContractModel):
@@ -529,6 +570,11 @@ CapabilityInput = Annotated[
     ],
     Field(discriminator="capability"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# 6. Attempt history and revisioned workflow graphs
+# ---------------------------------------------------------------------------
 
 
 class Attempt(ContractModel):
@@ -707,6 +753,11 @@ class WorkflowPatch(ContractModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# 7. Workspace boundaries and the uniform child-module request/result envelope
+# ---------------------------------------------------------------------------
+
+
 class WorkspaceGrant(ContractModel):
     """Explicit filesystem boundary granted to one module invocation."""
 
@@ -869,6 +920,11 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
         return self
 
 
+# ---------------------------------------------------------------------------
+# 8. Capability registry
+# ---------------------------------------------------------------------------
+
+
 class CapabilityDefinition(ContractModel):
     """Public registry entry describing ownership and completion evidence."""
 
@@ -896,9 +952,7 @@ class CapabilityRegistry(ContractModel):
 
 
 # ---------------------------------------------------------------------------
-# Schema 2.0 target contracts (CONTRACTS §20). These are new public data types
-# for the Phase 7 scientific control loop; the ScientificPort protocol itself
-# lands in a later step (7.4), not here.
+# 9. Scientific control-loop requests, outcomes, and opinions
 # ---------------------------------------------------------------------------
 
 

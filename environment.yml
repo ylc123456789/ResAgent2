@@ -15,5 +15,6 @@ dependencies:
       - -e ./packages/agents/coding
       - -e ./packages/agents/experiment
       - -e ./packages/agents/scientific
+      - -e ./apps/cli
 variables:
   PYTHONNOUSERSITE: "1"

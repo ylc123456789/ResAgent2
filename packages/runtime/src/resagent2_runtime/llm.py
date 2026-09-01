@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -14,7 +15,50 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .context import ContextBudgetExceeded, ContextComposer
 from .models import AgentAction, ComposedContext
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProfile:
+    """Configured context limits for one injected model client."""
+
+    context_window: int
+    reserved_output_tokens: int = 4096
+    safety_margin_tokens: int = 1024
+
+    def __post_init__(self) -> None:
+        if self.context_window < 1 or self.reserved_output_tokens < 1:
+            raise ValueError("context window and output reservation must be positive")
+        if self.safety_margin_tokens < 0:
+            raise ValueError("safety margin cannot be negative")
+        if (
+            self.reserved_output_tokens + self.safety_margin_tokens
+            >= self.context_window
+        ):
+            raise ValueError("model profile leaves no room for input context")
+
+    def input_budget(
+        self,
+        *,
+        schema_tokens: int,
+        component_limit: int,
+    ) -> int:
+        """Return the smaller of the model capacity and component policy."""
+
+        if schema_tokens < 0:
+            raise ValueError("schema_tokens cannot be negative")
+        if component_limit < 1:
+            raise ValueError("component_limit must be positive")
+        available = (
+            self.context_window
+            - self.reserved_output_tokens
+            - self.safety_margin_tokens
+            - schema_tokens
+        )
+        if available < 1:
+            raise ValueError("model profile leaves no room after action schema")
+        return min(component_limit, available)
 
 
 class LLMClient(Protocol):
@@ -61,6 +105,7 @@ class OpenAICompatibleClient:
         model: str,
         api_base: str,
         api_key_env: str,
+        model_profile: ModelProfile | None = None,
         timeout_seconds: int = 120,
         trace_dir: Path | None = None,
         trace_level: str = "off",
@@ -68,6 +113,7 @@ class OpenAICompatibleClient:
         self.model = model
         self.endpoint = f"{api_base.rstrip('/')}/chat/completions"
         self.api_key_env = api_key_env
+        self.model_profile = model_profile
         self.timeout_seconds = timeout_seconds
         self.trace_dir = Path(trace_dir) if trace_dir else None
         self.trace_level = trace_level
@@ -76,6 +122,35 @@ class OpenAICompatibleClient:
         self._last_call_id: str | None = None
         self.last_attempts = 0
         self._attempt_limit: int | None = None
+
+    @staticmethod
+    def _action_instruction(action_type: type[AgentAction]) -> str:
+        schema = json.dumps(action_type.model_json_schema(), ensure_ascii=False)
+        return (
+            "Return exactly one JSON object matching this action schema. "
+            "Do not use markdown fences.\n"
+            f"{schema}"
+        )
+
+    def context_budget(
+        self,
+        action_type: type[AgentAction],
+        component_limit: int,
+    ) -> int:
+        """Return this component's usable input budget for one action schema."""
+
+        if self.model_profile is None:
+            return component_limit
+        schema_tokens = ContextComposer.estimate_tokens(
+            self._action_instruction(action_type)
+        )
+        try:
+            return self.model_profile.input_budget(
+                schema_tokens=schema_tokens,
+                component_limit=component_limit,
+            )
+        except ValueError as error:
+            raise ContextBudgetExceeded(str(error)) from error
 
     def set_attempt_limit(self, max_attempts: int) -> None:
         """Limit provider attempts for the next call only."""
@@ -182,21 +257,16 @@ class OpenAICompatibleClient:
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
-        schema = json.dumps(action_type.model_json_schema(), ensure_ascii=False)
-        message = (
-            f"{context.text}\n\n"
-            "Return exactly one JSON object matching this action schema. "
-            "Do not use markdown fences.\n"
-            f"{schema}"
-        )
-        body = json.dumps(
-            {
-                "model": self.model,
-                "messages": [{"role": "user", "content": message}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0,
-            }
-        ).encode("utf-8")
+        message = f"{context.text}\n\n{self._action_instruction(action_type)}"
+        body_data = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": message}],
+            "response_format": {"type": "json_object"},
+            "temperature": 0,
+        }
+        if self.model_profile is not None:
+            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+        body = json.dumps(body_data).encode("utf-8")
         request = Request(
             self.endpoint,
             data=body,

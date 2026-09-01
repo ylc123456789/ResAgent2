@@ -30,8 +30,10 @@ from resagent2_orchestrator import (
     WorkflowScheduler,
 )
 from resagent2_runtime import (
-    ComposedContext,
+    ContextComposer,
+    ContextSection,
     JsonSessionStore,
+    ModelProfile,
     OpenAICompatibleClient,
 )
 from resagent2_scientific import ScientificAgent
@@ -50,11 +52,44 @@ def _trace_dir() -> Path | None:
     return Path(value).expanduser() if value else None
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = default if raw is None else int(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer") from error
+    if value < 1:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _model_profile() -> ModelProfile:
+    """Read one explicit model-capacity profile from the composition boundary."""
+
+    return ModelProfile(
+        context_window=_positive_int_env("RESAGENT2_CONTEXT_WINDOW", 65_536),
+        reserved_output_tokens=_positive_int_env(
+            "RESAGENT2_RESERVED_OUTPUT_TOKENS", 4096
+        ),
+        safety_margin_tokens=_positive_int_env(
+            "RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS", 1024
+        ),
+    )
+
+
+def _component_context_limit(component: str) -> int:
+    return _positive_int_env(
+        f"RESAGENT2_{component.upper()}_CONTEXT_TOKENS",
+        4096,
+    )
+
+
 def _client() -> OpenAICompatibleClient:
     return OpenAICompatibleClient(
         model=os.environ.get("RESAGENT2_MODEL", "deepseek-chat"),
         api_base=os.environ.get("RESAGENT2_API_BASE", "https://api.deepseek.com/v1"),
         api_key_env=os.environ.get("RESAGENT2_API_KEY_ENV", "DEEPSEEK_API_KEY"),
+        model_profile=_model_profile(),
         trace_dir=_trace_dir(),
         trace_level=os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off"),
     )
@@ -63,8 +98,10 @@ def _client() -> OpenAICompatibleClient:
 class _CompilerClient:
     """Bridge the runtime LLM client to the compiler's plain-prompt Port."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_context_tokens: int) -> None:
         self._client = _client()
+        self._composer = ContextComposer()
+        self._max_context_tokens = max_context_tokens
 
     def set_trace_context(self, **kwargs) -> None:
         self._client.set_trace_context(**kwargs)
@@ -77,13 +114,23 @@ class _CompilerClient:
         return self._client.last_attempts
 
     def next_action(self, prompt: str, action_type):
+        max_tokens = self._client.context_budget(
+            action_type,
+            self._max_context_tokens,
+        )
+        context = self._composer.compose(
+            "You are the stateless ResAgent2 Workflow Compiler.",
+            [
+                ContextSection(
+                    name="compiler_request",
+                    content=prompt,
+                    required=True,
+                )
+            ],
+            max_tokens=max_tokens,
+        )
         return self._client.next_action(
-            ComposedContext(
-                text=prompt,
-                included_sections=[],
-                omitted_sections=[],
-                estimated_tokens=0,
-            ),
+            context,
             action_type,
         )
 
@@ -176,16 +223,28 @@ def build_application(
     coding_store = JsonSessionStore(root / "sessions" / "coding")
     experiment_store = JsonSessionStore(root / "sessions" / "experiment")
     scientific_store = JsonSessionStore(root / "sessions" / "scientific")
+    coding_context_tokens = _component_context_limit("coding")
+    experiment_context_tokens = _component_context_limit("experiment")
+    scientific_context_tokens = _component_context_limit("scientific")
+    compiler_context_tokens = _component_context_limit("compiler")
 
     scheduler = WorkflowScheduler(
         bindings={
             Capability.CODE_UNDERSTAND: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_UNDERSTAND),
-                port=NativeCodingAgent(_client(), store=coding_store),
+                port=NativeCodingAgent(
+                    _client(),
+                    store=coding_store,
+                    max_context_tokens=coding_context_tokens,
+                ),
             ),
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=NativeCodingAgent(_client(), store=coding_store),
+                port=NativeCodingAgent(
+                    _client(),
+                    store=coding_store,
+                    max_context_tokens=coding_context_tokens,
+                ),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
@@ -193,6 +252,7 @@ def build_application(
                     _client(),
                     store=experiment_store,
                     resource_layout=resource_layout,
+                    max_context_tokens=experiment_context_tokens,
                 ),
             ),
         },
@@ -210,10 +270,13 @@ def build_application(
         literature_backend=ArxivLiteratureBackend(),
         registration_port=registration,
         store=scientific_store,
+        max_context_tokens=scientific_context_tokens,
     )
     controller = ResearchController(
         scientific_port=scientific,
-        compiler=LLMWorkflowCompiler(_CompilerClient()),
+        compiler=LLMWorkflowCompiler(
+            _CompilerClient(max_context_tokens=compiler_context_tokens)
+        ),
         scheduler=scheduler,
         registry=registry,
     )

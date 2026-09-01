@@ -11,6 +11,7 @@ from .context import ContextBudgetExceeded, ContextComposer, recent_tool_text_va
 from .llm import (
     LLMClient,
     LLMExhaustedError,
+    ModelProfile,
     OpenAICompatibleClient,
     ScriptedLLMClient,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "JsonSessionStore",
     "LLMClient",
     "LLMExhaustedError",
+    "ModelProfile",
     "OpenAICompatibleClient",
     "PermissionDecision",
     "PermissionPolicy",

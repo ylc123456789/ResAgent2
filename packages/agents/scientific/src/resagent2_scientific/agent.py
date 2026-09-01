@@ -80,11 +80,15 @@ class ScientificAgent:
         literature_backend: LiteratureSearchBackend | None = None,
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
+        max_context_tokens: int = 4096,
     ) -> None:
+        if max_context_tokens < 1:
+            raise ValueError("max_context_tokens must be positive")
         self.llm_client = llm_client
         self.literature_backend = literature_backend
         self.registration_port = registration_port
         self.store = store or InMemorySessionStore()
+        self.max_context_tokens = max_context_tokens
         self.loop = AgentLoop(store=self.store)
 
     def run(self, request: ScientificTurnRequest) -> ScientificTurnResult:
@@ -116,6 +120,7 @@ class ScientificAgent:
                 list(request.unresolved_task_outcomes)
             ),
             action_type=ScientificAction,
+            max_context_tokens=self.max_context_tokens,
         )
 
         session_id = request.parent_session_id or f"session_scientific_{request.run_id}"

@@ -26,6 +26,23 @@ LLM configuration uses environment variables only:
 - `RESAGENT2_API_KEY_ENV` (default `DEEPSEEK_API_KEY`)
 - the API key itself through the environment variable named above
 
+Context capacity is explicit configuration rather than a provider lookup:
+
+- `RESAGENT2_CONTEXT_WINDOW` (default `65536`)
+- `RESAGENT2_RESERVED_OUTPUT_TOKENS` (default `4096`)
+- `RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS` (default `1024`)
+- `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS` (default `4096`)
+- `RESAGENT2_CODING_CONTEXT_TOKENS` (default `4096`)
+- `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS` (default `4096`)
+- `RESAGENT2_COMPILER_CONTEXT_TOKENS` (default `4096`)
+
+The usable input budget is the smaller of the component limit and the model
+window after reserving output, action-schema and safety-margin tokens. When
+changing to a model with a smaller context window, set `RESAGENT2_CONTEXT_WINDOW`
+to that model's documented value. The Workflow Compiler reuses the same context
+composer and budget calculation but remains a stateless one-shot compiler; it
+does not run through the Agentic Loop.
+
 Existing resource and trace environment variables remain unchanged.
 
 ## Exit codes

@@ -71,10 +71,14 @@ class NativeCodingAgent:
         *,
         store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
+        max_context_tokens: int = 4096,
     ) -> None:
+        if max_context_tokens < 1:
+            raise ValueError("max_context_tokens must be positive")
         self.llm_client = llm_client
         self.loop = AgentLoop(store=store or InMemorySessionStore())
         self.resource_layout = resource_layout or ResourceLayout.from_env()
+        self.max_context_tokens = max_context_tokens
 
     @staticmethod
     def _failure(message: str, *, blocked: bool = False) -> ModuleResult:
@@ -176,6 +180,7 @@ class NativeCodingAgent:
                 completion_check=CodeUnderstandCompletionCheck(repository, baseline),
                 action_type=CodeUnderstandAction,
                 result_type=CodeUnderstandResult,
+                max_context_tokens=self.max_context_tokens,
             )
         else:
             if request.output_dir is None:
@@ -237,6 +242,7 @@ class NativeCodingAgent:
                 ),
                 action_type=CodeModifyAction,
                 result_type=CodeModifyResult,
+                max_context_tokens=self.max_context_tokens,
             )
 
         result = self.loop.run(

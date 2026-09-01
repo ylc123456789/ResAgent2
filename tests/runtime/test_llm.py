@@ -7,7 +7,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from resagent2_runtime import ComposedContext, OpenAICompatibleClient
+from resagent2_runtime import ComposedContext, ModelProfile, OpenAICompatibleClient
 from resagent2_runtime.models import AgentAction
 
 
@@ -43,6 +43,51 @@ def _context() -> ComposedContext:
         omitted_sections=[],
         estimated_tokens=0,
     )
+
+
+def test_model_profile_combines_model_capacity_and_component_limit() -> None:
+    profile = ModelProfile(
+        context_window=10_000,
+        reserved_output_tokens=2_000,
+        safety_margin_tokens=1_000,
+    )
+
+    assert profile.input_budget(schema_tokens=500, component_limit=8_000) == 6_500
+    assert profile.input_budget(schema_tokens=500, component_limit=4_000) == 4_000
+
+
+def test_model_profile_rejects_impossible_limits() -> None:
+    with pytest.raises(ValueError, match="no room for input"):
+        ModelProfile(
+            context_window=4_000,
+            reserved_output_tokens=3_000,
+            safety_margin_tokens=1_000,
+        )
+
+
+def test_client_reserves_schema_and_output_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    profile = ModelProfile(
+        context_window=4_000,
+        reserved_output_tokens=1_000,
+        safety_margin_tokens=500,
+    )
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        model_profile=profile,
+    )
+    budget = client.context_budget(AgentAction, component_limit=3_000)
+    assert 0 < budget < 2_500
+
+    ok = _FakeResponse(
+        {"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]}
+    )
+    with mock.patch("resagent2_runtime.llm.urlopen", return_value=ok) as urlopen_mock:
+        client.next_action(_context(), AgentAction)
+    request = urlopen_mock.call_args.args[0]
+    assert json.loads(request.data)["max_tokens"] == 1_000
 
 
 def test_transient_llm_failure_is_retried(monkeypatch) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from resagent2_cli import composition
 from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
@@ -16,6 +17,7 @@ from resagent2_contracts import (
     WorkspaceSpec,
 )
 from resagent2_orchestrator import InMemoryRunStore, ResearchRun
+from resagent2_runtime import AgentAction
 from resagent2_cli.main import _specs_for_existing_run
 
 
@@ -70,6 +72,43 @@ class _Builder:
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
         return CliApplication(controller=self.controller, run_store=InMemoryRunStore())
+
+
+def test_composition_reads_explicit_model_and_component_context_limits(monkeypatch):
+    monkeypatch.setenv("RESAGENT2_CONTEXT_WINDOW", "32000")
+    monkeypatch.setenv("RESAGENT2_RESERVED_OUTPUT_TOKENS", "3000")
+    monkeypatch.setenv("RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS", "1000")
+    monkeypatch.setenv("RESAGENT2_CODING_CONTEXT_TOKENS", "12000")
+
+    profile = composition._model_profile()
+    assert profile.context_window == 32000
+    assert profile.reserved_output_tokens == 3000
+    assert profile.safety_margin_tokens == 1000
+    assert composition._component_context_limit("coding") == 12000
+
+
+def test_compiler_reuses_context_composer_without_agent_loop(monkeypatch):
+    class _Client:
+        last_attempts = 1
+
+        def context_budget(self, action_type, component_limit):
+            return component_limit
+
+        def next_action(self, context, action_type):
+            self.context = context
+            return {"tool": "finish"}
+
+    runtime_client = _Client()
+    monkeypatch.setattr(composition, "_client", lambda: runtime_client)
+    compiler_client = composition._CompilerClient(max_context_tokens=512)
+
+    compiler_client.next_action("Compile this objective", AgentAction)
+
+    assert runtime_client.context.included_sections == [
+        "system",
+        "compiler_request",
+    ]
+    assert runtime_client.context.estimated_tokens > 0
 
 
 def test_run_passes_goal_and_workspace_to_existing_interfaces(tmp_path: Path):

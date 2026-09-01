@@ -52,6 +52,13 @@ class VerifiedResult(BaseModel):
     value: int
 
 
+class BudgetedScriptedLLM(ScriptedLLMClient):
+    """Scripted client exposing the optional model-aware budget hook."""
+
+    def context_budget(self, action_type, component_limit: int) -> int:
+        return 1
+
+
 def build_context(request, state) -> list[ContextSection]:
     return [
         ContextSection(
@@ -161,6 +168,25 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
     assert write_result.status == ModuleStatus.COMPLETED
     assert store.load("session_writer").memory["verified"] is True
     assert type(loop) is AgentLoop
+
+
+def test_loop_uses_model_aware_context_budget_when_client_provides_it() -> None:
+    llm = BudgetedScriptedLLM([AgentAction(tool="finish", arguments={})])
+    result = AgentLoop(store=InMemorySessionStore()).run(
+        definition(
+            name="budgeted",
+            llm=llm,
+            tools=(FinishTool(),),
+            allowed_tools={"finish"},
+        ),
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_budgeted",
+    )
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error is not None
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert llm.contexts == []
 
 
 def test_ask_user_returns_signal_without_reading_a_terminal() -> None:

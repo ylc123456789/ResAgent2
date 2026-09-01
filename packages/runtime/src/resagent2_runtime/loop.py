@@ -282,10 +282,17 @@ class AgentLoop:
                             required=True,
                         ),
                     )
+                context_limit = definition.max_context_tokens
+                budgeter = getattr(definition.llm_client, "context_budget", None)
+                if budgeter is not None:
+                    context_limit = budgeter(
+                        definition.action_type,
+                        definition.max_context_tokens,
+                    )
                 context = self.context_composer.compose(
                     definition.system_prompt,
                     sections,
-                    max_tokens=definition.max_context_tokens,
+                    max_tokens=context_limit,
                 )
             except ContextBudgetExceeded as error:
                 return self._failure(

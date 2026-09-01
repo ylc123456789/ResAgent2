@@ -36,10 +36,10 @@
 | Phase 5 | Coding Agent vNext | completed |
 | Phase 6 | Experiment Agent vNext | completed |
 | Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | completed（历史 schema 2.0 主链） |
-| Stabilization 3.0 | 按 ADR-0011 收敛控制面、契约、资源与生命周期 | in_progress（本地代码收尾；最终服务器五场景待验收） |
+| Stabilization 3.0 | 按 ADR-0011 收敛控制面、契约、资源与生命周期 | completed（`d3c5560` 代码树；本地与服务器验收通过） |
 | Phase 8 | 按需高级能力 | not_started |
 
-Phase 1—7 是历史实施记录。当前 production 只保留 schema 3.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；Stabilization 3.0 已完成主体代码收敛，但最终 HEAD 的服务器 clean-workdir 五场景仍需重跑，尤其是 repair 与 ask-resume 的重复验收。旧 schema 2.0 的五场景记录只证明 Phase 7 当时的主链，不替代 3.0 最终验收。
+Phase 1—7 是历史实施记录。当前 production 只保留 schema 3.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -734,4 +734,4 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-29 | Phase 7.7 recovery-loop hardening 收尾 | `0a57b6c`, `812c0aa` + 本地未 push | 本地 281 passed、1 skipped；mock E2E completed；服务器真实 E2E 场景 2 completed（baseline 0.4367 → candidate 0.5079，verdict=supports） | 修 3 条 P1（数据集通用绑定、运行时 ok=False/completion rejection 计数、环境中断恢复）+ 恢复闭环（previous_work_request + 最近历史/连续失败保护 + prompt 规则）；全新 workdir 场景 2 跑通 |
 | 2026-08-29 | 共享环境能力改造（ADR-0009） | 本地未 push | 本地 287 passed、1 skipped；mock E2E completed；服务器真实 E2E 场景 2 completed（verdict=supports） | 环境改 run_id+workspace_id 绑定；EnvironmentSpec/environment_spec 取代 ExperimentRunInput.python_version；EnvironmentManager inspect/prepare/audit + PreparedEnvironment + EnvironmentBinding；三个共享工具 prepare_environment/run_setup/audit_env；Coding 接环境化 verification、Experiment 删私有环境逻辑；Manager 不自动装依赖；半成品删除重建 + `.resagent2_base_ready` |
 | 2026-08-29 | Phase 7 五场景真实 E2E | `750b4d8` 起 + 本地未 push | 场景 1/2/4/5 通过；场景 3 repair 契约断点已修、真实 LLM 待收敛 | 1 direct inconclusive ✅；2 code-experiment ✅（work7，0.4237→0.5359）；4 ask-start/resume ✅（跨进程恢复）；5 literature ✅（修 budget_exhausted + 同 turn 动态 resolve 两个硬错误）；3 repair 修 Compiler 跨 WorkRequest supersede/update 契约断点 + 确定性测试覆盖（failed→新 WorkRequest→新增任务→旧失败保留→completed），真实 LLM 图生成仍抖动 |
-| 2026-08-31 | Stabilization 3.0 收尾复核 | 未提交 | 本地 378 passed、1 skipped；mock E2E completed；服务器待验收 | Compiler 明确“一 WorkRequest 一当前可执行轮”并拒绝 speculative repair；shared LLM client 按剩余调用预算限制 transport retry；Coding/Experiment 复用总量有界的 read-file context。最终五场景与 full trace 仍由服务器验收。 |
+| 2026-09-01 | Stabilization 3.0 完成 | `d3c5560`（被验收代码树） | 本地 378 passed、1 skipped；mock E2E completed；服务器 clean-workdir 五场景全部通过 | Compiler 一 WorkRequest 一当前可执行轮；LLM transport retry 纳入剩余 Run 预算；Coding/Experiment 共享有界 read-file context；repair 3 连过、ask/resume 两次跨进程通过；五场景 full trace 权限为目录 0700/文件 0600。其后仅同步验收文档。 |

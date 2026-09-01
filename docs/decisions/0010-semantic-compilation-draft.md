@@ -64,7 +64,7 @@ LLM **也不输出代码细节**：具体文件路径（如 `models/selayer.py`�
 11. 统一绑定 `work_request_id = request.id`；
 12. 生成最终契约对象。
 
-`current is None` 时生成 `WorkflowProposal`；否则生成 `WorkflowPatch(add_tasks=[...], supersede_task_ids=[], pending_task_updates=[])`——production Compiler 永远只产生 append-only patch。`code_modify` 任务的 `inputs.suggested_paths` 在物化时被强制清空（§1），Compiler 不会把它未读过的路径传给 Coding Agent。
+`current is None` 时生成 `WorkflowProposal`；否则生成 `WorkflowPatch(add_tasks=[...])`——production Compiler 永远只产生 append-only patch。schema 3.0 已删除 `supersede_task_ids` 和 `pending_task_updates`。`code_modify` 任务的 `inputs.suggested_paths` 在物化时被强制清空（§1），Compiler 不会把它未读过的路径传给 Coding Agent。
 
 ### 3. 一次有界纠错重编译
 

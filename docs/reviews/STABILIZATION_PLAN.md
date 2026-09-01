@@ -449,6 +449,8 @@ GIT/COPY/GENERATED 统一使用同级 staging directory：成功验证后 rename
 
 状态敏感的 repair 与 ask-resume 各额外重复一次。保留最终成功 Run snapshot、Session、Artifact、LLM full trace（权限 700/600）和环境 manifest；删除失败中间产物与无价值旧环境。
 
+**验收结果（2026-09-01）：通过。** 被验收的代码树为 `d3c5560`。direct、code-experiment、repair、ask-start/ask-resume、literature 五场景在服务器 clean workdir 全部完成；repair 连续通过 3 次，ask/resume 完成两次真实退出后的跨进程恢复。最终 Run snapshot、Session、Artifact 与环境 manifest 已保留，所有登记 Artifact 的文件和 SHA-256 一致；五场景 full LLM trace 已保留，目录权限为 `0700`、文件权限为 `0600`，且未记录 API key。
+
 ### 10.4 文档验收
 
 - ARCHITECTURE 只讲当前 3.0；

@@ -17,11 +17,11 @@ ResAgent2 是一个面向科研任务的、可审计的 Agent 工作流系统。
 
 ## 当前状态
 
-**阶段：schema 3.0 stabilization 进行中。本地 378 passed、1 skipped 且 mock E2E completed；最终 HEAD 的服务器五场景验收尚未完成。最近一次 clean-workdir 验收为 direct / code-experiment / ask-resume / literature 通过，repair 修复等待重跑。**
+**阶段：Stabilization 3.0 已完成。被验收的代码树为 `d3c5560`：本地 378 passed、1 skipped，mock E2E completed；服务器 clean-workdir 的 direct / code-experiment / repair / ask-resume / literature 五场景全部通过，其中 repair 连续通过 3 次，ask/resume 完成两次跨进程验收。**
 
 当前代码只实现 `resagent2-contracts` schema 3.0（`SCHEMA_VERSION="3.0"`）、共享 runtime/capabilities、确定性的 Workflow Core，以及原生 Coding/Experiment/Scientific Agent；没有 2.0/3.0 双 production 路径。workspace、无 shell process、Git、只读 Artifact、真实 LLM client、finalizer、provisioning 和环境能力已经接通，真实执行不再依赖旧 CodingAgent 或旧 reproagent。
 
-Phase 7 已完成唯一 Scientific 主链；当前 stabilization 按 ADR-0011 进一步统一控制面、Attempt、预算、资源、证据和生命周期语义。最终完成状态以 `docs/reviews/STABILIZATION_PLAN.md` 的验收条件和 `docs/DEVELOPMENT_PLAN.md` 的最新记录为准，不能用旧 schema 的 E2E 记录替代当前 HEAD 验收。
+Phase 7 已完成唯一 Scientific 主链；Stabilization 3.0 已按 ADR-0011 统一控制面、Attempt、预算、资源、证据和生命周期语义，并完成最终服务器验收。完成依据见 `docs/reviews/STABILIZATION_PLAN.md` 和 `docs/DEVELOPMENT_PLAN.md` 的最新记录。
 
 ## 四个角色
 

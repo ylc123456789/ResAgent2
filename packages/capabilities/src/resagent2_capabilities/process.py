@@ -248,10 +248,11 @@ class ProcessRunner:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         started = monotonic()
         timed_out = False
-        environment = _sanitized_environment(os.environ.copy())
-        environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        environment = os.environ.copy()
         if extra_env:
             environment.update(extra_env)
+        environment = _sanitized_environment(environment)
+        environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(
                 argv,

@@ -298,7 +298,13 @@ def _validate_relative_path(value: str) -> str:
     path = value.strip()
     posix = PurePosixPath(path)
     windows = PureWindowsPath(path)
-    if not path or posix.is_absolute() or windows.is_absolute() or ".." in posix.parts:
+    if (
+        not path
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or ".." in posix.parts
+        or ".." in windows.parts
+    ):
         raise ValueError("path must be a non-empty relative path without '..'")
     return path
 

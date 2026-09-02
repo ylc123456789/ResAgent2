@@ -286,6 +286,28 @@ def test_workspace_grant_rejects_paths_outside_root() -> None:
         )
 
 
+@pytest.mark.parametrize("bad_path", ["../x", "..\\x", "a/../../x", "a\\..\\..\\x"])
+def test_relative_path_rejects_cross_platform_traversal(bad_path: str) -> None:
+    with pytest.raises(ValidationError, match="relative"):
+        ArtifactCandidate(
+            kind="text",
+            path=bad_path,
+            media_type="text/plain",
+            summary="evidence",
+        )
+
+
+@pytest.mark.parametrize("good_path", ["train.py", "src/model.py", "src\\model.py"])
+def test_relative_path_accepts_workspace_relative_forms(good_path: str) -> None:
+    candidate = ArtifactCandidate(
+        kind="text",
+        path=good_path,
+        media_type="text/plain",
+        summary="evidence",
+    )
+    assert candidate.path == good_path
+
+
 def test_workspace_source_kind_values() -> None:
     assert {kind.value for kind in WorkspaceSourceKind} == {
         "git",

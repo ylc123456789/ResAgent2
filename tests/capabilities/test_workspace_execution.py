@@ -146,6 +146,34 @@ def test_process_runner_marks_timeout_and_stops_process(tmp_path) -> None:
     assert result.exit_code != 0
 
 
+def test_process_runner_extra_env_cannot_inject_credentials(tmp_path) -> None:
+    boundary = WorkspaceBoundary(grant(tmp_path))
+    result = ProcessRunner(boundary).run(
+        "env",
+        log_dir=".resagent2/env",
+        index=1,
+        timeout_seconds=10,
+        extra_env={
+            "DEEPSEEK_API_KEY": "sk-secret-deepseek",
+            "OPENAI_API_KEY": "sk-secret-openai",
+            "SSH_AUTH_SOCK": "/tmp/ssh-agent-secret.sock",
+            "AWS_SECRET_ACCESS_KEY": "cloud-secret-aws",
+            "MY_CUSTOM_VAR": "visible-value",
+        },
+    )
+
+    assert result.exit_code == 0
+    stdout = Path(result.stdout_path).read_text(encoding="utf-8")
+    for secret in (
+        "sk-secret-deepseek",
+        "sk-secret-openai",
+        "ssh-agent-secret.sock",
+        "cloud-secret-aws",
+    ):
+        assert secret not in stdout
+    assert "MY_CUSTOM_VAR=visible-value" in stdout
+
+
 def test_git_workspace_snapshot_detects_new_files(tmp_path) -> None:
     init_repo(tmp_path)
     repository = GitWorkspace(WorkspaceBoundary(grant(tmp_path)))

@@ -8,6 +8,7 @@ from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import AgentState, ContextSection
 
 from .completion import _observed_artifact_ids
+from .interpreter import render_work_brief
 
 
 SCIENTIFIC_PROMPT = """You are the Scientific Agent: the scientific brain of one research run.
@@ -36,8 +37,9 @@ WorkRequest rules:
 - Be self-contained: preserve every unmet precondition and constraint from the
   goal. Do not describe only the final evidence you want; also describe the
   problems that must be solved before that evidence can be produced.
-- When you receive a failed WorkOutcome, diagnose the failure first (read the
-  task outcomes, error messages and logs) before deciding the next step.
+- When the work brief lists blocking items, diagnose the failure first: read
+  the blocking item's diagnostic_excerpt (why it failed) and, if needed, the
+  relevant artifacts before deciding the next step.
 - Do not mechanically repeat a previous WorkRequest. If you retry, state what
   condition has changed that makes the retry likely to succeed.
 - If the failure is due to unimplemented code, a code bug, or an incomplete
@@ -45,17 +47,20 @@ WorkRequest rules:
   re-obtaining the evidence. Still never emit capability names or task ids.
 
 Evidence citation rules:
-- An Artifact id appearing in a WorkOutcome does NOT mean you have observed its
-  contents. If your judgment relies on an artifact's contents, call
-  read_artifact first.
-- If your judgment relies only on the WorkOutcome's status and summary, do not
-  fill that artifact id into your evidence list.
+- A work brief reports execution status and available evidence. An artifact id
+  listed under "evidence" does NOT mean you have observed its contents; if your
+  judgment relies on an artifact's contents, call read_artifact first.
+- "narrative" fields are explanatory only: module-provided explanatory prose,
+  not verified evidence. A blocking item's "diagnostic_excerpt" is execution
+  diagnosis only, and "caveats" are machine-labelled delivery gaps; never treat
+  any of them as observed evidence or fill an artifact id into your evidence
+  list just because one of these mentions it.
 - Never cite an unread artifact just to make the assessment look complete.
 
 Acknowledged-task rule:
-- acknowledged_task_ids must list exactly the failed/blocked task ids from the
-  unresolved task outcomes. If no task failed or was blocked, use []. Never
-  include completed tasks.
+- acknowledged_task_ids must list exactly the task ids in the work brief's
+  acknowledgement_required_task_ids (the blocking items). If there are none,
+  use []. Never include completed tasks.
 
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
@@ -113,17 +118,12 @@ def build_context(
         }
         for artifact in turn.authorized_artifacts
     ]
-    work_outcome = (
-        turn.work_outcome.model_dump(mode="json") if turn.work_outcome else None
+    brief = render_work_brief(
+        work_outcome=turn.work_outcome,
+        previous_work_request=turn.previous_work_request,
+        unresolved_task_outcomes=turn.unresolved_task_outcomes,
+        authorized_artifacts=turn.authorized_artifacts,
     )
-    previous_work_request = (
-        turn.previous_work_request.model_dump(mode="json")
-        if turn.previous_work_request
-        else None
-    )
-    unresolved = [
-        task.model_dump(mode="json") for task in turn.unresolved_task_outcomes
-    ]
     answers = [answer.model_dump(mode="json") for answer in turn.answers]
 
     sections = [
@@ -150,21 +150,9 @@ def build_context(
             required=True,
         ),
         ContextSection(
-            name="work_outcome",
-            content=json.dumps(work_outcome, ensure_ascii=False),
+            name="work_brief",
+            content=json.dumps(brief, ensure_ascii=False),
             priority=90,
-            required=True,
-        ),
-        ContextSection(
-            name="previous_work_request",
-            content=json.dumps(previous_work_request, ensure_ascii=False),
-            priority=89,
-            required=True,
-        ),
-        ContextSection(
-            name="unresolved_tasks",
-            content=json.dumps(unresolved, ensure_ascii=False),
-            priority=85,
             required=True,
         ),
         ContextSection(

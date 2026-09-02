@@ -19,6 +19,10 @@ file; the CLI never guesses whether a long goal is a path.
 The default data root is `.resagent2/data`. Override it with
 `RESAGENT2_DATA_ROOT` or `--data-root`.
 
+The CLI creates one `ResourceLayout` from the selected data root and injects
+it into both Coding and Experiment agents. Sequential tasks therefore share
+the same managed environment and resource roots.
+
 LLM configuration uses environment variables only:
 
 - `RESAGENT2_MODEL` (default `deepseek-chat`)

@@ -66,7 +66,7 @@ def _question_id(task_id: str, attempt_number: int) -> str:
     itself up to 128 characters and ``max_attempts_per_task`` has no upper
     bound, so ``question_<task>_<attempt>`` can overflow. Prefer the readable
     form; when it would overflow, fall back to a fixed-size hash of the full
-    (task, attempt) pair, which is deterministic and unique within a run.
+    (task, attempt) pair, which is deterministic and collision-resistant.
     """
     candidate = f"question_{task_id.removeprefix('task_')}_{attempt_number}"
     if len(candidate.removeprefix("question_")) <= 128:

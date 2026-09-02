@@ -235,6 +235,7 @@ def build_application(
                 port=NativeCodingAgent(
                     _client(),
                     store=coding_store,
+                    resource_layout=resource_layout,
                     max_context_tokens=coding_context_tokens,
                 ),
             ),
@@ -243,6 +244,7 @@ def build_application(
                 port=NativeCodingAgent(
                     _client(),
                     store=coding_store,
+                    resource_layout=resource_layout,
                     max_context_tokens=coding_context_tokens,
                 ),
             ),

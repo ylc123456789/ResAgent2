@@ -7,6 +7,7 @@ from resagent2_cli import composition
 from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
+    Capability,
     EnvironmentSpec,
     PendingQuestion,
     ResearchRequest,
@@ -226,6 +227,19 @@ def test_production_composition_builds_without_calling_external_services(tmp_pat
     application = build_application(data_root=tmp_path)
 
     assert application.controller.scheduler.store is application.run_store
+
+
+def test_coding_and_experiment_share_resource_layout(tmp_path: Path):
+    application = build_application(data_root=tmp_path)
+    bindings = application.controller.scheduler.bindings
+
+    coding = bindings[Capability.CODE_MODIFY].port
+    experiment = bindings[Capability.EXPERIMENT_RUN].port
+
+    # Both execution agents must resolve envs/resources from the same layout, so
+    # a code_modify prepare_environment and a follow-on experiment_run see the
+    # same physical env prefix.
+    assert coding.resource_layout is experiment.resource_layout
 
 
 def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(

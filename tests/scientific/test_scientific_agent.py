@@ -317,7 +317,7 @@ def test_unobserved_evidence_is_rejected(tmp_path: Path) -> None:
     assert result.error.code == ErrorCode.TOOL_FAILED
 
 
-def test_unacknowledged_task_is_rejected() -> None:
+def test_failed_task_without_limitation_is_rejected() -> None:
     unresolved = [
         WorkTaskOutcome(
             task_id="task_experiment",
@@ -420,7 +420,7 @@ def test_unobserved_evidence_can_be_recovered_by_reading(tmp_path) -> None:
     assert result.status == "request_work"
 
 
-def test_unknown_acknowledged_task_id_is_rejected() -> None:
+def test_obsolete_task_acknowledgement_field_is_rejected() -> None:
     agent = ScientificAgent(
         ScriptedLLMClient(
             [
@@ -432,7 +432,7 @@ def test_unknown_acknowledged_task_id_is_rejected() -> None:
                             "acknowledged_task_ids": ["task_unknown"],
                             "limitations": ["something failed"],
                         },
-                        "summary": "acknowledged a ghost task",
+                        "summary": "used an obsolete control field",
                     },
                 }
             ]

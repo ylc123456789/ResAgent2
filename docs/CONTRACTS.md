@@ -499,10 +499,9 @@ class ScientificOpinion:
     limitations: list[NonEmptyStr] = []
     unresolved_questions: list[NonEmptyStr] = []
     recommended_next_steps: list[NonEmptyStr] = []
-    acknowledged_task_ids: list[TaskId] = []
 ```
 
-verdict 与 RunStatus 独立：`inconclusive` 可以是一个成功完成的科学闭环。`supports`/`refutes` 必须至少引用一个 ArtifactId。`acknowledged_task_ids` 是 Scientific Agent 已明确纳入判断的 failed/blocked Task；最终 gate 要求所有仍 failed/blocked 的 TaskId 都出现在该列表；列表非空时 limitations 也必须非空。
+verdict 与 RunStatus 独立：`inconclusive` 可以是一个成功完成的科学闭环。`supports`/`refutes` 必须至少引用一个 ArtifactId。failed/blocked Task 是 Controller/Validator 的执行账务：最终 gate 直接从 Run 对账并把它们确定性写进 final report；只要仍有此类 Task，ScientificOpinion 的 `limitations` 必须非空，说明其对科学结论的影响。Scientific 不回传内部 TaskId。
 
 ### 16.4 ScientificTurnRequest 与 ScientificTurnResult
 

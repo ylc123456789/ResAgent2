@@ -41,7 +41,6 @@ class CompletionViolationCode(StrEnum):
     INVALID_OPINION = "invalid_opinion"
     UNKNOWN_EVIDENCE = "unknown_evidence"
     UNOBSERVED_EVIDENCE = "unobserved_evidence"
-    UNACKNOWLEDGED_TASK = "unacknowledged_task"
     MISSING_LIMITATIONS = "missing_limitations"
     INCONSISTENT_TASK_RESULT = "inconsistent_task_result"
 

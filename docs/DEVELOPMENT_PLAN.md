@@ -529,7 +529,7 @@ Scientific finalizer 必须：
 
 - 交叉检查 evidence_artifact_ids 与 Tool observation history；
 - 由代码派生并返回整个 Session 累计的 observed_artifact_ids，LLM action 不能填写该字段；
-- 根据 unresolved_task_outcomes 验证 opinion.acknowledged_task_ids；
+- 根据 unresolved_task_outcomes 要求 opinion 提供 limitations；精确 Task 对账留在 Validator；
 - 保留 limitations/unresolved_questions；
 - request_work 时确保 assessment 和 expected_evidence 非空；
 - finish 时执行 verdict/evidence 组合约束；
@@ -539,7 +539,7 @@ Scientific finalizer 必须：
 
 退出条件：Scientific Agent 可在不认识 WorkflowProposal/TaskProposal 的情况下通过唯一 ScientificPort 完成 scripted loop；新 Port 只在 tests/composition fixture 装配，production 仍未双路由。
 
-**状态：已完成（2026-08-28）。** 新建 `packages/agents/scientific`，`ScientificAgent` 实现 ScientificPort（`run(ScientificTurnRequest) -> ScientificTurnResult` 四态）。复用 AgentLoop：放宽 `AgentState.task_id/attempt_number` 为可选、`AgentLoop.run` 的 request 参数放宽为 `LoopRequest` Protocol（ContextBuilder/PermissionPolicy 的 request 参数放宽为 `Any`）、`ToolObservation`/`ModuleResult`/`ModuleStatus` 加 `request_work` 暂停通道。Tool 集：read_artifact（allowlist）+ literature_search（注入 backend/registration port）+ request_work + ask_user（带 assessment）+ finish（ScientificFinish）。finalizer 交叉检查 evidence、派生 observed_artifact_ids、验证 acknowledged_task_ids。修一个 7.1 落地 bug：`ScientificTurnRequest` 首次调用不应禁止 `unresolved_task_outcomes`（契约 §20.6 只禁 work_outcome/answers）。本地 190 tests 通过。未接 production composition root。
+**状态：已完成（2026-08-28）。** 新建 `packages/agents/scientific`，`ScientificAgent` 实现 ScientificPort（`run(ScientificTurnRequest) -> ScientificTurnResult` 四态）。复用 AgentLoop：放宽 `AgentState.task_id/attempt_number` 为可选、`AgentLoop.run` 的 request 参数放宽为 `LoopRequest` Protocol（ContextBuilder/PermissionPolicy 的 request 参数放宽为 `Any`）、`ToolObservation`/`ModuleResult`/`ModuleStatus` 加 `request_work` 暂停通道。Tool 集：read_artifact（allowlist）+ literature_search（注入 backend/registration port）+ request_work + ask_user（带 assessment）+ finish（ScientificFinish）。finalizer 交叉检查 evidence、派生 observed_artifact_ids；failed/blocked Task 的精确对账由 Validator 直接从 Run 完成，Scientific 通过 limitations 表达其影响。修一个 7.1 落地 bug：`ScientificTurnRequest` 首次调用不应禁止 `unresolved_task_outcomes`（契约 §20.6 只禁 work_outcome/answers）。本地 190 tests 通过。未接 production composition root。
 
 #### 7.5 Research Controller 与 Run 生命周期
 
@@ -576,7 +576,7 @@ ResearchRun 内部字段以 CONTRACTS §20.10.1 为准。work_requests 列表是
 4. opinion 的 statement、verdict、evidence、limitations、unresolved_questions 字段组合合法；
 5. final report 只从 typed Run state、ArtifactRef 和 ScientificOpinion 渲染；
 6. completed Task 的最后 Attempt 状态/error/Artifact producer 与 Scheduler 的合法 ModuleResult 映射一致；gate 不重跑领域 finalizer，也不从 summary 推断；
-7. 所有 failed/blocked TaskId 都被 opinion.acknowledged_task_ids 覆盖，且 limitations 非空。
+7. 所有 failed/blocked Task 都由 Validator 从 Run 对账并进入 final report，且 limitations 非空。
 
 Validator 不判断科学观点真假或证据语义是否充分。ScientificPort completion check 应先验证同一 snapshot；ResAgent 复核失败属于 contract_error，不得把 invalid candidate 写成 completed。
 

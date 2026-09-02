@@ -129,7 +129,7 @@ def test_completed_task_renders_purpose_and_authorized_evidence() -> None:
     assert brief["purpose"]["expected_evidence"] == ["accuracy"]
     outcomes = brief["outcomes"]
     assert len(outcomes) == 1
-    assert outcomes[0]["task_id"] == "task_run_training"
+    assert "task_id" not in outcomes[0]
     assert outcomes[0]["execution_status"] == "completed"
     assert outcomes[0]["narrative"] == "ran training"
     assert outcomes[0]["narrative_use"] == "explanatory_only"
@@ -141,7 +141,7 @@ def test_completed_task_renders_purpose_and_authorized_evidence() -> None:
         }
     ]
     assert brief["blocking_items"] == []
-    assert brief["acknowledgement_required_task_ids"] == []
+    assert "acknowledgement_required_task_ids" not in brief
 
 
 def test_completed_with_warning_exposes_caveat_content() -> None:
@@ -187,7 +187,7 @@ def test_failed_task_exposes_short_error_and_diagnostic_excerpt() -> None:
     )
 
     item = brief["blocking_items"][0]
-    assert item["task_id"] == "task_run_training"
+    assert "task_id" not in item
     assert item["status"] == "failed"
     assert item["error_code"] == "tool_failed"
     assert item["message"] == "Experiment command failed with exit code 1"
@@ -253,7 +253,7 @@ def test_blocked_task_enters_blocking_items() -> None:
     assert "diagnostic_excerpt" not in item
 
 
-def test_unresolved_tasks_generate_acknowledgement_ids() -> None:
+def test_unresolved_tasks_do_not_expose_internal_task_ids() -> None:
     brief = render_work_brief(
         work_outcome=None,
         previous_work_request=None,
@@ -261,7 +261,8 @@ def test_unresolved_tasks_generate_acknowledgement_ids() -> None:
         authorized_artifacts=[],
     )
 
-    assert brief["acknowledgement_required_task_ids"] == ["task_a", "task_b"]
+    assert "task_id" not in brief["blocking_items"][0]
+    assert "task_id" not in brief["blocking_items"][1]
     assert brief["purpose"] is None
     assert brief["outcomes"] == []
 
@@ -332,7 +333,6 @@ def test_brief_does_not_leak_execution_fields() -> None:
         "purpose",
         "outcomes",
         "blocking_items",
-        "acknowledgement_required_task_ids",
     }
     serialized = json.dumps(brief)
     for forbidden in (

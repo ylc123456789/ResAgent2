@@ -51,7 +51,7 @@ def render_work_brief(
     The raw ``WorkOutcome`` is an execution-fact summary (task ids, status
     enums, error codes, warnings). The Scientific Agent reasons over scientific
     semantics, so this lifts only what a scientist needs and labels how each
-    piece may be used. Everything else stays in the audit trail untouched.
+    piece may be used. Internal task identities stay in the audit trail.
     """
     authorized = {artifact.id: artifact for artifact in authorized_artifacts}
 
@@ -85,7 +85,6 @@ def render_work_brief(
                         }
                     )
             entry: dict[str, JsonValue] = {
-                "task_id": task.task_id,
                 "execution_status": (
                     "completed_with_caveats" if task.warnings else "completed"
                 ),
@@ -102,14 +101,13 @@ def render_work_brief(
                 entry["unregistered_artifact_ids"] = unregistered
             outcomes.append(entry)
 
-    # Failed/blocked tasks the Scientific Agent must acknowledge before it may
-    # finish. Only the stable error facts plus a bounded stderr excerpt are
-    # exposed; error details stay in the audit trail.
+    # Failed/blocked tasks that constrain the scientific conclusion. Only the
+    # stable error facts plus a bounded stderr excerpt are exposed; error
+    # details and task identities stay in the audit trail.
     blocking_items: list[JsonValue] = []
     for task in unresolved_task_outcomes:
         error = task.error
         item: dict[str, JsonValue] = {
-            "task_id": task.task_id,
             "status": task.status,
             "error_code": error.code.value if error is not None else None,
             "message": error.message if error is not None else task.summary,
@@ -125,7 +123,4 @@ def render_work_brief(
         "purpose": purpose,
         "outcomes": outcomes,
         "blocking_items": blocking_items,
-        "acknowledgement_required_task_ids": [
-            task.task_id for task in unresolved_task_outcomes
-        ],
     }

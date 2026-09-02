@@ -115,7 +115,6 @@ def result(
     *,
     evidence_ids: list[str] | None = None,
     observed: list[str] | None = None,
-    acknowledged: list[str] | None = None,
     limitations: list[str] | None = None,
 ) -> ScientificCompletedResult:
     return ScientificCompletedResult(
@@ -124,7 +123,6 @@ def result(
             verdict=verdict,
             statement="The evidence supports this judgment.",
             evidence_artifact_ids=evidence_ids or [],
-            acknowledged_task_ids=acknowledged or [],
             limitations=limitations or [],
         ),
         session=session(),
@@ -282,7 +280,7 @@ def test_nonterminal_task_prevents_final_completion(status, attempts) -> None:
     }
 
 
-def test_unacknowledged_failed_task_is_rejected() -> None:
+def test_failed_task_without_limitation_is_rejected() -> None:
     error = ModuleError(
         code=ErrorCode.TOOL_FAILED,
         message="experiment failed",
@@ -302,8 +300,36 @@ def test_unacknowledged_failed_task_is_rejected() -> None:
     )
 
     codes = {item.code for item in validation.violations}
-    assert CompletionViolationCode.UNACKNOWLEDGED_TASK in codes
     assert CompletionViolationCode.MISSING_LIMITATIONS in codes
+
+
+def test_failed_task_is_reported_without_agent_task_id() -> None:
+    error = ModuleError(
+        code=ErrorCode.TOOL_FAILED,
+        message="experiment failed",
+        retryable=False,
+    )
+    failed = Attempt(
+        number=1,
+        status=AttemptStatus.FAILED,
+        started_at=NOW,
+        finished_at=NOW,
+        error=error,
+    )
+
+    validation = ScientificCompletionValidator(registry()).validate(
+        run_state(workflow=workflow_task(TaskStatus.FAILED, [failed])),
+        result(
+            ScientificVerdict.INCONCLUSIVE,
+            limitations=["The failed experiment leaves the comparison incomplete."],
+        ),
+    )
+
+    assert validation.ok
+    assert validation.report is not None
+    assert [issue.task_id for issue in validation.report.execution_issues] == [
+        "task_experiment"
+    ]
 
 
 def test_completed_task_requires_valid_terminal_attempt() -> None:

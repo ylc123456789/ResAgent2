@@ -137,11 +137,10 @@ def request_work_action() -> dict:
     }
 
 
-def finish_action(verdict=ScientificVerdict.INCONCLUSIVE, acknowledged=()) -> dict:
+def finish_action(verdict=ScientificVerdict.INCONCLUSIVE, limitations=()) -> dict:
     opinion = {"verdict": verdict.value, "statement": "done"}
-    if acknowledged:
-        opinion["acknowledged_task_ids"] = list(acknowledged)
-        opinion["limitations"] = ["a task failed"]
+    if limitations:
+        opinion["limitations"] = list(limitations)
     return {
         "tool": "finish",
         "arguments": {
@@ -337,7 +336,7 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
     actions = [
         request_work_action(),
         request_work_action(),
-        finish_action(acknowledged=["task_experiment"]),
+        finish_action(limitations=["a task failed"]),
     ]
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
@@ -653,7 +652,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
     assert [t.task_id for t in second.outcome.tasks] == ["task_work_2"]
 
 
-def test_failed_task_appears_in_unresolved_then_acknowledged() -> None:
+def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
     failed = ModuleResult(
         status=ModuleStatus.FAILED,
         summary="crashed",
@@ -673,7 +672,7 @@ def test_failed_task_appears_in_unresolved_then_acknowledged() -> None:
     actions = [
         request_work_action(),
         request_work_action(),
-        finish_action(acknowledged=["task_experiment"]),
+        finish_action(limitations=["a task failed"]),
     ]
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(

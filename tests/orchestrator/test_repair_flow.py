@@ -100,7 +100,6 @@ def _finish() -> dict:
             "opinion": {
                 "verdict": ScientificVerdict.INCONCLUSIVE.value,
                 "statement": "the first run failed, then a fix restored it",
-                "acknowledged_task_ids": ["task_exp"],
                 "limitations": ["the first run failed before the fix"],
             },
             "summary": "done",
@@ -287,7 +286,6 @@ def _finish_after_repair() -> dict:
             "opinion": {
                 "verdict": ScientificVerdict.INCONCLUSIVE.value,
                 "statement": "the first run failed, then a fix restored it",
-                "acknowledged_task_ids": ["task_run_initial"],
                 "limitations": ["the first run failed before the fix"],
             },
             "summary": "done",

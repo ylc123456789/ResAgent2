@@ -332,6 +332,8 @@ ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检�
 
 `WorkflowProposal` / `WorkflowPatch` 仍是 typed boundary，但不再跨 Scientific Agent 边界；它们由 ResAgent 内部的 WorkflowCompiler 产生。
 
+**执行层 → Scientific 的确定性解释边界**：`ResAgent → Scientific` 的返回方向不再把 `WorkOutcome` 原样塞进 Scientific 上下文。`resagent2_scientific/interpreter.py` 的 `render_work_brief` 是一段确定性纯函数（不调用 LLM、不读写、不改状态），把 `WorkOutcome` + 上一轮 `WorkRequestDraft` + `unresolved_task_outcomes` + 已授权 `ArtifactRef` 解释成一份面向科学的「工作简报」：`purpose`（复用上一轮 `WorkRequestDraft`，不重新总结）、`outcomes`（completed 任务的证据指针 + 叙述性 `narrative`，`narrative_use` 恒为 `explanatory_only`；有 warning 时附 `caveats`，只投影 `code`/`message`；未注册进本回合授权集合的 artifact 记为 `unregistered_artifact_ids`）、`blocking_items`（failed/blocked 任务，只给 `error_code`/`message`/`retryable`，外加白名单投影的、有界 `diagnostic_excerpt`——即 `details.stderr_tail` 最后 1000 字符，`diagnostic_use` 恒为 `execution_diagnosis_only`；命令文本、日志路径、完整 `details` 一律不外泄）、`acknowledgement_required_task_ids`（Scientific 产出最终 opinion 前必须承认的失败任务 id）。`build_context` 只注入这份简报；原始 `WorkOutcome` 完整保留在审计轨迹中，不进 prompt。
+
 ## 11. 状态与生命周期
 
 ### 11.1 TaskStatus

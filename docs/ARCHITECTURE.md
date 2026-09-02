@@ -295,7 +295,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 ### 8.5 runtime 与 capabilities
 
-`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。共享 `recent_tool_text_values` 按一个总字符预算提取 Agent 白名单领域观察；Coding/Experiment 用它把最近 `read_file` 片段作为有界 required context，而不是各维护一套或依赖会截断的通用历史。共享 LLM client 的 provider retry 每次都计入调用总账，并由调用方剩余预算限制下一次真实尝试数。
+`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从本轮每个 Tool 已有的 `input_model` 自动派生其必填顶层参数，作为 required `tool_contracts` ContextSection 经 Context Composer 送给模型；因此这份约束受同一输入预算和 trace 记录，而 ToolRegistry 仍在执行前做完整的类型校验。共享 `recent_tool_text_values` 按一个总字符预算提取 Agent 白名单领域观察；Coding/Experiment 用它把最近 `read_file` 片段作为有界 required context，而不是各维护一套或依赖会截断的通用历史。共享 LLM client 的 provider retry 每次都计入调用总账，并由调用方剩余预算限制下一次真实尝试数。
 
 上下文容量采用显式、配置驱动的 `ModelProfile`，不查询供应商元数据：组合根声明模型总窗口、输出预留和安全余量，每个 Scientific/Coding/Experiment/Compiler 再声明自己的输入上限；实际输入预算取「模块上限」与「模型窗口扣除输出、Action schema 和安全余量后的容量」两者较小值。三个领域 Agent 继续通过 Agentic Loop 使用 Context Composer；Workflow Compiler 只直接复用同一个 Composer 和预算计算，仍是无 Session、无 Tool、无循环的单次结构化编译器。这样未来可给不同模块注入不同 LLM client/ModelProfile，而不改变领域 Agent 或 orchestrator 契约。
 

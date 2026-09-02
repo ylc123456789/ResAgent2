@@ -250,7 +250,7 @@ ResearchRequest：用户要研究什么
 Scientific、Coding、Experiment 共用同一套 `AgentLoop`：
 
 ```text
-构建上下文
+构建上下文（含由各 Tool input_model 自动派生的必填参数契约）
   → LLM 选择一个类型化 AgentAction
   → schema / 权限校验
   → 执行 Tool
@@ -354,7 +354,7 @@ ResearchRequest
 | ------------ | ------------------------------------------------------------ |
 | `loop.py`    | AgentLoop 主循环、错误恢复、预算和 completion decision       |
 | `models.py`  | AgentDefinition、AgentState、Action/Observation 等运行期模型 |
-| `tools.py`   | Tool 协议与分发                                              |
+| `tools.py`   | Tool 协议、输入模型分发与必填参数契约渲染                    |
 | `context.py` | 有预算和优先级的上下文组合                                   |
 | `llm.py`     | OpenAI-compatible client、transport retry、LLM trace         |
 | `store.py`   | SessionStore 和 JsonSessionStore                             |
@@ -513,7 +513,7 @@ Scientific 返回 finish 后，Controller 调用 `ScientificCompletionValidator`
 - 引用的 Artifact 是否属于本 Run；
 - 是否确实被观察；
 - 是否仍有 active WorkRequest、PendingQuestion 或 running Task；
-- failed/blocked Task 是否被明确承认；
+- failed/blocked Task 是否由 Validator 从 Run 确定性记录为执行问题，且 opinion 是否说明其科学影响；
 - opinion 是否包含观点、证据、局限和未解决问题。
 
 通过后写 final report Artifact，并把 Run 置为 completed。

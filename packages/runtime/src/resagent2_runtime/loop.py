@@ -285,6 +285,14 @@ class AgentLoop:
                             required=True,
                         ),
                     )
+                sections.append(
+                    ContextSection(
+                        name="tool_contracts",
+                        content=tool_contracts_text(definition.tools),
+                        priority=990,
+                        required=True,
+                    )
+                )
                 context_limit = definition.max_context_tokens
                 budgeter = getattr(definition.llm_client, "context_budget", None)
                 if budgeter is not None:
@@ -328,11 +336,14 @@ class AgentLoop:
                 raw_action = definition.llm_client.next_action(
                     context,
                     definition.action_type,
-                    tool_contracts=tool_contracts_text(definition.tools),
                 )
                 attempts = getattr(definition.llm_client, "last_attempts", 1)
                 self._run_llm_calls += attempts
                 state.llm_calls_used += attempts
+                # Tolerate the single historical dead field; every other unknown
+                # field still fails ``extra="forbid"`` validation.
+                if isinstance(raw_action, dict):
+                    raw_action.pop("reasoning_summary", None)
                 action = definition.action_type.model_validate(raw_action)
             except ValidationError as error:
                 validator = getattr(definition.llm_client, "record_validation", None)

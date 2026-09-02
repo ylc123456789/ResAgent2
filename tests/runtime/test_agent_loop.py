@@ -170,6 +170,51 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
     assert type(loop) is AgentLoop
 
 
+def test_loop_injects_tool_contracts_section() -> None:
+    client = ScriptedLLMClient(
+        [AgentAction(tool="finish", arguments={"result": {"answer": 42}})]
+    )
+    result = AgentLoop(store=InMemorySessionStore()).run(
+        definition(
+            name="contracts",
+            llm=client,
+            tools=(FinishTool(),),
+            allowed_tools={"finish"},
+        ),
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_contracts",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert client.contexts
+    assert "tool_contracts" in client.contexts[0].included_sections
+    assert "finish: result" in client.contexts[0].text
+
+
+def test_loop_tolerates_legacy_reasoning_summary_field() -> None:
+    client = ScriptedLLMClient(
+        [
+            {
+                "tool": "finish",
+                "arguments": {"result": {"answer": 42}},
+                "reasoning_summary": "legacy dead field",
+            }
+        ]
+    )
+    result = AgentLoop(store=InMemorySessionStore()).run(
+        definition(
+            name="legacy",
+            llm=client,
+            tools=(FinishTool(),),
+            allowed_tools={"finish"},
+        ),
+        request(Capability.CODE_UNDERSTAND),
+        session_id="session_legacy",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+
+
 def test_loop_uses_model_aware_context_budget_when_client_provides_it() -> None:
     llm = BudgetedScriptedLLM([AgentAction(tool="finish", arguments={})])
     result = AgentLoop(store=InMemorySessionStore()).run(

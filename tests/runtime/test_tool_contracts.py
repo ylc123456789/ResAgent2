@@ -3,7 +3,6 @@
 from pydantic import BaseModel
 
 from resagent2_runtime import AgentAction
-from resagent2_runtime.llm import OpenAICompatibleClient
 from resagent2_runtime.tools import tool_contracts_text
 
 
@@ -35,15 +34,6 @@ def test_tool_contracts_lists_required_arguments_only() -> None:
     assert "ask_user: text, reason" in text
     # Optional / defaulted fields must not be presented as required.
     assert "optional_note" not in text
-
-
-def test_action_instruction_appends_contracts() -> None:
-    contracts = tool_contracts_text((_FinishTool,))
-
-    instruction = OpenAICompatibleClient._action_instruction(AgentAction, contracts)
-
-    assert contracts in instruction
-    assert "Do not use markdown fences" in instruction
 
 
 def test_agent_action_has_no_reasoning_summary() -> None:

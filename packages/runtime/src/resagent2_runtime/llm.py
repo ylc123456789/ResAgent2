@@ -193,6 +193,8 @@ class OpenAICompatibleClient:
     def _sha256(text: str | None) -> str | None:
         if text is None:
             return None
+        if not isinstance(text, str):
+            text = json.dumps(text, ensure_ascii=False, default=str)
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def _trace_record(
@@ -312,6 +314,11 @@ class OpenAICompatibleClient:
                 continue
             try:
                 raw_response_text = payload["choices"][0]["message"]["content"]
+                if not isinstance(raw_response_text, str):
+                    raise TypeError(
+                        "provider returned non-string message content: "
+                        f"{type(raw_response_text).__name__}"
+                    )
                 content = raw_response_text.strip()
                 if content.startswith("```"):
                     content = content.removeprefix("```json").removeprefix("```")

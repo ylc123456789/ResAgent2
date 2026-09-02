@@ -260,3 +260,65 @@ def test_malformed_json_is_retried(monkeypatch) -> None:
 
     assert result == {"tool": "finish"}
     assert urlopen_mock.call_count == 2
+
+
+@pytest.mark.parametrize("content", [None, ["a", "b"], {"tool": "finish"}, 42])
+def test_non_string_content_is_a_controlled_failure(monkeypatch, content) -> None:
+    client = _client(monkeypatch)
+    bad = _FakeResponse({"choices": [{"message": {"content": content}}]})
+    with (
+        mock.patch("resagent2_runtime.llm.time.sleep"),
+        mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
+    ):
+        with pytest.raises(RuntimeError, match="3 attempts"):
+            client.next_action(_context(), AgentAction)
+
+    assert client.last_attempts == 3
+
+
+def test_full_trace_preserves_non_string_content(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="full",
+    )
+    bad = _FakeResponse({"choices": [{"message": {"content": ["a", "b"]}}]})
+    with (
+        mock.patch("resagent2_runtime.llm.time.sleep"),
+        mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
+    ):
+        with pytest.raises(RuntimeError, match="3 attempts"):
+            client.next_action(_context(), AgentAction)
+
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["action_valid"] is False
+    assert record["raw_response_text"] == ["a", "b"]
+    assert record["validation_error"]
+
+
+def test_metadata_trace_handles_non_string_content(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="metadata",
+    )
+    bad = _FakeResponse({"choices": [{"message": {"content": {"tool": "finish"}}}]})
+    with (
+        mock.patch("resagent2_runtime.llm.time.sleep"),
+        mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
+    ):
+        with pytest.raises(RuntimeError, match="3 attempts"):
+            client.next_action(_context(), AgentAction)
+
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert "raw_response_text" not in record
+    assert record["response_sha256"]
+    assert record["action_valid"] is False

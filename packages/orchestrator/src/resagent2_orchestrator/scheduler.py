@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,6 +57,24 @@ def _validate_answer(question: PendingQuestion | None, answer: UserAnswer) -> No
     missing = set(question.requested_fields) - set(answer.values)
     if missing:
         raise OrchestrationError(f"answer is missing fields: {sorted(missing)}")
+
+
+def _question_id(task_id: str, attempt_number: int) -> str:
+    """Build a strictly bounded question id from a task id and attempt.
+
+    ``QuestionId`` allows a 128-character body, but a legal task id body is
+    itself up to 128 characters and ``max_attempts_per_task`` has no upper
+    bound, so ``question_<task>_<attempt>`` can overflow. Prefer the readable
+    form; when it would overflow, fall back to a fixed-size hash of the full
+    (task, attempt) pair, which is deterministic and unique within a run.
+    """
+    candidate = f"question_{task_id.removeprefix('task_')}_{attempt_number}"
+    if len(candidate.removeprefix("question_")) <= 128:
+        return candidate
+    digest = hashlib.sha256(
+        f"{task_id}:{attempt_number}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"question_{digest}"
 
 
 _WORK_REQUEST_TRANSITIONS: dict[WorkRequestStatus, frozenset[WorkRequestStatus]] = {
@@ -478,7 +497,7 @@ class WorkflowScheduler:
             attempt.finished_at = None
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
-            question_id = f"question_{task.id.removeprefix('task_')}_{attempt.number}"
+            question_id = _question_id(task.id, attempt.number)
             draft = result.question
             if draft is None:
                 raise OrchestrationError("needs_user_input result has no question")

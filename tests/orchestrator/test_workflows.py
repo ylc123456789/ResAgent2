@@ -108,6 +108,45 @@ def _create_run(engine, run_id, request, proposal):
     return engine.accept_proposal(run_id, proposal)
 
 
+def _ask_result() -> ModuleResult:
+    """A paused needs_user_input result, for question-flow tests."""
+    return ModuleResult(
+        status=ModuleStatus.NEEDS_USER_INPUT,
+        summary="input required",
+        question=QuestionDraft(
+            text="pick one", requested_fields=["x"], reason="no input was given"
+        ),
+        session=SessionRef(
+            id="session_child",
+            module=AgentOwner.EXPERIMENT,
+            state_uri="memory://child",
+            status=SessionStatus.PAUSED,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+    )
+
+
+def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
+    engine = WorkflowScheduler(
+        bindings={
+            Capability.EXPERIMENT_RUN: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
+                port=ScriptedModulePort([_ask_result()]),
+            )
+        },
+        store=InMemoryRunStore(),
+    )
+    proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial",
+        summary="question",
+        compilation_rationale="ask for input",
+        tasks=[task(task_id, Capability.EXPERIMENT_RUN)],
+    )
+    _create_run(engine, run_id, research_request(), proposal)
+    return engine.run_until_stable(run_id)
+
+
 def test_linear_workflow_runs_to_completion() -> None:
     workflow = WorkflowProposal(
         work_request_id="work_legacy_initial",
@@ -289,6 +328,40 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     assert port.requests[1].answers == [answer]
     assert port.requests[1].parent_session_id == "session_child"
     assert port.requests[1].attempt_number == 1
+
+
+def test_long_task_id_question_stays_within_id_cap() -> None:
+    paused = _pause_with_question("task_" + "a" * 128, "run_long_question")
+
+    assert paused.status == RunStatus.PAUSED
+    assert paused.pending_question is not None
+    assert len(paused.pending_question.id) <= 137
+    assert paused.pending_question.id.startswith("question_")
+
+
+def test_question_id_keeps_short_task_ids_readable() -> None:
+    paused = _pause_with_question("task_experiment", "run_short_question")
+
+    assert paused.pending_question is not None
+    assert paused.pending_question.id == "question_experiment_1"
+
+
+@pytest.mark.parametrize(
+    ("task_id", "attempt_number"),
+    [
+        ("task_" + "a" * 128, 1),
+        ("task_" + "a" * 128, 10**30),
+        ("task_" + "a" * 128, 10**128),
+    ],
+)
+def test_question_id_is_strictly_bounded(task_id: str, attempt_number: int) -> None:
+    from pydantic import TypeAdapter
+
+    from resagent2_contracts import QuestionId
+    from resagent2_orchestrator.scheduler import _question_id
+
+    qid = _question_id(task_id, attempt_number)
+    assert TypeAdapter(QuestionId).validate_python(qid) == qid
 
 
 def test_failed_payload_cannot_be_promoted_to_completed() -> None:

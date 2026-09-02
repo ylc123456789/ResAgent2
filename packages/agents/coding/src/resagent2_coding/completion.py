@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
@@ -29,6 +29,16 @@ from resagent2_runtime import (
 from .models import CodeModifyFinish
 
 
+def _normalize_evidence_path(path: str) -> str:
+    """Normalize a validated workspace-relative path to a single POSIX form.
+
+    ``./train.py``, ``train.py`` and ``src\\train.py`` all reduce to the same
+    string, so recorded read paths and claimed evidence files compare equal
+    without tripping over spelling aliases.
+    """
+    return PurePosixPath(path.strip().replace("\\", "/")).as_posix()
+
+
 class CodeUnderstandCompletionCheck:
     def __init__(self, repository: GitWorkspace, baseline: GitBaseline) -> None:
         self.repository = repository
@@ -48,8 +58,14 @@ class CodeUnderstandCompletionCheck:
                 complete=False,
                 summary=f"Read-only result is invalid: {error.errors()[0]['msg']}",
             )
-        observed = set(state.memory.get("read_paths", []))
-        missing = [path for path in payload.evidence_files if path not in observed]
+        observed = {
+            _normalize_evidence_path(path) for path in state.memory.get("read_paths", [])
+        }
+        missing = [
+            path
+            for path in payload.evidence_files
+            if _normalize_evidence_path(path) not in observed
+        ]
         if missing:
             return CompletionDecision(
                 complete=False,

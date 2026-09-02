@@ -125,6 +125,33 @@ def test_read_only_profile_answers_with_observed_evidence_without_writes(tmp_pat
     ).stdout == ""
 
 
+def test_read_only_profile_normalizes_evidence_paths(tmp_path) -> None:
+    # ``./util.py`` and ``util.py`` are the same workspace file; the evidence
+    # match must not reject the claim over the spelling alias.
+    init_repo(tmp_path)
+    agent = NativeCodingAgent(
+        ScriptedLLMClient(
+            [
+                {"tool": "read_file", "arguments": {"path": "./util.py"}},
+                {
+                    "tool": "finish",
+                    "arguments": {
+                        "result": {
+                            "answer": "add is implemented in util.py",
+                            "evidence_files": ["util.py"],
+                        }
+                    },
+                },
+            ]
+        )
+    )
+
+    result = agent.invoke(request(tmp_path, capability=Capability.CODE_UNDERSTAND))
+
+    assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
+    assert result.payload["evidence_files"] == ["util.py"]
+
+
 def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatch) -> None:
     init_repo(tmp_path)
     _setup_env(tmp_path, monkeypatch)

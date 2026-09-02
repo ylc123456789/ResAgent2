@@ -504,6 +504,8 @@ workspace 并不是 `ResearchRequest` 的字段。组合根在构造 `WorkflowSc
 
 Scheduler 冻结 code patch、变更文件和 experiment metrics，生成 WorkOutcome。Controller 把它交回同一个 ScientificSession；Scientific 必须先通过 read_artifact 真正观察证据，才能在 opinion 中引用。
 
+这条返回链路的入口是 `resagent2_scientific/interpreter.py` 的 `render_work_brief`：它把执行层的 `WorkOutcome` 确定性解释成科学向的工作简报（purpose / outcomes / blocking_items / acknowledgement_required_task_ids），`context.py` 的 `build_context` 只注入这份简报和全局授权证据目录，原始 `WorkOutcome` 不进 prompt。
+
 ### 第八步：最终完成
 
 Scientific 返回 finish 后，Controller 调用 `ScientificCompletionValidator`：

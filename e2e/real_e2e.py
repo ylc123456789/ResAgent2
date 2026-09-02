@@ -274,9 +274,7 @@ _EXPECTED_TASK_CAPABILITIES = {
     Capability.EXPERIMENT_RUN,
 }
 
-_MODEL = "deepseek-chat"
-_API_BASE = "https://api.deepseek.com/v1"
-_API_KEY_ENV = "DEEPSEEK_API_KEY"
+_DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 def _llm_trace_dir() -> Path | None:
@@ -286,6 +284,18 @@ def _llm_trace_dir() -> Path | None:
 
 def _llm_trace_level() -> str:
     return os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
+
+
+def _new_llm_client() -> OpenAICompatibleClient:
+    """Use the same model and provider settings as the production CLI."""
+
+    return OpenAICompatibleClient(
+        model=os.environ.get("RESAGENT2_MODEL", _DEFAULT_MODEL),
+        api_base=os.environ.get("RESAGENT2_API_BASE", "https://api.deepseek.com/v1"),
+        api_key_env=os.environ.get("RESAGENT2_API_KEY_ENV", "DEEPSEEK_API_KEY"),
+        trace_dir=_llm_trace_dir(),
+        trace_level=_llm_trace_level(),
+    )
 
 
 def _repo(workdir: Path) -> Path:
@@ -313,13 +323,7 @@ def _grant(repo: Path) -> WorkspaceGrant:
 
 def _coding_agent(session_store) -> NativeCodingAgent:
     return NativeCodingAgent(
-        OpenAICompatibleClient(
-            model=_MODEL,
-            api_base=_API_BASE,
-            api_key_env=_API_KEY_ENV,
-            trace_dir=_llm_trace_dir(),
-            trace_level=_llm_trace_level(),
-        ),
+        _new_llm_client(),
         store=session_store,
     )
 
@@ -328,13 +332,7 @@ def _experiment_agent(
     session_store, resource_layout: ResourceLayout
 ) -> NativeExperimentAgent:
     return NativeExperimentAgent(
-        OpenAICompatibleClient(
-            model=_MODEL,
-            api_base=_API_BASE,
-            api_key_env=_API_KEY_ENV,
-            trace_dir=_llm_trace_dir(),
-            trace_level=_llm_trace_level(),
-        ),
+        _new_llm_client(),
         store=session_store,
         resource_layout=resource_layout,
     )
@@ -345,13 +343,7 @@ def _scientific_agent(
     session_store: JsonSessionStore,
 ) -> ScientificAgent:
     return ScientificAgent(
-        OpenAICompatibleClient(
-            model=_MODEL,
-            api_base=_API_BASE,
-            api_key_env=_API_KEY_ENV,
-            trace_dir=_llm_trace_dir(),
-            trace_level=_llm_trace_level(),
-        ),
+        _new_llm_client(),
         literature_backend=ArxivLiteratureBackend(),
         registration_port=registration_port,
         store=session_store,
@@ -396,14 +388,8 @@ class _CompilerClient:
     runtime into the orchestrator.
     """
 
-    def __init__(self, *, model: str, api_base: str, api_key_env: str) -> None:
-        self._client = OpenAICompatibleClient(
-            model=model,
-            api_base=api_base,
-            api_key_env=api_key_env,
-            trace_dir=_llm_trace_dir(),
-            trace_level=_llm_trace_level(),
-        )
+    def __init__(self) -> None:
+        self._client = _new_llm_client()
 
     def set_trace_context(self, **kwargs) -> None:
         self._client.set_trace_context(**kwargs)
@@ -515,7 +501,7 @@ def _build_controller(workdir: Path, repo: Path | None):
             JsonSessionStore(workdir / "scientific_sessions"),
         ),
         compiler=LLMWorkflowCompiler(
-            _CompilerClient(model=_MODEL, api_base=_API_BASE, api_key_env=_API_KEY_ENV)
+            _CompilerClient()
         ),
         scheduler=scheduler,
         registry=registry,

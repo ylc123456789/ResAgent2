@@ -203,6 +203,7 @@ class OpenAICompatibleClient:
         message: str,
         parsed_action,
         raw_response_text: str | None,
+        raw_reasoning_text: str | None,
         validation_error: str | None,
         started: float,
         retry_number: int,
@@ -210,7 +211,7 @@ class OpenAICompatibleClient:
         call_id: str,
         created_at: str,
     ) -> dict:
-        """Build one trace record; the full level keeps request/response text.
+        """Build one trace record; the full level keeps prompt, response, and provider reasoning.
 
         ``metadata`` level never records action content (which may embed source
         code or user input); it keeps only the tool name and a hash of the
@@ -238,6 +239,7 @@ class OpenAICompatibleClient:
             record["request_text"] = message
             record["raw_response_text"] = raw_response_text
             record["parsed_action"] = parsed_action
+            record["raw_reasoning_text"] = raw_reasoning_text
         else:
             record["request_sha256"] = self._sha256(message)
             record["response_sha256"] = self._sha256(raw_response_text)
@@ -286,6 +288,7 @@ class OpenAICompatibleClient:
         retry_number = 0
         raw_response_text: str | None = None
         parsed_action = None
+        raw_reasoning_text: str | None = None
         usage = None
         for attempt in range(attempt_limit):
             self.last_attempts = attempt + 1
@@ -301,7 +304,7 @@ class OpenAICompatibleClient:
                 if error.code is not None and error.code < 500:
                     self._write_trace(
                         self._trace_record(
-                            context, message, None, None,
+                            context, message, None, None, None,
                             f"LLM HTTP {error.code}: {detail}",
                             started, retry_number, None, call_id, created_at,
                         )
@@ -313,7 +316,12 @@ class OpenAICompatibleClient:
                 last_error = error
                 continue
             try:
-                raw_response_text = payload["choices"][0]["message"]["content"]
+                response_message = payload["choices"][0]["message"]
+                raw_response_text = response_message["content"]
+                reasoning_content = response_message.get("reasoning_content")
+                raw_reasoning_text = (
+                    reasoning_content if isinstance(reasoning_content, str) else None
+                )
                 if not isinstance(raw_response_text, str):
                     raise TypeError(
                         "provider returned non-string message content: "
@@ -332,7 +340,7 @@ class OpenAICompatibleClient:
                 continue
         self._write_trace(
             self._trace_record(
-                context, message, parsed_action, raw_response_text,
+                context, message, parsed_action, raw_response_text, raw_reasoning_text,
                 str(last_error) if last_error is not None else None,
                 started, retry_number, usage, call_id, created_at,
             )

@@ -25,7 +25,7 @@ the same managed environment and resource roots.
 
 LLM configuration uses environment variables only:
 
-- `RESAGENT2_MODEL` (default `deepseek-chat`)
+- `RESAGENT2_MODEL` (default `deepseek-v4-flash`; set `deepseek-v4-pro` when needed)
 - `RESAGENT2_API_BASE` (default `https://api.deepseek.com/v1`)
 - `RESAGENT2_API_KEY_ENV` (default `DEEPSEEK_API_KEY`)
 - the API key itself through the environment variable named above

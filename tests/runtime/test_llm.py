@@ -1,4 +1,4 @@
-"""Bounded transient-failure retry for the OpenAI-compatible LLM client."""
+"""OpenAI-compatible client retries and trace behavior."""
 
 import json
 from io import BytesIO
@@ -141,6 +141,7 @@ def test_trace_writes_jsonl_when_enabled(monkeypatch, tmp_path) -> None:
     assert record["raw_response_text"] == json.dumps({"tool": "finish"})
     assert record["parsed_action"] == {"tool": "finish"}
 
+    assert record["raw_reasoning_text"] is None
 
 def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
@@ -152,7 +153,7 @@ def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
         trace_level="metadata",
     )
     ok = _FakeResponse(
-        {"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]}
+        {"choices": [{"message": {"content": json.dumps({"tool": "finish"}), "reasoning_content": "visible rationale"}}]}
     )
     with mock.patch("resagent2_runtime.llm.urlopen", return_value=ok):
         client.next_action(_context(), AgentAction)
@@ -162,6 +163,7 @@ def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
     assert "request_text" not in record
     assert "raw_response_text" not in record
     assert "parsed_action" not in record
+    assert "raw_reasoning_text" not in record
     assert record["request_sha256"]
     assert record["response_sha256"]
     assert record["action_sha256"]
@@ -169,7 +171,36 @@ def test_trace_metadata_level_omits_full_text(monkeypatch, tmp_path) -> None:
     assert record["action_valid"] is True
 
 
+def test_full_trace_preserves_provider_reasoning(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test-model",
+        api_base="https://example.com/v1",
+        api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces",
+        trace_level="full",
+    )
+    response = _FakeResponse(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"tool": "finish"}),
+                        "reasoning_content": "provider-visible reasoning",
+                    }
+                }
+            ]
+        }
+    )
+    with mock.patch("resagent2_runtime.llm.urlopen", return_value=response):
+        client.next_action(_context(), AgentAction)
+
+    trace_file = tmp_path / "traces" / "llm_traces.jsonl"
+    record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert record["raw_reasoning_text"] == "provider-visible reasoning"
+
 def test_trace_preserves_bad_json_response(monkeypatch, tmp_path) -> None:
+
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
     client = OpenAICompatibleClient(
         model="test-model",

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from resagent2_contracts import Capability, RunStatus, TaskStatus
 
-from e2e.real_e2e import _real_e2e_succeeded
+from e2e.real_e2e import _new_llm_client, _real_e2e_succeeded
 
 
 def _run(*, artifact_kinds: set[str]) -> SimpleNamespace:
@@ -62,3 +62,11 @@ def test_real_e2e_requires_a_final_opinion() -> None:
     run.final_opinion = None
 
     assert not _real_e2e_succeeded(run)
+
+
+def test_real_e2e_uses_the_configured_current_model(monkeypatch) -> None:
+    monkeypatch.delenv("RESAGENT2_MODEL", raising=False)
+    assert _new_llm_client().model == "deepseek-v4-flash"
+
+    monkeypatch.setenv("RESAGENT2_MODEL", "deepseek-v4-pro")
+    assert _new_llm_client().model == "deepseek-v4-pro"

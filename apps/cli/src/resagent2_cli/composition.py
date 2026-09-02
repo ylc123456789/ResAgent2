@@ -86,7 +86,7 @@ def _component_context_limit(component: str) -> int:
 
 def _client() -> OpenAICompatibleClient:
     return OpenAICompatibleClient(
-        model=os.environ.get("RESAGENT2_MODEL", "deepseek-chat"),
+        model=os.environ.get("RESAGENT2_MODEL", "deepseek-v4-flash"),
         api_base=os.environ.get("RESAGENT2_API_BASE", "https://api.deepseek.com/v1"),
         api_key_env=os.environ.get("RESAGENT2_API_KEY_ENV", "DEEPSEEK_API_KEY"),
         model_profile=_model_profile(),

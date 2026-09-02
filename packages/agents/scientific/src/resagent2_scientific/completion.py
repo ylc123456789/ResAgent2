@@ -79,26 +79,16 @@ class ScientificCompletionCheck:
                 ),
             )
 
-        # Every still-failed/blocked task must be acknowledged, and no
-        # acknowledged id may point at a task that is not failed/blocked.
-        unresolved_ids = {task.task_id for task in self._unresolved}
-        acknowledged = set(opinion.acknowledged_task_ids)
-        missing = sorted(unresolved_ids - acknowledged)
-        if missing:
+        # Failed/blocked work is a controller-owned fact, not an identifier the
+        # Scientific Agent must echo. The final report renders the exact
+        # execution issues from the Run; Scientific expresses only their
+        # scientific impact through limitations.
+        if self._unresolved and not opinion.limitations:
             return CompletionDecision(
                 complete=False,
                 summary=(
-                    "Acknowledge the failed/blocked tasks in the opinion: "
-                    + ", ".join(missing)
-                ),
-            )
-        unknown = sorted(acknowledged - unresolved_ids)
-        if unknown:
-            return CompletionDecision(
-                complete=False,
-                summary=(
-                    "Acknowledge only failed/blocked tasks; unknown ids: "
-                    + ", ".join(unknown)
+                    "State at least one limitation before finishing because "
+                    "failed or blocked execution work remains."
                 ),
             )
 

@@ -203,9 +203,9 @@ class ScientificCompletionValidator:
         opinion: ScientificOpinion,
         violations: list[CompletionViolation],
     ) -> None:
-        # ScientificOpinion already enforces the verdict/evidence and
-        # acknowledged-task/limitations combinations. Revalidate here so this
-        # gate remains explicit even when fed a model created via model_construct.
+        # ScientificOpinion already enforces the verdict/evidence combination.
+        # Revalidate here so this gate remains explicit even when fed a model
+        # created via model_construct.
         try:
             ScientificOpinion.model_validate(opinion.model_dump())
         except Exception as error:
@@ -254,15 +254,6 @@ class ScientificCompletionValidator:
         unresolved = [
             task for task in tasks if task.status in {TaskStatus.FAILED, TaskStatus.BLOCKED}
         ]
-        acknowledged = set(opinion.acknowledged_task_ids)
-        missing = [task.id for task in unresolved if task.id not in acknowledged]
-        if missing:
-            self._add(
-                violations,
-                CompletionViolationCode.UNACKNOWLEDGED_TASK,
-                "failed or blocked tasks must be acknowledged",
-                *missing,
-            )
         if unresolved and not opinion.limitations:
             self._add(
                 violations,
@@ -273,8 +264,6 @@ class ScientificCompletionValidator:
 
         issues: list[WorkTaskOutcome] = []
         for task in unresolved:
-            if task.id not in acknowledged:
-                continue
             attempt = task.attempts[-1] if task.attempts else None
             if attempt is None or attempt.error is None:
                 self._add(
@@ -354,14 +343,10 @@ class ScientificCompletionValidator:
         result: ScientificCompletedResult,
         violations: list[CompletionViolation],
     ) -> None:
-        # Duplicate detection only applies to opinion fields the LLM authors
-        # directly: evidence_artifact_ids and acknowledged_task_ids. The two
-        # observed traces are deduplicated upstream (set semantics), so they
-        # cannot contain duplicates here.
-        groups = {
-            "opinion evidence": result.opinion.evidence_artifact_ids,
-            "acknowledged tasks": result.opinion.acknowledged_task_ids,
-        }
+        # Duplicate detection applies only to evidence ids the LLM authors
+        # directly. Observed traces are deduplicated upstream (set semantics),
+        # so they cannot contain duplicates here.
+        groups = {"opinion evidence": result.opinion.evidence_artifact_ids}
         for label, values in groups.items():
             duplicates = sorted({value for value in values if values.count(value) > 1})
             if duplicates:
@@ -371,21 +356,6 @@ class ScientificCompletionValidator:
                     f"{label} contains duplicate ids",
                     *duplicates,
                 )
-
-        tasks = {} if run.workflow is None else {task.id: task for task in run.workflow.tasks}
-        invalid_acknowledged = [
-            task_id
-            for task_id in result.opinion.acknowledged_task_ids
-            if task_id not in tasks
-            or tasks[task_id].status not in {TaskStatus.FAILED, TaskStatus.BLOCKED}
-        ]
-        if invalid_acknowledged:
-            self._add(
-                violations,
-                CompletionViolationCode.UNACKNOWLEDGED_TASK,
-                "acknowledged ids must name failed or blocked tasks",
-                *invalid_acknowledged,
-            )
 
         for label, values in (
             ("turn observed trace", result.observed_artifact_ids),

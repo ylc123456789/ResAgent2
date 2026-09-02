@@ -1079,7 +1079,7 @@ class WorkOutcome(ContractModel):
 
 
 class ScientificOpinion(ContractModel):
-    """Scientific Agent's final view with evidence and limitation references."""
+    """Scientific Agent's final view with evidence and limitations."""
 
     verdict: ScientificVerdict
     statement: NonEmptyStr
@@ -1087,7 +1087,6 @@ class ScientificOpinion(ContractModel):
     limitations: list[NonEmptyStr] = Field(default_factory=list)
     unresolved_questions: list[NonEmptyStr] = Field(default_factory=list)
     recommended_next_steps: list[NonEmptyStr] = Field(default_factory=list)
-    acknowledged_task_ids: list[TaskId] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_evidence(self) -> ScientificOpinion:
@@ -1096,8 +1095,6 @@ class ScientificOpinion(ContractModel):
                 raise ValueError(
                     f"{self.verdict.value} opinion requires at least one evidence artifact"
                 )
-        if self.acknowledged_task_ids and not self.limitations:
-            raise ValueError("acknowledged failed tasks require limitations")
         return self
 
 

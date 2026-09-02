@@ -332,7 +332,7 @@ ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检�
 
 `WorkflowProposal` / `WorkflowPatch` 仍是 typed boundary，但不再跨 Scientific Agent 边界；它们由 ResAgent 内部的 WorkflowCompiler 产生。
 
-**执行层 → Scientific 的确定性解释边界**：`ResAgent → Scientific` 的返回方向不再把 `WorkOutcome` 原样塞进 Scientific 上下文。`resagent2_scientific/interpreter.py` 的 `render_work_brief` 是一段确定性纯函数（不调用 LLM、不读写、不改状态），把 `WorkOutcome` + 上一轮 `WorkRequestDraft` + `unresolved_task_outcomes` + 已授权 `ArtifactRef` 解释成一份面向科学的「工作简报」：`purpose`（复用上一轮 `WorkRequestDraft`，不重新总结）、`outcomes`（completed 任务的证据指针 + 叙述性 `narrative`，`narrative_use` 恒为 `explanatory_only`；有 warning 时附 `caveats`，只投影 `code`/`message`；未注册进本回合授权集合的 artifact 记为 `unregistered_artifact_ids`）、`blocking_items`（failed/blocked 任务，只给 `error_code`/`message`/`retryable`，外加白名单投影的、有界 `diagnostic_excerpt`——即 `details.stderr_tail` 最后 1000 字符，`diagnostic_use` 恒为 `execution_diagnosis_only`；命令文本、日志路径、完整 `details` 一律不外泄）、`acknowledgement_required_task_ids`（Scientific 产出最终 opinion 前必须承认的失败任务 id）。`build_context` 只注入这份简报；原始 `WorkOutcome` 完整保留在审计轨迹中，不进 prompt。
+**执行层 → Scientific 的确定性解释边界**：`ResAgent → Scientific` 的返回方向不再把 `WorkOutcome` 原样塞进 Scientific 上下文。`resagent2_scientific/interpreter.py` 的 `render_work_brief` 是一段确定性纯函数（不调用 LLM、不读写、不改状态），把 `WorkOutcome` + 上一轮 `WorkRequestDraft` + `unresolved_task_outcomes` + 已授权 `ArtifactRef` 解释成一份面向科学的「工作简报」：`purpose`（复用上一轮 `WorkRequestDraft`，不重新总结）、`outcomes`（completed 任务的证据指针 + 叙述性 `narrative`，`narrative_use` 恒为 `explanatory_only`；有 warning 时附 `caveats`，只投影 `code`/`message`；未注册进本回合授权集合的 artifact 记为 `unregistered_artifact_ids`）、`blocking_items`（failed/blocked 任务，只给 `status`/`error_code`/`message`/`retryable`，外加白名单投影的、有界 `diagnostic_excerpt`——即 `details.stderr_tail` 最后 1000 字符，`diagnostic_use` 恒为 `execution_diagnosis_only`；命令文本、日志路径、完整 `details` 和内部 TaskId 一律不外泄）。`build_context` 只注入这份简报；原始 `WorkOutcome` 完整保留在审计轨迹中，不进 prompt。Validator 从 Run 自行对账 failed/blocked Task，并要求 Scientific 用 `limitations` 描述它们对结论的影响；最终报告再确定性渲染精确的执行问题。
 
 ## 11. 状态与生命周期
 
@@ -407,7 +407,7 @@ ResearchRun 只有同时满足以下条件才能 completed：
 4. opinion 明确写出观点、证据、局限和未解决问题；
 5. final report 只展示 ResearchRequest、Run state、registered Artifact 和 ScientificOpinion 中可追踪事实；
 6. 每个执行 Task 的领域完成证据已经由所属 capability finalizer 验证，不能由 summary 冒充；
-7. 所有仍 failed/blocked 的 TaskId 都出现在 opinion.acknowledged_task_ids，且 limitations 非空，不能静默丢失。
+7. 所有仍 failed/blocked 的 Task 都由 Validator 直接从 Run 对账并写入执行问题；Scientific 的 limitations 必须非空，不能静默丢失其对结论的影响。
 
 `inconclusive` 是合法科学观点，不等于运行失败。若系统忠实完成了可执行工作、证据可追踪且 opinion 说明为何不能下结论，Run 可以 completed。运行失败表示系统没有形成可靠闭环，例如预算耗尽且无合法 opinion、状态损坏或不可恢复契约错误。
 

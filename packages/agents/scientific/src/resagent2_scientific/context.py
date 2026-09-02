@@ -57,10 +57,11 @@ Evidence citation rules:
   list just because one of these mentions it.
 - Never cite an unread artifact just to make the assessment look complete.
 
-Acknowledged-task rule:
-- acknowledged_task_ids must list exactly the task ids in the work brief's
-  acknowledgement_required_task_ids (the blocking items). If there are none,
-  use []. Never include completed tasks.
+Execution-limitations rule:
+- When the work brief lists blocking items, state at least one limitation that
+  explains how incomplete execution affects the scientific conclusion. The
+  Controller records exact failed/blocked task identities separately; do not
+  emit task ids yourself.
 
 Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
@@ -70,7 +71,7 @@ Tool arguments:
 - literature_search: {"query": "...", "max_results": 10, "start_year": null, "end_year": null}
 - request_work: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "work_request": {"objective": "...", "expected_evidence": ["..."], "constraints": []}}
 - ask_user: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "text": "...", "requested_fields": [], "reason": "..."}
-- finish: {"opinion": {"verdict": "supports|refutes|inconclusive|not_applicable", "statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": [], "recommended_next_steps": [], "acknowledged_task_ids": []}, "summary": "..."}
+- finish: {"opinion": {"verdict": "supports|refutes|inconclusive|not_applicable", "statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": [], "recommended_next_steps": []}, "summary": "..."}
 """
 
 

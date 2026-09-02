@@ -120,6 +120,10 @@ def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
 
     payload = ExperimentResult.model_validate(decision.payload)
     assert payload.evidence_files == ["metrics.json"]
+    # The auto-appended required artifact also feeds the typed metrics, so a
+    # produced-but-unlisted metrics.json is not silently dropped.
+    assert payload.metrics == {"accuracy": 0.9}
+    assert payload.delivery_issues == []
 
 
 def test_no_experiment_run_cannot_complete(tmp_path) -> None:

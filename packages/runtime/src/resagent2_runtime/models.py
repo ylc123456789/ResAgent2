@@ -34,7 +34,6 @@ class AgentAction(RuntimeModel):
 
     tool: NonEmptyStr
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
-    reasoning_summary: str = ""
 
 
 class ContextSection(RuntimeModel):

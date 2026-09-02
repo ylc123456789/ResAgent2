@@ -21,6 +21,25 @@ class Tool(Protocol):
         """Execute validated arguments without mutating state directly."""
 
 
+def tool_contracts_text(tools: tuple[Tool, ...]) -> str:
+    """Render a compact per-tool argument contract for the model.
+
+    The action schema exposes ``arguments`` as a free-form object, so the model
+    would otherwise have to guess each tool's required top-level fields. This
+    derives them from each tool's existing ``input_model`` and injects a short,
+    deterministic contract so the model knows what ``arguments`` must contain.
+    """
+    lines = ["Tool argument contracts (required arguments):"]
+    for tool in tools:
+        required = [
+            name
+            for name, field in tool.input_model.model_fields.items()
+            if field.is_required()
+        ]
+        lines.append(f"- {tool.name}: {', '.join(required)}")
+    return "\n".join(lines)
+
+
 class ToolNotFoundError(LookupError):
     """Raised when an action names a Tool outside its Agent definition."""
 

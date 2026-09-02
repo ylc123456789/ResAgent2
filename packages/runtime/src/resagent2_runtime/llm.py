@@ -68,6 +68,8 @@ class LLMClient(Protocol):
         self,
         context: ComposedContext,
         action_type: type[AgentAction],
+        *,
+        tool_contracts: str | None = None,
     ) -> AgentAction | dict:
         """Return one action candidate for schema validation by AgentLoop."""
 
@@ -87,6 +89,8 @@ class ScriptedLLMClient:
         self,
         context: ComposedContext,
         action_type: type[AgentAction],
+        *,
+        tool_contracts: str | None = None,
     ) -> AgentAction | dict:
         """Record context and return the next scripted action."""
 
@@ -124,13 +128,19 @@ class OpenAICompatibleClient:
         self._attempt_limit: int | None = None
 
     @staticmethod
-    def _action_instruction(action_type: type[AgentAction]) -> str:
+    def _action_instruction(
+        action_type: type[AgentAction],
+        tool_contracts: str | None = None,
+    ) -> str:
         schema = json.dumps(action_type.model_json_schema(), ensure_ascii=False)
-        return (
+        text = (
             "Return exactly one JSON object matching this action schema. "
             "Do not use markdown fences.\n"
             f"{schema}"
         )
+        if tool_contracts:
+            text += "\n\n" + tool_contracts
+        return text
 
     def context_budget(
         self,
@@ -252,6 +262,8 @@ class OpenAICompatibleClient:
         self,
         context: ComposedContext,
         action_type: type[AgentAction],
+        *,
+        tool_contracts: str | None = None,
     ) -> AgentAction | dict:
         attempt_limit = min(3, self._attempt_limit or 3)
         self._attempt_limit = None
@@ -259,7 +271,7 @@ class OpenAICompatibleClient:
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
-        message = f"{context.text}\n\n{self._action_instruction(action_type)}"
+        message = f"{context.text}\n\n{self._action_instruction(action_type, tool_contracts)}"
         body_data = {
             "model": self.model,
             "messages": [{"role": "user", "content": message}],
@@ -324,6 +336,8 @@ class OpenAICompatibleClient:
                     content = content.removeprefix("```json").removeprefix("```")
                     content = content.removesuffix("```").strip()
                 parsed_action = json.loads(content)
+                if isinstance(parsed_action, dict):
+                    parsed_action.pop("reasoning_summary", None)
                 usage = payload.get("usage")
                 last_error = None
                 break

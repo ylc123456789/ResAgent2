@@ -38,7 +38,7 @@ from .models import (
     ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
-from .tools import Tool, ToolRegistry
+from .tools import Tool, ToolRegistry, tool_contracts_text
 
 _CONSECUTIVE_FAILURE_LIMIT = 5
 _RECENT_OBSERVATION_LIMIT = 6
@@ -328,6 +328,7 @@ class AgentLoop:
                 raw_action = definition.llm_client.next_action(
                     context,
                     definition.action_type,
+                    tool_contracts=tool_contracts_text(definition.tools),
                 )
                 attempts = getattr(definition.llm_client, "last_attempts", 1)
                 self._run_llm_calls += attempts

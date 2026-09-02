@@ -134,10 +134,19 @@ class ScientificAgent:
         if cached is not None:
             return cached
 
+        # The controller durably binds the deterministic scientific session id
+        # before its first turn. A crash can therefore leave an ACTIVE session
+        # on disk while no ScientificTurnResult reached the controller yet.
+        # Re-open that stable checkpoint rather than trying to create the same
+        # deterministic id again. A normal first turn still creates a session.
+        resume_id = request.parent_session_id
+        if resume_id is None and self.store.exists(session_id):
+            resume_id = session_id
+
         loop_request = _LoopRequest(
             run_id=request.run_id,
             budget=request.budget,
-            parent_session_id=request.parent_session_id,
+            parent_session_id=resume_id,
         )
         result = self.loop.run(
             definition,

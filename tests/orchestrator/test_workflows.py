@@ -4,6 +4,8 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner,
+    Attempt,
+    AttemptStatus,
     Capability,
     CodeModifyInput,
     CodeUnderstandInput,
@@ -345,6 +347,90 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
 
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert [item.number for item in run.workflow.tasks[0].attempts] == [1, 2]
+
+
+def test_recovery_closes_interrupted_attempt_and_uses_normal_retry_budget() -> None:
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed("retry worked")]})
+    _create_run(engine, "run_interrupted", research_request(), WorkflowProposal(
+        work_request_id="work_legacy_initial",
+        summary="interrupted",
+        compilation_rationale="recover one persisted attempt",
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+    ))
+    run = engine.store.load("run_interrupted")
+    workflow_task = run.workflow.tasks[0]
+    workflow_task.status = TaskStatus.RUNNING
+    workflow_task.attempts.append(
+        Attempt(
+            number=1,
+            status=AttemptStatus.RUNNING,
+            started_at=NOW,
+        )
+    )
+    engine.store.save(run)
+
+    recovered = engine.store.load("run_interrupted")
+    assert engine._recover_interrupted_attempts_in_place(recovered)
+    engine.store.save(recovered)
+    interrupted = recovered.workflow.tasks[0].attempts[0]
+    assert interrupted.status == AttemptStatus.FAILED
+    assert interrupted.error is not None
+    assert interrupted.error.code == ErrorCode.INTERRUPTED
+    assert recovered.workflow.tasks[0].status == TaskStatus.PENDING
+
+    final = engine.run_until_stable("run_interrupted")
+    assert final.workflow.tasks[0].status == TaskStatus.COMPLETED
+    assert [item.number for item in final.workflow.tasks[0].attempts] == [1, 2]
+
+
+def test_budget_exhaustion_does_not_persist_a_running_attempt() -> None:
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    _create_run(engine, "run_no_calls", research_request(), WorkflowProposal(
+        work_request_id="work_legacy_initial",
+        summary="no budget",
+        compilation_rationale="reject before starting",
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+    ))
+    run = engine.store.load("run_no_calls")
+    run.llm_calls_used = run.request.budget.max_llm_calls
+    engine.store.save(run)
+
+    with pytest.raises(OrchestrationError, match="LLM-call budget"):
+        engine.execute_task("run_no_calls", "task_experiment")
+
+    unchanged = engine.store.load("run_no_calls").workflow.tasks[0]
+    assert unchanged.status == TaskStatus.PENDING
+    assert unchanged.attempts == []
+
+
+def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
+    request_work = ModuleResult(
+        status=ModuleStatus.REQUEST_WORK,
+        summary="invalid task result",
+        request_work={},
+        session=SessionRef(
+            id="session_invalid_task",
+            module=AgentOwner.EXPERIMENT,
+            state_uri="session://session_invalid_task",
+            status=SessionStatus.PAUSED,
+            created_at=NOW,
+            updated_at=NOW,
+        ),
+    )
+    engine = scheduler({Capability.EXPERIMENT_RUN: [request_work]})
+    _create_run(engine, "run_invalid_request_work", research_request(), WorkflowProposal(
+        work_request_id="work_legacy_initial",
+        summary="invalid control signal",
+        compilation_rationale="task modules cannot request workflow work",
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+    ))
+
+    run = engine.run_until_stable("run_invalid_request_work")
+    attempt = run.workflow.tasks[0].attempts[0]
+    assert run.pending_question is None
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error is not None
+    assert attempt.error.code == ErrorCode.CONTRACT_ERROR
 
 
 def test_invalid_module_port_result_becomes_contract_failure() -> None:

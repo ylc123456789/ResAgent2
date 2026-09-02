@@ -177,6 +177,15 @@ def test_needs_user_input_requires_question() -> None:
         )
 
 
+def test_needs_user_input_requires_a_paused_session() -> None:
+    with pytest.raises(ValidationError, match="paused session"):
+        ModuleResult[dict[str, str]](
+            status=ModuleStatus.NEEDS_USER_INPUT,
+            summary="A decision is required",
+            question=QuestionDraft(text="Which?", reason="input is required"),
+        )
+
+
 @pytest.mark.parametrize("status", [ModuleStatus.FAILED, ModuleStatus.BLOCKED])
 def test_failed_or_blocked_result_requires_error(status: ModuleStatus) -> None:
     with pytest.raises(ValidationError, match="error"):

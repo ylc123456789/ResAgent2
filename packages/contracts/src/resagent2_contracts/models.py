@@ -149,6 +149,7 @@ class ErrorCode(StrEnum):
     CONTRACT_ERROR = "contract_error"
     ENVIRONMENT_UNAVAILABLE = "environment_unavailable"
     ARTIFACT_MISSING = "artifact_missing"
+    INTERRUPTED = "interrupted"
 
 
 class WorkspaceMode(StrEnum):
@@ -892,6 +893,8 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
                 raise ValueError(
                     "needs_user_input result requires question, no error, no request_work"
                 )
+            if self.session is None or self.session.status != SessionStatus.PAUSED:
+                raise ValueError("needs_user_input result requires a paused session")
         elif self.status == ModuleStatus.REQUEST_WORK:
             if self.request_work is None or self.error is not None or self.question is not None:
                 raise ValueError(

@@ -278,7 +278,7 @@ class ModuleError:
     details: dict[str, JsonValue] = {}
 ```
 
-ErrorCode 固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing。
+ErrorCode 固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing、interrupted。`interrupted` 只由 ResAgent 恢复逻辑写入，表示 Attempt 已持久化为 running、但进程在 ModuleResult 写回前退出；它是 retryable failure，不是新的 TaskStatus。
 
 ## 11. Attempt 与 SessionRef
 
@@ -303,7 +303,7 @@ class SessionRef:
     updated_at: datetime
 ```
 
-Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry（failed/blocked 后重试）是同一 Task 的新 Attempt，默认新 Session；pause/resume 是**同一 Attempt** 的暂停与继续，不增加 Attempt number，复用 Session/output_dir/workspace snapshot（ADR-0011 §2）；repair 是新 WorkflowTask。
+Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry（failed/blocked 后重试）是同一 Task 的新 Attempt，默认新 Session；pause/resume 是**同一 Attempt** 的暂停与继续，不增加 Attempt number，复用 Session/output_dir/workspace snapshot（ADR-0011 §2）；repair 是新 WorkflowTask。进程中断不是第三种 AttemptStatus：恢复时把遗留 running Attempt 结算为 `failed + ErrorCode.interrupted + retryable=True`，再按原有 Attempt 预算决定 Task 是否回到 pending（ADR-0012）。
 
 `running` 与 `needs_user_input` 都是非终态：不能有 finished_at/error；终态（completed/completed_with_warnings/failed/blocked）必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败/契约错误路径天然为 None。
 
@@ -571,7 +571,7 @@ WorkflowCompiler 的输入是 `WorkRequest`、CapabilityRegistry、Run 约束和
 
 ### 16.6 ScientificCompletionValidator 与 final report
 
-Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入同一个不可变 ResearchRun snapshot 和 ScientificCompletedResult；输出结构化 violation（invalid_session / active_control_state / invalid_opinion / unknown_evidence / unobserved_evidence / unacknowledged_task / missing_limitations / inconsistent_task_result）。验证顺序固定为：completed result/session/run 绑定正确 → 无 active WorkRequest/PendingQuestion/running Task → opinion 通过组合约束 → 每个 evidence Artifact 属于本 Run、Registry 可查、且同时出现在 result.observed_artifact_ids 与 run 的已复核 trace → 所有 failed/blocked Task 被 acknowledged 且存在 limitations → 每个 completed Task 都有合法终态 Attempt、无 error、artifact producer 与 binding owner 一致 → 不接受未知/重复/跨 Run 的 ID。
+Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入同一个不可变 ResearchRun snapshot 和 ScientificCompletedResult；输出结构化 violation（invalid_session / active_control_state / invalid_opinion / unknown_evidence / unobserved_evidence / unacknowledged_task / missing_limitations / inconsistent_task_result）。验证顺序固定为：completed result/session/run 绑定正确 → 无 active WorkRequest/PendingQuestion/**pending、running 或 needs_user_input Task** → opinion 通过组合约束 → 每个 evidence Artifact 属于本 Run、Registry 可查、且同时出现在 result.observed_artifact_ids 与 run 的已复核 trace → 所有 failed/blocked Task 被 acknowledged 且存在 limitations → 每个 completed Task 都有合法终态 Attempt、无 error、artifact producer 与 binding owner 一致 → 不接受未知/重复/跨 Run 的 ID。
 
 通过时 Validator 产出 `FinalReportData`（run_id、goal、opinion、evidence、execution_issues），纯 renderer 只消费 FinalReportData 生成 `kind=final_report`、`media_type=text/markdown` 的 ArtifactCandidate。RunStatus 只有在验证、渲染、Artifact 登记和 Run 字段写入全部成功后才改 completed。Validator 不判断 statement 是否科学正确。
 

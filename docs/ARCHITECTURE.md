@@ -368,6 +368,16 @@ WorkRequest 执行期间 Run 仍为 running；无需增加 planning 或 waiting_
 
 production composition root 走 `ResearchController`：`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 WorkflowProposal/Patch，`WorkflowScheduler` 执行 Coding/Experiment 图，`WorkOutcome` 回传 Scientific Session 再形成最终 `ScientificOpinion`，经 `ScientificCompletionValidator` 后写 completed。`WorkflowScheduler` 只执行任务图、不决定 ResearchRun 完成；`ResearchController` 是唯一的 Run 创建/回答/完成入口；任务级 ask/resume 在同一 Attempt 上继续。
 
+### 11.4 中断恢复边界
+
+`RUNNING` 是已经持久化的执行意图，不是进程存活证明。当前系统是单进程、同步调用模型：当新的 `ResearchController.run_until_stable()` 读取到遗留的 running Task/Attempt 时，它将该 Attempt **保留为历史**，结算为 `failed + ErrorCode.interrupted + retryable=True`；只有剩余 Attempt 预算允许时，Task 才回到 `pending` 等待新的 Attempt。系统不得静默删除或覆盖中断 Attempt。
+
+恢复只有 `ResearchController.run_until_stable()` 入口：它先整理遗留 Attempt，再重新计算 ready Task。`WorkflowScheduler` 不自行猜测旧进程是否仍在执行，也不把 Run 判为 completed。
+
+ScientificSession 的引用在首次 Scientific turn **之前**由 Controller 绑定到 ResearchRun；runtime 仍独占 Session 内容。首次 turn 中断后，Scientific Agent 以确定性 session id 重新打开已保存的 `active` checkpoint；正常的 ask-user/request-work 继续只允许从 `paused` Session 恢复。Session 不存在时可创建首次 checkpoint，已完成或失败的 Session 不可作为恢复目标。
+
+最终完成 gate 必须拒绝任何 `pending`、`running` 或 `needs_user_input` Task；只有所有 Task 都处于终态，ScientificOpinion 才能被验证为 Run completed。详细的取舍见 ADR-0012。
+
 ## 12. Artifact 与安全边界
 
 Artifact 保持两道检查：

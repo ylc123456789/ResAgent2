@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from resagent2_contracts import (
+    AgentOwner,
     CapabilityRegistry,
     ErrorCode,
     ModuleError,
@@ -25,6 +26,8 @@ from resagent2_contracts import (
     ScientificTurnRequest,
     ScientificTurnResult,
     ScientificWorkRequestResult,
+    SessionRef,
+    SessionStatus,
     TaskBudget,
     UserAnswer,
     WorkRequest,
@@ -137,6 +140,14 @@ class ResearchController:
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
 
+            # This is the only recovery entry for a persisted ResearchRun.
+            # Scheduler invocation is synchronous in the current local model,
+            # so a RUNNING Attempt observed after a new controller entry is a
+            # stale intent record, not a live worker claim.
+            if self.scheduler._recover_interrupted_attempts_in_place(run):
+                self._save(run)
+                continue
+
             # Wall-clock deadline: fail deterministically when the run budget is
             # exhausted (ADR-0011 §7.3). Preemptive per-tool cancellation is out
             # of scope; this is the run-level remaining-timeout gate.
@@ -160,6 +171,7 @@ class ResearchController:
                     return run
                 continue
 
+            self._bind_initial_scientific_session(run)
             turn_result = self._scientific_turn(run)
             run = self._apply_turn(run_id, turn_result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
@@ -168,12 +180,20 @@ class ResearchController:
     def _scientific_turn(self, run: ResearchRun) -> ScientificTurnResult:
         work_outcome = None
         previous_work_request = None
-        parent_session_id = run.scientific_session.id if run.scientific_session else None
+        parent_session_id = None
         active = self._active_work_request(run)
         if active is not None and active.status == WorkRequestStatus.STABLE:
             work_outcome = active.outcome
             previous_work_request = active.request
             parent_session_id = active.scientific_session_id
+        elif (
+            run.scientific_session is not None
+            and run.scientific_session.status == SessionStatus.PAUSED
+        ):
+            # User answers resume a deliberate pause. An ACTIVE session is an
+            # interrupted first turn; ScientificAgent reopens its deterministic
+            # checkpoint without pretending it was paused.
+            parent_session_id = run.scientific_session.id
         remaining = run.request.budget.max_llm_calls - run.llm_calls_used
         elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
         remaining_timeout = max(1, int(run.request.budget.timeout_seconds - elapsed))
@@ -194,6 +214,36 @@ class ResearchController:
                 parent_session_id=parent_session_id,
             )
         )
+
+    def _bind_initial_scientific_session(self, run: ResearchRun) -> None:
+        """Persist the deterministic Scientific session reference before use.
+
+        A first-turn crash can then be recovered without losing ownership of
+        ``session_scientific_<run_id>``. The runtime owns the session contents;
+        the controller stores only this reference and never reads its memory.
+        """
+        if run.scientific_session is not None:
+            return
+        now = datetime.now(UTC)
+        active = self._active_work_request(run)
+        session_id = (
+            active.scientific_session_id
+            if active is not None
+            else f"session_scientific_{run.run_id}"
+        )
+        run.scientific_session = SessionRef(
+            id=session_id,
+            module=AgentOwner.SCIENTIFIC,
+            state_uri=f"session://{session_id}",
+            # A persisted WorkRequest was produced by request_work, whose
+            # AgentLoop boundary deliberately pauses the Scientific session.
+            # This also repairs the narrow crash window before the controller
+            # copied that SessionRef into the Run.
+            status=SessionStatus.PAUSED if active is not None else SessionStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+        )
+        self._save(run)
 
     def _apply_turn(self, run_id: str, result: ScientificTurnResult) -> ResearchRun:
         run = self.scheduler.store.load(run_id)

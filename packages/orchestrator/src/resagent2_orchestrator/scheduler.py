@@ -263,6 +263,7 @@ class WorkflowScheduler:
         attempt_number = len(task.attempts) + 1
         if attempt_number > run.request.budget.max_attempts_per_task:
             raise OrchestrationError("task attempt budget is exhausted")
+        self._require_remaining_llm_budget(run)
         import_artifacts = [
             artifact_id
             for artifact_id, artifact in run.artifacts.items()
@@ -330,6 +331,9 @@ class WorkflowScheduler:
             if record is not None and record.source.environment is not None
             else EnvironmentSpec()
         )
+        remaining_calls = run.request.budget.max_llm_calls - run.llm_calls_used
+        if remaining_calls <= 0:
+            raise OrchestrationError("run LLM-call budget is exhausted")
         return ModuleTaskRequest(
             run_id=run.run_id,
             task_id=task.id,
@@ -347,9 +351,7 @@ class WorkflowScheduler:
             ],
             budget=TaskBudget(
                 max_steps=50,
-                max_llm_calls=min(
-                    50, run.request.budget.max_llm_calls - run.llm_calls_used
-                ),
+                max_llm_calls=min(50, remaining_calls),
                 timeout_seconds=max(
                     1,
                     int(
@@ -472,7 +474,7 @@ class WorkflowScheduler:
             attempt.status = AttemptStatus.BLOCKED
             attempt.error = result.error
             task.status = TaskStatus.BLOCKED
-        else:
+        elif result.status == ModuleStatus.NEEDS_USER_INPUT:
             attempt.finished_at = None
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
@@ -488,6 +490,18 @@ class WorkflowScheduler:
                 requested_fields=draft.requested_fields,
                 created_at=finished,
             )
+        else:
+            # request_work belongs only to the ScientificPort boundary. A task
+            # module returning it is an invalid contract, never an implicit
+            # request for user input.
+            attempt.finished_at = finished
+            attempt.status = AttemptStatus.FAILED
+            attempt.error = ModuleError(
+                code=ErrorCode.CONTRACT_ERROR,
+                message="task module returned request_work",
+                retryable=False,
+            )
+            task.status = TaskStatus.FAILED
 
         self._evaluate_run(run)
         self._save(run)
@@ -526,6 +540,44 @@ class WorkflowScheduler:
         if task.status != TaskStatus.NEEDS_USER_INPUT:
             raise OrchestrationError("question task is not awaiting user input")
         task.status = TaskStatus.PENDING
+
+    def _recover_interrupted_attempts_in_place(self, run: ResearchRun) -> bool:
+        """Apply interrupted-Attempt recovery to one Controller-loaded Run.
+
+        ``RUNNING`` records intent to invoke a module; it does not prove that a
+        process still exists after restart. Recovery preserves that historical
+        Attempt as a retryable interrupted failure, then returns the Task to
+        PENDING only when its ordinary retry budget permits another Attempt.
+        This stays private because only ResearchController owns Run recovery.
+        """
+        if run.workflow is None:
+            return False
+        changed = False
+        now = datetime.now(UTC)
+        for task in run.workflow.tasks:
+            if task.status != TaskStatus.RUNNING:
+                continue
+            attempt = task.attempts[-1] if task.attempts else None
+            if attempt is None or attempt.status != AttemptStatus.RUNNING:
+                raise OrchestrationError(
+                    f"running task {task.id} has no running latest attempt"
+                )
+            attempt.status = AttemptStatus.FAILED
+            attempt.finished_at = now
+            attempt.error = ModuleError(
+                code=ErrorCode.INTERRUPTED,
+                message="attempt interrupted before its module result was persisted",
+                retryable=True,
+            )
+            task.status = (
+                TaskStatus.PENDING
+                if attempt.number < run.request.budget.max_attempts_per_task
+                else TaskStatus.FAILED
+            )
+            changed = True
+        if changed:
+            self._evaluate_run(run)
+        return changed
 
     def retry_task(self, run_id: str, task_id: str) -> ResearchRun:
         """Explicitly retry a failed or blocked task after external recovery."""
@@ -660,6 +712,11 @@ class WorkflowScheduler:
         missing = [item.value for item in capabilities if item not in self.bindings]
         if missing:
             raise OrchestrationError(f"no ModulePort binding for: {sorted(set(missing))}")
+
+    @staticmethod
+    def _require_remaining_llm_budget(run: ResearchRun) -> None:
+        if run.llm_calls_used >= run.request.budget.max_llm_calls:
+            raise OrchestrationError("run LLM-call budget is exhausted")
 
     @staticmethod
     def _task(run: ResearchRun, task_id: str) -> WorkflowTask:

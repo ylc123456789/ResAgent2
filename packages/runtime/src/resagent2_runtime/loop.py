@@ -188,7 +188,7 @@ class AgentLoop:
                 )
             state = self.store.load(resume_id)
             if (
-                state.status != SessionStatus.PAUSED
+                state.status not in {SessionStatus.PAUSED, SessionStatus.ACTIVE}
                 or state.run_id != request.run_id
                 or state.task_id != request.task_id
                 or state.owner != definition.owner
@@ -196,7 +196,10 @@ class AgentLoop:
             ):
                 error = ModuleError(
                     code=ErrorCode.CONTRACT_ERROR,
-                    message="resume target does not match request or is not paused",
+                    message=(
+                        "resume target does not match request or is not "
+                        "recoverable"
+                    ),
                     retryable=False,
                 )
                 return ModuleResult(

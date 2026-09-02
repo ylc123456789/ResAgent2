@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from resagent2_contracts import (
     AgentOwner,
     Capability,
@@ -5,6 +7,7 @@ from resagent2_contracts import (
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
+    SessionStatus,
 )
 from resagent2_runtime import (
     AgentAction,
@@ -17,6 +20,7 @@ from resagent2_runtime import (
     FinishTool,
     InMemorySessionStore,
     ScriptedLLMClient,
+    AgentState,
 )
 
 
@@ -143,6 +147,47 @@ def test_resume_rejects_non_paused_session() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     assert result.error.code.value == "contract_error"
+
+
+def test_resume_recovers_active_session_after_interruption() -> None:
+    """ACTIVE is a persisted checkpoint after a process interruption, not a finish."""
+    store = InMemorySessionStore()
+    now = datetime.now(UTC)
+    store.save(
+        AgentState(
+            session_id="session_interrupted",
+            agent_name="finisher",
+            owner=AgentOwner.SCIENTIFIC,
+            run_id="run_resume",
+            task_id="task_experiment",
+            attempt_number=1,
+            status=SessionStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    loop = AgentLoop(store=store)
+    definition = AgentDefinition(
+        name="finisher",
+        owner=AgentOwner.SCIENTIFIC,
+        system_prompt="finish only",
+        tools=(FinishTool(),),
+        llm_client=ScriptedLLMClient(
+            [AgentAction(tool="finish", arguments={"result": {}})]
+        ),
+        context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"finish"}),
+        completion_check=_AcceptFinish(),
+    )
+
+    result = loop.run(
+        definition,
+        _request(attempt=1, parent="session_interrupted"),
+        session_id="session_interrupted",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    assert store.load("session_interrupted").status == SessionStatus.COMPLETED
 
 
 def test_resume_rejects_mismatched_task() -> None:

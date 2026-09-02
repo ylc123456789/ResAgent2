@@ -180,15 +180,22 @@ class ScientificCompletionValidator:
                 "a pending user question prevents completion",
                 run.pending_question.id,
             )
-        running = [] if run.workflow is None else [
-            task.id for task in run.workflow.tasks if task.status == TaskStatus.RUNNING
+        nonterminal = [] if run.workflow is None else [
+            task.id
+            for task in run.workflow.tasks
+            if task.status
+            in {
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
+                TaskStatus.NEEDS_USER_INPUT,
+            }
         ]
-        if running:
+        if nonterminal:
             self._add(
                 violations,
                 CompletionViolationCode.ACTIVE_CONTROL_STATE,
-                "running tasks prevent completion",
-                *running,
+                "non-terminal tasks prevent completion",
+                *nonterminal,
             )
 
     def _validate_opinion(

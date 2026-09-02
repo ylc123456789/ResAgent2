@@ -37,6 +37,7 @@
 | Phase 6 | Experiment Agent vNext | completed |
 | Phase 7 | Scientific Agent vNext、科学控制循环与闭环 gate | completed（历史 schema 2.0 主链） |
 | Stabilization 3.0 | 按 ADR-0011 收敛控制面、契约、资源与生命周期 | completed（`d3c5560` 代码树；本地与服务器验收通过） |
+| Stabilization 3.1 | 状态恢复边界：中断 Attempt、Scientific 首次 Session 与终态 gate 收敛（ADR-0012） | in_progress |
 | Phase 8 | 按需高级能力 | not_started |
 
 Phase 1—7 是历史实施记录。当前 production 只保留 schema 3.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。

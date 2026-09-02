@@ -245,6 +245,43 @@ def workflow_task(status: TaskStatus, attempts: list[Attempt]) -> Workflow:
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "attempts"),
+    [
+        (TaskStatus.PENDING, []),
+        (
+            TaskStatus.RUNNING,
+            [
+                Attempt(
+                    number=1,
+                    status=AttemptStatus.RUNNING,
+                    started_at=NOW,
+                )
+            ],
+        ),
+        (
+            TaskStatus.NEEDS_USER_INPUT,
+            [
+                Attempt(
+                    number=1,
+                    status=AttemptStatus.NEEDS_USER_INPUT,
+                    started_at=NOW,
+                )
+            ],
+        ),
+    ],
+)
+def test_nonterminal_task_prevents_final_completion(status, attempts) -> None:
+    validation = ScientificCompletionValidator(registry()).validate(
+        run_state(workflow=workflow_task(status, attempts)),
+        result(ScientificVerdict.INCONCLUSIVE),
+    )
+
+    assert CompletionViolationCode.ACTIVE_CONTROL_STATE in {
+        item.code for item in validation.violations
+    }
+
+
 def test_unacknowledged_failed_task_is_rejected() -> None:
     error = ModuleError(
         code=ErrorCode.TOOL_FAILED,

@@ -142,22 +142,30 @@ class ExperimentCompletionCheck:
             if normalized in changed and normalized not in evidence:
                 evidence.append(normalized)
 
+        # Fix the complete evidence set before deriving metrics: a required
+        # artifact the Agent produced but did not list is still evidence, and
+        # its JSON must feed the typed metrics (ADR-0011 §5.2).
+        artifact_issues: list[str] = []
+        for name in self.expected_artifacts:
+            normalized = self._resolve_path(name)
+            if normalized is None:
+                artifact_issues.append(f"Missing required artifact: {name}")
+                continue
+            if normalized not in changed:
+                artifact_issues.append(
+                    f"Required artifact {normalized} is unchanged from this attempt"
+                )
+                continue
+            if normalized not in evidence:
+                evidence.append(normalized)
+
         metrics = self._metrics_from_evidence(evidence)
         issues = [
             f"Missing required metric: {name}"
             for name in self.expected_metrics
             if not _metric_is_present(name, metrics)
         ]
-        for name in self.expected_artifacts:
-            normalized = self._resolve_path(name)
-            if normalized is None:
-                issues.append(f"Missing required artifact: {name}")
-                continue
-            if normalized not in changed:
-                issues.append(f"Required artifact {normalized} is unchanged from this attempt")
-                continue
-            if normalized not in evidence:
-                evidence.append(normalized)
+        issues.extend(artifact_issues)
 
         # A run that delivered none of the explicitly required evidence did not
         # actually produce results; reject it instead of completing with

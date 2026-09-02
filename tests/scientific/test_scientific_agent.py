@@ -554,3 +554,14 @@ def test_repeated_work_outcome_delivery_is_idempotent() -> None:
     assert duplicate.status == "completed"
     assert duplicate.opinion.verdict == ScientificVerdict.INCONCLUSIVE
     assert duplicate.opinion == result.opinion
+
+
+def test_scientific_finish_has_no_unconsumed_residual_risks() -> None:
+    from resagent2_scientific.context import SCIENTIFIC_PROMPT
+    from resagent2_scientific.models import ScientificFinish
+
+    # residual_risks duplicated ScientificOpinion.limitations and was never
+    # propagated to any result; it must not remain a field the model can emit
+    # that the finalizer then silently drops.
+    assert "residual_risks" not in ScientificFinish.model_fields
+    assert "residual_risks" not in SCIENTIFIC_PROMPT

@@ -48,4 +48,3 @@ class ScientificFinish(RuntimeModel):
 
     opinion: ScientificOpinion
     summary: NonEmptyStr
-    residual_risks: list[NonEmptyStr] = Field(default_factory=list)

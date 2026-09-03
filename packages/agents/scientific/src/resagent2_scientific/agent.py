@@ -117,7 +117,8 @@ class ScientificAgent:
             context_builder=lambda _loop_request, state: build_context(request, state),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(
-                list(request.unresolved_task_outcomes)
+                list(request.unresolved_task_outcomes),
+                list(request.research.required_evidence_kinds),
             ),
             action_type=ScientificAction,
             max_context_tokens=self.max_context_tokens,

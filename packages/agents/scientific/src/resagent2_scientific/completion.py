@@ -42,11 +42,23 @@ def unobserved_artifact_ids(cited: list[str], observed: list[str]) -> list[str]:
     return sorted(set(cited) - set(observed))
 
 
+def _evidence_kind_ids(state: AgentState, kind: str) -> set[str]:
+    """Return observed artifact ids of a required evidence kind, if known."""
+    if kind == "literature_search":
+        return set(state.memory.get("literature_artifact_ids", []))
+    return set()
+
+
 class ScientificCompletionCheck:
     """Finalize a finish candidate into a validated ScientificOpinion."""
 
-    def __init__(self, unresolved_task_outcomes: list[WorkTaskOutcome]) -> None:
+    def __init__(
+        self,
+        unresolved_task_outcomes: list[WorkTaskOutcome],
+        required_evidence_kinds: list[str] | None = None,
+    ) -> None:
         self._unresolved = unresolved_task_outcomes
+        self._required_evidence_kinds = required_evidence_kinds or []
 
     def evaluate(
         self,
@@ -78,6 +90,18 @@ class ScientificCompletionCheck:
                     + ", ".join(unobserved)
                 ),
             )
+
+        # Required evidence kinds: a run that must cite a certain kind of
+        # registered artifact cannot finish until the opinion cites one.
+        for kind in self._required_evidence_kinds:
+            if not (cited & _evidence_kind_ids(state, kind)):
+                return CompletionDecision(
+                    complete=False,
+                    summary=(
+                        f"Still missing required evidence of kind {kind!r}; cite "
+                        f"at least one registered {kind} artifact before finishing."
+                    ),
+                )
 
         # Failed/blocked work is a controller-owned fact, not an identifier the
         # Scientific Agent must echo. The final report renders the exact

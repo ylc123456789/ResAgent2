@@ -380,6 +380,7 @@ class ResearchRequest(ContractModel):
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     input_artifacts: list[ArtifactImport] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
+    required_evidence_kinds: list[str] = Field(default_factory=list)
     budget: RunBudget
 
 

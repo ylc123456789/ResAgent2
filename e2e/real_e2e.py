@@ -810,6 +810,7 @@ def run_literature(workdir: Path) -> bool:
             "This is a literature-only review: use literature_search directly and "
             "do not request code or experiment work."
         ],
+        required_evidence_kinds=["literature_search"],
         budget=RunBudget(
             max_tasks=1, max_attempts_per_task=1, max_llm_calls=60, timeout_seconds=900
         ),

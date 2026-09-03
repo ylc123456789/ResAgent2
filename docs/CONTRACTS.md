@@ -4,7 +4,7 @@
 
 **语义上级**：`ARCHITECTURE.md`；本文件不得改变其中的模块职责和控制流。
 
-**当前实现**：`resagent2-contracts 0.1.0`，wire schema `3.0`（`SCHEMA_VERSION="3.0"`，Stabilization 3.0 / ADR-0011 起）。schema 1.0/1.1/2.0 的历史演进记录在 `DEVELOPMENT_PLAN.md`、`docs/decisions/` 与 `docs/reviews/`，本文件只描述当前 3.0。
+**当前实现**：`resagent2-contracts 0.1.0`，wire schema `4.0`（`SCHEMA_VERSION="4.0"`）。schema 1.0/1.1/2.0/3.0 的历史演进记录在 `DEVELOPMENT_PLAN.md`、`docs/decisions/` 与 `docs/reviews/`，本文件只描述当前 4.0。schema 4.0 是一次 clean break：3.0 及更早的 `state/`、`sessions/` 是开发/测试产物，升级后不可恢复，应删除或归档后重新发起 Run（不实现迁移或 fallback）。
 
 ## 1. 使用规则
 
@@ -19,7 +19,7 @@
 所有公共模型：
 
 - 继承严格 `ContractModel`（`extra="forbid"`）；
-- 序列化 `schema_version: "3.0"`（`ContractModel.schema_version: Literal["3.0"]`）；
+- 序列化 `schema_version: "4.0"`（`ContractModel.schema_version: Literal["4.0"]`）；
 - 以下示意代码省略每个模型继承得到的 `schema_version`，但 wire 数据不能省略其版本语义。
 
 ## 2. 跨模块对象范围
@@ -90,6 +90,7 @@ class ResearchRequest:
     constraints: list[NonEmptyStr] = []
     input_artifacts: list[ArtifactImport] = []
     dataset_refs: list[DatasetRef] = []
+    required_evidence_kinds: list[RequiredEvidenceKind] = []  # 当前仅 literature_search
     budget: RunBudget
 ```
 
@@ -312,7 +313,7 @@ Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry（failed/blocke
 ```python
 class QuestionDraft:
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = []
+    requested_fields: list[NonEmptyStr] = Field(min_length=1)
     reason: NonEmptyStr
 
 class PendingQuestion:
@@ -320,16 +321,16 @@ class PendingQuestion:
     run_id: RunId
     task_id: TaskId | None = None
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = []
+    requested_fields: list[NonEmptyStr] = Field(min_length=1)
     created_at: datetime
 
 class UserAnswer:
     question_id: QuestionId
-    values: dict[NonEmptyStr, str]
+    values: dict[NonEmptyStr, str] = Field(min_length=1)
     answered_at: datetime
 ```
 
-子 Agent 只生成 QuestionDraft；ResAgent 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。`reason` 是必填字段。
+子 Agent 只生成 QuestionDraft；ResAgent 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。`reason` 是必填字段。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
 
 ## 13. Artifact 契约
 
@@ -604,7 +605,7 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-当前 `3.0`（Stabilization 3.0 / ADR-0011）相对 2.0 的改动：删除 `TaskProposal/WorkflowTask.required`、per-task `rationale`、`PendingTaskUpdate`/`supersede_task_ids`/`pending_task_updates`、`ExperimentResult.parameters`、`ExperimentRunInput.dataset_refs`，并收敛 `WorkspaceRecord`（去 `initial_commit`）；新增 `ArtifactImport`、`WorkspaceSpec.environment`、`ModuleTaskRequest.dataset_refs`、`ModuleResult.llm_calls`、`Attempt.summary`，并把 `CodeModifyResult.verification_results` 收紧为 min_length=1。`success_criteria`/`evidence_key` 及旧 scientific/planning task capability 已在 2.0 删除。1.0/1.1/2.0 演进见 `DEVELOPMENT_PLAN.md` 与 ADR-0007/0011。
+`3.0`（Stabilization 3.0 / ADR-0011）相对 2.0 的改动：删除 `TaskProposal/WorkflowTask.required`、per-task `rationale`、`PendingTaskUpdate`/`supersede_task_ids`/`pending_task_updates`、`ExperimentResult.parameters`、`ExperimentRunInput.dataset_refs`，并收敛 `WorkspaceRecord`（去 `initial_commit`）；新增 `ArtifactImport`、`WorkspaceSpec.environment`、`ModuleTaskRequest.dataset_refs`、`ModuleResult.llm_calls`、`Attempt.summary`，并把 `CodeModifyResult.verification_results` 收紧为 min_length=1。`success_criteria`/`evidence_key` 及旧 scientific/planning task capability 已在 2.0 删除。1.0/1.1/2.0 演进见 `DEVELOPMENT_PLAN.md` 与 ADR-0007/0011。
 
 ## 19. 运行时反馈与连续失败保护
 

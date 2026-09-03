@@ -2,7 +2,7 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）。
 
-**当前基线**：Stabilization 3.0（ADR-0011），wire schema `3.0`。`ResearchController` 是研究 Run 唯一入口与状态负责人；`WorkflowScheduler` 只执行任务图、不决定 Run 完成；pause/resume 走同一 Attempt；dataset / environment / input artifact / workspace 各有唯一权威来源；公共契约只保留有 production producer+consumer 的字段。
+**当前基线**：Stabilization 3.0（ADR-0011）之后的 wire schema `4.0`（输入与证据闭环收敛）。`ResearchController` 是研究 Run 唯一入口与状态负责人；`WorkflowScheduler` 只执行任务图、不决定 Run 完成；pause/resume 走同一 Attempt；dataset / environment / input artifact / workspace 各有唯一权威来源；公共契约只保留有 production producer+consumer 的字段。schema 4.0 是 clean break，旧 3.0 state 不恢复。
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 

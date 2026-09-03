@@ -81,7 +81,37 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "3.0"
+    assert restored.schema_version == "4.0"
+
+
+def test_schema_3_state_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Workflow(
+            run_id="run_example",
+            revision=1,
+            tasks=[],
+            created_from="work_test",
+            schema_version="3.0",
+        )
+
+
+def test_user_answer_requires_at_least_one_value() -> None:
+    with pytest.raises(ValidationError, match="values"):
+        UserAnswer(question_id="question_x", values={}, answered_at=NOW)
+
+
+def test_unsupported_evidence_kind_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ResearchRequest(
+            goal="Evaluate the method",
+            required_evidence_kinds=["code_change"],
+            budget=RunBudget(
+                max_tasks=1,
+                max_attempts_per_task=1,
+                max_llm_calls=10,
+                timeout_seconds=60,
+            ),
+        )
 
 
 @pytest.mark.parametrize(

@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "3.0"
+SCHEMA_VERSION = "4.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["3.0"] = SCHEMA_VERSION
+    schema_version: Literal["4.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +371,9 @@ class ArtifactImport(ContractModel):
     expected_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 
+RequiredEvidenceKind = Literal["literature_search"]
+
+
 class ResearchRequest(ContractModel):
     """User-confirmed research objective and run-wide boundaries."""
 
@@ -380,7 +383,7 @@ class ResearchRequest(ContractModel):
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     input_artifacts: list[ArtifactImport] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
-    required_evidence_kinds: list[str] = Field(default_factory=list)
+    required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
     budget: RunBudget
 
 

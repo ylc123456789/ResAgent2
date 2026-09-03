@@ -42,6 +42,13 @@ def test_agent_action_has_no_reasoning_summary() -> None:
     assert "reasoning_summary" not in AgentAction.model_fields
 
 
+def test_ask_user_contract_requires_requested_fields() -> None:
+    from resagent2_runtime import AskUserTool
+
+    text = tool_contracts_text((AskUserTool(),))
+    assert "ask_user: text, requested_fields, reason" in text
+
+
 def test_tool_contracts_include_optional_model_guidance() -> None:
     class _ReadInput(BaseModel):
         path: str

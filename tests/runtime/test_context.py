@@ -9,6 +9,7 @@ from resagent2_runtime import (
     AgentState,
     ContextComposer,
     ContextSection,
+    recent_tool_listing,
     recent_tool_snippets,
     recent_tool_text_values,
 )
@@ -170,3 +171,57 @@ def test_snippets_pack_whole_then_truncate_newest_first() -> None:
     assert snippets[2]["truncated"] is True
     assert snippets[2]["content"].startswith("X")
     assert snippets[2]["content"].endswith("X")
+
+
+def _listing_state(*values: dict) -> AgentState:
+    now = datetime.now(UTC)
+    events = [
+        AgentEvent(
+            sequence=index,
+            step=index,
+            type="observation",
+            tool="list_files",
+            data={"value": value},
+            created_at=now,
+        )
+        for index, value in enumerate(values, start=1)
+    ]
+    return AgentState(
+        session_id="session_context",
+        agent_name="test",
+        owner=AgentOwner.CODING,
+        run_id="run_context",
+        task_id="task_context",
+        attempt_number=1,
+        events=events,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_recent_listing_keeps_latest_and_bounds() -> None:
+    state = _listing_state(
+        {"paths": ["a.py", "b.py"], "truncated": False},
+        {"paths": ["c.py", "d.py", "e.py"], "truncated": False},
+    )
+    listing = recent_tool_listing(
+        state, tool="list_files", list_key="paths", max_entries=2
+    )
+    # Latest wins, bounded to 2 entries, truncated because 3 > 2.
+    assert listing["paths"] == ["c.py", "d.py"]
+    assert listing["truncated"] is True
+
+
+def test_recent_listing_preserves_tool_truncation() -> None:
+    state = _listing_state({"paths": ["a.py"], "truncated": True})
+    listing = recent_tool_listing(
+        state, tool="list_files", list_key="paths", max_entries=80
+    )
+    assert listing["paths"] == ["a.py"]
+    assert listing["truncated"] is True
+
+
+def test_recent_listing_returns_none_when_absent() -> None:
+    assert recent_tool_listing(
+        _listing_state(), tool="list_files", list_key="paths"
+    ) is None

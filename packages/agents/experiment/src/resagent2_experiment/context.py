@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 
 from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import AgentState, ContextSection, recent_tool_text_values
+from resagent2_runtime import (
+    AgentState,
+    ContextSection,
+    recent_tool_listing,
+    recent_tool_snippets,
+)
 
 
 EXPERIMENT_PROMPT = """You are the Experiment Agent. Run the declared experiment and
@@ -112,8 +117,11 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             priority=65,
         ),
     ]
-    read_files = recent_tool_text_values(
-        state, tool="read_file", identity_key="path", text_key="content"
+    read_files = recent_tool_snippets(
+        state,
+        tool="read_file",
+        identity_keys=("path", "start_line", "end_line"),
+        text_key="content",
     )
     if read_files:
         sections.append(
@@ -122,6 +130,15 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
                 content=json.dumps(read_files, ensure_ascii=False),
                 priority=60,
                 required=True,
+            )
+        )
+    listing = recent_tool_listing(state, tool="list_files", list_key="paths")
+    if listing:
+        sections.append(
+            ContextSection(
+                name="directory",
+                content=json.dumps(listing, ensure_ascii=False),
+                priority=62,
             )
         )
     return sections

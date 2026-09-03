@@ -193,3 +193,34 @@ def recent_tool_snippets(
         selected.append(bounded)
         break
     return selected
+
+
+def recent_tool_listing(
+    state: AgentState,
+    *,
+    tool: str,
+    list_key: str,
+    max_entries: int = 80,
+) -> dict | None:
+    """Return the latest bounded list observation for ``tool``, or None.
+
+    Generic for list-shaped outputs (e.g. ``list_files``): keeps the most
+    recent observation's ``list_key`` list, truncated to ``max_entries``, and
+    folds any tool-level truncation into one ``truncated`` flag. Agents use it
+    to retain "what files exist" without re-listing every turn.
+    """
+    if max_entries < 1:
+        raise ValueError("max_entries must be positive")
+    for event in reversed(state.events):
+        if event.type != "observation" or event.tool != tool:
+            continue
+        data = event.data if isinstance(event.data, dict) else {}
+        value = data.get("value")
+        if not isinstance(value, dict):
+            continue
+        entries = value.get(list_key)
+        if not isinstance(entries, list):
+            continue
+        truncated = bool(value.get("truncated")) or len(entries) > max_entries
+        return {list_key: entries[:max_entries], "truncated": truncated}
+    return None

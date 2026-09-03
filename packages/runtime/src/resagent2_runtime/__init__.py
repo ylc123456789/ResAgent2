@@ -10,6 +10,7 @@ process, repository, environment, dataset, hardware) live in
 from .context import (
     ContextBudgetExceeded,
     ContextComposer,
+    recent_tool_listing,
     recent_tool_snippets,
     recent_tool_text_values,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "PermissionPolicy",
     "ReadValueInput",
     "ReadValueTool",
+    "recent_tool_listing",
     "recent_tool_snippets",
     "recent_tool_text_values",
     "ScriptedLLMClient",

@@ -40,7 +40,7 @@
 | Stabilization 3.1 | 状态恢复边界：中断 Attempt、Scientific 首次 Session 与终态 gate 收敛（ADR-0012） | completed（`a9b1a5e`；本地 422 passed、服务器 clean-workdir 五场景验收通过） |
 | Phase 8 | 按需高级能力 | not_started |
 
-Phase 1—7 是历史实施记录。当前 production 只保留 schema 3.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。Stabilization 3.1 随后完成中断恢复收敛，并以 `2c2b56f` 合入输入边界、结果语义与 CLI 组合根的一致性修复。
+Phase 1—7 是历史实施记录。当前 production 只保留 schema 4.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；schema 4.0 是 clean break，旧 3.0 state 不恢复。Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。Stabilization 3.1 随后完成中断恢复收敛，并以 `2c2b56f` 合入输入边界、结果语义与 CLI 组合根的一致性修复。
 
 ## 3. Phase 0：仓库与架构基线
 
@@ -736,4 +736,4 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-08-29 | 共享环境能力改造（ADR-0009） | 本地未 push | 本地 287 passed、1 skipped；mock E2E completed；服务器真实 E2E 场景 2 completed（verdict=supports） | 环境改 run_id+workspace_id 绑定；EnvironmentSpec/environment_spec 取代 ExperimentRunInput.python_version；EnvironmentManager inspect/prepare/audit + PreparedEnvironment + EnvironmentBinding；三个共享工具 prepare_environment/run_setup/audit_env；Coding 接环境化 verification、Experiment 删私有环境逻辑；Manager 不自动装依赖；半成品删除重建 + `.resagent2_base_ready` |
 | 2026-08-29 | Phase 7 五场景真实 E2E | `750b4d8` 起 + 本地未 push | 场景 1/2/4/5 通过；场景 3 repair 契约断点已修、真实 LLM 待收敛 | 1 direct inconclusive ✅；2 code-experiment ✅（work7，0.4237→0.5359）；4 ask-start/resume ✅（跨进程恢复）；5 literature ✅（修 budget_exhausted + 同 turn 动态 resolve 两个硬错误）；3 repair 修 Compiler 跨 WorkRequest supersede/update 契约断点 + 确定性测试覆盖（failed→新 WorkRequest→新增任务→旧失败保留→completed），真实 LLM 图生成仍抖动 |
 | 2026-09-01 | Stabilization 3.0 完成 | `d3c5560`（被验收代码树） | 本地 378 passed、1 skipped；mock E2E completed；服务器 clean-workdir 五场景全部通过 | Compiler 一 WorkRequest 一当前可执行轮；LLM transport retry 纳入剩余 Run 预算；Coding/Experiment 共享有界 read-file context；repair 3 连过、ask/resume 两次跨进程通过；五场景 full trace 权限为目录 0700/文件 0600。其后仅同步验收文档。 |
-| 2026-09-03 | schema 4.0 输入与证据闭环 | `fix/input-evidence-closure`（待合并 main） | 本地 445 passed、1 skipped | SCHEMA_VERSION=4.0（clean break，旧 3.0 state 不恢复）；`requested_fields`/`UserAnswer.values` 必填；`required_evidence_kinds` 仅 `literature_search`；Coding/Experiment 共享 `recent_tool_snippets`（path+行范围片段）、Experiment 额外保留有界目录清单；删除 `recent_tool_text_values`；补 LLM 坏 JSON 跨层恢复链测试。 |
+| 2026-09-03 | schema 4.0 输入与证据闭环 | `a41b92a`（已合并 main） | 本地 456 passed、1 skipped | SCHEMA_VERSION=4.0（clean break，旧 3.0 state 不恢复）；`requested_fields`/`UserAnswer.values` 必填；`required_evidence_kinds` 仅 `literature_search`；Coding/Experiment 共享 `recent_tool_snippets`（path+行范围片段）、Experiment 额外保留有界目录清单；删除 `recent_tool_text_values`；补 LLM 坏 JSON 跨层恢复链测试。 |

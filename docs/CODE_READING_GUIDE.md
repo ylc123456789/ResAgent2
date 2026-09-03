@@ -71,6 +71,7 @@ Scientific、Coding、Experiment 是三个 Agent。WorkflowCompiler 和 Workflow
 | `packages/orchestrator`                 | ResAgent 的实现：Controller、Compiler、Scheduler、Run/Artifact |
 | `packages/agents/scientific`            | Scientific Agent 的 prompt、tools、context 和 finalizer        |
 | `packages/agents/coding` / `experiment` | Coding、Experiment Agent 的领域实现                            |
+| `apps/cli`                              | 人类 CLI 适配器：一次性命令、交互监控壳和 production 装配      |
 
 因此，“模块”在讨论中可能指系统角色，也可能指 Python package。阅读时要先问：这里说的是哪个层级？
 
@@ -83,7 +84,8 @@ flowchart TB
     Caps[capabilities\n真实能力组件]
     Agents[scientific / coding / experiment\n领域 Agent]
     Orch[orchestrator\n研究控制与任务执行]
-    Root[e2e/real_e2e.py\n当前可执行组合根]
+    Root[apps/cli/.../composition.py\nproduction CLI 组合根]
+    E2E[e2e/real_e2e.py\nE2E 组合根]
 
     Runtime --> Contracts
     Caps --> Runtime
@@ -95,6 +97,9 @@ flowchart TB
     Root --> Orch
     Root --> Agents
     Root --> Caps
+    E2E --> Orch
+    E2E --> Agents
+    E2E --> Caps
 ```
 
 关键约束：
@@ -105,7 +110,7 @@ flowchart TB
 - 三个 Agent 不能直接互相调用；
 - 只有组合根知道所有具体实现，并把它们装配起来。
 
-当前仓库还没有最终聊天界面或产品 CLI。`ResearchController` 是程序化入口，`e2e/real_e2e.py` 展示当前完整装配方式。
+当前没有聊天界面，但已有产品 CLI：`apps/cli/src/resagent2_cli/composition.py::build_application` 是生产装配入口，`main.py` 的一次性命令和 `shell.py` 都只调用 `ResearchController`。`e2e/real_e2e.py` 保留为独立的真实 E2E 装配/验收入口。
 
 ---
 
@@ -444,7 +449,7 @@ Scientific 的核心是“观点和证据引用”；Coding 的核心是“工�
 
 ### 第一步：装配系统
 
-看 `e2e/real_e2e.py::_build_controller`：
+先看 production CLI 的 `apps/cli/src/resagent2_cli/composition.py::build_application`：
 
 - 创建 LLM client；
 - 创建 RunStore、SessionStore、ArtifactRegistry；
@@ -452,7 +457,7 @@ Scientific 的核心是“观点和证据引用”；Coding 的核心是“工�
 - 构造三个 Agent 和对应 Port；
 - 把 Compiler、Scheduler、ScientificPort 注入 ResearchController。
 
-这一处回答“对象是怎样连起来的”。
+`e2e/real_e2e.py::_build_controller` 装配相同的核心图，只服务真实 E2E 场景。两处共同回答“对象是怎样连起来的”。
 
 ### 第二步：创建 Run
 
@@ -564,7 +569,8 @@ Agent 产生 QuestionDraft
 | 改 Task/Attempt/retry/恢复语义                   | `orchestrator/scheduler.py`                                   |
 | 改整个研究何时结束                               | `controller.py` + `orchestrator/completion.py`                |
 | 改所有 Agent 共用的循环、预算或错误恢复          | `runtime`，并回归三个 Agent                                   |
-| 改真实系统怎样装配                               | composition root，目前是`e2e/real_e2e.py`                     |
+| 改产品系统怎样装配                               | `apps/cli/.../composition.py::build_application`               |
+| 改真实 E2E 怎样装配                              | `e2e/real_e2e.py::_build_controller`                           |
 
 判断是否放错层的简单方法：
 
@@ -580,7 +586,7 @@ Agent 产生 QuestionDraft
 
 理解前面的系统后，可以沿一条真实主链读代码：
 
-1. `e2e/real_e2e.py::_build_controller`：系统怎样装配；
+1. `apps/cli/src/resagent2_cli/composition.py::build_application`：production 系统怎样装配（真实 E2E 对照 `e2e/real_e2e.py::_build_controller`）；
 2. `orchestrator/controller.py`：研究闭环；
 3. `scientific/agent.py` + `tools.py` + `completion.py`：科学判断怎样对外表达；
 4. `orchestrator/compiler.py`：语义工作怎样变成任务；

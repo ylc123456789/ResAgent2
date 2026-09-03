@@ -49,6 +49,40 @@ does not run through the Agentic Loop.
 
 Existing resource and trace environment variables remain unchanged.
 
+## Interactive shell
+
+Run `resagent2` with no subcommand (or `resagent2 shell`) to enter an
+interactive monitoring shell:
+
+```text
+resagent2> /run --goal "..." --workspace /path/to/repo
+resagent2> /answer accuracy          # single requested field
+resagent2> /answer metric=accuracy   # multi-field or explicit
+resagent2> /resume run_xxx
+resagent2> /show run_xxx
+resagent2> /attach run_xxx           # read-only, watch persisted state
+resagent2> /artifacts
+resagent2> /trace [run_xxx]          # raw request/response/reasoning
+resagent2> /quit
+```
+
+The shell is an observer of persisted Run state, not a second control plane. It
+runs the three blocking controller methods on a background thread and renders
+progress by polling the atomically-written `JsonRunStore` snapshot plus the
+optional append-only LLM trace. Choose `--data-root` when starting the shell;
+slash commands reject a second data-root so one shell cannot accidentally mix
+two Run stores.
+
+- **Ctrl-C stops watching and returns to the prompt; it does not cancel a Run.**
+  If this shell's worker is active, it keeps running while the shell stays open;
+  use `/attach` to watch it again. After a shell exit, resume an unfinished
+  persisted Run explicitly with `/resume`.
+- `/attach <run_id>` watches persisted state but never starts a worker. If no
+  worker is advancing that Run, return with Ctrl-C and use `/resume` explicitly.
+- The live view uses the metadata trace (agent/tool names). Raw request,
+  response, and reasoning appear only through `/trace`, which needs
+  `RESAGENT2_LLM_TRACE_LEVEL=full` and `RESAGENT2_LLM_TRACE_DIR`.
+
 ## Exit codes
 
 - `0`: completed, or `show` succeeded

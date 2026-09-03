@@ -370,6 +370,8 @@ WorkRequest 执行期间 Run 仍为 running；无需增加 planning 或 waiting_
 
 production composition root 走 `ResearchController`：`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 WorkflowProposal/Patch，`WorkflowScheduler` 执行 Coding/Experiment 图，`WorkOutcome` 回传 Scientific Session 再形成最终 `ScientificOpinion`，经 `ScientificCompletionValidator` 后写 completed。`WorkflowScheduler` 只执行任务图、不决定 ResearchRun 完成；`ResearchController` 是唯一的 Run 创建/回答/完成入口；任务级 ask/resume 在同一 Attempt 上继续。
 
+产品入口位于 `apps/cli`：`composition.build_application()` 负责 production 装配，一次性 CLI 命令与交互 shell 都只调用现有 `ResearchController`。交互 shell 仅轮询原子持久化的 Run snapshot 与可选 LLM trace 来渲染进度，不引入第二套调度或状态机；`e2e/real_e2e.py` 仍是独立的真实验收组合根。
+
 ### 11.4 中断恢复边界
 
 `RUNNING` 是已经持久化的执行意图，不是进程存活证明。当前系统是单进程、同步调用模型：当新的 `ResearchController.run_until_stable()` 读取到遗留的 running Task/Attempt 时，它将该 Attempt **保留为历史**，结算为 `failed + ErrorCode.interrupted + retryable=True`；只有剩余 Attempt 预算允许时，Task 才回到 `pending` 等待新的 Attempt。系统不得静默删除或覆盖中断 Attempt。

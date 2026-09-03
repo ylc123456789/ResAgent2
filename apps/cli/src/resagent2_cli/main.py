@@ -22,6 +22,7 @@ from resagent2_contracts import (
 )
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 
+from . import render
 from .composition import CliApplication, build_application
 
 
@@ -130,6 +131,33 @@ def _run_store(data_root: Path) -> JsonRunStore:
     return JsonRunStore(data_root / "state")
 
 
+def _request_from_args(args: argparse.Namespace) -> ResearchRequest:
+    """Assemble a ResearchRequest from parsed ``run`` flags.
+
+    Shared by the one-shot ``cli`` and the interactive shell so both build the
+    identical request for the same flags.
+    """
+    datasets = [
+        DatasetRef(dataset_id=name, relative_path=path)
+        for name, path in (
+            _assignment(value, label="--dataset") for value in args.dataset
+        )
+    ]
+    return ResearchRequest(
+        goal=_goal(args),
+        hypothesis=args.hypothesis,
+        context=args.context,
+        constraints=args.constraint,
+        dataset_refs=datasets,
+        budget=RunBudget(
+            max_tasks=args.max_tasks,
+            max_attempts_per_task=args.max_attempts,
+            max_llm_calls=args.max_llm_calls,
+            timeout_seconds=args.timeout_seconds,
+        ),
+    )
+
+
 def _exit_code(run: ResearchRun) -> int:
     if run.status == RunStatus.COMPLETED:
         return EXIT_COMPLETED
@@ -141,55 +169,18 @@ def _exit_code(run: ResearchRun) -> int:
 
 
 def _render_run(run: ResearchRun) -> None:
-    print(f"Run: {run.run_id}")
-    print(f"Status: {run.status.value}")
-    print(f"Goal: {run.request.goal}")
-    print(f"LLM calls: {run.llm_calls_used}/{run.request.budget.max_llm_calls}")
-    if run.latest_scientific_assessment is not None:
-        print("Scientific assessment:")
-        print(f"  {run.latest_scientific_assessment.statement}")
-    if run.workflow is not None:
-        print("Tasks:")
-        for task in run.workflow.tasks:
-            suffix = f" ({len(task.attempts)} attempt(s))" if task.attempts else ""
-            print(f"  {task.id}: {task.status.value}{suffix}")
-            if task.attempts:
-                latest = task.attempts[-1]
-                if latest.summary:
-                    print(f"    {latest.summary}")
-                if latest.error is not None:
-                    print(
-                        f"    {latest.error.code.value}: {latest.error.message}"
-                    )
-    if run.pending_question is not None:
-        print("Pending question:")
-        print(f"  {run.pending_question.text}")
-        if run.pending_question.requested_fields:
-            fields = ", ".join(run.pending_question.requested_fields)
-            print(f"  Fields: {fields}")
-    if run.artifacts:
-        print("Artifacts:")
-        for artifact in run.artifacts.values():
-            print(
-                f"  {artifact.id}: {artifact.kind} "
-                f"[{artifact.producer.value}] {artifact.uri}"
-            )
-    if run.final_opinion is not None:
-        print("Final opinion:")
-        print(f"  Verdict: {run.final_opinion.verdict.value}")
-        print(f"  {run.final_opinion.statement}")
-    if run.completion_violations:
-        print("Completion violations:")
-        for violation in run.completion_violations:
-            print(f"  {violation.code.value}: {violation.message}")
+    for line in render.render_final(run):
+        print(line)
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+def _parser(
+    parser_cls: type[argparse.ArgumentParser] = argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
+    parser = parser_cls(
         prog="resagent2",
         description="Thin command-line entrypoint for the existing ResAgent2 system.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     run = subparsers.add_parser("run", help="create and execute a ResearchRun")
     goals = run.add_mutually_exclusive_group(required=True)
@@ -221,6 +212,11 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("run_id")
     resume.add_argument("--data-root", default=_default_data_root())
     _workspace_args(resume)
+
+    shell = subparsers.add_parser(
+        "shell", help="enter the interactive monitoring shell"
+    )
+    shell.add_argument("--data-root", default=_default_data_root())
     return parser
 
 
@@ -231,6 +227,14 @@ def cli(
     store_factory: StoreFactory = _run_store,
 ) -> int:
     args = _parser().parse_args(argv)
+    if args.command is None or args.command == "shell":
+        from .shell import run_shell
+
+        return run_shell(
+            data_root=getattr(args, "data_root", None),
+            application_builder=application_builder,
+            store_factory=store_factory,
+        )
     data_root = Path(args.data_root).expanduser().resolve()
 
     if args.command == "show":
@@ -238,25 +242,7 @@ def cli(
         return EXIT_COMPLETED
 
     if args.command == "run":
-        datasets = [
-            DatasetRef(dataset_id=name, relative_path=path)
-            for name, path in (
-                _assignment(value, label="--dataset") for value in args.dataset
-            )
-        ]
-        request = ResearchRequest(
-            goal=_goal(args),
-            hypothesis=args.hypothesis,
-            context=args.context,
-            constraints=args.constraint,
-            dataset_refs=datasets,
-            budget=RunBudget(
-                max_tasks=args.max_tasks,
-                max_attempts_per_task=args.max_attempts,
-                max_llm_calls=args.max_llm_calls,
-                timeout_seconds=args.timeout_seconds,
-            ),
-        )
+        request = _request_from_args(args)
         application = application_builder(
             data_root=data_root,
             workspaces=_workspace_specs(args),

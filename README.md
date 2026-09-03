@@ -107,6 +107,10 @@ tests/
   契约、运行底座、工作流和端到端测试
 ```
 
+## 命令行入口（CLI）
+
+`resagent2`（`apps/cli`）是挂在 `ResearchController` 之上的薄命令行入口，提供一次性命令 `run / show / answer / resume`；无参数或 `resagent2 shell` 进入交互监控壳（流式进度、暂停内联回答、Ctrl-C 只停监看不取消 Run）。详见 `apps/cli/README.md`。
+
 ## 本地开发环境
 
 项目使用名为 `ResAgent2` 的 Conda 环境：

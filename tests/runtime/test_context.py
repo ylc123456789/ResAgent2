@@ -9,6 +9,7 @@ from resagent2_runtime import (
     AgentState,
     ContextComposer,
     ContextSection,
+    recent_tool_snippets,
     recent_tool_text_values,
 )
 
@@ -72,3 +73,100 @@ def test_bounded_read_section_fits_required_context_budget() -> None:
     )
     assert "read_files" in composed.included_sections
     assert composed.estimated_tokens <= 4096
+
+
+def _snippet_state(*values: dict) -> AgentState:
+    now = datetime.now(UTC)
+    events = [
+        AgentEvent(
+            sequence=index,
+            step=index,
+            type="observation",
+            tool="read_file",
+            data={"value": value},
+            created_at=now,
+        )
+        for index, value in enumerate(values, start=1)
+    ]
+    return AgentState(
+        session_id="session_context",
+        agent_name="test",
+        owner=AgentOwner.CODING,
+        run_id="run_context",
+        task_id="task_context",
+        attempt_number=1,
+        events=events,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_snippets_keep_two_ranges_of_the_same_file() -> None:
+    state = _snippet_state(
+        {
+            "path": "a.py",
+            "start_line": 100,
+            "end_line": 140,
+            "content": "A" * 500,
+            "truncated": False,
+        },
+        {
+            "path": "a.py",
+            "start_line": 180,
+            "end_line": 210,
+            "content": "B" * 500,
+            "truncated": False,
+        },
+    )
+    snippets = recent_tool_snippets(
+        state,
+        tool="read_file",
+        identity_keys=("path", "start_line", "end_line"),
+        text_key="content",
+    )
+    assert [(s["path"], s["start_line"], s["end_line"]) for s in snippets] == [
+        ("a.py", 180, 210),
+        ("a.py", 100, 140),
+    ]
+
+
+def test_snippets_pack_whole_then_truncate_newest_first() -> None:
+    state = _snippet_state(
+        {
+            "path": "big.py",
+            "start_line": 1,
+            "end_line": None,
+            "content": "X" * 8000,
+            "truncated": False,
+        },
+        {
+            "path": "a.py",
+            "start_line": 1,
+            "end_line": None,
+            "content": "a" * 120,
+            "truncated": False,
+        },
+        {
+            "path": "b.py",
+            "start_line": 1,
+            "end_line": None,
+            "content": "b" * 120,
+            "truncated": False,
+        },
+    )
+    snippets = recent_tool_snippets(
+        state,
+        tool="read_file",
+        identity_keys=("path", "start_line", "end_line"),
+        text_key="content",
+        max_total_chars=6000,
+    )
+    # Newest first, small snippets whole, only the older large one truncated.
+    assert [s["path"] for s in snippets] == ["b.py", "a.py", "big.py"]
+    assert snippets[0]["content"] == "b" * 120
+    assert snippets[1]["content"] == "a" * 120
+    assert snippets[0]["truncated"] is False
+    assert snippets[1]["truncated"] is False
+    assert snippets[2]["truncated"] is True
+    assert snippets[2]["content"].startswith("X")
+    assert snippets[2]["content"].endswith("X")

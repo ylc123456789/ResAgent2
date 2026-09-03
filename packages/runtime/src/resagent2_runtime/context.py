@@ -131,3 +131,65 @@ def _head_tail(text: str, max_chars: int) -> str:
     head = (available + 1) // 2
     tail = available // 2
     return text[:head] + marker + text[-tail:]
+
+
+def recent_tool_snippets(
+    state: AgentState,
+    *,
+    tool: str,
+    identity_keys: tuple[str, ...],
+    text_key: str,
+    limit: int = 6,
+    max_total_chars: int = 6000,
+) -> list[dict]:
+    """Return recent unique tool snippets, newest first, within one budget.
+
+    Unlike :func:`recent_tool_text_values`, which splits the budget evenly and
+    keeps only a head+tail of every item, this packs whole snippets by recency:
+    the newest snippet is kept in full, then the next, until the budget is
+    spent; only the final retained snippet is truncated and flagged, and
+    anything older is dropped. Identity is the tuple of ``identity_keys`` (for
+    read_file, ``("path", "start_line", "end_line")``), so two ranges of one
+    file coexist instead of overwriting each other.
+    """
+    if limit < 1 or max_total_chars < 1:
+        raise ValueError("limit and max_total_chars must be positive")
+    if not identity_keys:
+        raise ValueError("identity_keys must not be empty")
+
+    recent: list[dict] = []
+    seen: set[tuple] = set()
+    for event in reversed(state.events):
+        if event.type != "observation" or event.tool != tool:
+            continue
+        data = event.data if isinstance(event.data, dict) else {}
+        value = data.get("value")
+        if not isinstance(value, dict):
+            continue
+        content = value.get(text_key)
+        if not isinstance(content, str):
+            continue
+        identity = tuple(value.get(key) for key in identity_keys)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        recent.append(value)
+        if len(recent) >= limit:
+            break
+
+    selected: list[dict] = []
+    remaining = max_total_chars
+    for value in recent:
+        content = value[text_key]
+        if len(content) <= remaining:
+            selected.append(value)
+            remaining -= len(content)
+            continue
+        if remaining == 0:
+            break
+        bounded = dict(value)
+        bounded[text_key] = _head_tail(content, remaining)
+        bounded["truncated"] = True
+        selected.append(bounded)
+        break
+    return selected

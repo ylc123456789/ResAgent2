@@ -37,6 +37,9 @@ def tool_contracts_text(tools: tuple[Tool, ...]) -> str:
             if field.is_required()
         ]
         lines.append(f"- {tool.name}: {', '.join(required)}")
+        guidance = getattr(tool, "model_guidance", None)
+        if guidance:
+            lines.append(f"  {guidance}")
     return "\n".join(lines)
 
 

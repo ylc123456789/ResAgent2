@@ -346,6 +346,34 @@ def test_read_file_rejects_oversized_files(tmp_path) -> None:
         tool.execute(_agent_state(), tool.input_model(path="big.txt"))
 
 
+def test_read_file_returns_line_range_metadata(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "m.py").write_text("l1\nl2\nl3\nl4\n", encoding="utf-8")
+    boundary = WorkspaceBoundary(grant(root))
+    tool = ReadFileTool(boundary)
+    result = tool.execute(
+        _agent_state(), tool.input_model(path="m.py", start_line=2, end_line=3)
+    )
+    assert result.value["path"] == "m.py"
+    assert result.value["start_line"] == 2
+    assert result.value["end_line"] == 3
+    assert result.value["content"] == "l2\nl3\n"
+    assert result.value["truncated"] is False
+
+
+def test_read_file_unbounded_read_has_null_range(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "m.py").write_text("l1\n", encoding="utf-8")
+    boundary = WorkspaceBoundary(grant(root))
+    tool = ReadFileTool(boundary)
+    result = tool.execute(_agent_state(), tool.input_model(path="m.py"))
+    assert result.value["start_line"] is None
+    assert result.value["end_line"] is None
+    assert result.value["content"] == "l1\n"
+
+
 def test_replace_text_preserves_leading_whitespace_in_old_text(tmp_path) -> None:
     # old_text is an exact needle: indentation must survive model validation.
     root = tmp_path / "repo"

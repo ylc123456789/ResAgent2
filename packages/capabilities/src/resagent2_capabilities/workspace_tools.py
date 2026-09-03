@@ -66,10 +66,14 @@ class ReadFileInput(RuntimeModel):
 
 
 class ReadFileTool:
-    """Read text through a WorkspaceBoundary."""
+    """Read one optional line range through a WorkspaceBoundary."""
 
     name = "read_file"
     input_model = ReadFileInput
+    model_guidance = (
+        "If a read result is truncated, search for the symbol then read a "
+        "bounded start_line/end_line range; do not repeat the same unbounded read."
+    )
 
     def __init__(
         self,
@@ -99,7 +103,13 @@ class ReadFileTool:
             selected = selected[: self.max_chars]
         return ToolObservation(
             summary=f"Read {args.path}",
-            value={"path": args.path, "content": selected, "truncated": truncated},
+            value={
+                "path": args.path,
+                "start_line": args.start_line,
+                "end_line": args.end_line,
+                "content": selected,
+                "truncated": truncated,
+            },
             memory_updates={"read_paths": _remember(state, "read_paths", args.path)},
         )
 

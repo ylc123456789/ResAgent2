@@ -40,3 +40,19 @@ def test_agent_action_has_no_reasoning_summary() -> None:
     # The dead field must be gone so it no longer competes with a tool's
     # required `summary` argument.
     assert "reasoning_summary" not in AgentAction.model_fields
+
+
+def test_tool_contracts_include_optional_model_guidance() -> None:
+    class _ReadInput(BaseModel):
+        path: str
+
+    class _ReadTool:
+        name = "read_file"
+        input_model = _ReadInput
+        model_guidance = "read a bounded start_line/end_line range when truncated"
+
+    text = tool_contracts_text((_ReadTool, _FinishTool))
+    assert "- read_file: path" in text
+    assert "read a bounded start_line/end_line range when truncated" in text
+    # A tool without guidance still emits only its one contract line.
+    assert "- finish: opinion, summary" in text

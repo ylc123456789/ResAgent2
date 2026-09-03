@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 
 from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import AgentState, ContextSection, recent_tool_text_values
+from resagent2_runtime import AgentState, ContextSection, recent_tool_snippets
+
+
+CODING_SNIPPET_BUDGET_CHARS = 6_000
 
 
 UNDERSTAND_PROMPT = """You are the read-only Coding Agent.
@@ -90,8 +93,12 @@ def build_context(
             required=True,
         )
     ]
-    read_files = recent_tool_text_values(
-        state, tool="read_file", identity_key="path", text_key="content"
+    read_files = recent_tool_snippets(
+        state,
+        tool="read_file",
+        identity_keys=("path", "start_line", "end_line"),
+        text_key="content",
+        max_total_chars=CODING_SNIPPET_BUDGET_CHARS,
     )
     if read_files:
         sections.append(

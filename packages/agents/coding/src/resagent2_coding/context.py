@@ -23,7 +23,7 @@ Tool arguments:
 - search_text: {"query": "text", "path": ".", "max_results": 50}
 - read_artifact: {"artifact_id": "artifact_..."}
 - git_diff: {"max_chars": 20000}
-- ask_user: {"text": "...", "requested_fields": [], "reason": "..."}
+- ask_user: {"text": "...", "requested_fields": ["answer"], "reason": "..."}
 - finish: {"result": {"answer": "...", "evidence_files": ["..."],
   "uncertainty": ""}}
 """
@@ -54,7 +54,7 @@ Tool arguments:
 - replace_text: {"path": "relative/path", "old_text": "exact unique text",
   "new_text": "replacement"}
 - run_verification: {"commands": ["python -m pytest", "python -m py_compile train.py"]}
-- ask_user: {"text": "...", "requested_fields": [], "reason": "..."}
+- ask_user: {"text": "...", "requested_fields": ["answer"], "reason": "..."}
 - finish: {"result": {"summary": "...", "residual_risks": []}}
 """
 

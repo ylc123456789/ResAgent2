@@ -146,7 +146,7 @@ class AskUserToolInput(RuntimeModel):
     """Input schema for AskUserTool."""
 
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(default_factory=list)
+    requested_fields: list[NonEmptyStr] = Field(min_length=1)
     reason: NonEmptyStr
 
 

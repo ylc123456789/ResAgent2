@@ -182,7 +182,9 @@ def test_needs_user_input_requires_a_paused_session() -> None:
         ModuleResult[dict[str, str]](
             status=ModuleStatus.NEEDS_USER_INPUT,
             summary="A decision is required",
-            question=QuestionDraft(text="Which?", reason="input is required"),
+            question=QuestionDraft(
+                text="Which?", requested_fields=["answer"], reason="input is required"
+            ),
         )
 
 
@@ -198,8 +200,15 @@ def test_completed_result_rejects_error_and_question() -> None:
             status=ModuleStatus.COMPLETED,
             summary="Done",
             error=module_error(),
-            question=QuestionDraft(text="Continue?", reason="Unexpected branch"),
+            question=QuestionDraft(
+                text="Continue?", requested_fields=["answer"], reason="Unexpected branch"
+            ),
         )
+
+
+def test_question_draft_requires_at_least_one_field() -> None:
+    with pytest.raises(ValidationError, match="requested_fields"):
+        QuestionDraft(text="Which?", requested_fields=[], reason="input is required")
 
 
 def test_warning_status_and_warning_records_cannot_disagree() -> None:

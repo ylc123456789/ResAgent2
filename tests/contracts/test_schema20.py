@@ -166,7 +166,9 @@ def test_scientific_turn_result_discriminates_all_statuses() -> None:
         ScientificQuestionResult(
             status="needs_user_input",
             assessment=ScientificAssessment(statement="need a dataset"),
-            question=QuestionDraft(text="Which dataset?", reason="missing"),
+            question=QuestionDraft(
+                text="Which dataset?", requested_fields=["answer"], reason="missing"
+            ),
             session=session_ref(),
         ),
         ScientificCompletedResult(

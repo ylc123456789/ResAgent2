@@ -387,7 +387,7 @@ class QuestionDraft(ContractModel):
     """Question proposed by a child module but not yet persisted by ResAgent."""
 
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(default_factory=list)
+    requested_fields: list[NonEmptyStr] = Field(min_length=1)
     reason: NonEmptyStr
 
 
@@ -398,7 +398,7 @@ class PendingQuestion(ContractModel):
     run_id: RunId
     task_id: TaskId | None = None
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(default_factory=list)
+    requested_fields: list[NonEmptyStr] = Field(min_length=1)
     created_at: datetime
 
 
@@ -406,7 +406,7 @@ class UserAnswer(ContractModel):
     """Validated user values supplied for one persisted question."""
 
     question_id: QuestionId
-    values: dict[NonEmptyStr, str]
+    values: dict[NonEmptyStr, str] = Field(min_length=1)
     answered_at: datetime
 
 

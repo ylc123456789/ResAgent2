@@ -53,7 +53,11 @@ class ListFilesTool:
         truncated = len(files) > args.max_files
         return ToolObservation(
             summary=f"Listed {min(len(files), args.max_files)} workspace files",
-            value={"paths": files[: args.max_files], "truncated": truncated},
+            value={
+                "path": args.path,
+                "paths": files[: args.max_files],
+                "truncated": truncated,
+            },
         )
 
 

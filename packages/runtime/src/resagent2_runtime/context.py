@@ -75,51 +75,6 @@ class ContextComposer:
         )
 
 
-def recent_tool_text_values(
-    state: AgentState,
-    *,
-    tool: str,
-    identity_key: str,
-    text_key: str,
-    limit: int = 4,
-    max_total_chars: int = 6000,
-) -> dict[str, str]:
-    """Return recent unique tool text under one total context budget.
-
-    Agent-owned context builders use this to retain domain observations such as
-    file contents that the generic Runtime history intentionally abbreviates.
-    The bound applies to the whole returned mapping, not independently to every
-    item, so callers can safely make the resulting section required.
-    """
-    if limit < 1 or max_total_chars < 1:
-        raise ValueError("limit and max_total_chars must be positive")
-
-    recent: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for event in reversed(state.events):
-        if event.type != "observation" or event.tool != tool:
-            continue
-        data = event.data if isinstance(event.data, dict) else {}
-        value = data.get("value")
-        if not isinstance(value, dict):
-            continue
-        identity = value.get(identity_key)
-        content = value.get(text_key)
-        if not isinstance(identity, str) or not isinstance(content, str):
-            continue
-        if identity in seen:
-            continue
-        recent.append((identity, content))
-        seen.add(identity)
-        if len(recent) >= limit:
-            break
-
-    if not recent:
-        return {}
-    share = max(1, max_total_chars // len(recent))
-    return {identity: _head_tail(content, share) for identity, content in recent}
-
-
 def _head_tail(text: str, max_chars: int) -> str:
     """Bound text while preserving both its beginning and end."""
     if len(text) <= max_chars:
@@ -144,13 +99,11 @@ def recent_tool_snippets(
 ) -> list[dict]:
     """Return recent unique tool snippets, newest first, within one budget.
 
-    Unlike :func:`recent_tool_text_values`, which splits the budget evenly and
-    keeps only a head+tail of every item, this packs whole snippets by recency:
-    the newest snippet is kept in full, then the next, until the budget is
-    spent; only the final retained snippet is truncated and flagged, and
-    anything older is dropped. Identity is the tuple of ``identity_keys`` (for
-    read_file, ``("path", "start_line", "end_line")``), so two ranges of one
-    file coexist instead of overwriting each other.
+    Packs whole snippets by recency: the newest snippet is kept in full, then
+    the next, until the budget is spent; only the final retained snippet is
+    truncated and flagged, and anything older is dropped. Identity is the tuple
+    of ``identity_keys`` (for read_file, ``("path", "start_line", "end_line")``),
+    so two ranges of one file coexist instead of overwriting each other.
     """
     if limit < 1 or max_total_chars < 1:
         raise ValueError("limit and max_total_chars must be positive")
@@ -201,16 +154,19 @@ def recent_tool_listing(
     tool: str,
     list_key: str,
     max_entries: int = 80,
+    max_chars: int = 2000,
 ) -> dict | None:
     """Return the latest bounded list observation for ``tool``, or None.
 
     Generic for list-shaped outputs (e.g. ``list_files``): keeps the most
-    recent observation's ``list_key`` list, truncated to ``max_entries``, and
-    folds any tool-level truncation into one ``truncated`` flag. Agents use it
-    to retain "what files exist" without re-listing every turn.
+    recent observation's ``list_key`` list, packed in order up to
+    ``max_entries`` and ``max_chars`` without truncating an individual entry.
+    The remaining value fields (e.g. the listed ``path``) are preserved, and
+    any tool-level or budget-level truncation folds into one ``truncated``
+    flag. Agents use it to retain "what files exist" without re-listing.
     """
-    if max_entries < 1:
-        raise ValueError("max_entries must be positive")
+    if max_entries < 1 or max_chars < 1:
+        raise ValueError("max_entries and max_chars must be positive")
     for event in reversed(state.events):
         if event.type != "observation" or event.tool != tool:
             continue
@@ -221,6 +177,18 @@ def recent_tool_listing(
         entries = value.get(list_key)
         if not isinstance(entries, list):
             continue
-        truncated = bool(value.get("truncated")) or len(entries) > max_entries
-        return {list_key: entries[:max_entries], "truncated": truncated}
+        selected: list = []
+        used = 0
+        for entry in entries:
+            if len(selected) >= max_entries:
+                break
+            cost = len(str(entry))
+            if used + cost > max_chars:
+                break
+            selected.append(entry)
+            used += cost
+        bounded = dict(value)
+        bounded[list_key] = selected
+        bounded["truncated"] = bool(value.get("truncated")) or len(selected) < len(entries)
+        return bounded
     return None

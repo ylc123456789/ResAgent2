@@ -612,7 +612,7 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 
 - 可恢复失败落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它；
 - `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保证末尾错误字段（如 `stderr_tail`）不丢；
-- Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_text_values` 或 `recent_tool_snippets`，按整个 section 的总字符数限长并作为 required context；`recent_tool_snippets` 以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入（仅截断最后一段），供 Coding 保留精确代码片段；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
+- Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断最后一段）或 `recent_tool_listing`（保留最近有界目录清单，按条目数与字符数上限、不截断单个路径）作为 required context；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
 - provider transport retry 每次真实 HTTP 尝试都计入 `llm_calls`；AgentLoop/Compiler 必须把剩余调用数传给共享 client，client 的下一次尝试数不得超过该值；
 - 连续失败计数：成功的非 finish 工具重置；`ok=False` 累加；completion check 拒绝的 finish 也累加；连续 5 次失败返回 `TOOL_FAILED`，先于 step 预算。
 

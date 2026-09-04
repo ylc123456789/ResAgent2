@@ -196,7 +196,7 @@ class ModuleTaskRequest:
 | run/task/attempt | provenance 与幂等边界 |
 | capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
-| dataset_refs | 本 Task 从 Run 唯一数据集注册表继承的数据集子集（Scheduler 确定性写入，非 LLM 生成） |
+| dataset_refs | 本 Task 继承的 Run 已注册数据集集合（Scheduler 确定性写入，非 LLM 生成；当前不提前设计任务级子集） |
 | answers | 只包含属于本 Task 的已持久化回答 |
 | workspace / workspace_id / workspace_spec | 此 Attempt 的物理授权范围、逻辑工作区 id、来源声明（Agent 在 loop 前确定性 materialize） |
 | environment_spec | 上游声明的环境硬约束（`EnvironmentSpec.python_version`） |

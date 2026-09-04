@@ -93,9 +93,9 @@ WorkspaceSpec
 
 #### Dataset
 
-- `ResearchRequest.dataset_refs` 是唯一数据集注册表；
+- `ResearchRequest.dataset_refs` 是 Run 内唯一数据集注册表；部署层可通过只读 `DatasetCatalog` 在创建/恢复时补入新注册资源；
 - 删除 `ExperimentRunInput.dataset_refs`；
-- Scheduler 把 Run 已授权的 dataset refs 传给 Experiment；
+- Scheduler 把 Run 已注册的 dataset refs 同时传给 Coding 与 Experiment；
 - 若以后真的需要子集，再增加 `dataset_ids`，现在不提前设计。
 
 #### 初始 Artifact

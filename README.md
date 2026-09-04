@@ -111,6 +111,8 @@ tests/
 
 `resagent2`（`apps/cli`）是挂在 `ResearchController` 之上的薄命令行入口，提供一次性命令 `run / show / answer / resume`；无参数或 `resagent2 shell` 进入交互监控壳（流式进度、暂停内联回答、Ctrl-C 只停监看不取消 Run）。详见 `apps/cli/README.md`。
 
+共享数据集只需由部署者在 `RESAGENT2_DATASET_ROOT/catalog.json` 注册一次，CLI 会把目录自动交给新 Run；普通用户不再逐次传数据集路径。Scientific/Coding/Experiment 看到同一份只读目录策略，缺少必需数据集时询问用户，不自行下载或静默换数据集。
+
 ## 本地开发环境
 
 项目使用名为 `ResAgent2` 的 Conda 环境：

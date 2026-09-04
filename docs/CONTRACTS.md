@@ -422,7 +422,9 @@ class EnvironmentSpec:
     python_version: str | None = None
 ```
 
-`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」。`DatasetRef` 把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸，默认只读。`ResearchRequest.dataset_refs` 是**唯一**数据集注册表，Scheduler 经 `ModuleTaskRequest.dataset_refs` 传给 Experiment Agent；`ExperimentRunInput` 不再携带 `dataset_refs`。解析结果是 `{dataset_id, path, access="read_only"}` 列表，重复 `dataset_id` 拒绝；Experiment Agent 用 `RESAGENT2_DATASET_ROOT` / `RESAGENT2_DATASETS_JSON` 环境变量把映射交给脚本。
+`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」。部署者只在根目录的 `catalog.json` 中维护一个 `dataset_id → relative_path` JSON 对象；CLI 组合根把 `DatasetCatalog` 作为只读 Port 注入 `ResearchController`，Controller 在创建/恢复执行时把新注册资源合入 Run 的 `ResearchRequest.dataset_refs`，调用 CLI 的普通用户不逐次提供物理路径。catalog 缺失表示未注册数据集；格式错误、越界路径或已注册目录不存在会在 Run 执行前失败。已有同名绑定不可在 Run 中改写，目录新增则可在 `ask_user` 后继续同一 Run。
+
+`DatasetRef` 把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸，默认只读。`ResearchRequest.dataset_refs` 仍是 Run 内**唯一**数据集注册表，Scheduler 经 `ModuleTaskRequest.dataset_refs` 同时传给 Coding 与 Experiment；`ExperimentRunInput` 不携带 `dataset_refs`。三个 Agent 看到同一份不允许下载/替换、缺失时 `ask_user` 的目录上下文；Coding 验证命令与 Experiment 实验命令都获得 `RESAGENT2_DATASET_ROOT` / `RESAGENT2_DATASETS_JSON`。解析结果仍是 `{dataset_id, path, access="read_only"}` 列表，重复 `dataset_id` 拒绝。
 
 环境能力由 Coding 与 Experiment 共用（ADR-0009）：
 

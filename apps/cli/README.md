@@ -23,6 +23,25 @@ The CLI creates one `ResourceLayout` from the selected data root and injects
 it into both Coding and Experiment agents. Sequential tasks therefore share
 the same managed environment and resource roots.
 
+Datasets are deployment resources, not per-Run path flags. Configure
+`RESAGENT2_DATASET_ROOT` once and register the ready directories in
+`$RESAGENT2_DATASET_ROOT/catalog.json`:
+
+```json
+{
+  "cifar10": "cifar10",
+  "imagenet1k": "imagenet-1k"
+}
+```
+
+Keys are the dataset ids shown to Agents; values are paths relative to the
+shared dataset root. The CLI loads this catalog automatically for every new
+Run. Missing catalogs mean no datasets are registered; malformed catalogs or
+registered paths that do not exist fail before a Run starts. Agents may ask the
+user for a missing dataset, but may not invent paths, download data, or silently
+substitute another dataset. After provisioning and registering the resource,
+resume the persisted Run.
+
 LLM configuration uses environment variables only:
 
 - `RESAGENT2_MODEL` (default `deepseek-v4-flash`; set `deepseek-v4-pro` when needed)

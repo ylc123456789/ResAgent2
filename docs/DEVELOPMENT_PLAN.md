@@ -691,7 +691,7 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 统一工作区与 Coding 自主 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、WorkspaceId、workspace_id、GitBaseline、VerificationCommandPolicy | Phase 7.7 | 已实现（`9543ab7`, `5d1746d` 起） |
 | 恢复闭环（信息不丢） | previous_work_request、真实 summary/stderr_tail、Experiment prompt 规则 | Phase 7.7 hardening | 已实现：Scientific 重发 self-contained WorkRequest、Experiment 先读接口不臆造 CLI、按错误改命令 |
 | 运行时反馈与连续失败保护 | ToolObservation.ok、runtime_feedback、recent_observations、连续失败上限 | Phase 7.7 hardening | 已实现：拒绝落 ok=False 持久反馈、有界最近历史 head+tail 截断、finish 由 completion check 判定、连续 5 次 TOOL_FAILED |
-| 数据集两层资源模型 | DatasetRef、dataset_refs、RESAGENT2_DATASETS_JSON/RESAGENT2_DATASET_ROOT | Phase 7.7 hardening | 已实现：dataset_root 是公共根、DatasetRef 指向具体只读目录、通用 id→路径映射、重复 id 拒绝 |
+| 数据集两层资源模型 | DatasetCatalog、DatasetRef、dataset_refs、RESAGENT2_DATASETS_JSON/RESAGENT2_DATASET_ROOT | Phase 7.7 hardening + schema 4.0 收尾 | 已实现：部署者在共享根注册一次，CLI 自动装入 Run；Scientific/Coding/Experiment 共用目录策略，Coding 验证与 Experiment 实验共用只读环境映射；重复 id、越界和缺失目录拒绝 |
 | 环境中断恢复 | EnvironmentManager `.resagent2_base_ready` marker、删除重建 | Phase 7.7 hardening | 已实现：半成品基础环境确认在 env_root 内后删除重建，不静默复用 |
 | 共享环境能力与 Agent 自主选型 | EnvironmentSpec、environment_spec、prepare_environment/run_setup/audit_env、EnvironmentBinding | Phase 7.7 hardening（ADR-0009） | 已实现：环境归 run_id+workspace_id、Agent 选 Python/依赖、系统 inspect/prepare/audit、Coding/Experiment 共用、Manager 不自动装依赖 |
 
@@ -738,3 +738,4 @@ Validator 不判断科学观点真假或证据语义是否充分。ScientificPor
 | 2026-09-01 | Stabilization 3.0 完成 | `d3c5560`（被验收代码树） | 本地 378 passed、1 skipped；mock E2E completed；服务器 clean-workdir 五场景全部通过 | Compiler 一 WorkRequest 一当前可执行轮；LLM transport retry 纳入剩余 Run 预算；Coding/Experiment 共享有界 read-file context；repair 3 连过、ask/resume 两次跨进程通过；五场景 full trace 权限为目录 0700/文件 0600。其后仅同步验收文档。 |
 | 2026-09-03 | schema 4.0 输入与证据闭环 | `a41b92a`（已合并 main） | 本地 456 passed、1 skipped | SCHEMA_VERSION=4.0（clean break，旧 3.0 state 不恢复）；`requested_fields`/`UserAnswer.values` 必填；`required_evidence_kinds` 仅 `literature_search`；Coding/Experiment 共享 `recent_tool_snippets`（path+行范围片段）、Experiment 额外保留有界目录清单；删除 `recent_tool_text_values`；补 LLM 坏 JSON 跨层恢复链测试。 |
 | 2026-09-03 | CLI 交互监控壳 | `main` | 本地 491 passed、1 skipped；非 TTY 交互冒烟 | `apps/cli` 新增纯渲染与交互壳；一次性 `run/show/answer/resume` 保持原接口；无参数或 `shell` 进入监看，`/attach` 仅观察持久化状态，Ctrl-C 只停止监看；未改 `packages/*`。 |
+| 2026-09-04 | 共享数据集目录接入 | 待提交 | 本地 501 passed、1 skipped；服务器 E2E 待验收 | `DatasetCatalog` 从共享根自动装入/恢复 Run；删除普通 CLI 的逐次路径参数；Scientific/Coding/Experiment 共用缺失资源策略，Coding verification 与 Experiment command 共用数据集环境。 |

@@ -376,7 +376,7 @@ runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scient
 | 进程           | `process.py`                             | shell-free 命令执行和环境变量清理      |
 | 仓库           | `repo.py`                                | clone/copy/generated 工作区物化        |
 | 环境           | `environment.py`, `environment_tools.py` | prepare/setup/audit 和环境生命周期     |
-| 数据集         | `dataset.py`, `resources.py`             | DatasetRef 解析与共享资源目录          |
+| 数据集         | `dataset.py`, `resources.py`             | DatasetCatalog、DatasetRef 解析与三个 Agent 的共享只读资源目录 |
 | Artifact 读取  | `artifacts.py`                           | 只读已登记 Artifact                    |
 | 文献           | `literature.py`                          | 文献后端和规范化候选证据               |
 | 硬件           | `hardware.py`                            | 实验硬件审计上下文                     |

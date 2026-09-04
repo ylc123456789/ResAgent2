@@ -16,7 +16,12 @@ from .completion import (
     RenderedFinalReport,
     ScientificCompletionValidator,
 )
-from .controller import ResearchController, ScientificGate, ScientificPort
+from .controller import (
+    DatasetRefSource,
+    ResearchController,
+    ScientificGate,
+    ScientificPort,
+)
 from .layout import RunLayout
 from .models import CompletionViolation, CompletionViolationCode, ResearchRun
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
@@ -33,6 +38,7 @@ __all__ = [
     "CompletionViolationCode",
     "CompilerLLM",
     "DeterministicWorkflowCompiler",
+    "DatasetRefSource",
     "FinalReportData",
     "FinalReportRenderer",
     "InMemoryRunStore",

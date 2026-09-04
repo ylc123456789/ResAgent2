@@ -1,8 +1,11 @@
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
     Capability,
+    DatasetRef,
     ExperimentRunInput,
     ModuleStatus,
     ModuleTaskRequest,
@@ -22,6 +25,7 @@ from resagent2_capabilities import (
 )
 from resagent2_runtime import (
     AgentDefinition,
+    AgentState,
     AgentLoop,
     AllowListPermissionPolicy,
     FinishTool,
@@ -33,6 +37,33 @@ from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
 from resagent2_experiment.models import ExperimentAction
 from resagent2_experiment.tools import RunCommandTool
+
+
+def test_experiment_context_uses_shared_dataset_catalog() -> None:
+    request = ModuleTaskRequest(
+        run_id="run_test",
+        task_id="task_experiment",
+        attempt_number=1,
+        capability=Capability.EXPERIMENT_RUN,
+        goal="Run with CIFAR-10",
+        inputs=ExperimentRunInput(instructions="Run with CIFAR-10"),
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
+        budget=TaskBudget(max_steps=3, max_llm_calls=3, timeout_seconds=30),
+    )
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_dataset",
+        agent_name="experiment-run",
+        owner=AgentOwner.EXPERIMENT,
+        run_id=request.run_id,
+        task_id=request.task_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+    section = next(item for item in build_context(request, state) if item.name == "datasets")
+
+    assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
 
 
 class _FakeManager:

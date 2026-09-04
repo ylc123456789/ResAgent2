@@ -1,4 +1,4 @@
-"""Dataset reference resolution and generic environment overrides."""
+"""Shared dataset catalog, context and execution bindings."""
 
 from __future__ import annotations
 
@@ -14,10 +14,70 @@ from resagent2_contracts import DatasetRef
 # are deliberately kept out of the dataset root.
 RESAGENT2_DATASET_ROOT = "RESAGENT2_DATASET_ROOT"
 RESAGENT2_DATASETS_JSON = "RESAGENT2_DATASETS_JSON"
+DATASET_CATALOG_FILENAME = "catalog.json"
 
 
 class DatasetResolutionError(ValueError):
     """Raised when a task-level dataset reference cannot be safely resolved."""
+
+
+class DatasetCatalog:
+    """Read the deployment-owned ``dataset_id -> relative path`` catalog.
+
+    The catalog lives under the shared dataset root and is the only place where
+    physical dataset directories are registered.  An absent catalog means that
+    no datasets are available; a malformed catalog or missing registered path
+    is an explicit configuration error.
+    """
+
+    def __init__(self, dataset_root: str | Path) -> None:
+        self.dataset_root = Path(dataset_root).expanduser().resolve()
+
+    @property
+    def path(self) -> Path:
+        return self.dataset_root / DATASET_CATALOG_FILENAME
+
+    def references(self) -> list[DatasetRef]:
+        if not self.path.exists():
+            return []
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise DatasetResolutionError(
+                f"cannot read dataset catalog {self.path}: {error}"
+            ) from error
+        if not isinstance(raw, dict) or not all(
+            isinstance(dataset_id, str) and isinstance(relative_path, str)
+            for dataset_id, relative_path in raw.items()
+        ):
+            raise DatasetResolutionError(
+                "dataset catalog must be a JSON object mapping ids to relative paths"
+            )
+        try:
+            refs = [
+                DatasetRef(dataset_id=dataset_id, relative_path=relative_path)
+                for dataset_id, relative_path in sorted(raw.items())
+            ]
+        except ValueError as error:
+            raise DatasetResolutionError(f"invalid dataset catalog: {error}") from error
+        resolve_dataset_refs(self.dataset_root, refs)
+        return refs
+
+
+def dataset_context(refs: list[DatasetRef]) -> dict:
+    """Render one compact policy/context payload shared by all Agents."""
+
+    return {
+        "available_dataset_ids": sorted(ref.dataset_id for ref in refs),
+        "access": "read_only",
+        "environment": {
+            "root": RESAGENT2_DATASET_ROOT,
+            "id_to_path_map": RESAGENT2_DATASETS_JSON,
+        },
+        "missing_dataset_action": "ask_user",
+        "download_allowed": False,
+        "substitution_allowed": False,
+    }
 
 
 def resolve_dataset_refs(

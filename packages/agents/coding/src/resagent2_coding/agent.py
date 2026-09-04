@@ -20,6 +20,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     AuditEnvTool,
     CreateFileTool,
+    DatasetResolutionError,
     EnvironmentBinding,
     EnvironmentManager,
     GitDiffTool,
@@ -41,6 +42,8 @@ from resagent2_capabilities import (
     WorkspaceBoundary,
     WorkspacePermissionError,
     WorkspaceSnapshot,
+    dataset_env_overrides,
+    resolve_dataset_refs,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -127,6 +130,18 @@ class NativeCodingAgent:
             repository = GitWorkspace(boundary)
         except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
             return self._failure(str(error), blocked=True)
+
+        try:
+            datasets = resolve_dataset_refs(
+                self.resource_layout.dataset_root,
+                list(request.dataset_refs),
+            )
+        except DatasetResolutionError as error:
+            return self._failure(str(error), blocked=True)
+        dataset_env = dataset_env_overrides(
+            self.resource_layout.dataset_root,
+            datasets,
+        )
 
         # Capture this Attempt's baseline: previous tasks' accepted changes are
         # the starting state, and only this Attempt's increment counts. On
@@ -217,6 +232,7 @@ class NativeCodingAgent:
                     timeout_seconds=request.budget.timeout_seconds,
                     baseline=baseline,
                     env_binding=binding,
+                    extra_env=dataset_env,
                 ),
             )
             tools = (*common_tools, *write_tools)

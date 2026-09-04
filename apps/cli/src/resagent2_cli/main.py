@@ -11,7 +11,6 @@ from typing import Callable, Sequence
 from uuid import uuid4
 
 from resagent2_contracts import (
-    DatasetRef,
     EnvironmentSpec,
     ResearchRequest,
     RunBudget,
@@ -137,18 +136,11 @@ def _request_from_args(args: argparse.Namespace) -> ResearchRequest:
     Shared by the one-shot ``cli`` and the interactive shell so both build the
     identical request for the same flags.
     """
-    datasets = [
-        DatasetRef(dataset_id=name, relative_path=path)
-        for name, path in (
-            _assignment(value, label="--dataset") for value in args.dataset
-        )
-    ]
     return ResearchRequest(
         goal=_goal(args),
         hypothesis=args.hypothesis,
         context=args.context,
         constraints=args.constraint,
-        dataset_refs=datasets,
         budget=RunBudget(
             max_tasks=args.max_tasks,
             max_attempts_per_task=args.max_attempts,
@@ -191,7 +183,6 @@ def _parser(
     run.add_argument("--hypothesis")
     run.add_argument("--context", default="")
     run.add_argument("--constraint", action="append", default=[])
-    run.add_argument("--dataset", action="append", default=[], metavar="ID=PATH")
     run.add_argument("--max-tasks", type=int, default=8)
     run.add_argument("--max-attempts", type=int, default=2)
     run.add_argument("--max-llm-calls", type=int, default=200)

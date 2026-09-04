@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from resagent2_capabilities import (
+    DatasetCatalog,
     DatasetResolutionError,
     EnvironmentManager,
     EnvironmentManagerError,
@@ -16,6 +17,7 @@ from resagent2_capabilities import (
     RepoMaterializer,
     RepoMaterializerError,
     ResourceLayout,
+    dataset_context,
     dataset_env_overrides,
     find_conda,
     resolve_dataset_refs,
@@ -485,6 +487,47 @@ def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> Non
     assert resolved[0]["path"] == str((root / "cifar10").resolve())
     assert resolved[1]["path"] == str((root / "mnist").resolve())
     assert all(entry["access"] == "read_only" for entry in resolved)
+
+
+def test_dataset_catalog_loads_registered_directories(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    (root / "cifar-10").mkdir(parents=True)
+    (root / "mnist").mkdir()
+    (root / "catalog.json").write_text(
+        json.dumps({"mnist": "mnist", "cifar10": "cifar-10"}),
+        encoding="utf-8",
+    )
+
+    refs = DatasetCatalog(root).references()
+
+    assert refs == [
+        DatasetRef(dataset_id="cifar10", relative_path="cifar-10"),
+        DatasetRef(dataset_id="mnist", relative_path="mnist"),
+    ]
+
+
+def test_dataset_catalog_is_empty_until_resources_are_registered(tmp_path) -> None:
+    assert DatasetCatalog(tmp_path / "datasets").references() == []
+
+
+def test_dataset_catalog_rejects_missing_registered_directory(tmp_path) -> None:
+    root = tmp_path / "datasets"
+    root.mkdir()
+    (root / "catalog.json").write_text('{"cifar10": "missing"}', encoding="utf-8")
+
+    with pytest.raises(DatasetResolutionError, match="does not exist"):
+        DatasetCatalog(root).references()
+
+
+def test_dataset_context_has_one_shared_missing_resource_policy() -> None:
+    context = dataset_context(
+        [DatasetRef(dataset_id="cifar10", relative_path="cifar-10")]
+    )
+
+    assert context["available_dataset_ids"] == ["cifar10"]
+    assert context["missing_dataset_action"] == "ask_user"
+    assert context["download_allowed"] is False
+    assert context["substitution_allowed"] is False
 
 
 def test_resolve_dataset_refs_rejects_missing_path(tmp_path) -> None:

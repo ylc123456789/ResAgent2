@@ -450,7 +450,17 @@ class _FailingVerificationRunner:
     def __init__(self, boundary) -> None:
         self.boundary = boundary
 
-    def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None):
+    def run(
+        self,
+        command,
+        *,
+        log_dir,
+        index,
+        timeout_seconds,
+        argv_prefix=None,
+        extra_env=None,
+    ):
+        self.extra_env = extra_env
         root = Path(log_dir)
         root.mkdir(parents=True, exist_ok=True)
         stdout = root / f"command_{index:02d}.stdout"
@@ -485,3 +495,24 @@ def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
 
     assert observation.ok is False
     assert observation.value["passed"] is False
+
+
+def test_run_verification_passes_shared_resource_environment(tmp_path) -> None:
+    init_repo(tmp_path)
+    boundary = WorkspaceBoundary(grant(tmp_path))
+    repository = GitWorkspace(boundary)
+    runner = _FailingVerificationRunner(boundary)
+    tool = RunVerificationTool(
+        runner,
+        repository,
+        log_root=str(tmp_path / "verification"),
+        timeout_seconds=10,
+        baseline=repository.snapshot(),
+        extra_env={"RESAGENT2_DATASET_ROOT": "/datasets"},
+    )
+
+    tool.execute(
+        _agent_state(), tool.input_model(commands=["python -m py_compile missing.py"])
+    )
+
+    assert runner.extra_env == {"RESAGENT2_DATASET_ROOT": "/datasets"}

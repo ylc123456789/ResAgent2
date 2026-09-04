@@ -11,7 +11,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from resagent2_capabilities import ArxivLiteratureBackend, ResourceLayout
+from resagent2_capabilities import (
+    ArxivLiteratureBackend,
+    DatasetCatalog,
+    ResourceLayout,
+)
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentOwner,
@@ -220,6 +224,7 @@ def build_application(
     registry = _registry()
     run_store = JsonRunStore(root / "state")
     resource_layout = ResourceLayout.from_env(data_root=root)
+    dataset_catalog = DatasetCatalog(resource_layout.dataset_root)
     coding_store = JsonSessionStore(root / "sessions" / "coding")
     experiment_store = JsonSessionStore(root / "sessions" / "experiment")
     scientific_store = JsonSessionStore(root / "sessions" / "scientific")
@@ -281,5 +286,6 @@ def build_application(
         ),
         scheduler=scheduler,
         registry=registry,
+        dataset_ref_source=dataset_catalog,
     )
     return CliApplication(controller=controller, run_store=run_store)

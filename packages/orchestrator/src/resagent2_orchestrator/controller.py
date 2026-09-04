@@ -15,6 +15,7 @@ from typing import Protocol
 from resagent2_contracts import (
     AgentOwner,
     CapabilityRegistry,
+    DatasetRef,
     ErrorCode,
     ModuleError,
     PendingQuestion,
@@ -66,6 +67,12 @@ class ScientificGate(Protocol):
     ) -> CompletionValidation: ...
 
 
+class DatasetRefSource(Protocol):
+    """Deployment resource source; the Controller only consumes references."""
+
+    def references(self) -> list[DatasetRef]: ...
+
+
 class ResearchController:
     """Drive one research run from a natural-language goal to a final opinion."""
 
@@ -78,6 +85,7 @@ class ResearchController:
         registry: CapabilityRegistry,
         gate: ScientificGate | None = None,
         report_renderer: FinalReportRenderer | None = None,
+        dataset_ref_source: DatasetRefSource | None = None,
     ) -> None:
         self.scientific_port = scientific_port
         self.compiler = compiler
@@ -85,6 +93,7 @@ class ResearchController:
         self.registry = registry
         self.gate = gate or ScientificCompletionValidator(registry)
         self.report_renderer = report_renderer or FinalReportRenderer()
+        self.dataset_ref_source = dataset_ref_source
 
     def create_run(
         self,
@@ -139,6 +148,7 @@ class ResearchController:
             run = self.scheduler.store.load(run_id)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
+            self._merge_registered_datasets(run)
 
             # This is the only recovery entry for a persisted ResearchRun.
             # Scheduler invocation is synchronous in the current local model,
@@ -176,6 +186,30 @@ class ResearchController:
             run = self._apply_turn(run_id, turn_result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
+
+    def _merge_registered_datasets(self, run: ResearchRun) -> None:
+        """Add newly provisioned resources without changing prior Run bindings."""
+
+        if self.dataset_ref_source is None:
+            return
+        existing = {ref.dataset_id: ref for ref in run.request.dataset_refs}
+        additions: list[DatasetRef] = []
+        for ref in self.dataset_ref_source.references():
+            previous = existing.get(ref.dataset_id)
+            if previous is not None:
+                if previous != ref:
+                    raise ValueError(
+                        f"dataset {ref.dataset_id!r} was remapped during the Run"
+                    )
+                continue
+            existing[ref.dataset_id] = ref
+            additions.append(ref)
+        if not additions:
+            return
+        run.request = run.request.model_copy(
+            update={"dataset_refs": [*run.request.dataset_refs, *additions]}
+        )
+        self._save(run)
 
     def _scientific_turn(self, run: ResearchRun) -> ScientificTurnResult:
         work_outcome = None

@@ -213,7 +213,6 @@ class NativeExperimentAgent:
         )
         initial_memory = {
             "repo": {"repo_url": source_ref, "commit": materialized.commit},
-            "datasets": datasets,
             "hardware": HardwareAudit().text(),
             "command_count": 0,
             "experiment_success_count": 0,

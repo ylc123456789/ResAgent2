@@ -1,11 +1,15 @@
+import json
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from resagent2_contracts import (
+    AgentOwner,
     Capability,
     CodeModifyInput,
     CodeUnderstandInput,
+    DatasetRef,
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
@@ -14,7 +18,8 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
 )
 from resagent2_coding import NativeCodingAgent
-from resagent2_runtime import ScriptedLLMClient
+from resagent2_coding.context import build_context
+from resagent2_runtime import AgentState, ScriptedLLMClient
 
 
 def init_repo(root: Path) -> None:
@@ -62,6 +67,30 @@ def _setup_env(tmp_path: Path, monkeypatch) -> None:
 
 _PREPARE = {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}}
 _AUDIT = {"tool": "audit_env", "arguments": {}}
+
+
+def test_coding_context_uses_shared_dataset_catalog(tmp_path) -> None:
+    task = request(tmp_path, capability=Capability.CODE_UNDERSTAND).model_copy(
+        update={
+            "dataset_refs": [
+                DatasetRef(dataset_id="cifar10", relative_path="cifar-10")
+            ]
+        }
+    )
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_dataset",
+        agent_name="coding-understand",
+        owner=AgentOwner.CODING,
+        run_id=task.run_id,
+        task_id=task.task_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+    section = next(item for item in build_context(task, state) if item.name == "dataset_catalog")
+
+    assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
 
 
 def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
@@ -483,3 +512,4 @@ def test_code_modify_requires_workspace_id(tmp_path, monkeypatch) -> None:
     result = agent.invoke(req)
 
     assert result.status == ModuleStatus.BLOCKED
+    DatasetRef,

@@ -10,6 +10,7 @@ from resagent2_contracts import (
     Capability,
     CapabilityDefinition,
     CapabilityRegistry,
+    DatasetRef,
     ErrorCode,
     ExperimentRunInput,
     ModuleError,
@@ -101,6 +102,7 @@ def build_controller(
     *,
     actions: list[dict],
     store=None,
+    dataset_ref_source=None,
 ) -> ResearchController:
     scheduler = WorkflowScheduler(
         bindings={
@@ -121,6 +123,7 @@ def build_controller(
         compiler=compiler,
         scheduler=scheduler,
         registry=registry(),
+        dataset_ref_source=dataset_ref_source,
     )
 
 
@@ -378,6 +381,65 @@ def test_paused_question_then_answer_resumes() -> None:
     run = controller.answer_question("run_paused", answer)
 
     assert run.status == RunStatus.COMPLETED
+
+
+def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
+    class _DatasetSource:
+        refs = []
+
+        def references(self):
+            return list(self.refs)
+
+    source = _DatasetSource()
+    ask_action = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "cifar10 is unavailable"},
+            "text": "Provision cifar10 and confirm when it is ready.",
+            "requested_fields": ["dataset_ready"],
+            "reason": "required dataset is missing",
+        },
+    }
+    controller = build_controller(
+        actions=[ask_action, finish_action()],
+        dataset_ref_source=source,
+    )
+    paused = controller.create_run("run_dataset_refresh", research_request())
+    assert paused.request.dataset_refs == []
+
+    source.refs = [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]
+    completed = controller.answer_question(
+        paused.run_id,
+        UserAnswer(
+            question_id=paused.pending_question.id,
+            values={"dataset_ready": "yes"},
+            answered_at=NOW,
+        ),
+    )
+
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.request.dataset_refs == source.refs
+
+
+def test_dataset_binding_cannot_be_remapped_during_run() -> None:
+    class _DatasetSource:
+        def references(self):
+            return [DatasetRef(dataset_id="cifar10", relative_path="other")]
+
+    request = research_request().model_copy(
+        update={
+            "dataset_refs": [
+                DatasetRef(dataset_id="cifar10", relative_path="cifar10")
+            ]
+        }
+    )
+    controller = build_controller(
+        actions=[finish_action()],
+        dataset_ref_source=_DatasetSource(),
+    )
+
+    with pytest.raises(ValueError, match="remapped during the Run"):
+        controller.create_run("run_dataset_remap", request)
 
 
 def _task_question_result() -> ModuleResult:

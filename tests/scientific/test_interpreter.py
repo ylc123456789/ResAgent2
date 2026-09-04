@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from resagent2_contracts import (
     AgentOwner,
     ArtifactRef,
+    DatasetRef,
     ErrorCode,
     ModuleError,
     ResearchRequest,
@@ -386,6 +387,9 @@ def test_build_context_emits_single_work_brief_section() -> None:
         run_id="run_example",
         research=ResearchRequest(
             goal="Evaluate the method",
+            dataset_refs=[
+                DatasetRef(dataset_id="cifar10", relative_path="cifar-10")
+            ],
             budget=RunBudget(
                 max_tasks=5,
                 max_attempts_per_task=2,
@@ -408,7 +412,12 @@ def test_build_context_emits_single_work_brief_section() -> None:
     sections = build_context(turn, _state())
 
     names = [section.name for section in sections]
+    assert "dataset_catalog" in names
     assert "work_brief" in names
     assert "work_outcome" not in names
     assert "previous_work_request" not in names
     assert "unresolved_tasks" not in names
+    dataset_section = next(
+        section for section in sections if section.name == "dataset_catalog"
+    )
+    assert json.loads(dataset_section.content)["available_dataset_ids"] == ["cifar10"]

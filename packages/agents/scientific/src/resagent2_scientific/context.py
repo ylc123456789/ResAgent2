@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from resagent2_capabilities import dataset_context
 from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import AgentState, ContextSection
 
@@ -28,6 +29,11 @@ Use ask_user when the goal explicitly reserves a decision for the user or
 forbids inferring a default (user preference, risk choice, cost limit,
 evaluation metric, or whether an external action is allowed). Do not replace
 an explicitly required user decision with request_work.
+
+Dataset rule:
+- Use only dataset ids listed in dataset_catalog. If a required dataset is not
+  listed, call ask_user and name the missing dataset. Never invent a path,
+  download a dataset, or silently substitute another dataset.
 
 WorkRequest rules:
 - Request only the next necessary round of work that the current evidence
@@ -142,6 +148,15 @@ def build_context(
             name="research",
             content=json.dumps(research, ensure_ascii=False),
             priority=100,
+            required=True,
+        ),
+        ContextSection(
+            name="dataset_catalog",
+            content=json.dumps(
+                dataset_context(list(turn.research.dataset_refs)),
+                ensure_ascii=False,
+            ),
+            priority=98,
             required=True,
         ),
         ContextSection(

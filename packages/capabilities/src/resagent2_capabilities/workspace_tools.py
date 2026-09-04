@@ -326,6 +326,7 @@ class RunVerificationTool:
         permission_policy: VerificationCommandPolicy | None = None,
         baseline: GitBaseline,
         env_binding: EnvironmentBinding | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.runner = runner
         self.repository = repository
@@ -334,6 +335,7 @@ class RunVerificationTool:
         self.permission_policy = permission_policy or VerificationCommandPolicy()
         self.baseline = baseline
         self.env_binding = env_binding
+        self.extra_env = dict(extra_env or {})
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunVerificationInput, arguments)
@@ -392,6 +394,7 @@ class RunVerificationTool:
                     index=index,
                     timeout_seconds=remaining,
                     argv_prefix=argv_prefix,
+                    extra_env=self.extra_env,
                 )
             )
         after_digest = _digest()

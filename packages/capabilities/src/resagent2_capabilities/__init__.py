@@ -8,7 +8,9 @@ Agents assemble the subset they need through their Tool Profile.
 
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
 from .dataset import (
+    DatasetCatalog,
     DatasetResolutionError,
+    dataset_context,
     dataset_env_overrides,
     mirror_env_overrides,
     resolve_dataset_refs,
@@ -80,6 +82,7 @@ __all__ = [
     "CommandPermissionDecision",
     "CreateFileInput",
     "CreateFileTool",
+    "DatasetCatalog",
     "DatasetResolutionError",
     "EnvironmentBinding",
     "EnvironmentManager",
@@ -124,6 +127,7 @@ __all__ = [
     "WorkspaceObserver",
     "WorkspacePermissionError",
     "WorkspaceSnapshot",
+    "dataset_context",
     "dataset_env_overrides",
     "find_conda",
     "media_type_for",

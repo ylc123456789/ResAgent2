@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from resagent2_capabilities import dataset_context
 from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import AgentState, ContextSection, recent_tool_snippets
 
@@ -91,7 +92,16 @@ def build_context(
             ),
             priority=100,
             required=True,
-        )
+        ),
+        ContextSection(
+            name="dataset_catalog",
+            content=json.dumps(
+                dataset_context(list(request.dataset_refs)),
+                ensure_ascii=False,
+            ),
+            priority=90,
+            required=True,
+        ),
     ]
     read_files = recent_tool_snippets(
         state,

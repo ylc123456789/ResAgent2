@@ -8,6 +8,7 @@ from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
     Capability,
+    DatasetRef,
     EnvironmentSpec,
     PendingQuestion,
     ResearchRequest,
@@ -227,6 +228,23 @@ def test_production_composition_builds_without_calling_external_services(tmp_pat
     application = build_application(data_root=tmp_path)
 
     assert application.controller.scheduler.store is application.run_store
+
+
+def test_production_composition_loads_the_shared_dataset_catalog(
+    tmp_path: Path, monkeypatch
+):
+    dataset_root = tmp_path / "datasets"
+    (dataset_root / "cifar-10").mkdir(parents=True)
+    (dataset_root / "catalog.json").write_text(
+        '{"cifar10": "cifar-10"}', encoding="utf-8"
+    )
+    monkeypatch.setenv("RESAGENT2_DATASET_ROOT", str(dataset_root))
+
+    application = build_application(data_root=tmp_path / "data")
+
+    assert application.controller.dataset_ref_source.references() == [
+        DatasetRef(dataset_id="cifar10", relative_path="cifar-10")
+    ]
 
 
 def test_coding_and_experiment_share_resource_layout(tmp_path: Path):

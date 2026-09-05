@@ -131,7 +131,8 @@ Tool.execute(state: AgentState, arguments: BaseModel) -> ToolObservation
 - **错误处理**：参数校验错误、工具返回 `ok=False` 或执行时抛出的 PermissionError 等可转成反馈后继续，受预算和连续失败上限限制；PermissionPolicy 返回不允许时则立即以 permission_denied 失败，不进入重试。不可恢复异常/耗尽限制也返回模块失败。未知工具按既有拒绝策略处理，不放宽 schema 来吞错。
 - **重复与恢复**：读取通常可重复；修改文件、安装依赖和启动实验不承诺幂等。Session checkpoint 保存观测，不是外部副作用的 exactly-once 事务。
 - **共享位置**：文件片段/目录观测的上下文保留属于 runtime；安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
-- **已知缺口**：LLM 返回时已过 deadline 仍可能启动工具（F12）；ToolObservation 尚未在模型层拒绝多种控制信号同时出现（D3）。规范用法应至多返回一种控制信号，不能依赖 Loop 分支顺序解释冲突。
+- **截止与控制信号**：LLM/权限检查之后、真正派发工具之前再检查 wall-clock 截止时间；过期动作不执行，已发生调用仍记账。这不是执行中工具的抢占取消。ToolObservation 模型强制三种控制信号至多一个，不依赖分支顺序解释冲突。
+- **客户端与 trace**：客户端只需实现 next_action，可选预算/trace hooks 按能力检测调用；无 attempt 计量时按每请求一次记账。action_valid 记录响应解析/Action 调试状态，不证明工具 arguments 合法或工具执行成功；验收还需关联参数错误、observation.ok 和最终状态。
 
 **源码**：[Tool 协议和 Registry](../packages/runtime/src/resagent2_runtime/tools.py)、[Loop](../packages/runtime/src/resagent2_runtime/loop.py)、[ToolObservation](../packages/runtime/src/resagent2_runtime/models.py)、[共享能力](../packages/capabilities/src/resagent2_capabilities/)。
 

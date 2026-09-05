@@ -425,6 +425,17 @@ class AgentLoop:
                     retryable=False,
                 )
 
+            # Model calls and permission checks can consume the remaining
+            # deadline. Their completed work is already accounted for, but an
+            # expired action must not start a new tool or its side effects.
+            if self.clock() - started >= request.budget.timeout_seconds:
+                return self._failure(
+                    state,
+                    ErrorCode.TIMEOUT,
+                    "Agent session exceeded timeout before tool dispatch",
+                    retryable=True,
+                )
+
             try:
                 observation = registry.dispatch(
                     action.tool,

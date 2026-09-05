@@ -80,6 +80,16 @@ class ToolObservation(RuntimeModel):
     question: QuestionDraft | None = None
     request_work: JsonValue | None = None
 
+    @model_validator(mode="after")
+    def validate_control_signal(self) -> "ToolObservation":
+        signals = (self.finish_candidate, self.question, self.request_work)
+        if sum(signal is not None for signal in signals) > 1:
+            raise ValueError(
+                "a tool observation can carry at most one of "
+                "finish_candidate, question, and request_work"
+            )
+        return self
+
 
 class CompletionDecision(RuntimeModel):
     """Deterministic finalizer decision for the current Agent state.

@@ -62,7 +62,11 @@ class ModelProfile:
 
 
 class LLMClient(Protocol):
-    """Provider-neutral interface for requesting one structured Agent action."""
+    """Provider-neutral interface: only ``next_action`` is required.
+
+    Consumers feature-detect optional budget and trace hooks. A minimal client
+    needs none of them; absent attempt accounting means one call per request.
+    """
 
     def next_action(
         self,

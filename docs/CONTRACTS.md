@@ -10,6 +10,8 @@
 
 本文件回答「模块之间传什么、字段准确表示什么」。
 
+从模块理解接口，请先看 [ARCHITECTURE §8](ARCHITECTURE.md#8-模块职责)；调用、返回、所有权、恢复和副作用见 [六张接口说明卡](INTERFACES.md)。接口卡同时记录当前接收边界尚未落实的约束，不因本文声明某项语义就假定所有替换实现已经被完整校验。
+
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
 - 代码与本文字段不一致时，视为 contract bug；
@@ -230,7 +232,9 @@ class ModuleResult[PayloadT]:
 - `completed_with_warnings`：至少有一条 WarningRecord；
 - ArtifactCandidate 可随失败结果作为诊断输出登记，但不能让失败状态变成功。
 
-`summary` 只用于人类展示；`payload` 是 capability 专有数据。`llm_calls` 是本 Attempt 实际新增的 LLM 调用数（含 HTTP 重试），供 Run 使用账本累计。Scheduler 将通过校验的 payload 原样持久化到对应 Attempt，供审计和恢复后读取，但不解释其中的领域语义，也不从 payload 推断状态。
+`summary` 是解释性文字，可供人类展示，也会经 WorkOutcome/interpreter 投影给 Scientific 模型参考；**不能用于机器状态判定或替代真实证据**。`payload` 是 capability 专有数据。`llm_calls` 是本次模块返回对应的实际新增 LLM 调用数（含 HTTP 重试），供 Run 使用账本累计；同 Attempt 多次问答续跑时不能重复报告 Session 历史总数。Scheduler 将 payload 持久化到对应 Attempt，供审计和恢复后读取，但不解释其中的领域语义，也不从 payload 推断状态。
+
+**未实现约束**：当前 Scheduler 校验通用 ModuleResult 外壳，尚未按 capability 完整验证替换 Port 的成功 payload；Artifact 注册失败重建结果时也可能丢新增 llm_calls、Session 和原错误。不能将原生 finalizer 的守约等同于接收边界完整验收，见 [I3](INTERFACES.md#i3-执行任务)。
 
 ## 10. 领域 payload
 
@@ -569,11 +573,17 @@ ScientificPort 是唯一 Scientific Agent 边界。work_outcome 按 work_request
 
 ### 16.5 WorkflowCompiler 边界
 
-WorkflowCompiler 的输入是 `WorkRequest`、CapabilityRegistry、Run 约束和当前 Workflow 摘要；输出只有 `WorkflowProposal` 或 `WorkflowPatch`。production `LLMWorkflowCompiler` 不让 LLM 直接输出 Proposal/Patch：LLM 只输出 orchestrator 内部的 `CompilationDraft`（顶层 summary/rationale + 每任务 key/capability/goal/depends_on/workspace_id/inputs），再由确定性 `_materialize_draft` 分配全局 TaskId、绑定 `work_request_id`、解析 workspace、转换局部依赖并产出 Proposal（首轮）或只追加 Patch（修复轮）。每个草图只表示当前可执行的一轮，不预编译依赖本轮失败才需要的条件任务；失败经 WorkOutcome 返回 Scientific 后另建修复 WorkRequest。结构校验通过后再做一次语义审查（`CompilationReview`），同时检查遗漏前置条件和多余条件任务；结构拒绝与语义拒绝各自最多带精确反馈重编译一次，两次都失败才把 WorkRequest/Run 置为 failed。Compiler 不产生 §7 以外的 capability；validator 检查 run、revision、work_request_id、DAG、能力注册表、预算和 inputs discriminator。
+WorkflowCompiler 的输入是 `WorkRequest`、CapabilityRegistry、预算、当前 Workflow 与逻辑工作区摘要；返回内部 `CompilationResult(output, llm_calls)`，其中 output 是 `WorkflowProposal` 或 `WorkflowPatch`。这层计量包装不新增跨模块 wire 类型。
+
+production `LLMWorkflowCompiler` 不让 LLM 直接输出 Proposal/Patch：LLM 只输出 orchestrator 内部的 `CompilationDraft`（顶层 summary/rationale + 每任务 key/capability/goal/depends_on/workspace_id/constraints/inputs），再由确定性 `_materialize_draft` 分配全局 TaskId、绑定 `work_request_id`、解析 workspace、转换局部依赖并产出 Proposal（首轮）或只追加 Patch（修复轮）。每个草图只表示当前可执行的一轮，不预编译依赖本轮失败才需要的条件任务；失败经 WorkOutcome 返回 Scientific 后另建修复 WorkRequest。
+
+结构校验通过后再做一次语义审查（`CompilationReview`），同时检查遗漏前置条件和多余条件任务。结构拒绝与语义拒绝共享一次带精确反馈的纠错重编，总计最多两版草图，每版最多一次 review；仍失败则 Compiler 抛 CompilationError，由 Controller 将 WorkRequest/Run 置为 failed。图模型、Compiler 与 Scheduler 分担身份、revision、DAG、能力、预算和 inputs 检查，不是三套完全相同的 validator。精确入口和失败计量约定见 [I2](INTERFACES.md#i2-工作编译)。
 
 ### 16.6 ScientificCompletionValidator 与 final report
 
-Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入同一个不可变 ResearchRun snapshot 和 ScientificCompletedResult；输出结构化 violation（invalid_session / active_control_state / invalid_opinion / unknown_evidence / unobserved_evidence / unacknowledged_task / missing_limitations / inconsistent_task_result）。验证顺序固定为：completed result/session/run 绑定正确 → 无 active WorkRequest/PendingQuestion/**pending、running 或 needs_user_input Task** → opinion 通过组合约束 → 每个 evidence Artifact 属于本 Run、Registry 可查、且同时出现在 result.observed_artifact_ids 与 run 的已复核 trace → 所有 failed/blocked Task 被 acknowledged 且存在 limitations → 每个 completed Task 都有合法终态 Attempt、无 error、artifact producer 与 binding owner 一致 → 不接受未知/重复/跨 Run 的 ID。
+Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入 ResearchRun 与 ScientificCompletedResult，内部构造经校验的 Run 深拷贝；输出 CompletionValidation（结构化 violations 或 FinalReportData）。检查包括：completed result/session/run 绑定正确 → 无 active WorkRequest/PendingQuestion/**pending、running 或 needs_user_input Task** → opinion 通过组合约束 → 每个 evidence Artifact 属于本 Run，且同时出现在 result.observed_artifact_ids 与 Run 已复核集合 → 从 Run 确定性对账 failed/blocked Task，要求存在错误记录及 opinion.limitations → 每个 completed Task 有合法终态 Attempt、无 error、artifact producer 与 binding owner 一致 → 拒绝未知/重复/跨 Run 的 ID。Scientific 不再上报 acknowledged_task_ids，执行问题的精确身份由 Validator 生成。
+
+原生 ScientificCompletionCheck 先根据 Session 工具记录、未解决工作及证据要求检查候选；它不持有完整 ResearchRun。这里的最终 gate 再独立验收完整 Run，不能把两者描述为输入完全相同。**未实现约束**：最终 gate 尚未独立落实 required_evidence_kinds，非 completed Scientific 响应的身份/assessment 引用验收也不完整，见 [I1](INTERFACES.md#i1-科学决策)。
 
 通过时 Validator 产出 `FinalReportData`（run_id、goal、opinion、evidence、execution_issues），纯 renderer 只消费 FinalReportData 生成 `kind=final_report`、`media_type=text/markdown` 的 ArtifactCandidate。RunStatus 只有在验证、渲染、Artifact 登记和 Run 字段写入全部成功后才改 completed。Validator 不判断 statement 是否科学正确。
 
@@ -594,7 +604,7 @@ Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Sessio
 | request_work | paused | 复核 observed trace，持久化 assessment，创建 requested WorkRequest | running |
 | needs_user_input | paused | 复核 observed trace，持久化 assessment/PendingQuestion | paused |
 | completed | completed | 复核并合并 observed trace，调用 ScientificCompletionValidator；通过后保存 opinion/报告 | completed |
-| failed | failed 或空 | 保存 ModuleError；AgentLoop 内部可恢复机会已耗尽 | failed |
+| failed | failed 或空 | 结束 Run；应保留 ModuleError，但当前 Controller 尚未将其持久化为 Run 终止根因（见 I1） | failed |
 
 completed 若未通过 Validator，不得写 Run completed；这种不一致属于 `contract_error`，Run failed 并保留两层验证证据。WorkRequest 状态不映射为新的 RunStatus：requested/compiling/executing/stable/consumed 期间 Run 都是 running。
 

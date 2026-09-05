@@ -439,6 +439,9 @@ class RunVerificationTool:
                 "verification_results": payload,
                 "verification_diff_sha256": after_digest,
                 "verification_workspace_unchanged": workspace_unchanged,
+                "verification_environment_generation": (
+                    self.env_binding.generation if self.env_binding is not None else None
+                ),
             },
         )
 

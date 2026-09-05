@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from .resources import ResourceLayout
 
@@ -456,6 +457,13 @@ class EnvironmentBinding:
             run_id=run_id, workspace_id=workspace_id
         )
         self.certified: bool = False
+        # A fresh binding cannot vouch for tests from a previous process.
+        self.generation = uuid4().hex
+
+    def invalidate(self) -> None:
+        """Invalidate environment-dependent observations before a mutation starts."""
+        self.certified = False
+        self.generation = uuid4().hex
 
     def argv_prefix(self) -> list[str] | None:
         if self.current is None or self.manager.conda_exe is None:

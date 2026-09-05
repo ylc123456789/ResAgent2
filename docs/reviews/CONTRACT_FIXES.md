@@ -10,7 +10,7 @@
 |---|---|---|
 | S0 文档基线 | 保存接口卡与模块说明；列出边界及验收计划 | 已完成 |
 | S1 身份与作用域 | F01/F02/F05；同 Attempt 恢复 D1 | 已完成 |
-| S2 验证与指标 | F03/F04/F11；共享验证有效性判断 | 待完成 |
+| S2 验证与指标 | F03/F04/F11；共享验证有效性判断 | 已完成 |
 | S3 返回验收与诊断 | F06/F07/F08/F09/F10；统一证据种类语义 D2 | 待完成 |
 | S4 Runtime 边界 | F12；互斥控制信号 D3、可选客户端能力/trace 语义 D4/D5 | 待完成 |
 | S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 待完成 |
@@ -52,5 +52,6 @@
 
 ## 验收记录
 
+- S2：EnvironmentBinding 的 generation 在 prepare/setup 开始前失效，重新创建绑定也失效；Coding 控制提示与完成 gate 共用验证规则，必须覆盖当前编辑与环境。指标采用规范化后精确匹配，同名不同值拒绝，不按文件顺序覆盖。Coding/capabilities 149 passed、1 skipped；Experiment 36 passed。第一轮集成全量 542 passed、1 skipped，另两条标准库白名单测试失败已补齐（hashlib/uuid），最终全量见 S5。
 - S0：保存本轮接口参考文档和修复计划；原有本地基线 501 passed、1 skipped。后续记录随每批更新。
 - S1：Session ID 包含所属 Run 且长度有界；动态工件索引按 Run 隔离并在读字节前校验；每次新问题分配独立 ID；Runtime 拒绝跨 Attempt 恢复。新增跨 Run/读取/长 ID 测试 12 条，相关回归 86 passed；问答与 Runtime 恢复 24 passed。两组范围有交集，不相加冒充全量测试数。

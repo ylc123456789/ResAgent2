@@ -97,11 +97,13 @@ class CodeModifyCompletionCheck:
         *,
         output_root: str,
         baseline: GitBaseline,
+        env_binding: EnvironmentBinding,
     ) -> None:
         self.repository = repository
         self.boundary = boundary
         self.output_root = output_root
         self.baseline = baseline
+        self.env_binding = env_binding
 
     def evaluate(
         self,
@@ -129,20 +131,11 @@ class CodeModifyCompletionCheck:
         for path in changed:
             self.boundary.resolve_write_file(path)
 
-        raw_results = state.memory.get("verification_results", [])
-        try:
-            results = [VerificationResult.model_validate(item) for item in raw_results]
-        except ValidationError:
+        results, verification_issue = _verification_status(state, self.env_binding)
+        if verification_issue is not None:
             return CompletionDecision(
                 complete=False,
-                summary="Stored verification results are invalid",
-            )
-        edit_revision = int(state.memory.get("edit_revision", 0))
-        verification_revision = state.memory.get("verification_revision")
-        if verification_revision != edit_revision:
-            return CompletionDecision(
-                complete=False,
-                summary="Run verification after the latest file edit",
+                summary=verification_issue,
             )
         current_digest = hashlib.sha256(
             self.repository.diff_since(self.baseline).encode("utf-8")
@@ -158,12 +151,6 @@ class CodeModifyCompletionCheck:
                     "review the diff and rerun verification"
                 ),
             )
-        if any(item.exit_code != 0 or item.timed_out for item in results):
-            return CompletionDecision(
-                complete=False,
-                summary="Verification failed; inspect the latest command observation",
-            )
-
         patch_text = self.repository.diff_since(self.baseline)
         patch_path = Path(self.output_root) / "changes.patch"
         patch_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,6 +189,32 @@ class CodeModifyCompletionCheck:
         )
 
 
+def _verification_status(
+    state: AgentState, binding: EnvironmentBinding
+) -> tuple[list[VerificationResult], str | None]:
+    """One validity rule for the model's guidance and the completion hard gate."""
+    try:
+        results = [
+            VerificationResult.model_validate(item)
+            for item in state.memory.get("verification_results", [])
+        ]
+    except (ValidationError, TypeError):
+        return [], "Stored verification results are invalid; rerun verification"
+    if not results:
+        return results, "Run verification before finishing"
+    if state.memory.get("verification_revision") != int(state.memory.get("edit_revision", 0)):
+        return results, "Run verification after the latest file edit"
+    if not binding.certified:
+        return results, "Audit the environment, then rerun verification if its generation changed"
+    if state.memory.get("verification_environment_generation") != binding.generation:
+        return results, "Environment changed or was restored; rerun verification after audit"
+    if any(item.exit_code != 0 or item.timed_out for item in results):
+        return results, "Verification failed; inspect the latest command observation"
+    if not state.memory.get("verification_workspace_unchanged", False):
+        return results, "Workspace changed during verification; review and rerun verification"
+    return results, None
+
+
 def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict:
     """Derive the Coding "modify—verify" control state from facts, not the LLM.
 
@@ -212,16 +225,15 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict
     obligation stays visible until verification actually covers the latest edit.
     """
     edit_revision = int(state.memory.get("edit_revision", 0))
-    verification_revision = state.memory.get("verification_revision")
-    verified_revision = (
-        verification_revision if verification_revision is not None else 0
-    )
-    unverified_edit = edit_revision > verified_revision
+    results, issue = _verification_status(state, binding)
+    verification_required = edit_revision > 0 and issue is not None
     environment_certified = bool(binding.certified)
-    if unverified_edit:
+    if verification_required:
         required_next_action = (
             "audit_env" if not environment_certified else "run_verification"
         )
+        if environment_certified and any(item.exit_code != 0 or item.timed_out for item in results):
+            required_next_action = "inspect_and_fix_verification"
     elif edit_revision > 0:
         # The latest edit is already verified: there is no outstanding
         # obligation, so the Agent must finish rather than re-apply an edit
@@ -230,8 +242,9 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict
     else:
         required_next_action = "make_the_required_change"
     return {
-        "workspace_changed": unverified_edit,
-        "verification_required": unverified_edit,
+        "workspace_changed": edit_revision > int(state.memory.get("verification_revision") or 0),
+        "verification_required": verification_required,
+        "verification_issue": issue if verification_required else None,
         "environment_certified": environment_certified,
         "required_next_action": required_next_action,
     }

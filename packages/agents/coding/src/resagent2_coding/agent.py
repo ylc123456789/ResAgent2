@@ -258,6 +258,7 @@ class NativeCodingAgent:
                     boundary,
                     output_root=str(output_root),
                     baseline=baseline,
+                    env_binding=binding,
                 ),
                 action_type=CodeModifyAction,
                 result_type=CodeModifyResult,

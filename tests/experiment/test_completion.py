@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
+import json
 from pathlib import Path
+
+import pytest
 
 from resagent2_contracts import (
     AgentOwner,
@@ -124,6 +127,116 @@ def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
     # produced-but-unlisted metrics.json is not silently dropped.
     assert payload.metrics == {"accuracy": 0.9}
     assert payload.delivery_issues == []
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual"),
+    [
+        ("balanced_accuracy", "accuracy"),
+        ("baseline_accuracy", "accuracy"),
+        ("accuracy", "balanced_accuracy"),
+        ("accuracy", "baseline_accuracy"),
+    ],
+)
+def test_metric_substrings_do_not_satisfy_different_metrics(tmp_path, expected, actual) -> None:
+    (tmp_path / "metrics.json").write_text(json.dumps({actual: 0.9}), encoding="utf-8")
+
+    decision = _check(tmp_path, expected_metrics=[expected]).evaluate(
+        _state(), _finish(evidence_files=["metrics.json"])
+    )
+
+    # A real artifact is still partial delivery, but cannot certify a different
+    # required metric just because their names share a substring.
+    assert decision.complete is True
+    payload = ExperimentResult.model_validate(decision.payload)
+    assert payload.delivery_issues == [f"Missing required metric: {expected}"]
+    assert decision.warnings[0].code == "delivery_not_met"
+
+
+def test_metric_normalization_preserves_case_and_separator_aliases(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text('{"Balanced Accuracy": 0.9}', encoding="utf-8")
+
+    decision = _check(tmp_path, expected_metrics=["balanced_accuracy"]).evaluate(
+        _state(), _finish(evidence_files=["metrics.json"])
+    )
+
+    assert decision.complete is True
+    assert decision.warnings == []
+    payload = ExperimentResult.model_validate(decision.payload)
+    assert payload.metrics == {"balancedaccuracy": 0.9}
+    assert payload.delivery_issues == []
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_metric_values_reject_finish_in_any_evidence_order(tmp_path, reverse) -> None:
+    (tmp_path / "first.json").write_text('{"accuracy": 0.4}', encoding="utf-8")
+    (tmp_path / "second.json").write_text('{"Accuracy": 0.9}', encoding="utf-8")
+    evidence = ["first.json", "second.json"]
+    if reverse:
+        evidence.reverse()
+
+    decision = _check(tmp_path, expected_metrics=["accuracy"]).evaluate(
+        _state(), _finish(evidence_files=evidence)
+    )
+
+    assert decision.complete is False
+    assert decision.failure is None
+    assert decision.payload is None
+    assert decision.artifacts == []
+    assert "Conflicting values for normalized metrics: accuracy" in decision.summary
+    assert "distinct metric names" in decision.summary
+
+
+def test_required_artifact_participates_in_metric_conflict_detection(tmp_path) -> None:
+    (tmp_path / "first.json").write_text('{"accuracy": 0.4}', encoding="utf-8")
+    (tmp_path / "required.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+
+    decision = _check(tmp_path, expected_artifacts=["required.json"]).evaluate(
+        _state(), _finish(evidence_files=["first.json"])
+    )
+
+    assert decision.complete is False
+    assert "Conflicting values for normalized metrics: accuracy" in decision.summary
+
+
+def test_normalized_metric_collision_within_one_file_rejects_finish(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text(
+        '{"baseline_accuracy": 0.4, "Baseline Accuracy": 0.9}', encoding="utf-8"
+    )
+
+    decision = _check(tmp_path).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
+
+    assert decision.complete is False
+    assert "Conflicting values for normalized metrics: baselineaccuracy" in decision.summary
+
+
+def test_duplicate_equal_metric_values_are_accepted(tmp_path) -> None:
+    (tmp_path / "first.json").write_text('{"accuracy": 1}', encoding="utf-8")
+    (tmp_path / "second.json").write_text('{"Accuracy": 1.0}', encoding="utf-8")
+
+    decision = _check(tmp_path, expected_metrics=["accuracy"]).evaluate(
+        _state(), _finish(evidence_files=["first.json", "second.json"])
+    )
+
+    assert decision.complete is True
+    assert decision.warnings == []
+    assert ExperimentResult.model_validate(decision.payload).metrics == {"accuracy": 1.0}
+
+
+def test_distinct_baseline_and_candidate_metrics_remain_independent(tmp_path) -> None:
+    (tmp_path / "metrics.json").write_text(
+        '{"baseline_accuracy": 0.4, "candidate_accuracy": 0.9}', encoding="utf-8"
+    )
+
+    decision = _check(
+        tmp_path, expected_metrics=["baseline_accuracy", "candidate_accuracy"]
+    ).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
+
+    assert decision.complete is True
+    assert decision.warnings == []
+    assert ExperimentResult.model_validate(decision.payload).metrics == {
+        "baselineaccuracy": 0.4, "candidateaccuracy": 0.9
+    }
 
 
 def test_no_experiment_run_cannot_complete(tmp_path) -> None:

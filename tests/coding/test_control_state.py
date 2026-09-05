@@ -25,7 +25,7 @@ def _state(memory: dict) -> AgentState:
 
 
 def _binding(certified: bool):
-    return SimpleNamespace(certified=certified)
+    return SimpleNamespace(certified=certified, generation="generation_test")
 
 
 def test_no_edit_yet_is_not_unverified() -> None:
@@ -53,7 +53,17 @@ def test_after_audit_still_requires_verification() -> None:
 
 def test_after_verification_obligation_clears() -> None:
     control = derive_control_state(
-        _state({"edit_revision": 1, "verification_revision": 1}), _binding(True)
+        _state({
+            "edit_revision": 1,
+            "verification_revision": 1,
+            "verification_environment_generation": "generation_test",
+            "verification_workspace_unchanged": True,
+            "verification_results": [{
+                "command": "python -m pytest", "exit_code": 0, "timed_out": False,
+                "stdout_path": "test.stdout", "stderr_path": "test.stderr",
+                "duration_seconds": 0.0,
+            }],
+        }), _binding(True)
     )
     assert control["workspace_changed"] is False
     assert control["verification_required"] is False

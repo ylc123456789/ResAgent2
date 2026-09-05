@@ -419,7 +419,7 @@ Session 检查已有 run/task/owner/agent 约束，但 Runtime 自身尚未强�
 
 这些是普通 Python 组件和部分 Tool，不要求每个能力都有自己的 Agent、Session 或“服务管理器”。例如环境准备是一项能力，决定该装什么依赖是 Agent 策略；文件内容访问属于能力，决定把哪些片段保留在模型上下文属于 Runtime 的共享上下文机制。
 
-EnvironmentBinding 是 capabilities 的公开 API，而非跨模块 wire contract。恢复已有 prefix 会重建 binding，但 certified 为 false，需要重新 audit；marker 只表示基础环境事实。ProcessRunner 的 shell-free、凭据清理和路径检查有明确用途，但不是 OS 级隔离，也不能防止被授权程序做出全部不当行为。
+EnvironmentBinding 是 capabilities 的公开 API，而非跨模块 wire contract。恢复已有 prefix 会重建 binding，但 certified 为 false，需要重新 audit；marker 只表示基础环境事实。绑定的 generation 在 prepare/setup 开始执行或进程重新绑定时改变，依赖旧 generation 的验证不能复用。Coding 的控制提示与完成 gate 共用同一验证规则：当前代码和环境都必须被成功验证。ProcessRunner 的 shell-free、凭据清理和路径检查有明确用途，但不是 OS 级隔离，也不能防止被授权程序做出全部不当行为。
 
 源码入口：[capabilities 包](../packages/capabilities/src/resagent2_capabilities/)、[environment_tools.py](../packages/capabilities/src/resagent2_capabilities/environment_tools.py)、[process.py](../packages/capabilities/src/resagent2_capabilities/process.py)、[literature.py](../packages/capabilities/src/resagent2_capabilities/literature.py)。工具与工件的详细交互见 [I4](INTERFACES.md#i4-单步工具)、[I6](INTERFACES.md#i6-工件登记与读取)。
 
@@ -554,7 +554,7 @@ observation history 的所有者是 runtime SessionStore；ResAgent 不读取原
 
 Coding、Experiment、Scientific 各自的确定性 finalizer 是领域完成证据的唯一判断者；ResAgent 不从 summary 或任意 payload 猜测完成状态。
 
-下列是完成必须满足的架构条件，不是当前所有可替换实现已经被完整校验的声明。原生 finalizer 已有大量检查，但环境验证新鲜性、metrics 冲突、替换 Port 的成功 payload 与 required evidence 验收仍有缺口，见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
+下列是完成必须满足的架构条件，不是当前所有可替换实现已经被完整校验的声明。原生 finalizer 检查环境验证新鲜性；metrics 从完整证据派生、精确匹配名称并拒绝同名冲突。替换 Port 的成功 payload 与 required evidence 验收仍待 S3 收口，见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
 
 ResearchRun 只有同时满足以下条件才能 completed：
 

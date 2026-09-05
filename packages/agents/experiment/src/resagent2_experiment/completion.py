@@ -37,7 +37,7 @@ def _metric_is_present(expected: str, metrics: dict) -> bool:
         return False
     for name in metrics:
         actual = _metric_key(name)
-        if actual and (wanted == actual or wanted in actual or actual in wanted):
+        if actual and wanted == actual:
             return True
     return False
 
@@ -71,13 +71,17 @@ class ExperimentCompletionCheck:
             return None
         return self.boundary.relative(resolved)
 
-    def _metrics_from_evidence(self, evidence: list[str]) -> dict:
+    def _metrics_from_evidence(self, evidence: list[str]) -> tuple[dict, list[str]]:
         """Read top-level numeric fields from the Agent's JSON evidence files.
 
         The typed ``metrics`` in the payload come only from evidence the Agent
         actually produced; the LLM cannot self-certify a number (ADR-0011 §5.2).
+        Different values for the same normalized metric are ambiguous, not a
+        last-file-wins choice. Return their names so completion can reject the
+        candidate without publishing an arbitrarily selected measurement.
         """
         metrics: dict = {}
+        conflicts: set[str] = set()
         for path in evidence:
             if not path.lower().endswith(".json"):
                 continue
@@ -90,8 +94,12 @@ class ExperimentCompletionCheck:
                 continue
             for key, value in data.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    metrics[_metric_key(key)] = value
-        return metrics
+                    name = _metric_key(key)
+                    if name in metrics and metrics[name] != value:
+                        conflicts.add(name)
+                    else:
+                        metrics[name] = value
+        return metrics, sorted(conflicts)
 
     @staticmethod
     def _workspace_snapshot(state: AgentState) -> WorkspaceSnapshot | None:
@@ -159,7 +167,18 @@ class ExperimentCompletionCheck:
             if normalized not in evidence:
                 evidence.append(normalized)
 
-        metrics = self._metrics_from_evidence(evidence)
+        metrics, conflicts = self._metrics_from_evidence(evidence)
+        if conflicts:
+            return CompletionDecision(
+                complete=False,
+                summary=(
+                    "Conflicting values for normalized metrics: "
+                    + ", ".join(conflicts)
+                    + ". Use distinct metric names for distinct measurements "
+                    "(for example baseline_accuracy and candidate_accuracy), "
+                    "or provide consistent evidence before finishing."
+                ),
+            )
         issues = [
             f"Missing required metric: {name}"
             for name in self.expected_metrics

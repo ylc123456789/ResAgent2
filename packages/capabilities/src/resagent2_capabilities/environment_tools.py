@@ -92,7 +92,7 @@ class PrepareEnvironmentTool:
                     },
                 )
         # Preparing/switching may mutate the env: invalidate any prior audit.
-        self.binding.certified = False
+        self.binding.invalidate()
         try:
             environment = self.binding.manager.prepare(
                 run_id=self.binding.run_id,
@@ -190,7 +190,6 @@ class RunSetupTool:
             )
         # Any setup command may mutate the env even if it later fails, so the
         # previous audit is invalidated *before* the command runs.
-        self.binding.certified = False
         command = args.command
         argv_prefix = self.binding.argv_prefix()
         if _is_conda_command(args.command):
@@ -203,6 +202,7 @@ class RunSetupTool:
             )
             argv_prefix = None
         index = int(state.memory.get("setup_count", 0)) + 1
+        self.binding.invalidate()
         result = self.runner.run(
             command,
             log_dir=self.log_dir,

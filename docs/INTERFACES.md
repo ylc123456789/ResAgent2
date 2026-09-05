@@ -161,7 +161,7 @@ CompletionCheck.evaluate(
 - **Experiment 判据**：实际命令结果、相对 baseline 新增/改变的证据、完整 JSON 证据集派生的 metrics。完全缺少要求的证据不放行，部分交付产生 warnings；真实非零退出/超时命令及日志可支持确定性失败出口。LLM 不能直接自证 metrics。
 - **Scientific 判据**：原生 check 根据 Session 工具记录、传入的未解决任务与 required evidence 检查观点和引用，不持有完整 ResearchRun；Controller 正式完成时再独立执行基于完整 Run 的最终 gate。
 - **不是同一接口**：Orchestrator 的 `ScientificCompletionValidator.validate(run, result) -> CompletionValidation` 检查整个 Run；`FinalReportRenderer.render(data)` 只确定性渲染 typed report。它们不代替子 Agent 对测试/实验事实的领域验收。
-- **已知缺口**：环境变更未使旧 Coding verification 失效（F03）；验证失败却被控制上下文要求 finish（F11）；Experiment 的指标子串匹配和同名冲突覆盖会失真（F04）。需要让提示与 gate 共用有效性判断、明确指标规则，不能只加一句 prompt。Scientific 最终要求的替换边界缺口见 I1。
+- **验证有效性**：Coding 提示与 gate 共用规则：验证非空、全部通过，覆盖当前 edit revision 和已认证环境 generation。prepare/setup 开始执行以及进程重新绑定环境都会使旧验证过期；重新 audit 不能替代重跑测试。Experiment 指标规范化后精确匹配，同名不同值的证据可恢复拒绝，不静默覆盖。Scientific 最终要求的替换边界见 I1。
 
 **源码**：[CompletionCheck / Loop](../packages/runtime/src/resagent2_runtime/loop.py)、[CompletionDecision](../packages/runtime/src/resagent2_runtime/models.py)、[Coding check](../packages/agents/coding/src/resagent2_coding/completion.py)、[Experiment check](../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Scientific check](../packages/agents/scientific/src/resagent2_scientific/completion.py)。
 

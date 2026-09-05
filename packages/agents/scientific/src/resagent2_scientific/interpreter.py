@@ -108,6 +108,7 @@ def render_work_brief(
     for task in unresolved_task_outcomes:
         error = task.error
         item: dict[str, JsonValue] = {
+            "objective": task.summary,
             "status": task.status,
             "error_code": error.code.value if error is not None else None,
             "message": error.message if error is not None else task.summary,

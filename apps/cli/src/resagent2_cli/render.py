@@ -77,6 +77,8 @@ def render_final(run: Any) -> list[str]:
         f"Goal: {run.request.goal}",
         f"LLM calls: {run.llm_calls_used}/{run.request.budget.max_llm_calls}",
     ]
+    if run.terminal_error is not None:
+        lines.append(f"Error: {run.terminal_error.code.value}: {run.terminal_error.message}")
     if run.latest_scientific_assessment is not None:
         lines.append("Scientific assessment:")
         lines.append(f"  {run.latest_scientific_assessment.statement}")

@@ -4,7 +4,7 @@
 
 **阅读方式**：先看谁调用谁，再看输入、返回分支、状态归属和失败处理。这里的“接口”是当前进程内 Python 调用，不是新增 RPC、MCP 或 A2A 服务；Protocol 也不意味着实现自动获得隔离、幂等或完整结果验证。
 
-**审查基线**：`54dfa99`，2026-09-05。接口修复分阶段进行，进度与验收见 [CONTRACT_FIXES](reviews/CONTRACT_FIXES.md)。F/D 编号用于对应原审查；各卡区分已落实的规则与尚未修复项。
+**审查基线**：`54dfa99`，2026-09-05。修复进度与验收见 [CONTRACT_FIXES](reviews/CONTRACT_FIXES.md)。这里解释当前行为，不另外维护字段全集；F/D 编号仅用于追溯审查。
 
 ## 导航
 
@@ -34,7 +34,7 @@ ScientificPort.run(request: ScientificTurnRequest) -> ScientificTurnResult
 | `request_work` | assessment + WorkRequestDraft + paused Session | 保存观点；为工作请求分配身份、编译和执行；之后恢复 Scientific |
 | `needs_user_input` | assessment + QuestionDraft + paused Session | 保存 PendingQuestion，Run paused，等待用户 |
 | `completed` | opinion + completed Session | 交给最终 `ScientificCompletionValidator`；通过并登记报告后才完成 Run |
-| `failed` | ModuleError；Session 可为空 | 结束本轮科学闭环并将 Run 置 failed；错误落盘仍有下述缺口 |
+| `failed` | ModuleError；Session 可为空，否则为 failed Session | Run 置 failed，具体原因保存在 terminal_error，CLI 可查询 |
 
 每个分支还带 code-derived `observed_artifact_ids` 和本次新增 `llm_calls`。`completed` 只是 Scientific 模块完成，不等于 Run 已完成。
 
@@ -42,11 +42,12 @@ ScientificPort.run(request: ScientificTurnRequest) -> ScientificTurnResult
 - **副作用**：Scientific 可调用只读工件工具、检索文献；检索产物通过注入的 registration port 登记。它不改 Workflow/Task，不直接调用 Coding 或 Experiment。
 - **暂停与恢复**：一个 Run 使用同一个 Scientific Session，跨越多个 WorkRequest。原生实现按 `work_request_id` / `question_id` 缓存已交付结果，重复交付不重新追加观测或调用 LLM；这不是所有替换 Port 自动具备的能力。
 - **完成边界**：最终 gate 从 Run 对账执行问题、证据归属与观察记录；失败任务的 ID 由代码写入最终报告，不要求模型传回。用户答案的路由以已持久化问题为准，不广播到其他 Agent。
-- **已知缺口**：非 completed 响应的 Session 身份/状态及 assessment 引用尚未完整复核，最终 gate 也未独立落实 required evidence（F07）；`ScientificFailedResult.error` 尚未保存为 Run 终止错误（F09）；简报隐藏内部 ID 时也丢失了失败工作的业务目标（F10）。动态读取隔离另见 I6。`required_evidence_kinds` 表示“已有该类证据”还是“本次必须检索”的判据仍需统一（D2），不能把当前工具记录检查当作两者等价。
+- **接收验收**：四种响应都先校验 schema、所属 Scientific Session/状态、观察与引用的 Run 归属，再确认交付。非法回复不能消费 stable WorkOutcome、标记答案已交付或替换 Session；已发生的调用仍计账。最终 gate 是可独立调用的入口，会再验完整 completed 响应。Scientific 自己在转译失败时结算其所属 Session，不让 failed 与 completed 状态矛盾。
+- **证据要求**：`required_evidence_kinds` 表示观点必须引用已登记且已观察的指定种类 Artifact；Native 和最终 gate 共用纯判据，授权导入的文献也可以满足，不偷偷等价成“必须调用某工具”。失败简报保留 objective、具体错误及有界 stderr 摘录，但不暴露内部 Task ID。
 
 **源码**：[Controller / ScientificPort](../packages/orchestrator/src/resagent2_orchestrator/controller.py)、[ScientificAgent](../packages/agents/scientific/src/resagent2_scientific/agent.py)、[interpreter](../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[最终 gate 与报告](../packages/orchestrator/src/resagent2_orchestrator/completion.py)。
 
-**契约 / 已有测试**：[CONTRACTS §16](CONTRACTS.md#16-科学控制契约)；[Controller 测试](../tests/orchestrator/test_controller.py)、[最终完成测试](../tests/orchestrator/test_scientific_completion.py)、[简报测试](../tests/scientific/test_interpreter.py)。已有测试不代表覆盖了上述缺口。
+**契约 / 测试**：[CONTRACTS §16](CONTRACTS.md#16-科学控制契约)；[Controller 测试](../tests/orchestrator/test_controller.py)、[四种返回边界](../tests/orchestrator/test_scientific_turn_boundary.py)、[最终完成测试](../tests/orchestrator/test_scientific_completion.py)、[简报测试](../tests/scientific/test_interpreter.py)。
 
 ## I2 工作编译
 
@@ -106,7 +107,7 @@ ModulePort.invoke(request: ModuleTaskRequest) -> ModuleResult
 - **调用粒度**：一次 `invoke` 是一个执行区间，不保证整个 Attempt 结束。`llm_calls` 是该次返回对应的新增消费；问答续跑要增量累计，不能重复报 Session 全历史调用数。
 - **恢复与重放**：用户问答续跑使用 `parent_session_id`。中断后恢复会保留失败的旧 Attempt，再按预算开始新 Attempt；没有通用“重复 invoke 自动无副作用”的承诺。失败时写过的代码也不会自动回滚，原生 Coding 会尽量产出诊断 patch。
 - **身份规则**：共享 Session ID 函数包含 Run/task/attempt，并处理长 ID；Scientific 与 Controller 也共用有界 Run Session ID。每个新用户问题生成独立 ID 并持久化，同 Attempt 多次提问不会复用身份；Runtime 恢复时核对 Attempt 编号（F01/F05/D1 已修）。
-- **已知缺口**：Scheduler 尚未按 capability 完整验收替换 Port 的成功 payload（F06）；Artifact 注册失败重建结果会丢调用消费及 Session/原诊断（F08）。不能把现有原生 finalizer 的检查等同于 Port 接收边界已封闭。
+- **返回验收**：Scheduler 重验外壳，并按 capability 用已有结果模型检查成功 payload；空或错类型 payload 变为不可自动重试的 contract_error。这里检查结构，原生 finalizer 仍负责真实测试/实验事实。登记失败保留 Session、已发生调用、原始诊断、warnings 及已登记的前序工件，错误另记，不伪装成成功。
 
 **源码**：[ModulePort](../packages/orchestrator/src/resagent2_orchestrator/ports.py)、[Scheduler](../packages/orchestrator/src/resagent2_orchestrator/scheduler.py)、[Coding](../packages/agents/coding/src/resagent2_coding/agent.py)、[Experiment](../packages/agents/experiment/src/resagent2_experiment/agent.py)。
 
@@ -187,7 +188,7 @@ Scientific Tool: Candidate → 注入的 ArtifactRegistrationPort → 同一个 
 - **重复调用**：各入口有各自重复登记检查；最终报告已有幂等恢复路径，不能推广为所有外部副作用 exactly-once。读取可重复，授予更多工件必须经过登记和授权链。
 - **模型可见性**：Scientific 看到授权目录、简报和主动读取内容，不应看到任意候选路径或另一 Run 的文件。full trace 是独立调试记录，不自动成为 Artifact 或科学证据。
 - **读取隔离**：reader 显式绑定 Run，读取字节前核对 Ref.id/run_id；动态 resolve 显式接收 run_id，CLI/E2E 用 (run_id, artifact_id) 索引，同内容的跨 Run 工件不会相互覆盖（F02 已修）。hash 校验仍只负责内容完整性。
-- **已知缺口**：登记失败覆盖结果导致消费/诊断丢失（F08）。
+- **登记失败**：不清零已发生的调用、不丢 Session/原诊断；已有原错误时追加 artifact_registration_error，禁止因登记失败自动重试。此前成功登记的工件保留为可追踪的部分结果，不承诺批量原子性。
 
 **源码**：[ArtifactRegistry](../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[RegisteredArtifactReader](../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[CLI registration adapter](../apps/cli/src/resagent2_cli/composition.py)、[Scientific tools](../packages/agents/scientific/src/resagent2_scientific/tools.py)。
 

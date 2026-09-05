@@ -95,7 +95,7 @@ def proposal(work_request_id: str) -> WorkflowProposal:
 
 
 def completed_result() -> ModuleResult:
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={})
+    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"})
 
 
 def build_controller(

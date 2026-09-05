@@ -68,7 +68,7 @@ def test_attempt_persists_module_payload() -> None:
     result = ModuleResult(
         status=ModuleStatus.COMPLETED,
         summary="done",
-        payload={"accuracy": 0.9},
+        payload={"env_id": "resenv_test", "metrics": {"accuracy": 0.9}},
     )
     engine = WorkflowScheduler(
         bindings={
@@ -83,4 +83,5 @@ def test_attempt_persists_module_payload() -> None:
     run = engine.run_until_stable("run_payload")
 
     attempt = run.workflow.tasks[0].attempts[0]
-    assert attempt.payload == {"accuracy": 0.9}
+    assert attempt.payload["metrics"] == {"accuracy": 0.9}
+    assert attempt.payload["env_id"] == "resenv_test"

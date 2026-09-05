@@ -189,6 +189,7 @@ def test_failed_task_exposes_short_error_and_diagnostic_excerpt() -> None:
 
     item = brief["blocking_items"][0]
     assert "task_id" not in item
+    assert item["objective"] == failed.summary
     assert item["status"] == "failed"
     assert item["error_code"] == "tool_failed"
     assert item["message"] == "Experiment command failed with exit code 1"
@@ -266,6 +267,21 @@ def test_unresolved_tasks_do_not_expose_internal_task_ids() -> None:
     assert "task_id" not in brief["blocking_items"][1]
     assert brief["purpose"] is None
     assert brief["outcomes"] == []
+
+
+def test_same_error_does_not_hide_different_failed_work_objectives() -> None:
+    first = _failed("task_baseline").model_copy(update={"summary": "Measure baseline accuracy"})
+    second = _failed("task_candidate").model_copy(update={"summary": "Measure candidate latency"})
+    brief = render_work_brief(
+        work_outcome=None, previous_work_request=None,
+        unresolved_task_outcomes=[first, second], authorized_artifacts=[],
+    )
+    left, right = brief["blocking_items"]
+    assert left["objective"] == "Measure baseline accuracy"
+    assert right["objective"] == "Measure candidate latency"
+    assert left["message"] == right["message"]
+    assert "task_baseline" not in json.dumps(brief)
+    assert "task_candidate" not in json.dumps(brief)
 
 
 def test_unregistered_artifact_not_presented_as_evidence() -> None:

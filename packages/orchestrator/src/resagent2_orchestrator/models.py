@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from resagent2_contracts import (
     ArtifactId,
     ArtifactRef,
+    ModuleError,
     PendingQuestion,
     QuestionId,
     ResearchRequest,
@@ -41,6 +42,7 @@ class CompletionViolationCode(StrEnum):
     INVALID_OPINION = "invalid_opinion"
     UNKNOWN_EVIDENCE = "unknown_evidence"
     UNOBSERVED_EVIDENCE = "unobserved_evidence"
+    MISSING_EVIDENCE_KIND = "missing_evidence_kind"
     MISSING_LIMITATIONS = "missing_limitations"
     INCONSISTENT_TASK_RESULT = "inconsistent_task_result"
 
@@ -75,6 +77,7 @@ class ResearchRun(OrchestratorModel):
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
     llm_calls_used: int = Field(default=0, ge=0)
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
+    terminal_error: ModuleError | None = None
     created_at: datetime
     updated_at: datetime
 

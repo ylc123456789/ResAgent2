@@ -74,8 +74,21 @@ def task(
     )
 
 
-def completed(summary="done") -> ModuleResult:
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary=summary, payload={})
+def completed(summary="done", *, capability=Capability.EXPERIMENT_RUN) -> ModuleResult:
+    if capability == Capability.CODE_UNDERSTAND:
+        payload = {"answer": "Code inspected", "evidence_files": ["train.py"]}
+    elif capability == Capability.CODE_MODIFY:
+        payload = {
+            "changed_files": ["train.py"], "patch_path": "changes.patch",
+            "verification_passed": True, "verification_results": [{
+                "command": "python -m pytest", "exit_code": 0,
+                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
+                "duration_seconds": 0.0,
+            }],
+        }
+    else:
+        payload = {"env_id": "resenv_test"}
+    return ModuleResult(status=ModuleStatus.COMPLETED, summary=summary, payload=payload)
 
 
 def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowScheduler:
@@ -160,9 +173,9 @@ def test_linear_workflow_runs_to_completion() -> None:
     )
     engine = scheduler(
         {
-            Capability.CODE_MODIFY: [completed()],
+            Capability.CODE_MODIFY: [completed(capability=Capability.CODE_MODIFY)],
             Capability.EXPERIMENT_RUN: [completed()],
-            Capability.CODE_UNDERSTAND: [completed()],
+            Capability.CODE_UNDERSTAND: [completed(capability=Capability.CODE_UNDERSTAND)],
         }
     )
 
@@ -196,7 +209,7 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     engine = scheduler(
         {
             Capability.EXPERIMENT_RUN: [completed("baseline"), completed("treatment")],
-            Capability.CODE_UNDERSTAND: [completed()],
+            Capability.CODE_UNDERSTAND: [completed(capability=Capability.CODE_UNDERSTAND)],
         }
     )
     _create_run(engine, "run_parallel", research_request(), proposal)
@@ -226,7 +239,7 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
     engine = scheduler(
         {
             Capability.EXPERIMENT_RUN: [blocked, completed("retry succeeded")],
-            Capability.CODE_MODIFY: [completed("repair completed")],
+            Capability.CODE_MODIFY: [completed("repair completed", capability=Capability.CODE_MODIFY)],
         }
     )
     proposal = WorkflowProposal(

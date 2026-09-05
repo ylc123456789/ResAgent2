@@ -88,6 +88,7 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
     result = ModuleResult(
         status=ModuleStatus.COMPLETED,
         summary="experiment completed",
+        payload={"env_id": "resenv_test"},
         artifacts=[
             ArtifactCandidate(
                 kind="experiment_result",
@@ -136,6 +137,7 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
             ModuleResult(
                 status=ModuleStatus.COMPLETED,
                 summary="evidence",
+                payload={"env_id": "resenv_test"},
                 artifacts=[
                     ArtifactCandidate(
                         kind="experiment_result",
@@ -148,7 +150,8 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         ]
     )
     analyze_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed",
+                      payload={"answer": "Code inspected", "evidence_files": ["train.py"]})]
     )
     experiment = proposal().tasks[0]
     analyze = TaskProposal(
@@ -220,6 +223,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
             ModuleResult(
                 status=ModuleStatus.COMPLETED,
                 summary="evidence",
+                payload={"env_id": "resenv_test"},
                 artifacts=[
                     ArtifactCandidate(
                         kind="experiment_result",
@@ -232,7 +236,8 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         ]
     )
     analyze_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed",
+                      payload={"answer": "Code inspected", "evidence_files": ["train.py"]})]
     )
     experiment = proposal().tasks[0]
     analyze = TaskProposal(
@@ -281,7 +286,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
 def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:
     store = JsonRunStore(tmp_path / "state")
     first_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="done")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"})]
     )
     binding = ModuleBinding(owner=AgentOwner.EXPERIMENT, port=first_port)
     first = WorkflowScheduler(

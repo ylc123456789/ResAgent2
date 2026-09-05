@@ -61,7 +61,7 @@ class _AcceptFinish:
     def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
-        return CompletionDecision(complete=True, summary="done")
+        return CompletionDecision(complete=True, summary="done", payload=candidate.result)
 
 
 def _context(request, state) -> list[ContextSection]:
@@ -208,7 +208,9 @@ def test_bad_json_recovers_through_scheduler_attempt_retry(monkeypatch, tmp_path
                 {
                     "message": {
                         "content": json.dumps(
-                            {"tool": "finish", "arguments": {"result": {}}}
+                            {"tool": "finish", "arguments": {"result": {
+                                "answer": "Recovered", "evidence_files": ["train.py"],
+                            }}}
                         )
                     }
                 }

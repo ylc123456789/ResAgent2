@@ -169,7 +169,7 @@ def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
             content = b"{}"
             path = tmp_path / "lit.json"
             path.write_bytes(content)
-            return ArtifactRef(
+            self.artifact = ArtifactRef(
                 id="artifact_lit",
                 kind="literature_search",
                 producer=AgentOwner.SCIENTIFIC,
@@ -180,6 +180,13 @@ def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
                 media_type="application/json",
                 summary="literature",
             )
+            return self.artifact
+
+        def resolve(self, artifact_id, *, run_id):
+            artifact = getattr(self, "artifact", None)
+            if artifact is not None and artifact.id == artifact_id and artifact.run_id == run_id:
+                return artifact
+            return None
 
     agent = ScientificAgent(
         ScriptedLLMClient(
@@ -203,10 +210,37 @@ def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
         literature_backend=_Backend(),
         registration_port=_Register(),
     )
-    result = agent.run(turn())
+    request = turn()
+    request.research.required_evidence_kinds = ["literature_search"]
+    result = agent.run(request)
 
     assert result.status == "completed"
     assert result.observed_artifact_ids == ["artifact_lit"]
+
+
+def test_imported_literature_satisfies_required_kind_after_reading_without_search(tmp_path):
+    imported = artifact("artifact_imported", tmp_path)
+    imported = ArtifactRef.model_validate({
+        **imported.model_dump(mode="json"),
+        "kind": "literature_search", "producer": "orchestrator",
+        "task_id": None, "attempt_number": None,
+        "metadata": {"source_type": "import"},
+    })
+    client = ScriptedLLMClient([
+        {"tool": "read_artifact", "arguments": {"artifact_id": imported.id}},
+        {"tool": "finish", "arguments": {
+            "summary": "Reviewed the imported literature",
+            "opinion": opinion(ScientificVerdict.SUPPORTS, evidence=[imported.id]),
+        }},
+    ])
+    agent = ScientificAgent(client)  # No search backend or registration port.
+    request = turn(artifacts=[imported])
+    request.research.required_evidence_kinds = ["literature_search"]
+    result = agent.run(request)
+    assert result.status == "completed"
+    assert result.observed_artifact_ids == [imported.id]
+    assert result.llm_calls == 2
+    assert '"required_evidence_kinds": ["literature_search"]' in client.contexts[0].text
 
 
 def test_ask_user_pauses_with_question_and_assessment() -> None:

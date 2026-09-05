@@ -29,7 +29,8 @@ class RegisteredArtifactReader:
         self._artifacts = {artifact.id: artifact for artifact in artifacts}
         self._resolve = resolve
 
-    def read_text(self, artifact_id: str, *, max_chars: int = 8_000) -> dict:
+    def resolve_ref(self, artifact_id: str) -> ArtifactRef | None:
+        """Return an authorized, Run-scoped Ref without reading its file."""
         artifact = self._artifacts.get(artifact_id)
         if artifact is None and self._resolve is not None:
             artifact = self._resolve(artifact_id)
@@ -39,6 +40,12 @@ class RegisteredArtifactReader:
             or artifact.id != artifact_id
             or artifact.run_id != self._run_id
         ):
+            return None
+        return artifact
+
+    def read_text(self, artifact_id: str, *, max_chars: int = 8_000) -> dict:
+        artifact = self.resolve_ref(artifact_id)
+        if artifact is None:
             raise ArtifactReadError(f"unknown artifact id: {artifact_id}")
         parsed = urlparse(artifact.uri)
         if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:

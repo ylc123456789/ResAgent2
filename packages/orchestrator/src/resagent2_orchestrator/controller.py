@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Protocol
 
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
 from resagent2_contracts import (
     AgentOwner,
     CapabilityRegistry,
@@ -43,6 +45,7 @@ from .completion import (
     CompletionValidation,
     FinalReportRenderer,
     ScientificCompletionValidator,
+    scientific_turn_violations,
 )
 from .models import ResearchRun
 from .scheduler import (
@@ -50,6 +53,8 @@ from .scheduler import (
     _transition_work_request,
     _validate_answer,
 )
+
+_TURN_RESULT = TypeAdapter(ScientificTurnResult)
 
 
 class ScientificPort(Protocol):
@@ -164,14 +169,14 @@ class ResearchController:
             # of scope; this is the run-level remaining-timeout gate.
             elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
             if elapsed >= run.request.budget.timeout_seconds:
-                run.status = RunStatus.FAILED
-                self._save(run)
-                return run
+                return self._fail_run(run, ModuleError(
+                    code=ErrorCode.TIMEOUT, message="Run wall-clock budget exhausted", retryable=False,
+                ))
 
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
-                run.status = RunStatus.FAILED
-                self._save(run)
-                return run
+                return self._fail_run(run, ModuleError(
+                    code=ErrorCode.BUDGET_EXHAUSTED, message="Run LLM-call budget exhausted", retryable=False,
+                ))
 
             active = self._active_work_request(run)
             if active is not None and active.status != WorkRequestStatus.STABLE:
@@ -283,28 +288,50 @@ class ResearchController:
     def _apply_turn(self, run_id: str, result: ScientificTurnResult) -> ResearchRun:
         run = self.scheduler.store.load(run_id)
 
-        # The ScientificPort returned, so the delivered WorkOutcome is consumed.
-        # This runs only after a successful return; a crash before this point
-        # leaves the work request stable so a restart redelivers it (and the
-        # ScientificPort idempotency returns the same result).
-        for work_request in run.work_requests:
+        # A returned response is not yet an accepted response. Account for
+        # consumption even when its schema or references are subsequently rejected.
+        raw = result.model_dump() if isinstance(result, BaseModel) else result
+        try:
+            result = _TURN_RESULT.validate_python(raw)
+        except ValidationError as error:
+            calls = raw.get("llm_calls", 0) if isinstance(raw, dict) else 0
+            if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
+                run.llm_calls_used += calls
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.CONTRACT_ERROR,
+                message=f"ScientificPort returned an invalid result: {error}",
+                retryable=False,
+            ))
+        run.llm_calls_used += result.llm_calls
+        violations = scientific_turn_violations(run, result)
+        if violations:
+            run.completion_violations = violations
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.CONTRACT_ERROR,
+                message="ScientificPort response failed boundary validation",
+                retryable=False,
+            ))
+        if run.llm_calls_used > run.request.budget.max_llm_calls:
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.BUDGET_EXHAUSTED, message="Run LLM-call budget exhausted", retryable=False,
+            ))
+
+        # Stage delivery acknowledgement on a copy. An invalid finish must not
+        # consume the stable outcome, mark answers delivered or replace the session.
+        accepted = run.model_copy(deep=True)
+        for work_request in accepted.work_requests:
             if work_request.status == WorkRequestStatus.STABLE:
                 _transition_work_request(work_request, WorkRequestStatus.CONSUMED)
-
-        violations = self._review_observed(run, result.observed_artifact_ids)
-        if violations:
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
-
-        self._merge_observed(run, result.observed_artifact_ids)
-        self._accumulate_llm_calls(run, result.llm_calls)
-        self._mark_answers_delivered(run)
-
-        if run.llm_calls_used > run.request.budget.max_llm_calls:
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+        self._merge_observed(accepted, result.observed_artifact_ids)
+        self._mark_answers_delivered(accepted)
+        if isinstance(result, ScientificCompletedResult):
+            validation = self.gate.validate(accepted, result)
+            if not validation.ok:
+                run.completion_violations = list(validation.violations)
+                return self._fail_run(run, ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR, message="Scientific completion was rejected", retryable=False,
+                ))
+        run = accepted
 
         if isinstance(result, ScientificWorkRequestResult):
             run.latest_scientific_assessment = result.assessment
@@ -339,13 +366,7 @@ class ResearchController:
             return run
 
         if isinstance(result, ScientificCompletedResult):
-            validation = self.gate.validate(run, result)
             run.scientific_session = result.session
-            if not validation.ok:
-                run.completion_violations = list(validation.violations)
-                run.status = RunStatus.FAILED
-                self._save(run)
-                return run
             assert validation.report is not None
             try:
                 rendered = self.report_renderer.render(validation.report)
@@ -354,10 +375,11 @@ class ResearchController:
                     rendered.content,
                     run_id=run.run_id,
                 )
-            except Exception:
-                run.status = RunStatus.FAILED
-                self._save(run)
-                return run
+            except Exception as error:
+                return self._fail_run(run, ModuleError(
+                    code=ErrorCode.ARTIFACT_MISSING,
+                    message=f"Final report creation failed: {error}", retryable=False,
+                ))
             run.artifacts[report.id] = report
             run.completion_violations = []
             run.final_opinion = result.opinion
@@ -370,7 +392,12 @@ class ResearchController:
         assert isinstance(result, ScientificFailedResult)
         if result.session is not None:
             run.scientific_session = result.session
+        return self._fail_run(run, result.error)
+
+    def _fail_run(self, run: ResearchRun, error: ModuleError) -> ResearchRun:
+        """Persist the terminal cause alongside the failed status."""
         run.status = RunStatus.FAILED
+        run.terminal_error = error
         self._save(run)
         return run
 
@@ -378,9 +405,9 @@ class ResearchController:
         run = self.scheduler.store.load(run_id)
         active = self._active_work_request(run)
         if active is None:
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.CONTRACT_ERROR, message="No active work request to execute", retryable=False,
+            ))
 
         if active.status == WorkRequestStatus.EXECUTING:
             # The workflow was already accepted; resume scheduler execution.
@@ -412,9 +439,9 @@ class ResearchController:
 
         remaining_calls = run.request.budget.max_llm_calls - run.llm_calls_used
         if remaining_calls <= 0:
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.BUDGET_EXHAUSTED, message="No remaining Compiler calls", retryable=False,
+            ))
 
         try:
             compilation = self.compiler.compile(
@@ -437,9 +464,8 @@ class ResearchController:
                     retryable=False,
                 ),
             )
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+            assert active.error is not None
+            return self._fail_run(run, active.error)
 
         run.llm_calls_used += compilation.llm_calls
         self._save(run)
@@ -451,25 +477,23 @@ class ResearchController:
         except Exception as error:
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)
+            failure = ModuleError(
+                code=ErrorCode.CONTRACT_ERROR,
+                message=f"compiled workflow was rejected: {error}", retryable=False,
+            )
             if active is not None:
                 _transition_work_request(
                     active,
                     WorkRequestStatus.FAILED,
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message=f"compiled workflow was rejected: {error}",
-                        retryable=False,
-                    ),
+                    error=failure,
                 )
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+            return self._fail_run(run, failure)
         run = self.scheduler.store.load(run_id)
         active = self._active_work_request(run)
         if active is None:
-            run.status = RunStatus.FAILED
-            self._save(run)
-            return run
+            return self._fail_run(run, ModuleError(
+                code=ErrorCode.CONTRACT_ERROR, message="Accepted workflow lost its work request", retryable=False,
+            ))
         _transition_work_request(
             active,
             WorkRequestStatus.EXECUTING,
@@ -489,15 +513,6 @@ class ResearchController:
             }:
                 return work_request
         return None
-
-    def _review_observed(self, run: ResearchRun, observed: list[str]) -> list[str]:
-        """Return the observed ids that are not registered artifacts of this run."""
-        violations: list[str] = []
-        for artifact_id in observed:
-            artifact = run.artifacts.get(artifact_id)
-            if artifact is None or artifact.run_id != run.run_id:
-                violations.append(artifact_id)
-        return violations
 
     def _merge_observed(self, run: ResearchRun, observed: list[str]) -> None:
         current = set(run.scientific_observed_artifact_ids)
@@ -522,9 +537,6 @@ class ResearchController:
             for a in run.answers
             if a.question_id not in run.answer_task_ids
         ]
-
-    def _accumulate_llm_calls(self, run: ResearchRun, calls: int) -> None:
-        run.llm_calls_used += calls
 
     def _authorized_artifacts(self, run: ResearchRun):
         return [run.artifacts[artifact_id] for artifact_id in run.artifacts]

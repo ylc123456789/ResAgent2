@@ -53,6 +53,9 @@ WorkRequest rules:
   re-obtaining the evidence. Still never emit capability names or task ids.
 
 Evidence citation rules:
+- required_evidence_kinds names the kinds of registered artifacts your opinion
+  must cite after observing them. Authorized imported artifacts count too;
+  this requirement does not by itself demand a new tool call or new search.
 - A work brief reports execution status and available evidence. An artifact id
   listed under "evidence" does NOT mean you have observed its contents; if your
   judgment relies on an artifact's contents, call read_artifact first.
@@ -116,6 +119,7 @@ def build_context(
         "hypothesis": turn.research.hypothesis,
         "context": turn.research.context,
         "constraints": turn.research.constraints,
+        "required_evidence_kinds": list(turn.research.required_evidence_kinds),
     }
     authorized = [
         {

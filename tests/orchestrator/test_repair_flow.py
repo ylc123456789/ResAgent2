@@ -68,8 +68,18 @@ def _registry() -> CapabilityRegistry:
     )
 
 
-def _completed() -> ModuleResult:
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={})
+def _completed(capability=Capability.EXPERIMENT_RUN) -> ModuleResult:
+    payload = {"env_id": "resenv_test"}
+    if capability == Capability.CODE_MODIFY:
+        payload = {
+            "changed_files": ["train.py"], "patch_path": "changes.patch",
+            "verification_passed": True, "verification_results": [{
+                "command": "python -m pytest", "exit_code": 0,
+                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
+                "duration_seconds": 0.0,
+            }],
+        }
+    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload=payload)
 
 
 def _failed() -> ModuleResult:
@@ -185,7 +195,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=ScriptedModulePort([_completed()]),
+                port=ScriptedModulePort([_completed(Capability.CODE_MODIFY)]),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
@@ -304,7 +314,7 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=ScriptedModulePort([_completed()]),
+                port=ScriptedModulePort([_completed(Capability.CODE_MODIFY)]),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,

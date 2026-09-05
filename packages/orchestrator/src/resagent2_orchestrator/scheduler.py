@@ -14,8 +14,11 @@ from resagent2_contracts import (
     Attempt,
     AttemptStatus,
     Capability,
+    CodeModifyResult,
+    CodeUnderstandResult,
     EnvironmentSpec,
     ErrorCode,
+    ExperimentResult,
     ModuleError,
     ModuleResult,
     ModuleStatus,
@@ -398,7 +401,14 @@ class WorkflowScheduler:
         record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
         grant = self._grant(record, task.capability) if record is not None else None
         try:
-            result = ModuleResult.model_validate(binding.port.invoke(module_request))
+            raw_result = binding.port.invoke(module_request)
+            # Revalidate model instances too: model_construct/model_copy can
+            # bypass their validators before crossing this external boundary.
+            result = ModuleResult.model_validate(
+                raw_result.model_dump(mode="python")
+                if isinstance(raw_result, ModuleResult)
+                else raw_result
+            )
         except ValidationError as error:
             result = ModuleResult(
                 status=ModuleStatus.FAILED,
@@ -432,6 +442,37 @@ class WorkflowScheduler:
             )
 
         artifact_ids: list[str] = []
+        if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
+            payload_model = {
+                Capability.CODE_UNDERSTAND: CodeUnderstandResult,
+                Capability.CODE_MODIFY: CodeModifyResult,
+                Capability.EXPERIMENT_RUN: ExperimentResult,
+            }[task.capability]
+            try:
+                payload = payload_model.model_validate(result.payload)
+            except ValidationError as error:
+                # The envelope is valid: these calls and this Session already
+                # happened even though the claimed successful payload is invalid.
+                result = ModuleResult(
+                    status=ModuleStatus.FAILED,
+                    summary="ModulePort returned an invalid capability payload",
+                    artifacts=result.artifacts,
+                    session=result.session,
+                    warnings=result.warnings,
+                    llm_calls=result.llm_calls,
+                    error=ModuleError(
+                        code=ErrorCode.CONTRACT_ERROR,
+                        message=f"{task.capability.value} payload failed schema validation",
+                        retryable=False,
+                        details={"validation_errors": [
+                            {"type": item["type"], "loc": list(item["loc"]), "message": item["msg"]}
+                            for item in error.errors(include_url=False)
+                        ]},
+                    ),
+                )
+            else:
+                result = result.model_copy(update={"payload": payload.model_dump(mode="json")})
+
         try:
             for index, candidate in enumerate(result.artifacts, start=1):
                 artifact = self.artifact_registry.register(
@@ -447,14 +488,30 @@ class WorkflowScheduler:
                 run.artifacts[artifact.id] = artifact
                 artifact_ids.append(artifact.id)
         except (ArtifactRegistrationError, OSError) as error:
+            registration_error = str(error)
+            failure = (
+                result.error.model_copy(update={
+                    "retryable": False,
+                    "details": {
+                        **result.error.details,
+                        "artifact_registration_error": registration_error,
+                    },
+                })
+                if result.error is not None
+                else ModuleError(
+                    code=ErrorCode.ARTIFACT_MISSING,
+                    message=registration_error,
+                    retryable=False,
+                )
+            )
             result = ModuleResult(
                 status=ModuleStatus.FAILED,
-                summary="Artifact registration failed",
-                error=ModuleError(
-                    code=ErrorCode.ARTIFACT_MISSING,
-                    message=str(error),
-                    retryable=False,
-                ),
+                summary=f"{result.summary}; artifact registration failed",
+                payload=result.payload,
+                session=result.session,
+                warnings=result.warnings,
+                llm_calls=result.llm_calls,
+                error=failure,
             )
 
         finished = datetime.now(UTC)
@@ -464,6 +521,7 @@ class WorkflowScheduler:
         attempt.artifact_ids = artifact_ids
         attempt.payload = result.payload
         attempt.summary = result.summary
+        task.warnings.extend(result.warnings)
 
         if result.status in {
             ModuleStatus.COMPLETED,
@@ -476,7 +534,6 @@ class WorkflowScheduler:
                 else AttemptStatus.COMPLETED
             )
             task.status = TaskStatus.COMPLETED
-            task.warnings.extend(result.warnings)
         elif result.status == ModuleStatus.FAILED:
             attempt.finished_at = finished
             attempt.status = AttemptStatus.FAILED

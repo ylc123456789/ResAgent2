@@ -26,11 +26,20 @@ def _run(goal="g", status="running", llm_used=5, llm_max=200):
         artifacts={},
         final_opinion=None,
         completion_violations=[],
+        terminal_error=None,
     )
 
 
 def test_render_live_none():
     assert render_live(None) == ["… starting …"]
+
+
+def test_render_final_preserves_terminal_cause():
+    from resagent2_contracts import ErrorCode, ModuleError
+
+    run = _run(status="failed")
+    run.terminal_error = ModuleError(code=ErrorCode.TOOL_FAILED, message="provider unavailable", retryable=False)
+    assert "Error: tool_failed: provider unavailable" in render_final(run)
 
 
 def test_render_live_header_and_pending_question():

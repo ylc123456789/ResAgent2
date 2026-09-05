@@ -100,8 +100,18 @@ def proposal() -> WorkflowProposal:
     )
 
 
-def completed_result() -> ModuleResult:
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={})
+def completed_result(capability: Capability) -> ModuleResult:
+    payload = {"env_id": "resenv_mock", "metrics": {"accuracy": 0.9}}
+    if capability == Capability.CODE_MODIFY:
+        payload = {
+            "changed_files": ["train.py"], "patch_path": "changes.patch",
+            "verification_passed": True, "verification_results": [{
+                "command": "python -m pytest", "exit_code": 0,
+                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
+                "duration_seconds": 0.0,
+            }],
+        }
+    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload=payload)
 
 
 def request_work_action() -> dict:
@@ -135,11 +145,11 @@ def run_mock_e2e(*, workdir: Path | None = None):
         bindings={
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScriptedModulePort([completed_result(Capability.CODE_MODIFY)]),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScriptedModulePort([completed_result(Capability.EXPERIMENT_RUN)]),
             ),
         },
         store=JsonRunStore(workdir / "state"),

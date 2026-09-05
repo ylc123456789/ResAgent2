@@ -165,10 +165,17 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
     repo = tmp_path / "repo"
     repo.mkdir()
     coding_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="code")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="code", payload={
+            "changed_files": ["train.py"], "patch_path": "changes.patch",
+            "verification_passed": True, "verification_results": [{
+                "command": "python -m pytest", "exit_code": 0,
+                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
+                "duration_seconds": 0.0,
+            }],
+        })]
     )
     experiment_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="exp")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="exp", payload={"env_id": "resenv_test"})]
     )
     engine = WorkflowScheduler(
         bindings={
@@ -258,7 +265,7 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
     from resagent2_contracts import DatasetRef, EnvironmentSpec
 
     port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="ok")]
+        [ModuleResult(status=ModuleStatus.COMPLETED, summary="ok", payload={"env_id": "resenv_test"})]
     )
     engine = WorkflowScheduler(
         bindings={

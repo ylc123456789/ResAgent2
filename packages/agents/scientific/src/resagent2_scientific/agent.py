@@ -10,6 +10,7 @@ request surface, so the Scientific Agent adapts the turn into a minimal
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -30,6 +31,8 @@ from resagent2_contracts import (
     ScientificTurnResult,
     ScientificWorkRequestResult,
     SessionId,
+    SessionRef,
+    SessionStatus,
     TaskBudget,
     WorkRequestDraft,
     scientific_session_id,
@@ -43,6 +46,8 @@ from resagent2_capabilities import (
 )
 from resagent2_runtime import (
     AgentDefinition,
+    AgentEvent,
+    AgentState,
     AgentLoop,
     AllowListPermissionPolicy,
     InMemorySessionStore,
@@ -124,6 +129,7 @@ class ScientificAgent:
             completion_check=ScientificCompletionCheck(
                 list(request.unresolved_task_outcomes),
                 list(request.research.required_evidence_kinds),
+                resolve_artifact=reader.resolve_ref,
             ),
             action_type=ScientificAction,
             max_context_tokens=self.max_context_tokens,
@@ -136,7 +142,7 @@ class ScientificAgent:
         # (CONTRACTS §20.7: work_outcome keyed by work_request_id, answers keyed
         # by question_id).
         idem_key = self._idempotency_key(request)
-        cached = self._cached_turn_result(session_id, idem_key)
+        cached = self._cached_turn_result(session_id, idem_key, run_id=request.run_id)
         if cached is not None:
             return cached
 
@@ -162,7 +168,7 @@ class ScientificAgent:
         )
         llm_calls = result.llm_calls
         turn_result = self._to_turn_result(request, result, session_id, llm_calls)
-        self._cache_turn_result(session_id, idem_key, turn_result)
+        self._cache_turn_result(session_id, idem_key, turn_result, run_id=request.run_id)
         return turn_result
 
     @staticmethod
@@ -187,15 +193,9 @@ class ScientificAgent:
         if result.status == ModuleStatus.COMPLETED:
             opinion = self._validated_opinion(result.payload)
             if opinion is None:
-                return ScientificFailedResult(
-                    status="failed",
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message="completion payload did not contain a valid opinion",
-                        retryable=False,
-                    ),
-                    session=result.session,
-                    observed_artifact_ids=observed,
+                return self._translation_failure(
+                    request, result, session_id,
+                    message="completion payload did not contain a valid opinion",
                     llm_calls=llm_calls,
                 )
             return ScientificCompletedResult(
@@ -210,27 +210,15 @@ class ScientificAgent:
             assessment = self._assessment_from_signal(result.request_work)
             work_request = self._work_request_from_signal(result.request_work)
             if assessment is None or work_request is None:
-                return ScientificFailedResult(
-                    status="failed",
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message="request_work signal did not carry a valid assessment/work_request",
-                        retryable=False,
-                    ),
-                    session=result.session,
-                    observed_artifact_ids=observed,
+                return self._translation_failure(
+                    request, result, session_id,
+                    message="request_work signal did not carry a valid assessment/work_request",
                     llm_calls=llm_calls,
                 )
             if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
-                return ScientificFailedResult(
-                    status="failed",
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message="assessment cites evidence not observed by any Tool",
-                        retryable=False,
-                    ),
-                    session=result.session,
-                    observed_artifact_ids=observed,
+                return self._translation_failure(
+                    request, result, session_id,
+                    message="assessment cites evidence not observed by any Tool",
                     llm_calls=llm_calls,
                 )
             return ScientificWorkRequestResult(
@@ -248,15 +236,9 @@ class ScientificAgent:
                 text="Input required", reason="Scientific Agent paused for input"
             )
             if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
-                return ScientificFailedResult(
-                    status="failed",
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message="assessment cites evidence not observed by any Tool",
-                        retryable=False,
-                    ),
-                    session=result.session,
-                    observed_artifact_ids=observed,
+                return self._translation_failure(
+                    request, result, session_id,
+                    message="assessment cites evidence not observed by any Tool",
                     llm_calls=llm_calls,
                 )
             return ScientificQuestionResult(
@@ -277,8 +259,52 @@ class ScientificAgent:
             status="failed",
             error=error,
             session=result.session,
-            observed_artifact_ids=observed,
+            observed_artifact_ids=observed if result.session is not None else [],
             llm_calls=llm_calls,
+        )
+
+    def _translation_failure(
+        self,
+        request: ScientificTurnRequest,
+        result: ModuleResult,
+        session_id: SessionId,
+        *,
+        message: str,
+        llm_calls: int,
+    ) -> ScientificFailedResult:
+        """Settle this Agent's Session when the outer scientific signal fails.
+
+        The shared loop may already have paused or completed successfully, but
+        its signal still has to satisfy the Scientific boundary. Never relabel
+        a foreign or missing Session merely because its id was supplied.
+        """
+        error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False)
+        session = None
+        observed = []
+        state = self._owned_session(session_id, request.run_id)
+        if (
+            state is not None
+            and result.session is not None
+            and result.session.id == session_id
+            and result.session.module == AgentOwner.SCIENTIFIC
+        ):
+            now = datetime.now(UTC)
+            state.status = SessionStatus.FAILED
+            state.updated_at = now
+            state.events.append(AgentEvent(
+                sequence=len(state.events) + 1, step=state.step, type="error",
+                data=error.model_dump(mode="json"), created_at=now,
+            ))
+            self.store.save(state)
+            session = SessionRef(
+                id=state.session_id, module=state.owner, status=state.status,
+                state_uri=f"session://{state.session_id}",
+                created_at=state.created_at, updated_at=state.updated_at,
+            )
+            observed = _observed_artifact_ids(state)
+        return ScientificFailedResult(
+            status="failed", error=error, session=session,
+            observed_artifact_ids=observed, llm_calls=llm_calls,
         )
 
     def _observed(self, session_id: str) -> list[str]:
@@ -294,12 +320,28 @@ class ScientificAgent:
     def _idem_key_label(key: tuple) -> str:
         return "/".join(str(part) for part in key)
 
-    def _cached_turn_result(
-        self, session_id: str, key: tuple
-    ) -> ScientificTurnResult | None:
+    def _owned_session(self, session_id: SessionId, run_id: RunId) -> AgentState | None:
+        """A cache or failure translation must not bypass Session ownership."""
         try:
             state = self.store.load(session_id)
         except Exception:
+            return None
+        if (
+            state.session_id != session_id
+            or state.run_id != run_id
+            or state.owner != AgentOwner.SCIENTIFIC
+            or state.agent_name != "scientific"
+            or state.task_id is not None
+            or state.attempt_number is not None
+        ):
+            return None
+        return state
+
+    def _cached_turn_result(
+        self, session_id: str, key: tuple, *, run_id: RunId,
+    ) -> ScientificTurnResult | None:
+        state = self._owned_session(session_id, run_id)
+        if state is None:
             return None
         raw = state.memory.get("_turn_results", {}).get(self._idem_key_label(key))
         if raw is None:
@@ -310,11 +352,10 @@ class ScientificAgent:
             return None
 
     def _cache_turn_result(
-        self, session_id: str, key: tuple, turn_result: ScientificTurnResult
+        self, session_id: str, key: tuple, turn_result: ScientificTurnResult, *, run_id: RunId,
     ) -> None:
-        try:
-            state = self.store.load(session_id)
-        except Exception:
+        state = self._owned_session(session_id, run_id)
+        if state is None:
             return
         results = dict(state.memory.get("_turn_results", {}))
         results[self._idem_key_label(key)] = turn_result.model_dump(mode="json")

@@ -17,7 +17,7 @@ class ModulePort(Protocol):
     """Uniform boundary implemented by native Agents or legacy adapters."""
 
     def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
-        """Execute one complete task attempt and return a structured result."""
+        """Execute until a result or pause; resume may invoke the same Attempt again."""
 
 
 @dataclass(frozen=True, slots=True)

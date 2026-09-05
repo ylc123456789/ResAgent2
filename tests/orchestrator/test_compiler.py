@@ -576,7 +576,7 @@ def test_compiler_proposal_traces_to_workflow_created_from() -> None:
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort(
-                    [ModuleResult(status=ModuleStatus.COMPLETED, summary="done")]
+                    [ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"})]
                 ),
             )
         },
@@ -817,7 +817,7 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
             )
         ],
     )
-    port = _CapturePort(ModuleResult(status=ModuleStatus.COMPLETED, summary="done"))
+    port = _CapturePort(ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"}))
     scheduler = WorkflowScheduler(
         bindings={
             Capability.EXPERIMENT_RUN: ModuleBinding(

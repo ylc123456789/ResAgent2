@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
@@ -16,10 +16,12 @@ from resagent2_contracts import (
     RunId,
     ScientificCompletedResult,
     ScientificOpinion,
+    ScientificTurnResult,
     SessionStatus,
     TaskStatus,
     WorkRequestStatus,
     WorkTaskOutcome,
+    missing_required_evidence_kinds,
 )
 
 from .models import (
@@ -66,6 +68,49 @@ class RenderedFinalReport:
     content: str
 
 
+def scientific_turn_violations(
+    run: ResearchRun, result: ScientificTurnResult,
+) -> list[CompletionViolation]:
+    """Check the receiving boundary before consuming a delivered turn.
+
+    This checks references and protocol state, not scientific truth. The same
+    rule also protects the standalone final gate from alternate Port callers.
+    """
+    violations: list[CompletionViolation] = []
+
+    def reject(code: CompletionViolationCode, message: str, *ids: str) -> None:
+        violations.append(CompletionViolation(code=code, message=message, related_ids=list(ids)))
+
+    session = result.session
+    expected_status = {
+        "request_work": SessionStatus.PAUSED,
+        "needs_user_input": SessionStatus.PAUSED,
+        "completed": SessionStatus.COMPLETED,
+        "failed": SessionStatus.FAILED,
+    }[result.status]
+    if session is not None:
+        if session.module != AgentOwner.SCIENTIFIC or session.status != expected_status:
+            reject(CompletionViolationCode.INVALID_SESSION,
+                   f"{result.status} requires a scientific {expected_status.value} session", session.id)
+        if run.scientific_session is not None and session.id != run.scientific_session.id:
+            reject(CompletionViolationCode.INVALID_SESSION,
+                   "result does not belong to the run's bound scientific session", session.id)
+
+    observed = set(result.observed_artifact_ids)
+    assessment = getattr(result, "assessment", None)
+    opinion = getattr(result, "opinion", None)
+    cited = set((assessment or opinion).evidence_artifact_ids) if assessment or opinion else set()
+    for artifact_id in sorted(observed | cited):
+        artifact = run.artifacts.get(artifact_id)
+        if artifact is None or artifact.id != artifact_id or artifact.run_id != run.run_id:
+            reject(CompletionViolationCode.UNKNOWN_EVIDENCE,
+                   "turn evidence is not a registered artifact of this run", artifact_id)
+        elif artifact_id in cited and artifact_id not in observed:
+            reject(CompletionViolationCode.UNOBSERVED_EVIDENCE,
+                   "turn citations must be present in its observed trace", artifact_id)
+    return violations
+
+
 class ScientificCompletionValidator:
     """Validate closure consistency without judging scientific truth."""
 
@@ -80,14 +125,22 @@ class ScientificCompletionValidator:
         run: ResearchRun,
         result: ScientificCompletedResult,
     ) -> CompletionValidation:
+        # This gate is also callable without Controller. Revalidate the entire
+        # completed response, including status/session, not just its opinion.
+        try:
+            result = ScientificCompletedResult.model_validate(
+                result.model_dump() if isinstance(result, BaseModel) else result
+            )
+        except ValidationError as error:
+            return CompletionValidation(violations=(CompletionViolation(
+                code=CompletionViolationCode.INVALID_OPINION,
+                message=f"Invalid completed Scientific response: {error}",
+            ),))
         # Work on a validated deep copy so this pure validator cannot mutate the
         # controller's live object through nested Pydantic models.
         snapshot = ResearchRun.model_validate(run.model_dump())
-        violations: list[CompletionViolation] = []
-
-        self._validate_session(snapshot, result, violations)
+        violations = scientific_turn_violations(snapshot, result)
         self._validate_control_state(snapshot, violations)
-        self._validate_opinion(result.opinion, violations)
         evidence = self._validate_evidence(snapshot, result, violations)
         issues = self._validate_unresolved_tasks(snapshot, result.opinion, violations)
         self._validate_completed_tasks(snapshot, violations)
@@ -119,36 +172,6 @@ class ScientificCompletionValidator:
                 related_ids=list(related_ids),
             )
         )
-
-    def _validate_session(
-        self,
-        run: ResearchRun,
-        result: ScientificCompletedResult,
-        violations: list[CompletionViolation],
-    ) -> None:
-        session = result.session
-        if session.module != AgentOwner.SCIENTIFIC:
-            self._add(
-                violations,
-                CompletionViolationCode.INVALID_SESSION,
-                "completed result must come from a scientific session",
-                session.id,
-            )
-        if session.status != SessionStatus.COMPLETED:
-            self._add(
-                violations,
-                CompletionViolationCode.INVALID_SESSION,
-                "completed result requires SessionStatus.completed",
-                session.id,
-            )
-        if run.scientific_session is not None and run.scientific_session.id != session.id:
-            self._add(
-                violations,
-                CompletionViolationCode.INVALID_SESSION,
-                "completed result does not resume the run's scientific session",
-                run.scientific_session.id,
-                session.id,
-            )
 
     def _validate_control_state(
         self,
@@ -198,23 +221,6 @@ class ScientificCompletionValidator:
                 *nonterminal,
             )
 
-    def _validate_opinion(
-        self,
-        opinion: ScientificOpinion,
-        violations: list[CompletionViolation],
-    ) -> None:
-        # ScientificOpinion already enforces the verdict/evidence combination.
-        # Revalidate here so this gate remains explicit even when fed a model
-        # created via model_construct.
-        try:
-            ScientificOpinion.model_validate(opinion.model_dump())
-        except Exception as error:
-            self._add(
-                violations,
-                CompletionViolationCode.INVALID_OPINION,
-                f"invalid scientific opinion: {error}",
-            )
-
     def _validate_evidence(
         self,
         run: ResearchRun,
@@ -226,22 +232,29 @@ class ScientificCompletionValidator:
         run_observed = set(run.scientific_observed_artifact_ids)
         for artifact_id in result.opinion.evidence_artifact_ids:
             artifact = run.artifacts.get(artifact_id)
-            if artifact is None or artifact.run_id != run.run_id:
-                self._add(
-                    violations,
-                    CompletionViolationCode.UNKNOWN_EVIDENCE,
-                    "opinion evidence is not a registered artifact of this run",
-                    artifact_id,
-                )
+            # The shared turn boundary already rejects missing/foreign refs
+            # and unobserved turn citations. The final gate additionally checks
+            # the Run's durable observed ledger and its required evidence kinds.
+            if artifact is None or artifact.id != artifact_id or artifact.run_id != run.run_id:
                 continue
             evidence.append(artifact)
-            if artifact_id not in turn_observed or artifact_id not in run_observed:
+            if artifact_id not in run_observed:
                 self._add(
                     violations,
                     CompletionViolationCode.UNOBSERVED_EVIDENCE,
                     "opinion evidence must be present in both observed traces",
                     artifact_id,
                 )
+        missing = missing_required_evidence_kinds(
+            run.request.required_evidence_kinds,
+            run_id=run.run_id,
+            artifacts=run.artifacts.values(),
+            observed_artifact_ids=turn_observed & run_observed,
+            cited_artifact_ids=result.opinion.evidence_artifact_ids,
+        )
+        if missing:
+            self._add(violations, CompletionViolationCode.MISSING_EVIDENCE_KIND,
+                      "opinion must cite observed artifacts of required kinds: " + ", ".join(missing))
         return evidence
 
     def _validate_unresolved_tasks(

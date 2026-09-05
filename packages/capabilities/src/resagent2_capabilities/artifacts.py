@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_contracts import ArtifactRef
+from resagent2_contracts import ArtifactRef, RunId
 
 
 class ArtifactReadError(ValueError):
@@ -15,14 +16,16 @@ class ArtifactReadError(ValueError):
 
 
 class RegisteredArtifactReader:
-    """Resolve provided ArtifactRefs (plus an optional live resolver) and verify."""
+    """Read explicitly granted or live-authorized refs within one Run only."""
 
     def __init__(
         self,
         artifacts: list[ArtifactRef],
         *,
-        resolve=None,
+        run_id: RunId,
+        resolve: Callable[[str], ArtifactRef | None] | None = None,
     ) -> None:
+        self._run_id = run_id
         self._artifacts = {artifact.id: artifact for artifact in artifacts}
         self._resolve = resolve
 
@@ -30,7 +33,12 @@ class RegisteredArtifactReader:
         artifact = self._artifacts.get(artifact_id)
         if artifact is None and self._resolve is not None:
             artifact = self._resolve(artifact_id)
-        if artifact is None:
+        # Check provenance before touching a path, even if a resolver is buggy.
+        if (
+            artifact is None
+            or artifact.id != artifact_id
+            or artifact.run_id != self._run_id
+        ):
             raise ArtifactReadError(f"unknown artifact id: {artifact_id}")
         parsed = urlparse(artifact.uri)
         if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:

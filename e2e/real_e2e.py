@@ -373,11 +373,11 @@ class _ScientificArtifactRegistration:
         run = self._store.load(run_id)
         run.artifacts[artifact.id] = artifact
         self._store.save(run)
-        self._live[artifact.id] = artifact
+        self._live[(run_id, artifact.id)] = artifact
         return artifact
 
-    def resolve(self, artifact_id):
-        return self._live.get(artifact_id)
+    def resolve(self, artifact_id, *, run_id):
+        return self._live.get((run_id, artifact_id))
 
 
 class _CompilerClient:

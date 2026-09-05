@@ -8,6 +8,7 @@ import resagent2_capabilities
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "capabilities" / "src"
 ALLOWED_IMPORT_ROOTS = {
     "__future__",
+    "collections",
     "dataclasses",
     "datetime",
     "defusedxml",
@@ -25,6 +26,7 @@ ALLOWED_IMPORT_ROOTS = {
     "time",
     "typing",
     "urllib",
+    "uuid",
     "pydantic",
     "resagent2_contracts",
     "resagent2_runtime",

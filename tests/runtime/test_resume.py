@@ -84,7 +84,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
 
     resumed = loop.run(
         definition,
-        _request(attempt=2, parent="session_child"),
+        _request(attempt=1, parent="session_child"),
         session_id="session_child",
     )
 
@@ -93,8 +93,41 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
     assert resumed.payload == {"dataset": "demo"}
 
     state = store.load("session_child")
-    assert state.attempt_number == 2
-    assert state.step == 2  # cumulative across attempts, not reset
+    assert state.attempt_number == 1
+    assert state.step == 2  # cumulative across resumed calls in this Attempt
+
+
+def test_resume_rejects_another_attempt_without_mutating_checkpoint() -> None:
+    store = InMemorySessionStore()
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_same_attempt",
+        agent_name="finisher",
+        owner=AgentOwner.SCIENTIFIC,
+        run_id="run_resume",
+        task_id="task_experiment",
+        attempt_number=1,
+        status=SessionStatus.PAUSED,
+        created_at=now,
+        updated_at=now,
+    )
+    store.save(state)
+    client = ScriptedLLMClient([])
+    definition = AgentDefinition(
+        name="finisher", owner=AgentOwner.SCIENTIFIC,
+        system_prompt="unused", tools=(FinishTool(),), llm_client=client,
+        context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"finish"}),
+        completion_check=_AcceptFinish(),
+    )
+    result = AgentLoop(store=store).run(
+        definition, _request(attempt=2, parent=state.session_id),
+        session_id=state.session_id,
+    )
+    assert result.status == ModuleStatus.FAILED
+    assert result.error.code.value == "contract_error"
+    assert store.load(state.session_id) == state
+    assert client.contexts == []
 
 
 def test_resume_unknown_session_fails_cleanly() -> None:

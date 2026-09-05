@@ -75,11 +75,12 @@ class ArtifactRegistrationPort(Protocol):
     ) -> ArtifactRef:
         """Freeze one candidate with session provenance and return its Ref."""
 
-    def resolve(self, artifact_id: str) -> ArtifactRef | None:
-        """Return a previously registered artifact by id, or ``None``.
+    def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
+        """Return a live-authorized artifact of this Run, or ``None``.
 
         This lets the Scientific Agent's ``read_artifact`` see an artifact
         (e.g. a literature search) registered earlier in the same turn.
+        An artifact registered for another Run must never be returned.
         """
 
 

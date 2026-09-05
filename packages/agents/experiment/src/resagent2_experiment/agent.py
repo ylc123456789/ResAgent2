@@ -17,6 +17,7 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSourceKind,
     WorkspaceSpec,
+    task_session_id,
 )
 from resagent2_capabilities import (
     AuditEnvTool,
@@ -170,7 +171,9 @@ class NativeExperimentAgent:
             ListFilesTool(boundary),
             ReadFileTool(boundary),
             SearchTextTool(boundary),
-            ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts)),
+            ReadArtifactTool(
+                RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
+            ),
             PrepareEnvironmentTool(binding),
             RunSetupTool(
                 runner,
@@ -226,6 +229,8 @@ class NativeExperimentAgent:
         return self.loop.run(
             definition,
             request,
-            session_id=f"session_{request.task_id}_{request.attempt_number}",
+            session_id=task_session_id(
+                request.run_id, request.task_id, request.attempt_number
+            ),
             initial_memory=initial_memory,
         )

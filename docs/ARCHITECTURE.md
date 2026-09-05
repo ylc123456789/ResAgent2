@@ -415,7 +415,7 @@ Session 检查已有 run/task/owner/agent 约束，但 Runtime 自身尚未强�
 | DatasetCatalog.references / resolve_dataset_refs | catalog 与 DatasetRefs → 注册引用/可读目录；辅助函数生成上下文和环境映射 | 三个 Agent 复用；不下载、不选择默认数据集；资源缺失走已有 ask_user |
 | HardwareAudit | 当前机器 → 硬件信息 | 为实验选择提供事实，不决定实验方案 |
 | LiteratureSearchBackend.search | query、条数与年份条件 → list[LiteraturePaper] | Scientific Tool 使用；可访问网络；Tool 将规范化结果交 registration port 冻结 |
-| RegisteredArtifactReader.read_text | 授权 ArtifactRefs + artifact_id → 校验 hash 后的有界内容 | Scientific/领域读取工具使用；不允许直接传任意文件路径；动态授权缺口见 I6 |
+| RegisteredArtifactReader.read_text | 当前 Run + 授权 ArtifactRefs + artifact_id → 校验 hash 后的有界内容 | 静态与动态引用都在读取前核对 Run 与 artifact_id，不允许直接传任意文件路径 |
 
 这些是普通 Python 组件和部分 Tool，不要求每个能力都有自己的 Agent、Session 或“服务管理器”。例如环境准备是一项能力，决定该装什么依赖是 Agent 策略；文件内容访问属于能力，决定把哪些片段保留在模型上下文属于 Runtime 的共享上下文机制。
 
@@ -448,7 +448,7 @@ contracts 不是运行中的 Actor，没有 run/invoke 方法，不持有 Sessio
 | shell 的后台 Runner | 后台调用既有同步入口；前台轮询快照和 trace 渲染进度 | 不成为第二套 Scheduler；停止监看不等于取消 Run |
 | LLM / Artifact adapter | 把具体客户端与登记能力接到约定接口 | 不把密钥传给实验进程；不替 Agent 作科学决策 |
 
-数据根是存储布局配置，不是会话身份的替代品；同一个应用会服务多个 Run，所以 Session 命名与动态 Artifact resolver 必须按 Run 正确隔离（当前缺口见 I3/I6）。不要用“每次换全新目录”代替接口隔离测试。当前没有独立的聊天 API 服务，架构图中的 API/Conversation Adapter 是可替换入口位置，不是已交付功能。
+数据根是存储布局配置，不是会话身份的替代品；同一个应用会服务多个 Run，所以任务 Session 标识由 Run、Task、Attempt 共同生成，动态 Artifact resolver 也按 Run 隔离。暂停恢复复用同一 Attempt；同一 Attempt 连续提问则使用不同 QuestionId。不要用“每次换全新目录”代替接口隔离测试。当前没有独立的聊天 API 服务，架构图中的 API/Conversation Adapter 是可替换入口位置，不是已交付功能。
 
 源码入口：[composition.py](../apps/cli/src/resagent2_cli/composition.py)、[main.py](../apps/cli/src/resagent2_cli/main.py)、[shell.py](../apps/cli/src/resagent2_cli/shell.py)；用户操作见 [CLI README](../apps/cli/README.md)。
 
@@ -544,7 +544,7 @@ Artifact 保持两道检查：
 
 只有 completed/completed-with-warnings Attempt 的 Artifact 自动作为成功证据传播；失败/blocked Attempt 的诊断 Artifact 可以登记并进入 WorkOutcome，但必须保留失败语义。
 
-设计要求是 Scientific Agent 只能通过 ArtifactRef 授权集合读取已有证据。它输出的 evidence_artifact_ids 必须来自本 Run 且确实通过 `read_artifact` 或 `literature_search` Tool 观察过。**当前动态 resolver 尚未绑定 Run 作用域，存在读取先于归属拒绝的缺口**；静态引用和 hash 检查、最终 observed 校验不能替代读取前授权，见 [I6](INTERFACES.md#i6-工件登记与读取)。
+Scientific Agent 只能通过本 Run 的 ArtifactRef 授权集合读取已有证据。静态与动态 resolver 返回的引用均在读取前检查 Run 和 artifact_id，再校验文件 hash。它输出的 evidence_artifact_ids 还必须确实通过 `read_artifact` 或 `literature_search` Tool 观察过；最终 observed 校验不能替代读取前授权，见 [I6](INTERFACES.md#i6-工件登记与读取)。
 
 ArtifactRef 的 provenance 是互斥三态（见 `CONTRACTS.md` §13）：执行 Artifact（coding/experiment + task/attempt）、Scientific Tool Artifact（scientific + session）、Orchestrator Artifact（orchestrator + source_type=import/final_report）。`literature_search` 成功后先规范化结果，通过 composition root 注入的 Artifact registration port 交给同一个 ResAgent Artifact Registry，以当前 run/session 冻结登记，再把 ArtifactRef 返回 Agent。Scientific Tool 不能自行分配 ArtifactId、hash 或伪造 provenance。
 

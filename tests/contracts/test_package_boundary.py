@@ -7,6 +7,7 @@ import resagent2_contracts
 
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "contracts" / "src"
 ALLOWED_IMPORT_ROOTS = {
+    "hashlib",
     "__future__",
     "datetime",
     "enum",

@@ -191,6 +191,7 @@ class AgentLoop:
                 state.status not in {SessionStatus.PAUSED, SessionStatus.ACTIVE}
                 or state.run_id != request.run_id
                 or state.task_id != request.task_id
+                or state.attempt_number != request.attempt_number
                 or state.owner != definition.owner
                 or state.agent_name != definition.name
             ):
@@ -208,7 +209,6 @@ class AgentLoop:
                     error=error,
                 )
             state.status = SessionStatus.ACTIVE
-            state.attempt_number = request.attempt_number
             state.updated_at = now
         else:
             state = AgentState(

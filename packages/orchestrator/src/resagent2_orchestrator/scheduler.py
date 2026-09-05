@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -60,19 +61,17 @@ def _validate_answer(question: PendingQuestion | None, answer: UserAnswer) -> No
 
 
 def _question_id(task_id: str, attempt_number: int) -> str:
-    """Build a strictly bounded question id from a task id and attempt.
+    """Identify a new question, not its Attempt (which can ask more than once).
 
-    ``QuestionId`` allows a 128-character body, but a legal task id body is
-    itself up to 128 characters and ``max_attempts_per_task`` has no upper
-    bound, so ``question_<task>_<attempt>`` can overflow. Prefer the readable
-    form; when it would overflow, fall back to a fixed-size hash of the full
-    (task, attempt) pair, which is deterministic and collision-resistant.
+    The generated id is persisted with PendingQuestion and reused only for
+    that question. Keep short task names readable; hash overlong identities.
     """
-    candidate = f"question_{task_id.removeprefix('task_')}_{attempt_number}"
+    nonce = uuid4().hex
+    candidate = f"question_{task_id.removeprefix('task_')}_{attempt_number}_{nonce}"
     if len(candidate.removeprefix("question_")) <= 128:
         return candidate
     digest = hashlib.sha256(
-        f"{task_id}:{attempt_number}".encode("utf-8")
+        f"{task_id}:{attempt_number}:{nonce}".encode("utf-8")
     ).hexdigest()[:24]
     return f"question_{digest}"
 

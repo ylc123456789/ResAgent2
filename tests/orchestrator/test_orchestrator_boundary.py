@@ -7,6 +7,7 @@ import resagent2_orchestrator
 
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "orchestrator" / "src"
 ALLOWED_IMPORT_ROOTS = {
+    "uuid",
     "__future__",
     "collections",
     "dataclasses",

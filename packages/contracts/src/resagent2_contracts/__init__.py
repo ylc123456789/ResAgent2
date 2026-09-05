@@ -1,5 +1,7 @@
 """Stable public imports for ResAgent2 cross-module contracts."""
 
+from .identifiers import scientific_session_id, task_session_id
+
 from .models import (
     SCHEMA_VERSION,
     AgentOwner,
@@ -118,6 +120,8 @@ __all__ = [
     "SessionId",
     "SessionRef",
     "SessionStatus",
+    "scientific_session_id",
+    "task_session_id",
     "TaskBudget",
     "TaskId",
     "TaskProposal",

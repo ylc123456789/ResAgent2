@@ -32,6 +32,7 @@ from resagent2_contracts import (
     SessionId,
     TaskBudget,
     WorkRequestDraft,
+    scientific_session_id,
 )
 from resagent2_capabilities import (
     ArtifactRegistrationPort,
@@ -92,9 +93,13 @@ class ScientificAgent:
         self.loop = AgentLoop(store=self.store)
 
     def run(self, request: ScientificTurnRequest) -> ScientificTurnResult:
+        resolve = getattr(self.registration_port, "resolve", None)
         reader = RegisteredArtifactReader(
             request.authorized_artifacts,
-            resolve=getattr(self.registration_port, "resolve", None),
+            run_id=request.run_id,
+            resolve=(
+                lambda artifact_id: resolve(artifact_id, run_id=request.run_id)
+            ) if resolve is not None else None,
         )
         tools: list = [
             ReadArtifactTool(reader),
@@ -124,7 +129,7 @@ class ScientificAgent:
             max_context_tokens=self.max_context_tokens,
         )
 
-        session_id = request.parent_session_id or f"session_scientific_{request.run_id}"
+        session_id = request.parent_session_id or scientific_session_id(request.run_id)
 
         # Idempotency: repeated delivery of the same work_outcome or the same
         # answers returns the persisted result instead of re-running the loop

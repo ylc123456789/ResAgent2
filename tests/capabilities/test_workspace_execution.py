@@ -283,7 +283,7 @@ def test_registered_artifact_reader_verifies_hash(tmp_path) -> None:
         media_type="text/plain",
         summary="input",
     )
-    reader = RegisteredArtifactReader([artifact])
+    reader = RegisteredArtifactReader([artifact], run_id=artifact.run_id)
 
     assert reader.read_text("artifact_input")["content"] == "evidence"
     frozen.write_text("tampered", encoding="utf-8")

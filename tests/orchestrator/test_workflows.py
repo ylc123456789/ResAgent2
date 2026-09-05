@@ -343,7 +343,51 @@ def test_question_id_keeps_short_task_ids_readable() -> None:
     paused = _pause_with_question("task_experiment", "run_short_question")
 
     assert paused.pending_question is not None
-    assert paused.pending_question.id == "question_experiment_1"
+    assert paused.pending_question.id.startswith("question_experiment_1_")
+
+
+def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> None:
+    from resagent2_orchestrator.scheduler import _validate_answer
+
+    port = ScriptedModulePort([_ask_result(), _ask_result()])
+    engine = WorkflowScheduler(
+        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+            owner=AgentOwner.EXPERIMENT, port=port,
+        )},
+        store=InMemoryRunStore(),
+    )
+    proposal = WorkflowProposal(
+        work_request_id="work_legacy_initial", summary="ask twice",
+        compilation_rationale="Two user choices in one execution attempt",
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+    )
+    _create_run(engine, "run_two_questions", research_request(), proposal)
+    first = engine.run_until_stable("run_two_questions")
+    answer = UserAnswer(
+        question_id=first.pending_question.id, values={"x": "first"},
+        answered_at=NOW,
+    )
+    run = engine.store.load(first.run_id)
+    run.answers.append(answer)
+    run.answer_task_ids[answer.question_id] = "task_experiment"
+    run.pending_question = None
+    run.status = RunStatus.RUNNING
+    engine.resume_task_in_place(run, "task_experiment")
+    engine.store.save(run)
+
+    # A new scheduler reads the persisted answer/Attempt; no in-memory counter.
+    restarted = WorkflowScheduler(bindings=engine.bindings, store=engine.store)
+    second = restarted.run_until_stable(run.run_id)
+    assert second.pending_question.id != answer.question_id
+    assert len(second.workflow.tasks[0].attempts) == 1
+    assert port.requests[1].attempt_number == 1
+    assert port.requests[1].parent_session_id == "session_child"
+    with pytest.raises(OrchestrationError, match="does not match"):
+        _validate_answer(second.pending_question, answer)
+    _validate_answer(second.pending_question, UserAnswer(
+        question_id=second.pending_question.id, values={"x": "second"},
+        answered_at=NOW,
+    ))
 
 
 @pytest.mark.parametrize(

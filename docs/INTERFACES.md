@@ -4,7 +4,7 @@
 
 **阅读方式**：先看谁调用谁，再看输入、返回分支、状态归属和失败处理。这里的“接口”是当前进程内 Python 调用，不是新增 RPC、MCP 或 A2A 服务；Protocol 也不意味着实现自动获得隔离、幂等或完整结果验证。
 
-**实现核对基线**：`54dfa99`，2026-09-05。每张卡末尾的“已知缺口”来自本轮契约审查，明确区分设计要求与尚未落实的检查；本次只补文档，不代表这些问题已修复。F/D 编号用于对应审查报告，文字说明可独立阅读。
+**审查基线**：`54dfa99`，2026-09-05。接口修复分阶段进行，进度与验收见 [CONTRACT_FIXES](reviews/CONTRACT_FIXES.md)。F/D 编号用于对应原审查；各卡区分已落实的规则与尚未修复项。
 
 ## 导航
 
@@ -105,7 +105,8 @@ ModulePort.invoke(request: ModuleTaskRequest) -> ModuleResult
 - **状态与副作用**：Scheduler 拥有 Task/Attempt 历史并在调用前保存 running 意图；Agent/runtime 拥有 Session 正文。Agent 可操作授权工作区与环境，返回 ArtifactCandidate；Registry 才负责冻结为 ArtifactRef。
 - **调用粒度**：一次 `invoke` 是一个执行区间，不保证整个 Attempt 结束。`llm_calls` 是该次返回对应的新增消费；问答续跑要增量累计，不能重复报 Session 全历史调用数。
 - **恢复与重放**：用户问答续跑使用 `parent_session_id`。中断后恢复会保留失败的旧 Attempt，再按预算开始新 Attempt；没有通用“重复 invoke 自动无副作用”的承诺。失败时写过的代码也不会自动回滚，原生 Coding 会尽量产出诊断 patch。
-- **已知缺口**：原生 Coding/Experiment 的 Session ID 只含 task/attempt，尚不满足共享 Store 跨 Run 唯一性（F01）；同 Attempt 多次提问会复用 QuestionId（F05）；Scheduler 尚未按 capability 完整验收替换 Port 的成功 payload（F06）；Artifact 注册失败重建结果会丢调用消费及 Session/原诊断（F08）。不能把现有原生 finalizer 的检查等同于 Port 接收边界已封闭。
+- **身份规则**：共享 Session ID 函数包含 Run/task/attempt，并处理长 ID；Scientific 与 Controller 也共用有界 Run Session ID。每个新用户问题生成独立 ID 并持久化，同 Attempt 多次提问不会复用身份；Runtime 恢复时核对 Attempt 编号（F01/F05/D1 已修）。
+- **已知缺口**：Scheduler 尚未按 capability 完整验收替换 Port 的成功 payload（F06）；Artifact 注册失败重建结果会丢调用消费及 Session/原诊断（F08）。不能把现有原生 finalizer 的检查等同于 Port 接收边界已封闭。
 
 **源码**：[ModulePort](../packages/orchestrator/src/resagent2_orchestrator/ports.py)、[Scheduler](../packages/orchestrator/src/resagent2_orchestrator/scheduler.py)、[Coding](../packages/agents/coding/src/resagent2_coding/agent.py)、[Experiment](../packages/agents/experiment/src/resagent2_experiment/agent.py)。
 
@@ -185,7 +186,8 @@ Scientific Tool: Candidate → 注入的 ArtifactRegistrationPort → 同一个 
 - **失败与原子性**：非法路径、丢失文件、hash 不符应拒绝。单工件 staging 不意味着一次批量登记或 Run + Session + Artifact 是跨资源事务；可能已有前面的工件登记成功，后面的登记失败。
 - **重复调用**：各入口有各自重复登记检查；最终报告已有幂等恢复路径，不能推广为所有外部副作用 exactly-once。读取可重复，授予更多工件必须经过登记和授权链。
 - **模型可见性**：Scientific 看到授权目录、简报和主动读取内容，不应看到任意候选路径或另一 Run 的文件。full trace 是独立调试记录，不自动成为 Artifact 或科学证据。
-- **已知缺口**：当前 CLI/E2E 的动态 resolver 是应用级 ID 映射，未绑定当前 Run，存在跨 Run 先读后拒（F02）；登记失败覆盖结果导致消费/诊断丢失（F08）。现有 hash 和最终 gate 不能弥补读取前授权缺口。
+- **读取隔离**：reader 显式绑定 Run，读取字节前核对 Ref.id/run_id；动态 resolve 显式接收 run_id，CLI/E2E 用 (run_id, artifact_id) 索引，同内容的跨 Run 工件不会相互覆盖（F02 已修）。hash 校验仍只负责内容完整性。
+- **已知缺口**：登记失败覆盖结果导致消费/诊断丢失（F08）。
 
 **源码**：[ArtifactRegistry](../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[RegisteredArtifactReader](../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[CLI registration adapter](../apps/cli/src/resagent2_cli/composition.py)、[Scientific tools](../packages/agents/scientific/src/resagent2_scientific/tools.py)。
 

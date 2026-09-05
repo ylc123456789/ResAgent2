@@ -35,6 +35,7 @@ from resagent2_contracts import (
     WorkRequestStatus,
     WorkTaskOutcome,
     WorkspaceDescriptor,
+    scientific_session_id,
 )
 
 from .compiler import WorkflowCompiler
@@ -253,7 +254,7 @@ class ResearchController:
         """Persist the deterministic Scientific session reference before use.
 
         A first-turn crash can then be recovered without losing ownership of
-        ``session_scientific_<run_id>``. The runtime owns the session contents;
+        its bounded Session identity. The runtime owns the session contents;
         the controller stores only this reference and never reads its memory.
         """
         if run.scientific_session is not None:
@@ -263,7 +264,7 @@ class ResearchController:
         session_id = (
             active.scientific_session_id
             if active is not None
-            else f"session_scientific_{run.run_id}"
+            else scientific_session_id(run.run_id)
         )
         run.scientific_session = SessionRef(
             id=session_id,

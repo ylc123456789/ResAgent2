@@ -14,7 +14,7 @@ from resagent2_contracts import (
 
 
 class ModulePort(Protocol):
-    """Uniform boundary implemented by native Agents or legacy adapters."""
+    """Uniform boundary implemented by native Agents or other task adapters."""
 
     def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
         """Execute until a result or pause; resume may invoke the same Attempt again."""

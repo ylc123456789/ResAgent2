@@ -22,12 +22,12 @@
 
 ## 2. 一句话架构
 
-**Scientific Agent 是科学大脑，ResAgent 是执行神经系统。**
+**Scientific Agent 是科学大脑，Orchestrator 是执行神经系统。**
 
 - Scientific Agent 负责回答：当前证据意味着什么，还缺什么证据，最终能形成什么科学观点；
-- ResAgent 负责回答：怎样把「还缺什么」转换成合法任务图，怎样调度、恢复、登记证据和结束 Run；
+- Orchestrator 负责回答：怎样把「还缺什么」转换成合法任务图，怎样调度、恢复、登记证据和结束 Run；
 - Coding Agent 是程序员；Experiment Agent 是实验员；
-- Workflow 是 ResAgent 的内部执行表示，不是 Scientific Agent 的公开产物。
+- Workflow 是 Orchestrator 的内部执行表示，不是 Scientific Agent 的公开产物。
 
 最重要的闭环是：
 
@@ -35,7 +35,7 @@
 自然语言目标
   → 科学判断
   → 若证据不足，提出语义化工作请求
-  → ResAgent 编译并执行任务图
+  → Orchestrator 编译并执行任务图
   → 冻结新证据并恢复同一个科学会话
   → 更新科学判断
   → 直到形成最终科学意见或需要用户输入
@@ -48,7 +48,7 @@
 1. 用户可以直接用自然语言描述研究目标和约束；
 2. Scientific Agent 以一套长期、可恢复的 Agentic Loop 持续形成科学判断，不需要外部选择 plan/analyze 模式；
 3. 证据不足时，Scientific Agent 只说明需要什么工作和证据，不承担执行图字段；
-4. ResAgent 可以用 LLM 理解工作请求，但必须用确定性代码校验图、状态、预算、安全和 provenance；
+4. Orchestrator 可以用 LLM 理解工作请求，但必须用确定性代码校验图、状态、预算、安全和 provenance；
 5. Coding、Experiment、Scientific 复用同一个 runtime，不复制三套 Agent 框架；
 6. 所有跨模块事实通过契约、Run state 和不可变 Artifact 传递；
 7. 用户可以解释一次 Run 为什么发起任务、任务产生什么证据、最终观点依据什么。
@@ -67,27 +67,27 @@
 
 | 概念 | 准确含义 | 所有者 |
 |---|---|---|
-| ResearchRequest | 用户确认的自然语言目标、上下文、约束和总预算 | ResAgent |
-| ResearchRun | 一次研究从目标到最终意见的完整持久化状态 | ResAgent |
-| ScientificSession | Scientific Agent 对同一 ResearchRun 的长期可恢复推理状态 | Scientific Agent/runtime；ResAgent 只持有引用 |
+| ResearchRequest | 用户确认的自然语言目标、上下文、约束和总预算 | Orchestrator |
+| ResearchRun | 一次研究从目标到最终意见的完整持久化状态 | Orchestrator |
+| ScientificSession | Scientific Agent 对同一 ResearchRun 的长期可恢复推理状态 | Scientific Agent/runtime；Orchestrator 只持有引用 |
 | ScientificAssessment | Scientific Agent 在某一时点对目标、证据、局限和未解问题的当前观点 | Scientific Agent |
 | WorkRequestDraft | Scientific Agent 对「还需要得到什么证据」的语义请求，不含执行字段 | Scientific Agent |
-| WorkRequest | ResAgent 分配 ID 并持久化后的工作请求 | ResAgent |
-| WorkflowCompiler | 把 WorkRequest 翻译为 WorkflowProposal/Patch 的无状态有界组件 | ResAgent |
-| WorkflowProposal | 尚未被接受的初始执行图候选 | WorkflowCompiler 产生，ResAgent 校验 |
-| WorkflowPatch | 对已接受执行图的**只追加**修订候选 | WorkflowCompiler 产生，ResAgent 校验 |
-| Workflow | ResAgent 接受并持久化的有版本任务图 | ResAgent |
-| WorkflowTask | 调度器交给一个专业执行能力的顶层工作单元，可有多个 Attempt | ResAgent |
-| Attempt | 某个 WorkflowTask 的一次执行尝试；因问答暂停时，可跨多次模块调用继续 | ResAgent |
-| WorkspaceSpec | 逻辑工作区的来源声明（source_kind + location + environment）；location 可为本地来源路径，但不等于本 Attempt 的物理授权 | ResAgent 的 composition root 声明 |
-| WorkspaceRecord | 一个工作区解析后的记录（root、source、managed） | ResAgent |
-| WorkspaceGrant | 某次 Attempt 的最大物理授权边界，由 WorkspaceRecord 派生 | ResAgent |
-| WorkOutcome | 一次 WorkRequest 执行稳定后，成功、失败、警告和 Artifact 的汇总 | ResAgent |
+| WorkRequest | Orchestrator 分配 ID 并持久化后的工作请求 | Orchestrator |
+| WorkflowCompiler | 把 WorkRequest 翻译为 WorkflowProposal/Patch 的无状态有界组件 | Orchestrator |
+| WorkflowProposal | 尚未被接受的初始执行图候选 | WorkflowCompiler 产生，Orchestrator 校验 |
+| WorkflowPatch | 对已接受执行图的**只追加**修订候选 | WorkflowCompiler 产生，Orchestrator 校验 |
+| Workflow | Orchestrator 接受并持久化的有版本任务图 | Orchestrator |
+| WorkflowTask | 调度器交给一个专业执行能力的顶层工作单元，可有多个 Attempt | Orchestrator |
+| Attempt | 某个 WorkflowTask 的一次执行尝试；因问答暂停时，可跨多次模块调用继续 | Orchestrator |
+| WorkspaceSpec | 逻辑工作区的来源声明（source_kind + location + environment）；location 可为本地来源路径，但不等于本 Attempt 的物理授权 | Orchestrator 的 composition root 声明 |
+| WorkspaceRecord | 一个工作区解析后的记录（root、source、managed） | Orchestrator |
+| WorkspaceGrant | 某次 Attempt 的最大物理授权边界，由 WorkspaceRecord 派生 | Orchestrator |
+| WorkOutcome | 一次 WorkRequest 执行稳定后，成功、失败、警告和 Artifact 的汇总 | Orchestrator |
 | ScientificOpinion | Scientific Agent 对用户目标给出的最终自然语言观点及证据引用 | Scientific Agent |
-| ScientificCompletionValidator | 验证科学闭环结构、证据 provenance 和控制状态；不判断科学观点真假 | ResAgent |
+| ScientificCompletionValidator | 验证科学闭环结构、证据 provenance 和控制状态；不判断科学观点真假 | Orchestrator |
 | ArtifactCandidate | 模块声明的待登记文件 | 生产它的模块 |
-| ArtifactRef | ResAgent 验证、冻结并登记后的不可变证据引用 | ResAgent |
-| PendingQuestion | 已持久化、会暂停 Run 的用户问题 | ResAgent |
+| ArtifactRef | Orchestrator 验证、冻结并登记后的不可变证据引用 | Orchestrator |
+| PendingQuestion | 已持久化、会暂停 Run 的用户问题 | Orchestrator |
 
 `ScientificAssessment` 与 `ScientificOpinion` 的正文是自然语言；小型结构化外壳只服务于控制、证据引用和验证，不把科学推理固定成枚举流程。
 
@@ -95,7 +95,7 @@
 
 ```text
 WorkRequest（为什么需要执行）
-  └─ Workflow revision（ResAgent 怎样安排执行）
+  └─ Workflow revision（Orchestrator 怎样安排执行）
        └─ WorkflowTask（一个顶层工作单元）
             └─ Attempt（一次执行尝试，可暂停并继续调用）
                  └─ Session（模块内部 Agentic Loop）
@@ -109,7 +109,7 @@ ScientificSession 不属于某个 WorkflowTask；它属于整个 ResearchRun，�
 ```mermaid
 flowchart TB
     User([用户])
-    subgraph Res[ResAgent / Research Orchestrator]
+    subgraph Res[Orchestrator（研究编排模块）]
         Entry[CLI / API / Conversation Adapter]
         Controller[Research Controller]
         Compiler[Workflow Compiler]
@@ -181,13 +181,13 @@ flowchart TB
 
 Scientific Agent 没有显式 plan/analyze 模式。`request_work`、`ask_user` 和 `finish` 是控制信号，不是三种 Agent 实现。
 
-每次 `request_work` 必须同时给出当前科学观点，禁止只派工作、不说明科学理由。它对 Scientific Agent 类似一个异步 Tool：调用后暂停，ResAgent 完成工作后把 `WorkOutcome` 作为 observation 返回。
+每次 `request_work` 必须同时给出当前科学观点，禁止只派工作、不说明科学理由。它对 Scientific Agent 类似一个异步 Tool：调用后暂停，Orchestrator 完成工作后把 `WorkOutcome` 作为 observation 返回。
 
 runtime SessionStore 持有完整 Tool event history。ScientificPort 的确定性 finalizer 只从成功的 `read_artifact` / `literature_search` Tool observation 中提取 `observed_artifact_ids`，LLM 不能直接填写这组 trace；ResearchController 在 Registry 复核后把并集持久化进 ResearchRun，不读取或复制 Session 私有内容。
 
 ### 6.2 Workflow 执行循环
 
-它由 ResAgent 的确定性代码驱动：
+它由 Orchestrator 的确定性代码驱动：
 
 ```text
 读取已接受 Workflow
@@ -229,7 +229,7 @@ LLM 调用可开启一个最小 JSONL trace（`OpenAICompatibleClient.trace_dir`
 ```mermaid
 sequenceDiagram
     actor User
-    participant Res as ResAgent
+    participant Res as Orchestrator
     participant Sci as Scientific Agent
     participant Comp as WorkflowCompiler
     participant Sch as Scheduler
@@ -268,18 +268,18 @@ Experiment Task failed/blocked
   → 图稳定后 WorkOutcome 记录失败、警告、诊断 Artifact
   → Scientific Agent 根据失败原因更新判断
   → 可 request_work 请求代码修复、替代实验或更多诊断
-  → ResAgent 编译为 WorkflowPatch 后继续
+  → Orchestrator 编译为 WorkflowPatch 后继续
 ```
 
 ### 7.3 用户问题
 
-Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent 分配 QuestionId，持久化 PendingQuestion 并把 Run 置为 paused。`answer_question(run_id, answer)` 先按 run_id 选 Run，再核对当前 question_id 和必答字段；任务与 Session 从已持久化的问题和 Attempt 推导，并不是让用户在答案里自报这些身份。恢复时复用对应 Session，普通 retry 不复用 Session。同 Attempt 连续两问的 ID 唯一性仍有缺口，见 [I3](INTERFACES.md#i3-执行任务)。
+Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。Orchestrator 分配 QuestionId，持久化 PendingQuestion 并把 Run 置为 paused。`answer_question(run_id, answer)` 先按 run_id 选 Run，再核对当前 question_id 和必答字段；任务与 Session 从已持久化的问题和 Attempt 推导，并不是让用户在答案里自报这些身份。恢复时复用对应 Session，普通 retry 不复用 Session。同 Attempt 连续两问也分配不同 QuestionId；第一问的答案不能用于回答第二问，见 [I3](INTERFACES.md#i3-执行任务)。
 
 ## 8. 模块职责
 
-这一节把架构模块和真实接口对上。下面的方法签名是阅读索引，不是新增 API；标注“内部”的方法不应被 CLI 直接用来另起一套控制流。**现状说明按 `54dfa99` 核对；“已知缺口”尚未修复，本次文档完善不等于产品已通过这些边界验收。**
+这一节把架构模块和真实接口对上。下面的方法签名是阅读索引，不是新增 API；标注“内部”的方法不应被 CLI 直接用来另起一套控制流。以下按当前实现说明；本轮本地契约回归与服务器验收分开记录，见 [修复计划](reviews/CONTRACT_FIXES.md)。历史服务器通过记录不代表本轮代码已完成真实验收。
 
-### 8.1 ResAgent / Research Orchestrator
+### 8.1 Orchestrator（研究编排模块）
 
 负责自然语言入口、ResearchRun/ScientificSession 引用、WorkRequest 生命周期、WorkflowCompiler、Proposal/Patch 校验、Task/Attempt 调度、retry、问题协调、Artifact、预算、WorkOutcome 和 ScientificCompletionValidator。它还管理 Run 中的逻辑工作区（`ResearchRun.workspaces`），把 `workspace_id` 解析为物理 `WorkspaceRecord` 并为每个 Attempt 派生 `WorkspaceGrant`，同时用 `RunLayout`/`ResourceLayout` 分开 Run 数据目录与共享资源目录。
 
@@ -305,13 +305,13 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 **错误与恢复**：业务 ask 是同 Attempt 暂停；失败 retry 是新 Attempt；进程中断由 Controller 将遗留 running Attempt 记为 interrupted 后再按预算处理。这三者不能混用。RunStore 的原子快照不保证外部命令恰好执行一次，也不授权两个进程同时 resume 同一个 Run。
 
-**当前缺口**：替换 ModulePort 的成功 payload 验收、Scientific 非完成分支的身份/证据验收尚不完整；Artifact 注册失败可能丢已发生的消费；Scientific 终止根因尚未完整落 Run。详见 [I1](INTERFACES.md#i1-科学决策)、[I3](INTERFACES.md#i3-执行任务)、[I6](INTERFACES.md#i6-工件登记与读取)，不能将设计上的责任理解为已覆盖所有错误出口。
+**返回验收**：Scheduler 按 capability 校验成功 payload；Controller 对 Scientific 四种返回分支统一核对结构、Session 身份/状态和证据引用，再消费工作结果或答案。工件登记失败保留已有调用消费、Session、已登记工件和原根因；Scientific failure 与报告生成失败通过 `ResearchRun.terminal_error` 保留原因。详见 [I1](INTERFACES.md#i1-科学决策)、[I3](INTERFACES.md#i3-执行任务)、[I6](INTERFACES.md#i6-工件登记与读取)。这些验收不证明自然语言目标已经正确实现。
 
 源码入口：[controller.py](../packages/orchestrator/src/resagent2_orchestrator/controller.py)、[scheduler.py](../packages/orchestrator/src/resagent2_orchestrator/scheduler.py)、[store.py](../packages/orchestrator/src/resagent2_orchestrator/store.py)、[completion.py](../packages/orchestrator/src/resagent2_orchestrator/completion.py)。
 
 ### 8.2 Scientific Agent
 
-唯一职责是科学判断。输入是目标、当前 Run 摘要、授权证据、WorkOutcome 和用户回答；对外动作只有 `request_work`、`ask_user` 和 `finish`。证据引用校验在 `request_work`/`ask_user` 工具内进行：引用未观察到的 artifact 返回 `ok=False` 的可恢复反馈（而非 loop 后硬失败），让 Agent 改正后再走闭环。
+唯一业务职责是科学判断。输入是目标、当前 Run 摘要、授权证据、WorkOutcome 和用户回答；对外控制动作是 `request_work`、`ask_user` 和 `finish`。三者都会提前校验引用：未观察到的 artifact 返回 `ok=False` 的可恢复反馈，让 Agent 改正后再走闭环。
 
 它可以直接使用只读 `read_artifact` 和 `literature_search` Tool。它不输出 WorkflowProposal/Patch，不选择 capability、workspace、环境或执行器，不修改 Task/Run 状态，也不直接调用 Coding/Experiment Agent。
 
@@ -326,7 +326,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 | 状态所有者 | Scientific/runtime 保存 Session；Controller 保存 assessment、WorkRequest、PendingQuestion、opinion 及 Run 状态 |
 | 副作用与恢复 | 可检索并经 registration port 冻结文献；同 Run 的 Session 可跨多轮工作恢复，不创建执行 Task |
 
-因此，“科学判断是唯一业务职责”不表示它没有工具或 IO；它有证据获取能力，但没有调度权。`completed` 必须经 Controller 最终 gate，不是模型说完成就结束整个研究。接口分支、幂等交付及已知的返回验收/失败信息缺口见 [I1](INTERFACES.md#i1-科学决策)。
+因此，“科学判断是唯一业务职责”不表示它没有工具或 IO；它有证据获取能力，但没有调度权。`completed` 必须经 Controller 最终 gate，不是模型说完成就结束整个研究。接口分支、幂等交付与失败信息保存见 [I1](INTERFACES.md#i1-科学决策)。
 
 源码入口：[agent.py](../packages/agents/scientific/src/resagent2_scientific/agent.py)、[context.py](../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter.py](../packages/agents/scientific/src/resagent2_scientific/interpreter.py)。
 
@@ -347,7 +347,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 成功返回的是对应 payload + ArtifactCandidate；失败/阻塞返回 ModuleError；缺用户信息可返回问题并暂停。代码修改在失败时不自动回滚，原生实现会尽量保存 failed_changes.patch。暂停恢复复用原 baseline，不能把已做修改重新当作初始状态。Session 由 Runtime 保存，Task/Attempt 与产物登记由 Scheduler 保存。
 
-**当前缺口**：Session 命名跨 Run 冲突、环境变更后旧验证未失效、失败验证的控制提示误指 finish 尚未修复。不要将“有验证工具”理解为验证新鲜性已经完整保证。见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
+**验证有效性**：Session 身份包含 Run、Task 和 Attempt。代码验证必须有非空、合法、全部成功的命令记录，覆盖最新编辑、已审计环境的当前 generation；环境 prepare/setup 或进程重新绑定后必须重验，仅重新 audit 不够。控制提示与 finalizer 共用这个判据，finalizer 另以 Git diff 检查验证后代码是否改变。见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
 
 源码入口：[agent.py](../packages/agents/coding/src/resagent2_coding/agent.py)、[completion.py](../packages/agents/coding/src/resagent2_coding/completion.py)；详细字段见 [CONTRACTS §10](CONTRACTS.md#10-领域-payload)。
 
@@ -366,7 +366,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 | 不完整与失败 | 部分交付可 completed_with_warnings；没有要求的证据可拒绝 finish；真实失败命令可产生确定性 failed；用户问题可暂停 |
 | 恢复 / 所有权 | 同 Attempt 恢复 Session 与 workspace snapshot；重建 EnvironmentBinding 后需重审计；不自行改变 Task/Run 状态 |
 
-模型生成的 summary 是解释性结果，Scientific 可以参考，但数值追溯仍落在证据文件。当前 metrics 名称匹配过宽、同名冲突值静默覆盖尚未修复，因此“从文件提取”不能直接等同于“提取规则已无歧义”。Session 命名也有与 Coding 相同的跨 Run 缺口。见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
+summary 是解释性结果，Scientific 可以参考，但数值须追溯到证据文件。metrics 名称规范化后精确匹配，`accuracy` 不代替 `baseline_accuracy`；完整证据集内同规范名不同值会拒绝本次 finish，要求区分指标或提供一致证据。同值重复可接受，缺少部分交付仍走 warnings。Session 身份与 Coding 使用同一生成规则。见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
 
 源码入口：[agent.py](../packages/agents/experiment/src/resagent2_experiment/agent.py)、[tools.py](../packages/agents/experiment/src/resagent2_experiment/tools.py)、[completion.py](../packages/agents/experiment/src/resagent2_experiment/completion.py)。
 
@@ -392,9 +392,11 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。ResAgent �
 
 LoopRequest 只要求 run/task/attempt、预算和父 Session；Scientific 的 task/attempt 可为空。领域 inputs、工作区和研究语义由注入的 context builder、工具及 finalizer 使用，因此共享 Runtime 不依赖具体 Agent。
 
-**调用方必须知道的限制**：当前 LLM Protocol 只声明 next_action，真实循环还通过可选 hooks 使用 context_budget、set_attempt_limit、last_attempts 和 trace 功能。换客户端时需核对预算与计量行为，不能仅凭方法签名宣称全部适配。trace 的 `action_valid` 也不能单独证明工具参数完整通过了后续 input_model 校验，应联查 Runtime/Session 反馈。
+**LLM 客户端的最小约定**：必需方法只有 `next_action(context, action_type)`。Runtime 通过 `getattr` 使用可选的 `context_budget`、`set_attempt_limit`、`last_attempts`、`set_trace_context`、`record_validation`，没有这些 hooks 的客户端仍可运行。缺少计量 hook 时按一次请求计一次调用；若客户端内部会重试，应提供真实 attempts 和限制 hook。换客户端不需要新增 Provider 层，但应测试预算、计量与错误约定。
 
-Session 检查已有 run/task/owner/agent 约束，但 Runtime 自身尚未强制同 Attempt 恢复（当前 Scheduler 会保持编号）；模型响应回来后的 deadline 再检查也存在缺口。规范仍是问答续跑同 Attempt、过期不再启动新操作；详见接口卡的现状注记，不新增第二套恢复机制。
+**trace 的含义**：`action_valid` 只表示 provider 初步解析得到了候选动作；后续外层 Action schema 错误以同一 `call_id` 的补充记录关联。它不证明工具参数通过 `input_model` 校验、工具执行成功、finalizer 通过或科学结论正确。调试时结合原始响应、关联校验记录和 Session 的 action/observation/error，不以“全部 action_valid=True”代替验收。
+
+Runtime 恢复检查 run/task/attempt/owner/agent 与可恢复状态。循环在工具派发前重新检查 deadline：LLM 或权限检查耗尽时间后不再启动工具，已发生的调用仍计账；这不是对运行中工具的强制抢占。`ToolObservation` 的 question、request_work、finish_candidate 至多携带一种，防止相互矛盾的控制信号。
 
 源码入口：[loop.py](../packages/runtime/src/resagent2_runtime/loop.py)、[context.py](../packages/runtime/src/resagent2_runtime/context.py)、[llm.py](../packages/runtime/src/resagent2_runtime/llm.py)、[tools.py](../packages/runtime/src/resagent2_runtime/tools.py)、[store.py](../packages/runtime/src/resagent2_runtime/store.py)。
 
@@ -433,7 +435,7 @@ contracts 不是运行中的 Actor，没有 run/invoke 方法，不持有 Sessio
 | 合法模型 | JSON/schema，用于持久化与调用约束 | schema 声明不能代替接收方实际调用校验 |
 | CapabilityRegistry 与专属 inputs | 能力声明、路由所需类型及结构一致性 | registry 不持有具体 Agent；实际绑定由组合根提供 |
 
-结构校验只能证明检查过的规则。`ModuleResult` 外壳合法，并不自动证明 payload 与 capability 相配、Session 属于当前 Run、证据已读或依赖变更后测试仍有效；这些需要接收方与领域完成检查共同落实。当前接口缺口正集中在这一层交接，不能再加几个字段就认为解决。
+结构校验只能证明检查过的规则。`ModuleResult` 外壳合法，并不自动证明 payload 与 capability 相配、Session 属于当前 Run、证据已读或依赖变更后测试仍有效；这些需要接收方与领域完成检查共同落实。因此可替换实现要通过同一组接收边界测试，不能仅凭返回类型名称宣称守约。
 
 字段说明见 [CONTRACTS](CONTRACTS.md)；源码见 [models.py](../packages/contracts/src/resagent2_contracts/models.py)。通用运行机制的小对象（AgentState、ToolObservation、ContextSection）留在 runtime；EnvironmentBinding 等能力对象留在 capabilities，不为了“统一”全部搬入跨模块 contracts。
 
@@ -464,7 +466,7 @@ contracts 不是运行中的 Actor，没有 run/invoke 方法，不持有 Sessio
 
 ### 9.2 Experiment
 
-原生 Experiment Agent 实现 `experiment_run`：在统一工作区上由 RepoMaterializer 确认 source+commit，EnvironmentManager 用 `run_id + workspace_id` 绑定基础环境（`inspect`/`prepare`/`audit`，env 目录来自 `ResourceLayout.env_root`），依赖安装由共享 `run_setup` 完成，HardwareAudit 提供硬件上下文；Run 数据集由组合根从 `DatasetCatalog` 自动注册，任务级 `DatasetRef(dataset_id, relative_path)` 再解析到 `ResourceLayout.dataset_root` 下的具体只读目录，并经通用环境变量 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON` 交给脚本；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且证据文件必须相对本 Attempt 的 `WorkspaceSnapshot` 基线新增或改变。实验输出写入 Attempt 目录或 ArtifactRegistry，不写入共享缓存。
+原生 Experiment Agent 实现 `experiment_run`：在统一工作区上由 RepoMaterializer 确认 source+commit，EnvironmentManager 用 `run_id + workspace_id` 绑定基础环境（`inspect`/`prepare`/`audit`，env 目录来自 `ResourceLayout.env_root`），依赖安装由共享 `run_setup` 完成，HardwareAudit 提供硬件上下文；Run 数据集由组合根从 `DatasetCatalog` 自动注册，任务级 `DatasetRef(dataset_id, relative_path)` 再解析到 `ResourceLayout.dataset_root` 下的具体只读目录，并经通用环境变量 `RESAGENT2_DATASET_ROOT`/`RESAGENT2_DATASETS_JSON` 交给脚本；实验命令需先通过绑定当前环境的 audit。finalizer 要求至少一次实验命令成功，且证据文件必须相对本 Attempt 的 `WorkspaceSnapshot` 基线新增或改变。实验在授权工作区产出证据，由 ArtifactRegistry 冻结；命令日志使用 Attempt 输出目录，不把这些 Run 数据混入共享缓存。
 
 ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检查而非安全隔离；setup/experiment 分类也不是安全分类。详细约束见 ADR-0004、ADR-0005 和 contracts。
 
@@ -474,18 +476,24 @@ ProcessRunner 同样不是 OS 沙箱；environment audit 是流程正确性检�
 
 专业 Agent 不能直接互调。当前边界只有：
 
-- ResAgent → Scientific：`ScientificTurnRequest`；
-- Scientific → ResAgent：`ScientificTurnResult`；
-- ResAgent 内部：`WorkRequest` → WorkflowCompiler → `WorkflowProposal | WorkflowPatch`；
+- Orchestrator → Scientific：`ScientificTurnRequest`；
+- Scientific → Orchestrator：`ScientificTurnResult`；
+- Orchestrator 内部：`WorkRequest` → WorkflowCompiler → `WorkflowProposal | WorkflowPatch`；
 - Scheduler ↔ Coding/Experiment：`ModuleTaskRequest` → `ModuleResult`；
-- ResAgent → Scientific：`WorkOutcome` + 已授权 `ArtifactRef`；
-- Agent → ResAgent：`QuestionDraft`；ResAgent ↔ User：`PendingQuestion` / `UserAnswer`。
+- Orchestrator → Scientific：`WorkOutcome` + 已授权 `ArtifactRef`；
+- Agent → Orchestrator：`QuestionDraft`；Orchestrator ↔ User：`PendingQuestion` / `UserAnswer`。
 
-命名固定为：`Research Orchestrator / ResAgent` 是顶层模块，`ResearchController` 是该模块内驱动研究闭环的实现组件，`ScientificPort` 是 ResearchController 调用 Scientific Agent 的唯一边界。
+命名约定：`ResAgent2` 是整个项目；`Orchestrator` 是研究编排模块，代码包名为 `resagent2_orchestrator`；`ResearchController` 是其中驱动研究闭环的组件。不再用“ResAgent”作为当前模块的第二个名字。
 
-`WorkflowProposal` / `WorkflowPatch` 仍是 typed boundary，但不再跨 Scientific Agent 边界；它们由 ResAgent 内部的 WorkflowCompiler 产生。
+`WorkflowProposal` / `WorkflowPatch` 仍是 typed boundary，但不再跨 Scientific Agent 边界；它们由 Orchestrator 内部的 WorkflowCompiler 产生。
 
-**执行层 → Scientific 的确定性解释边界**：`ResAgent → Scientific` 的返回方向不再把 `WorkOutcome` 原样塞进 Scientific 上下文。`resagent2_scientific/interpreter.py` 的 `render_work_brief` 是一段确定性纯函数（不调用 LLM、不读写、不改状态），把 `WorkOutcome` + 上一轮 `WorkRequestDraft` + `unresolved_task_outcomes` + 已授权 `ArtifactRef` 解释成一份面向科学的「工作简报」：`purpose`（复用上一轮 `WorkRequestDraft`，不重新总结）、`outcomes`（completed 任务的证据指针 + 叙述性 `narrative`，`narrative_use` 恒为 `explanatory_only`；有 warning 时附 `caveats`，只投影 `code`/`message`；未注册进本回合授权集合的 artifact 记为 `unregistered_artifact_ids`）、`blocking_items`（failed/blocked 任务，只给 `status`/`error_code`/`message`/`retryable`，外加白名单投影的、有界 `diagnostic_excerpt`——即 `details.stderr_tail` 最后 1000 字符，`diagnostic_use` 恒为 `execution_diagnosis_only`；命令文本、日志路径、完整 `details` 和内部 TaskId 一律不外泄）。`build_context` 只注入这份简报；原始 `WorkOutcome` 完整保留在审计轨迹中，不进 prompt。Validator 从 Run 自行对账 failed/blocked Task，并要求 Scientific 用 `limitations` 描述它们对结论的影响；最终报告再确定性渲染精确的执行问题。
+返回时，Scientific 的 `context.build_context` 调用内部纯函数 `interpreter.render_work_brief`，把 WorkOutcome 整理成模型需要的工作简报；interpreter 不是独立模块、Agent 或新调度层。
+
+- `purpose`：上一轮请求的业务目的；`outcomes`：完成情况、解释性 narrative 与需读取的证据指针。
+- `blocking_items`：保留失败工作的业务 objective、错误信息及有界 stderr 摘录；隐藏内部 TaskId 不等于删除工作目标。
+- narrative 不自证结果；warnings 只投影 code/message；诊断摘录只用于执行诊断，命令、日志路径及完整 details 留在审计记录中。
+
+原始 WorkOutcome 仍保留。最终 Validator 从 Run 对账失败任务，Scientific 用 limitations 说明影响，报告确定性展示执行问题。
 
 ## 11. 状态与生命周期
 
@@ -540,21 +548,21 @@ ScientificSession 的引用在首次 Scientific turn **之前**由 Controller �
 Artifact 保持两道检查：
 
 1. capabilities/Tool 执行前按 WorkspaceGrant 做 resolve、symlink 和读写授权检查；
-2. ResAgent 登记时重新检查文件存在、相对路径、containment、symlink escape，计算 hash，绑定 run/task/attempt（或 session/orchestrator）并冻结复制。
+2. Orchestrator 登记时重新检查文件存在、相对路径、containment、symlink escape，计算 hash，绑定 run/task/attempt（或 session/orchestrator）并冻结复制。
 
 只有 completed/completed-with-warnings Attempt 的 Artifact 自动作为成功证据传播；失败/blocked Attempt 的诊断 Artifact 可以登记并进入 WorkOutcome，但必须保留失败语义。
 
 Scientific Agent 只能通过本 Run 的 ArtifactRef 授权集合读取已有证据。静态与动态 resolver 返回的引用均在读取前检查 Run 和 artifact_id，再校验文件 hash。它输出的 evidence_artifact_ids 还必须确实通过 `read_artifact` 或 `literature_search` Tool 观察过；最终 observed 校验不能替代读取前授权，见 [I6](INTERFACES.md#i6-工件登记与读取)。
 
-ArtifactRef 的 provenance 是互斥三态（见 `CONTRACTS.md` §13）：执行 Artifact（coding/experiment + task/attempt）、Scientific Tool Artifact（scientific + session）、Orchestrator Artifact（orchestrator + source_type=import/final_report）。`literature_search` 成功后先规范化结果，通过 composition root 注入的 Artifact registration port 交给同一个 ResAgent Artifact Registry，以当前 run/session 冻结登记，再把 ArtifactRef 返回 Agent。Scientific Tool 不能自行分配 ArtifactId、hash 或伪造 provenance。
+ArtifactRef 的 provenance 是互斥三态（见 `CONTRACTS.md` §13）：执行 Artifact（coding/experiment + task/attempt）、Scientific Tool Artifact（scientific + session）、Orchestrator Artifact（orchestrator + source_type=import/final_report）。`literature_search` 成功后先规范化结果，通过 composition root 注入的 Artifact registration port 交给同一个 Orchestrator Artifact Registry，以当前 run/session 冻结登记，再把 ArtifactRef 返回 Agent。Scientific Tool 不能自行分配 ArtifactId、hash 或伪造 provenance。
 
-observation history 的所有者是 runtime SessionStore；ResAgent 不读取原始 prompt、reasoning 或任意 Session event。跨边界只传 ScientificPort finalizer 从 trusted Tool result 派生的 `observed_artifact_ids`，ResearchRun 持久化其已复核并集用于最终审计。
+observation history 的所有者是 runtime SessionStore；Orchestrator 不读取原始 prompt、reasoning 或任意 Session event。跨边界只传 ScientificPort finalizer 从 trusted Tool result 派生的 `observed_artifact_ids`，ResearchRun 持久化其已复核并集用于最终审计。
 
 ## 13. 完成判定
 
-Coding、Experiment、Scientific 各自的确定性 finalizer 是领域完成证据的唯一判断者；ResAgent 不从 summary 或任意 payload 猜测完成状态。
+Coding、Experiment、Scientific 各自的确定性 finalizer 是领域完成证据的唯一判断者；Orchestrator 不从 summary 或任意 payload 猜测完成状态。
 
-下列是完成必须满足的架构条件，不是当前所有可替换实现已经被完整校验的声明。原生 finalizer 检查环境验证新鲜性；metrics 从完整证据派生、精确匹配名称并拒绝同名冲突。替换 Port 的成功 payload 与 required evidence 验收仍待 S3 收口，见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
+完成检查分两处：领域 finalizer 判断实际操作证据；接收方核验公开契约。Scheduler 按 capability 验证成功 payload，Controller/gate 验证 Session、控制状态及已登记、已观察的证据；`required_evidence_kinds` 按工件种类检查，已读且授权的导入证据也有效。两处都不把“schema 通过”当作科学正确的证明。
 
 ResearchRun 只有同时满足以下条件才能 completed：
 
@@ -568,12 +576,12 @@ ResearchRun 只有同时满足以下条件才能 completed：
 
 `inconclusive` 是合法科学观点，不等于运行失败。若系统忠实完成了可执行工作、证据可追踪且 opinion 说明为何不能下结论，Run 可以 completed。运行失败表示系统没有形成可靠闭环，例如预算耗尽且无合法 opinion、状态损坏或不可恢复契约错误。
 
-这里的「验证」是闭环一致性验证，不是科学真理验证。Scientific Agent 的 deterministic completion check 使用 Session 工具记录、传入的未解决工作和证据要求检查候选；ResAgent 的 ScientificCompletionValidator 再基于完整 Run 的经校验深拷贝复核。二者输入和职责不同，不能称为对同一 snapshot 重复校验。最终 gate 拒绝时，不能把无效候选写成 completed。观点是否在语义上正确属于模型质量与评测，不属于确定性状态机能够证明的事项。
+这里的「验证」是闭环一致性验证，不是科学真理验证。Scientific Agent 的 deterministic completion check 使用 Session 工具记录、传入的未解决工作和证据要求检查候选；Orchestrator 的 ScientificCompletionValidator 再基于完整 Run 的经校验深拷贝复核。二者输入和职责不同，不能称为对同一 snapshot 重复校验。最终 gate 拒绝时，不能把无效候选写成 completed。观点是否在语义上正确属于模型质量与评测，不属于确定性状态机能够证明的事项。
 
 ## 14. 不可破坏的架构约束
 
 1. Scientific Agent 不输出执行图字段；WorkflowCompiler 不形成科学结论、不决定代码文件/验证命令/物理目录；
-2. ResAgent 可以使用 LLM 编译图，但状态转换只由代码执行；
+2. Orchestrator 可以使用 LLM 编译图，但状态转换只由代码执行；
 3. 专业 Agent 不直接互调；
 4. WorkflowTask、Attempt、Session、AgentAction 不得混为同一层；
 5. 跨模块持久事实必须成为 contract 字段或 Artifact，不能只藏在 prompt/summary；

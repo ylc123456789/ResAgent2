@@ -117,7 +117,7 @@ class TaskStatus(StrEnum):
 
 
 class AttemptStatus(StrEnum):
-    """Outcome of one real module invocation."""
+    """Lifecycle of a task attempt, possibly spanning paused module calls."""
 
     RUNNING = "running"
     COMPLETED = "completed"
@@ -834,7 +834,7 @@ class WorkspaceDescriptor(ContractModel):
 
 
 class ModuleTaskRequest(ContractModel):
-    """Uniform orchestrator request envelope for one child-module attempt."""
+    """One execution interval of a child-module attempt, including pause/resume."""
 
     run_id: RunId
     task_id: TaskId
@@ -1103,7 +1103,7 @@ class ScientificOpinion(ContractModel):
 
 
 class ScientificTurnRequest(ContractModel):
-    """One ResAgent-to-Scientific call: goal, state, evidence, and new outcome."""
+    """One Orchestrator-to-Scientific call: goal, evidence, and new outcome."""
 
     run_id: RunId
     research: ResearchRequest

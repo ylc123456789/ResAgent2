@@ -10,7 +10,7 @@
 
 本文件回答「模块之间传什么、字段准确表示什么」。
 
-从模块理解接口，请先看 [ARCHITECTURE §8](ARCHITECTURE.md#8-模块职责)；调用、返回、所有权、恢复和副作用见 [六张接口说明卡](INTERFACES.md)。接口卡同时记录当前接收边界尚未落实的约束，不因本文声明某项语义就假定所有替换实现已经被完整校验。
+从模块理解接口，请先看 [ARCHITECTURE §8](ARCHITECTURE.md#8-模块职责)；调用、返回、所有权、恢复和副作用见 [六张接口说明卡](INTERFACES.md)。替换实现既要满足类型，也要满足接口卡中的调用和接收规则；测试是实际边界行为的证据。
 
 - 架构概念和谁调用谁，以 `ARCHITECTURE.md` 为准；
 - Python 字段必须与 `packages/contracts/src/resagent2_contracts/models.py` 一致；
@@ -28,13 +28,13 @@
 
 | 边界 | 请求 | 响应/状态 |
 |---|---|---|
-| 用户 → ResAgent | ResearchRequest、UserAnswer | PendingQuestion、`final_report` ArtifactRef |
-| ResAgent → Scientific Agent | ScientificTurnRequest | ScientificTurnResult |
+| 用户 → Orchestrator | ResearchRequest、UserAnswer | PendingQuestion、`final_report` ArtifactRef |
+| Orchestrator → Scientific Agent | ScientificTurnRequest | ScientificTurnResult |
 | Scheduler → 专业模块 | ModuleTaskRequest | ModuleResult |
 | 专业模块 → Artifact Registry | ArtifactCandidate | ArtifactRef |
-| ResAgent 持久化 | Workflow、WorkflowTask、Attempt、PendingQuestion | ResearchRun 属于 orchestrator 内部模型 |
+| Orchestrator 持久化 | Workflow、WorkflowTask、Attempt、PendingQuestion | ResearchRun 属于 orchestrator 内部模型 |
 
-ResAgent ↔ Scientific Agent 使用 `ScientificTurnRequest` / `ScientificTurnResult`；Scientific Agent 只提出 `WorkRequestDraft`，`WorkflowProposal`/`WorkflowPatch` 由 ResAgent 内部的 WorkflowCompiler 产生。禁止跨模块读取另一个模块的内部 Session state、私有目录或 prompt；禁止从 summary 文本推断机器状态；禁止把任意 dict 作为长期接口。
+Orchestrator ↔ Scientific Agent 使用 `ScientificTurnRequest` / `ScientificTurnResult`；Scientific Agent 只提出 `WorkRequestDraft`，`WorkflowProposal`/`WorkflowPatch` 由 Orchestrator 内部的 WorkflowCompiler 产生。禁止跨模块读取另一个模块的内部 Session state、私有目录或 prompt；禁止从 summary 文本推断机器状态；禁止把任意 dict 作为长期接口。
 
 ## 3. ID 命名空间
 
@@ -42,8 +42,8 @@ ResAgent ↔ Scientific Agent 使用 `ScientificTurnRequest` / `ScientificTurnRe
 |---|---|---|
 | RunId | `run_example` | 全局唯一 |
 | TaskId | `task_experiment` | Run 内唯一且跨 revision 稳定 |
-| SessionId | `session_coding_1` | 子模块内唯一 |
-| ArtifactId | `artifact_metrics` | Run 内唯一，不跨 Attempt 复用 |
+| SessionId | `session_coding_1` | SessionStore 内唯一；执行 Session 身份包含 Run、Task、Attempt |
+| ArtifactId | `artifact_metrics` | Run 内唯一；执行工件保留 Task/Attempt 归属，科学与导入工件可按内容幂等 |
 | QuestionId | `question_dataset` | Run 内唯一 |
 | WorkRequestId | `work_x` | Run 内唯一 |
 | WorkspaceId | `ws_main` | Run 内唯一 |
@@ -58,7 +58,7 @@ ResAgent ↔ Scientific Agent 使用 `ScientificTurnRequest` / `ScientificTurnRe
 pending | running | paused | completed | failed
 ```
 
-由 ResAgent 写入。planning、replanning、interrupted 不是 RunStatus。
+由 Orchestrator 写入。planning、replanning、interrupted 不是 RunStatus。
 
 ### 4.2 TaskStatus
 
@@ -80,7 +80,7 @@ class ModuleStatus(StrEnum):
     REQUEST_WORK = "request_work"
 ```
 
-ModuleStatus 的六个结果值中，前五个是 AttemptStatus 的子集；`request_work` 只由 ScientificPort 产生，不是 Attempt 状态。AttemptStatus 另外包含 `running`（七个值）。ModuleStatus 由模块返回；AttemptStatus 由 Scheduler 根据已校验的 ModuleResult 记录。
+ModuleStatus 的六个结果值中，前五个是 AttemptStatus 的子集；`request_work` 只由 ScientificPort 产生，不是 Attempt 状态。AttemptStatus 另外包含 `running`（共六个值）。ModuleStatus 由模块返回；AttemptStatus 由 Scheduler 根据已校验的 ModuleResult 记录。
 
 ## 5. ResearchRequest
 
@@ -104,6 +104,7 @@ class ResearchRequest:
 | constraints | 整个 Run 必须遵守的限制 |
 | input_artifacts | 用户提供的**最小输入**（`ArtifactImport`），由 Controller 创建 Run 时验证本地 URI、冻结复制、校验 hash 并生成 `orchestrator/import` ArtifactRef |
 | dataset_refs | 整个 Run 的**唯一**数据集注册表（§15） |
+| required_evidence_kinds | 必须被已登记、已观察且最终引用的 Artifact.kind 满足；约束证据种类，不强制某次 Tool 调用，导入证据也可满足 |
 | budget | max_tasks、max_attempts_per_task、max_llm_calls、timeout_seconds |
 
 ## 6. Workflow 执行图契约
@@ -205,7 +206,7 @@ class ModuleTaskRequest:
 | output_dir | code_modify / experiment_run 的输出目录 |
 | parent_session_id | 仅显式 resume 使用；普通 retry 为空 |
 
-`workspace_spec` 存在时要求 `workspace` 非空、`workspace_id` 与 `workspace_spec.workspace_id` 一致、`workspace.source` 与 `workspace_spec.source_kind` 一致。ask-user 后的 resume 产生 `parent_session_id`；runtime AgentLoop 在 resume 时加载该 Session 并校验 run/task/agent/owner/paused 一致。普通 retry 不复用 Session。
+`workspace_spec` 存在时要求 `workspace` 非空、`workspace_id` 与 `workspace_spec.workspace_id` 一致、`workspace.source` 与 `workspace_spec.source_kind` 一致。ask-user 后的 resume 产生 `parent_session_id`；runtime AgentLoop 在 resume 时加载该 Session 并校验 run/task/attempt/agent/owner 和可恢复状态；执行会话的 ID 也按 Run/Task/Attempt 隔离。普通 retry 不复用 Session。
 
 ## 9. ModuleResult
 
@@ -234,7 +235,7 @@ class ModuleResult[PayloadT]:
 
 `summary` 是解释性文字，可供人类展示，也会经 WorkOutcome/interpreter 投影给 Scientific 模型参考；**不能用于机器状态判定或替代真实证据**。`payload` 是 capability 专有数据。`llm_calls` 是本次模块返回对应的实际新增 LLM 调用数（含 HTTP 重试），供 Run 使用账本累计；同 Attempt 多次问答续跑时不能重复报告 Session 历史总数。Scheduler 将 payload 持久化到对应 Attempt，供审计和恢复后读取，但不解释其中的领域语义，也不从 payload 推断状态。
 
-**未实现约束**：当前 Scheduler 校验通用 ModuleResult 外壳，尚未按 capability 完整验证替换 Port 的成功 payload；Artifact 注册失败重建结果时也可能丢新增 llm_calls、Session 和原错误。不能将原生 finalizer 的守约等同于接收边界完整验收，见 [I3](INTERFACES.md#i3-执行任务)。
+Scheduler 同时校验通用外壳和该 capability 的成功 payload 模型；不合规结果转为 contract_error，而非完成任务。Artifact 注册失败也保留新增 `llm_calls`、Session 和已取得的结果；已有 ModuleError 的根因保留，注册错误附在 details 中。原生 finalizer 负责真实工具证据，接收端负责公共结果约束，两者不是互相替代，见 [I3](INTERFACES.md#i3-执行任务)。
 
 ## 10. 领域 payload
 
@@ -273,7 +274,8 @@ class ExperimentResult:
 - `CodeUnderstandResult.evidence_files` 至少包含一个实际通过 Coding read/search Tool 观察过的 workspace 相对路径。
 - `CodeModifyResult` 要求 changed_files 与 deleted_files 至少一项非空且不重叠；`verification_results` 至少一条且 `verification_passed` 必须等于「所有 VerificationResult 均为 exit_code 0 且未 timeout」（model validator 强制，ADR-0011 §3）。`patch_path` 指向 Coding finalizer 通过 Git 能力生成的 Attempt patch。
 - `ExperimentResult.metrics` 由 Experiment finalizer 从完整 JSON evidence 集合读取顶层数值字段得到，LLM 不能自证数字（ADR-0011 §5.2）。该集合包含 Agent 声明、且相对 WorkspaceSnapshot 基线在本 Attempt 改变的 evidence 文件，以及满足同一条件的 `expected_artifacts`；后者即使 Agent 漏报也会被自动补入。`evidence_files` 是这个完整集合中的 workspace 相对路径。`repo_url` + `commit` 是 repo identity；`env_id` 是 `run_id + workspace_id` 绑定的基础环境 id。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings（code=`delivery_not_met`）。
-- `ExperimentRunInput`（§18）仍保留 `parameters`（实验配置参数），但 `ExperimentResult` 不再有 `parameters` 字段（删除，无 production 消费者）。
+- 期望指标按规范化后的完整名称匹配，不做子串匹配：`accuracy` 不能满足 `balanced_accuracy` 或 `baseline_accuracy`。完整 JSON 证据集中，同一规范名出现不同数值会拒绝本次 finish，要求区分指标键；重复同值可接受，缺失交付项仍走既有 warnings。
+- `ExperimentRunInput` 仍保留 `parameters`（实验配置参数），但 `ExperimentResult` 不再有 `parameters` 字段（删除，无 production 消费者）。
 
 ```python
 class ModuleError:
@@ -283,7 +285,7 @@ class ModuleError:
     details: dict[str, JsonValue] = {}
 ```
 
-ErrorCode 固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing、interrupted。`interrupted` 只由 ResAgent 恢复逻辑写入，表示 Attempt 已持久化为 running、但进程在 ModuleResult 写回前退出；它是 retryable failure，不是新的 TaskStatus。
+ErrorCode 固定枚举：invalid_input、permission_denied、tool_failed、timeout、budget_exhausted、contract_error、environment_unavailable、artifact_missing、interrupted。`interrupted` 只由 Orchestrator 恢复逻辑写入，表示 Attempt 已持久化为 running、但进程在 ModuleResult 写回前退出；它是 retryable failure，不是新的 TaskStatus。
 
 ## 11. Attempt 与 SessionRef
 
@@ -308,9 +310,9 @@ class SessionRef:
     updated_at: datetime
 ```
 
-Attempt 属于 ResAgent 历史，Session 属于子 Agent。retry（failed/blocked 后重试）是同一 Task 的新 Attempt，默认新 Session；pause/resume 是**同一 Attempt** 的暂停与继续，不增加 Attempt number，复用 Session/output_dir/workspace snapshot（ADR-0011 §2）；repair 是新 WorkflowTask。进程中断不是第三种 AttemptStatus：恢复时把遗留 running Attempt 结算为 `failed + ErrorCode.interrupted + retryable=True`，再按原有 Attempt 预算决定 Task 是否回到 pending（ADR-0012）。
+Attempt 属于 Orchestrator 历史，Session 属于子 Agent。retry（failed/blocked 后重试）是同一 Task 的新 Attempt，默认新 Session；pause/resume 是**同一 Attempt** 的暂停与继续，不增加 Attempt number，复用 Session/output_dir/workspace snapshot（ADR-0011 §2）；repair 是新 WorkflowTask。进程中断不是第三种 AttemptStatus：恢复时把遗留 running Attempt 结算为 `failed + ErrorCode.interrupted + retryable=True`，再按原有 Attempt 预算决定 Task 是否回到 pending（ADR-0012）。
 
-`running` 与 `needs_user_input` 都是非终态：不能有 finished_at/error；终态（completed/completed_with_warnings/failed/blocked）必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败/契约错误路径天然为 None。
+`running` 与 `needs_user_input` 都是非终态：不能有 finished_at/error；终态（completed/completed_with_warnings/failed/blocked）必须有 finished_at；failed/blocked 必须有 error；其他终态不能有 error。`payload` 是模块返回的能力专属结构化结果，随 Attempt 持久化，不被静默丢弃；失败时可为空；若完成结果在后续 Artifact 登记阶段失败，已验过的 payload 可保留作诊断，但不把 failed 状态变成成功。
 
 ## 12. Question 与 Answer
 
@@ -334,7 +336,7 @@ class UserAnswer:
     answered_at: datetime
 ```
 
-子 Agent 只生成 QuestionDraft；ResAgent 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。`reason` 是必填字段。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
+子 Agent 只生成 QuestionDraft；Orchestrator 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。同一 Attempt 的连续两个新问题使用不同 ID；重复提交已处理问题的答案不能满足下一问题。`reason` 是必填字段。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
 
 ## 13. Artifact 契约
 
@@ -369,15 +371,15 @@ class ArtifactImport:
     expected_sha256: str | None = None
 ```
 
-Candidate 的 path 必须是 workspace root 下无 `..` 的相对路径。Candidate 故意没有 id、URI、hash 或 provenance；这些只能由 ResAgent 登记时产生。`content` 只用于传递派生的小型文本 Artifact（如 patch）；普通大文件仍走 workspace path + ArtifactRegistry 冻结。
+Candidate 的 path 必须是无 `..` 的相对路径；普通文件相对于授权 workspace root，带 `content` 的派生文本（如 patch）则以 path 作为工件内文件名。Candidate 故意没有 id、URI、hash 或 provenance；这些由 Orchestrator 登记时产生。普通大文件仍走 workspace path + ArtifactRegistry 冻结。
 
-ArtifactRef 的 provenance 是互斥三态（model validator 强制）：
+ArtifactRef 的 provenance 有三种互斥形状：
 
-- **执行 Artifact**：producer 为 coding/experiment，`task_id` 与正整数 `attempt_number` 同时存在，`session_id` 为空；
+- **执行 Artifact**：`task_id` 与正整数 `attempt_number` 同时存在，`session_id` 为空；登记/接收端将 producer 与任务 binding owner 对齐，当前执行 owner 是 coding/experiment；
 - **Scientific Tool Artifact**：producer 为 scientific，`session_id` 存在，`task_id` 与 `attempt_number` 同时为空；
 - **Orchestrator Artifact**：producer 为 orchestrator，三者都为空，且 `metadata.source_type` 必须是 `import` 或 `final_report`。
 
-混合字段、缺半个 task/attempt、非正 attempt、scientific 带 task、orchestrator 带 session 等全部拒绝。所有 Artifact 仍必须有当前 run_id、Registry 计算的 sha256 和冻结 uri。
+模型拒绝混合 Session 与 Task 字段、缺半个 task/attempt、非正 attempt 等非法形状；任务 owner 与当前 Run 的一致性还由登记和接收边界检查。所有 Artifact 必须有所属 run_id、Registry 计算的 sha256 和冻结 uri。读取器对静态授权和动态解析的 Ref 都在读文件前核对请求的 ArtifactId 与当前 run_id，再检查本地 URI 和 hash；不能先把跨 Run 内容交给模型，再等最终 gate 拒绝。
 
 `ArtifactImport` 是用户提供的最小输入，不含 provenance 或 hash；Controller 验证本地 URI、冻结复制、校验 `expected_sha256` 后生成 `orchestrator/import` ArtifactRef。
 
@@ -411,7 +413,7 @@ class WorkspaceDescriptor:
 
 `WorkspaceSourceKind`：GIT（clone 到受管目录）/ LOCAL（原地绑定，managed=False）/ COPY（复制已有本地 Git 工作树）/ GENERATED（创建空受管工作区）。
 
-`WorkspaceSpec` 是逻辑来源声明，不保存物理路径；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
+`WorkspaceSpec` 是逻辑来源声明，`location` 可包含仓库 URL 或本地来源路径，但不是 Attempt 的物理授权；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
 
 capabilities 提供一个内部 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline` 的 tree hash，非 Git workspace 用有界 file-hash fallback）表达 Attempt 起点；GitDiffTool、Coding finalizer、failed patch 与 Experiment evidence ownership 都消费同一个 snapshot，删除 HEAD-relative legacy diff API（ADR-0011 §4）。
 
@@ -434,7 +436,8 @@ class EnvironmentSpec:
 
 - `EnvironmentSpec.python_version` 有值表示硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断；
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用），不同 Workspace/Run 隔离；`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`；
-- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`；任何被允许并开始执行的 `run_setup` 命令都使旧 audit 失效（`env_certified=False`），须重新 `audit_env`；
+- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
+- Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 
 ## 16. 科学控制契约
@@ -569,7 +572,9 @@ ScientificTurnResult = Union[
 - `observed_artifact_ids` 由 ScientificPort finalizer 从整个 Session 的成功 Tool observation 累积派生，不能来自 LLM action payload；assessment/opinion 的 evidence_artifact_ids 必须是 observed_artifact_ids 的子集；
 - `llm_calls` 是本轮 ScientificPort 实际新增的 LLM 调用数（非负整数）。
 
-ScientificPort 是唯一 Scientific Agent 边界。work_outcome 按 work_request_id、answers 按 question_id 幂等：重复投递返回已持久化结果，不能重复追加 observation 或重复调用 LLM。
+ScientificPort 是唯一 Scientific Agent 边界。Controller 在消费响应前，按四种结果分支复核结构、Session 的 owner/status/已绑定身份、观察集合和 assessment/opinion 的引用关系；失败分支可没有 Session，但必须保留 error。非法响应不会替换已有 Session、消费待交付 WorkOutcome 或把答案标为已交付；可确认的实际新增调用数仍计入预算。
+
+work_outcome 按 work_request_id、answers 按 question_id 幂等：重复投递返回已持久化结果，不能重复追加 observation 或重复调用 LLM。
 
 ### 16.5 WorkflowCompiler 边界
 
@@ -583,7 +588,7 @@ production `LLMWorkflowCompiler` 不让 LLM 直接输出 Proposal/Patch：LLM �
 
 Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Session 私有 event。输入 ResearchRun 与 ScientificCompletedResult，内部构造经校验的 Run 深拷贝；输出 CompletionValidation（结构化 violations 或 FinalReportData）。检查包括：completed result/session/run 绑定正确 → 无 active WorkRequest/PendingQuestion/**pending、running 或 needs_user_input Task** → opinion 通过组合约束 → 每个 evidence Artifact 属于本 Run，且同时出现在 result.observed_artifact_ids 与 Run 已复核集合 → 从 Run 确定性对账 failed/blocked Task，要求存在错误记录及 opinion.limitations → 每个 completed Task 有合法终态 Attempt、无 error、artifact producer 与 binding owner 一致 → 拒绝未知/重复/跨 Run 的 ID。Scientific 不再上报 acknowledged_task_ids，执行问题的精确身份由 Validator 生成。
 
-原生 ScientificCompletionCheck 先根据 Session 工具记录、未解决工作及证据要求检查候选；它不持有完整 ResearchRun。这里的最终 gate 再独立验收完整 Run，不能把两者描述为输入完全相同。**未实现约束**：最终 gate 尚未独立落实 required_evidence_kinds，非 completed Scientific 响应的身份/assessment 引用验收也不完整，见 [I1](INTERFACES.md#i1-科学决策)。
+原生 ScientificCompletionCheck 先根据 Session 工具记录、未解决工作及证据要求检查候选；它不持有完整 ResearchRun。最终 gate 再独立验收完整 Run。两处复用证据种类的纯判据：从本 Run 已登记 Artifact 中确认所需 kind 同时被观察和引用，导入证据与新生成证据遵循同一规则；不能把两处描述为输入完全相同，见 [I1](INTERFACES.md#i1-科学决策)。
 
 通过时 Validator 产出 `FinalReportData`（run_id、goal、opinion、evidence、execution_issues），纯 renderer 只消费 FinalReportData 生成 `kind=final_report`、`media_type=text/markdown` 的 ArtifactCandidate。RunStatus 只有在验证、渲染、Artifact 登记和 Run 字段写入全部成功后才改 completed。Validator 不判断 statement 是否科学正确。
 
@@ -594,8 +599,8 @@ Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Sessio
 | completed | completed | 继续依赖图；其 Artifact 可自动传给依赖任务 |
 | completed_with_warnings | completed，并追加 warnings | 继续依赖图；warnings 被持久化 |
 | failed | retryable 且预算允许时 pending，否则 failed | 可重试项重新进入调度；稳定后进入 WorkOutcome |
-| blocked | blocked | ResAgent 只能通过显式 WorkflowPatch/recovery 和 retry 恢复 |
-| needs_user_input | needs_user_input | ResAgent 保存 PendingQuestion，Run 置为 paused |
+| blocked | blocked | Orchestrator 只能通过显式 WorkflowPatch/recovery 和 retry 恢复 |
+| needs_user_input | needs_user_input | Orchestrator 保存 PendingQuestion，Run 置为 paused |
 
 `request_work` 不是 Task 状态，只由 ScientificPort 产生，映射到「持久化 assessment + 创建 WorkRequest」：
 
@@ -604,9 +609,9 @@ Validator 是 orchestrator 内部纯验证器，不调用 LLM，不读取 Sessio
 | request_work | paused | 复核 observed trace，持久化 assessment，创建 requested WorkRequest | running |
 | needs_user_input | paused | 复核 observed trace，持久化 assessment/PendingQuestion | paused |
 | completed | completed | 复核并合并 observed trace，调用 ScientificCompletionValidator；通过后保存 opinion/报告 | completed |
-| failed | failed 或空 | 结束 Run；应保留 ModuleError，但当前 Controller 尚未将其持久化为 Run 终止根因（见 I1） | failed |
+| failed | failed 或空 | 结束 Run，将原 ModuleError 保存到 ResearchRun.terminal_error（见 I1） | failed |
 
-completed 若未通过 Validator，不得写 Run completed；这种不一致属于 `contract_error`，Run failed 并保留两层验证证据。WorkRequest 状态不映射为新的 RunStatus：requested/compiling/executing/stable/consumed 期间 Run 都是 running。
+completed 若未通过 Validator，不得写 Run completed；这种不一致属于 `contract_error`，Run failed 并保留 `completion_violations` 和 `terminal_error`。Scientific 接收校验与最终报告失败也保存终止原因；这些属于 orchestrator 的持久状态，不新增跨模块 wire 类型。WorkRequest 状态不映射为新的 RunStatus：requested/compiling/executing/stable/consumed 期间 Run 都是 running。
 
 ## 18. schema 版本规则
 
@@ -617,26 +622,30 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 - metadata 不得长期承载本应成为正式字段的状态；
 - schema 版本策略发生改变时必须先写 ADR。
 
-`3.0`（Stabilization 3.0 / ADR-0011）相对 2.0 的改动：删除 `TaskProposal/WorkflowTask.required`、per-task `rationale`、`PendingTaskUpdate`/`supersede_task_ids`/`pending_task_updates`、`ExperimentResult.parameters`、`ExperimentRunInput.dataset_refs`，并收敛 `WorkspaceRecord`（去 `initial_commit`）；新增 `ArtifactImport`、`WorkspaceSpec.environment`、`ModuleTaskRequest.dataset_refs`、`ModuleResult.llm_calls`、`Attempt.summary`，并把 `CodeModifyResult.verification_results` 收紧为 min_length=1。`success_criteria`/`evidence_key` 及旧 scientific/planning task capability 已在 2.0 删除。1.0/1.1/2.0 演进见 `DEVELOPMENT_PLAN.md` 与 ADR-0007/0011。
+历史字段增删矩阵保留在 `DEVELOPMENT_PLAN.md` 和 ADR-0011；当前接口不要求同时维护旧 schema 路径。
 
 ## 19. 运行时反馈与连续失败保护
 
 `ToolObservation.ok` 是机器可读的成功标志：成功读取/命令为 True，失败命令（非零退出）、参数拒绝、路径缺失等可恢复失败为 False。下游不得靠解析 `summary` 文本判断失败。AgentLoop 的反馈语义：
 
 - 可恢复失败落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它；
-- `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保证末尾错误字段（如 `stderr_tail`）不丢；
+- `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保留首尾线索但不保证所有字段完整；需要精确正文时使用下面的专门工作集，完整观察仍留在 Session；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断最后一段）或 `recent_tool_listing`（保留最近有界目录清单，按条目数与字符数上限、不截断单个路径）作为 required context；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
-- provider transport retry 每次真实 HTTP 尝试都计入 `llm_calls`；AgentLoop/Compiler 必须把剩余调用数传给共享 client，client 的下一次尝试数不得超过该值；
+- 共享客户端的每次 HTTP 尝试（含重试）都计入 `llm_calls`；AgentLoop/Compiler 通过可选的 `set_attempt_limit`/`last_attempts` hooks 限制并计量实际尝试。最小 LLM 客户端只须有 `next_action`，无计数 hook 时一次调用按一次计；自带内部重试的实现应提供这两个 hooks；
+- 工具派发前重新检查 wall-clock 余量；LLM 或权限检查已用尽时间时，不再派发工具，已发生调用仍入账。这不等于能撤销或抢占已经执行的外部操作；
+- 一条 ToolObservation 的 `question`、`request_work`、`finish_candidate` 至多一个非空；普通观察可以全为空；
 - 连续失败计数：成功的非 finish 工具重置；`ok=False` 累加；completion check 拒绝的 finish 也累加；连续 5 次失败返回 `TOOL_FAILED`，先于 step 预算。
+
+LLM trace 的 `action_valid` 仅表示 provider 已解析出 action 候选；外层 Action schema 错误另以同一 `call_id` 记录。它不证明 Tool 参数通过校验、执行成功或科学结论有效；须结合 validation 记录和 Session 中的 observation/completion 结果阅读。
 
 ## 20. 公共导出核对表
 
-| 类别 | Python 公共类型 |
+| 类别 | Python 公共类型/纯函数 |
 |---|---|
 | ID/版本 | SCHEMA_VERSION、RunId、TaskId、SessionId、ArtifactId、QuestionId、WorkRequestId、WorkspaceId |
 | 状态/路由 | Capability、AgentOwner、RunStatus、TaskStatus、AttemptStatus、ModuleStatus、WorkRequestStatus、SessionStatus |
 | 错误/授权 | ErrorCode、WorkspaceMode |
-| 科学枚举 | ScientificVerdict |
+| 科学枚举 | ScientificVerdict、RequiredEvidenceKind |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest、ArtifactImport |
 | 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
@@ -649,4 +658,5 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 | 模块边界 | WorkspaceGrant、ModuleTaskRequest、ModuleResult |
 | 工作区 | WorkspaceSourceKind、WorkspaceSpec、WorkspaceRecord、WorkspaceDescriptor |
 | 注册 | CapabilityDefinition、CapabilityRegistry |
-| 科学控制 | ScientificAssessment、WorkRequestDraft、WorkRequest、WorkTaskOutcome、WorkOutcome、ScientificOpinion、ScientificTurnRequest、ScientificTurnResult |
+| 科学控制 | ScientificAssessment、WorkRequestDraft、WorkRequest、WorkTaskOutcome、WorkOutcome、ScientificOpinion、ScientificTurnRequest、ScientificTurnResult 及其四种结果分支 |
+| 共享边界判据 | scientific_session_id、task_session_id、missing_required_evidence_kinds（纯函数，不新增 wire 消息） |

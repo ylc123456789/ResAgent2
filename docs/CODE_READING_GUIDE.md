@@ -6,7 +6,9 @@
 
 如果只记一句话：
 
-> Scientific Agent 负责科学判断；ResearchController 负责研究闭环；WorkflowCompiler 把科学需求翻译成任务图；WorkflowScheduler 执行任务图；Coding/Experiment Agent 完成专业工作；runtime 提供共享 Agent 循环；capabilities 提供真实能力。
+> 从 CLI 提交目标；Scientific 决定做什么；Orchestrator 负责安排、记录和验收；Coding/Experiment 执行专业工作，再把证据交回 Scientific。
+
+先把这四个职责串起来，再看它们内部的类。ResAgent2 是整个项目的名字；Orchestrator 是研究编排模块，不是另一个 Agent。
 
 ---
 
@@ -53,14 +55,14 @@ ResAgent2 的价值就是把开放的 LLM 推理和确定性的工程控制组�
 
 | 角色                             | 简单类比       | 负责                                                         | 不负责                                   |
 | -------------------------------- | -------------- | ------------------------------------------------------------ | ---------------------------------------- |
-| ResAgent / Research Orchestrator | 神经系统和总管 | Run 状态、工作请求、任务图、调度、预算、问题、证据、最终闭环 | 自己形成科学观点、改代码、跑实验         |
+| Orchestrator | 神经系统和总管 | Run 状态、工作请求、任务图、调度、预算、问题、证据、最终闭环 | 自己形成科学观点、改代码、跑实验         |
 | Scientific Agent                 | 科学大脑       | 当前科学判断、还缺什么证据、最终科学意见                     | 输出执行图、选择文件、直接调用其他 Agent |
 | Coding Agent                     | 程序员         | 阅读项目、修改代码、准备环境、运行验证                       | 判断实验是否支持科学假设                 |
 | Experiment Agent                 | 实验员         | 准备环境、运行实验、采集指标和证据                           | 修改产品代码、形成最终科学结论           |
 
-Scientific、Coding、Experiment 是三个 Agent。WorkflowCompiler 和 WorkflowScheduler 不是 Agent，而是 ResAgent 内部的组件。
+Scientific、Coding、Experiment 是三个 Agent。WorkflowCompiler 和 WorkflowScheduler 不是 Agent，而是 Orchestrator 内部的组件。
 
-### 2.2 六类代码包
+### 2.2 代码目录怎样落实这些职责
 
 
 | 目录                                    | 含义                                                           |
@@ -68,7 +70,7 @@ Scientific、Coding、Experiment 是三个 Agent。WorkflowCompiler 和 Workflow
 | `packages/contracts`                    | 系统共同使用的词典：跨模块对象、字段和状态                     |
 | `packages/runtime`                      | 通用 Agent 运行机制：循环、Tool、上下文、LLM、Session          |
 | `packages/capabilities`                 | 可复用真实能力：文件、Git、进程、环境、数据集、仓库、文献      |
-| `packages/orchestrator`                 | ResAgent 的实现：Controller、Compiler、Scheduler、Run/Artifact |
+| `packages/orchestrator`                 | Orchestrator 的实现：Controller、Compiler、Scheduler、Run/Artifact |
 | `packages/agents/scientific`            | Scientific Agent 的 prompt、tools、context 和 finalizer        |
 | `packages/agents/coding` / `experiment` | Coding、Experiment Agent 的领域实现                            |
 | `apps/cli`                              | 人类 CLI 适配器：一次性命令、交互监控壳和 production 装配      |
@@ -76,6 +78,8 @@ Scientific、Coding、Experiment 是三个 Agent。WorkflowCompiler 和 Workflow
 因此，“模块”在讨论中可能指系统角色，也可能指 Python package。阅读时要先问：这里说的是哪个层级？
 
 ### 2.3 依赖方向
+
+阅读源码时可以忽略 `*.egg-info/`、`build/`、`__pycache__/`：它们是安装或构建产生的内容，不是新的架构模块。`src/resagent2_*` 才是各包的源码；本轮没有删除安装环境依赖的元数据，也没有为减少视觉层级迁移全部目录。
 
 ```mermaid
 flowchart TB
@@ -153,8 +157,8 @@ sequenceDiagram
 4. 如果证据不足，它返回 `WorkRequestDraft`，只描述“还需要什么工作/证据”；
 5. Controller 把 Draft 变成有 ID、有状态的 `WorkRequest`；
 6. `WorkflowCompiler` 把语义请求翻译成 `WorkflowProposal` 或只追加的 `WorkflowPatch`；
-7. `WorkflowScheduler` 根据依赖执行 `WorkflowTask`，每次真实模块调用形成一个 `Attempt`；
-8. Coding/Experiment 返回文件候选，ResAgent 校验、复制、计算哈希后形成不可变 `ArtifactRef`；
+7. `WorkflowScheduler` 根据依赖执行 `WorkflowTask`；首次执行或失败重试创建 `Attempt`，问答后的调用继续原 Attempt；
+8. Coding/Experiment 返回文件候选，Orchestrator 校验、复制、计算哈希后形成不可变 `ArtifactRef`；
 9. 图稳定后生成 `WorkOutcome`，恢复同一个 ScientificSession，直到 `finish` 或 `ask_user`。
 
 这条链是整个项目的主干。其他类型、状态和工具都在服务它。
@@ -170,9 +174,9 @@ ResearchRequest：用户要研究什么
 └─ ResearchRun：这次研究的完整生命周期
    ├─ ScientificSession：跨多轮工作的长期科学推理会话
    └─ WorkRequest：当前还需要什么证据
-      └─ Workflow revision：ResAgent 当前怎样安排执行
+      └─ Workflow revision：Orchestrator 当前怎样安排执行
          └─ WorkflowTask：一个顶层专业任务
-            └─ Attempt：这次任务的一次真实调用
+            └─ Attempt：一次执行尝试，可因问答暂停后继续调用
                └─ Session：Coding/Experiment 内部 Agent 会话
                   └─ AgentAction：一次 Tool 动作
 ```
@@ -183,7 +187,7 @@ ResearchRequest：用户要研究什么
 
 - WorkRequest 是科学语义，例如“需要一组基线与候选模型的可比较实验结果”；
 - WorkflowTask 是执行语义，例如“修改代码实现 SE block”“运行训练脚本”；
-- Scientific Agent 只产生前者；Compiler/ResAgent 产生后者。
+- Scientific Agent 只产生前者；Compiler/Orchestrator 产生后者。
 
 #### WorkflowTask 和 Attempt
 
@@ -194,7 +198,7 @@ ResearchRequest：用户要研究什么
 
 #### Attempt 和 Session
 
-- Attempt 属于 ResAgent 的调度层；
+- Attempt 属于 Orchestrator 的调度层；
 - Session 属于 runtime 的 Agent 内部状态；
 - Coding/Experiment Session 绑定具体 Attempt；
 - ScientificSession 绑定整个 ResearchRun，可以跨多个 WorkRequest。
@@ -202,7 +206,7 @@ ResearchRequest：用户要研究什么
 #### ArtifactCandidate 和 ArtifactRef
 
 - Agent 只能说“我产生了这个文件”，得到 `ArtifactCandidate`；
-- ResAgent 重新检查路径、权限、文件存在性和 provenance，冻结复制并计算哈希；
+- Orchestrator 重新检查路径、权限、文件存在性和 provenance，冻结复制并计算哈希；
 - 登记完成后的不可变证据才是 `ArtifactRef`。
 
 ### 4.2 三套状态各管什么
@@ -212,7 +216,7 @@ ResearchRequest：用户要研究什么
 | -------------------------------- | --------------------------------------------------------------------------------- |
 | `RunStatus`                      | 整次研究：running / paused / completed / failed                                   |
 | `TaskStatus`                     | 一个顶层任务：pending / running / completed / failed / blocked / needs_user_input |
-| `AttemptStatus` / `ModuleStatus` | 一次模块执行怎样结束                                                              |
+| `AttemptStatus` / `ModuleStatus` | 前者是执行尝试的生命周期，后者是本次调用返回的结果                                                              |
 
 单个实验 Task 失败不等于 ResearchRun 失败。失败先进入 `WorkOutcome`，Scientific Agent 可以请求修复任务；只有整个控制闭环不可恢复或预算耗尽时，Run 才失败。
 
@@ -301,7 +305,7 @@ contracts 不是业务实现，也不是数据库模型集合。它是模块之�
 | Scientific        | Controller        | `ScientificTurnResult`                           | 当前观点以及 request_work / ask_user / finish / failed 之一 |
 | Scientific        | Controller        | `WorkRequestDraft`                               | 还缺什么工作，不含 capability、TaskId 或依赖图              |
 | Controller        | Compiler          | `WorkRequest`                                    | 已持久化、可追踪的语义工作请求                              |
-| Compiler          | Controller        | `WorkflowProposal/Patch`                         | 尚未接受的执行图候选                                        |
+| Compiler          | Controller        | `CompilationResult(output, llm_calls)`            | 执行图候选（Proposal/Patch）及本次实际调用数                                        |
 | Scheduler         | Coding/Experiment | `ModuleTaskRequest`                              | 一个 Attempt 被授权执行的目标、输入、工作区和预算           |
 | Coding/Experiment | Scheduler         | `ModuleResult`                                   | 强类型状态、payload、问题、错误和 ArtifactCandidate         |
 | Scheduler         | Scientific        | `WorkOutcome`（经 Controller）                   | 一次 WorkRequest 稳定后的成功、失败、警告和证据汇总         |
@@ -329,7 +333,7 @@ ResearchRequest
 → ScientificOpinion
 ```
 
-字段含义查 `docs/CONTRACTS.md`，Python 类型和 validator 查 `packages/contracts/src/resagent2_contracts/models.py`。
+字段含义查 [CONTRACTS.md](CONTRACTS.md)，生产者、接收检查和恢复规则查 [INTERFACES.md](INTERFACES.md)。Python 类型与 validator 在 `packages/contracts/src/resagent2_contracts/models.py`；有一个类型不等于调用方已经执行了所有检查，要沿接收代码和测试确认。
 
 ---
 
@@ -357,14 +361,16 @@ ResearchRequest
 
 | 文件         | 作用                                                         |
 | ------------ | ------------------------------------------------------------ |
-| `loop.py`    | AgentLoop 主循环、错误恢复、预算和 completion decision       |
-| `models.py`  | AgentDefinition、AgentState、Action/Observation 等运行期模型 |
+| `loop.py`    | AgentDefinition 装配与 AgentLoop：错误恢复、预算和 completion decision       |
+| `models.py`  | AgentState、Action/Observation、CompletionDecision 等运行期模型 |
 | `tools.py`   | Tool 协议、输入模型分发与必填参数契约渲染                    |
 | `context.py` | 有预算和优先级的上下文组合                                   |
 | `llm.py`     | OpenAI-compatible client、transport retry、LLM trace         |
 | `store.py`   | SessionStore 和 JsonSessionStore                             |
 
-runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scientific_finish 等领域 Tool。
+runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scientific_finish 等领域 Tool。LLM 客户端只须实现 `next_action`；预算/trace 等 hooks 由调用方通过 `getattr` 按需使用，不要求新增一层 Provider 架构。
+
+读 trace 时，`action_valid` 只说明 provider 解析出了 action 候选；外层 Action schema 错误另以同一 `call_id` 记录。它不能证明工具参数合法、工具成功，或最终科学判断正确。
 
 ### 7.3 capabilities：可复用的真实能力
 
@@ -381,7 +387,7 @@ runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scient
 | 文献           | `literature.py`                          | 文献后端和规范化候选证据               |
 | 硬件           | `hardware.py`                            | 实验硬件审计上下文                     |
 
-capability 是可以被不同 Agent 复用的能力组件，不是一个新 Agent，也不应该知道 ResearchRun 的控制策略。
+这里有两个容易同名混淆的层级：`code_modify` 是 Scheduler 路由的顶层任务能力；`read_file` 是 Agent 调用的一次 Tool。`capabilities` 包里的文件、Git、环境等 Python 组件为 Tool 提供实现，可被多个 Agent 复用，但不负责 ResearchRun 的控制策略。它们不是同一个注册表，也不需要硬塞进一种接口。
 
 ### 7.4 三个 Agent 的共同结构
 
@@ -395,7 +401,7 @@ tools.py       领域控制 Tool（如果需要）
 completion.py  确定性完成/失败判断
 ```
 
-Scientific 的核心是“观点和证据引用”；Coding 的核心是“工作区增量和验证”；Experiment 的核心是“真实命令、指标与实验文件证据”。
+Scientific 的核心是“观点和证据引用”；Coding 的核心是“工作区增量和验证”；Experiment 的核心是“真实命令、指标与实验文件证据”。Scientific 多一个 `interpreter.py`，只是把返回结果整理为上下文的内部纯函数，不是第四个 Agent 或新的架构层。
 
 ---
 
@@ -441,6 +447,8 @@ Scientific 的核心是“观点和证据引用”；Coding 的核心是“工�
 
 环境和数据集是共享资源，不应写进代码仓库；Run state、Attempt 输出和 Artifact 是一次 Run 的数据，不应写进共享缓存。`ResourceLayout` 与 `RunLayout` 就是在表达这一区别。
 
+查故障时先看 Run 的状态、Attempt 错误和 `terminal_error`：Scientific 返回的终止错误、接收校验和最终报告失败会保存在 Run 中，不必只凭一行 failed 猜原因；需要细节再查对应 Session 和 full trace。
+
 ---
 
 ## 10. 沿 code-experiment 场景走一遍代码
@@ -484,17 +492,17 @@ workspace 并不是 `ResearchRequest` 的字段。组合根在构造 `WorkflowSc
 
 - LLM 只产生局部 task key、capability、goal、depends_on、inputs；
 - 代码分配全局 TaskId、绑定 WorkRequestId、解析 workspace；
-- validator 拒绝空图、未知能力、跨请求依赖和提前编排的条件修复任务。
+- 确定性校验拒绝空图、未知能力、跨请求依赖等结构错误；短语义审查判断是否漏了前置工作，或提前编排了尚未触发的条件修复。
 
 ### 第五步：Scheduler 执行
 
 看 `WorkflowScheduler.run_until_stable`、`execute_task`、`_start_task`、`_invoke`：
 
 - 找到 ready Task；
-- 创建 Attempt 和 Attempt 输出目录；
+- 创建 Attempt 和输出目录，或在问答后恢复同一 Attempt；
 - 构造 ModuleTaskRequest；
 - 通过 ModulePort 调用 Coding 或 Experiment；
-- 登记结果和 Artifact。
+- 按 capability 检查成功 payload，再登记结果和 Artifact；登记失败也保留实际调用数、Session 和原始失败原因。
 
 ### 第六步：进入 AgentLoop
 
@@ -503,25 +511,27 @@ workspace 并不是 `ResearchRequest` 的字段。组合根在构造 `WorkflowSc
 - context builder 告诉 LLM 当前目标、文件和控制状态；
 - LLM 发出 read_file / replace_text / run_verification / finish；
 - Tool 执行结果形成 ToolObservation；
-- completion check 根据真实 workspace diff 和 verification 判断是否完成。
+- completion check 根据真实 workspace diff，以及当前修改版本、当前已审计环境代次上的成功 verification 判断是否完成。环境重新 prepare/setup 或进程恢复后，只做 audit 不会让旧测试重新有效，须重验。
+
+Runtime 在工具派发前还会复查截止时间：LLM 或权限检查已耗尽时间时，不再执行下一项工具副作用；已消耗的 LLM 调用仍计入账本。
 
 ### 第七步：证据回到 Scientific
 
 Scheduler 冻结 code patch、变更文件和 experiment metrics，生成 WorkOutcome。Controller 把它交回同一个 ScientificSession；Scientific 必须先通过 read_artifact 真正观察证据，才能在 opinion 中引用。
 
-这条返回链路的入口是 `resagent2_scientific/interpreter.py` 的 `render_work_brief`：它把执行层的 `WorkOutcome` 确定性解释成科学向的工作简报（purpose / outcomes / blocking_items），`context.py` 的 `build_context` 只注入这份简报和全局授权证据目录，原始 `WorkOutcome` 和内部 TaskId 不进 prompt。完成时由 orchestrator 的 Validator 从 Run 自行对账执行问题，Scientific 只用 limitations 说明其影响。
+`context.py` 调用 Scientific 内部的 `interpreter.render_work_brief`，把 `WorkOutcome` 整理成工作目的、结果和待解决问题：保留失败任务的目标与有界诊断，隐藏内部 TaskId。summary 是解释性文字，指标和原始文件仍须沿 Artifact 阅读。原始 WorkOutcome 保留作审计；最终由 Orchestrator 从 Run 对账执行问题，Scientific 用 limitations 说明其科学影响。
 
 ### 第八步：最终完成
 
 Scientific 返回 finish 后，Controller 调用 `ScientificCompletionValidator`：
 
 - 引用的 Artifact 是否属于本 Run；
-- 是否确实被观察；
+- 是否确实被观察；声明的必需证据种类是否被已登记、已读且被引用的 Artifact 满足（导入工件也可满足）；
 - 是否仍有 active WorkRequest、PendingQuestion 或 running Task；
 - failed/blocked Task 是否由 Validator 从 Run 确定性记录为执行问题，且 opinion 是否说明其科学影响；
 - opinion 是否包含观点、证据、局限和未解决问题。
 
-通过后写 final report Artifact，并把 Run 置为 completed。
+通过后写 final report Artifact，并把 Run 置为 completed。这是执行与证据闭环验收，不证明 LLM 的科学解释一定正确。
 
 ---
 
@@ -545,14 +555,14 @@ experiment_run failed
 
 ```text
 Agent 产生 QuestionDraft
-→ Controller 分配 QuestionId，保存 PendingQuestion
+→ Orchestrator 分配 QuestionId，保存 PendingQuestion
 → Run paused，进程可以退出
 → 用户提交匹配的 UserAnswer
 → Controller 根据 task_id 判断恢复 Scientific 还是具体 Task
 → 恢复原 Session；任务级问题继续同一 Attempt
 ```
 
-这里 RunStore 保存公开问题状态，SessionStore 保存 Agent 内部进度，两者缺一不可。
+这里 RunStore 保存公开问题状态，SessionStore 保存 Agent 内部进度，两者缺一不可。同一 Attempt 再问一个新问题，会有新的 QuestionId，旧答案不能被当成新答案；执行 Session 的身份包含 Run、Task、Attempt，跨 Run 不会仅因 task 名相同而复用。
 
 ---
 
@@ -578,26 +588,15 @@ Agent 产生 QuestionDraft
 - capability 里出现 ResearchRun 状态迁移，通常放错了；
 - Agent 直接创建 WorkflowTask，通常放错了；
 - Scheduler 解释实验是否支持假设，通常放错了；
-- 同一规则在两个 Agent 各复制一遍，应先考虑抽成共享 runtime/capability。
+- 两个 Agent 需要同一语义的能力时，优先复用 runtime/capabilities；只是名字相似、职责不同，不要为统一而统一。
 
 ---
 
 ## 13. 现在再谈代码阅读顺序
 
-理解前面的系统后，可以沿一条真实主链读代码：
+不用顺序读完整个仓库。按第 10 节跟一次运行：先看 CLI 的 `build_application` 和 `ResearchController`，遇到编译、任务执行、专业 Agent 时再进入对应文件；到了共享循环或文件/环境操作，再看 runtime/capabilities。
 
-1. `apps/cli/src/resagent2_cli/composition.py::build_application`：production 系统怎样装配（真实 E2E 对照 `e2e/real_e2e.py::_build_controller`）；
-2. `orchestrator/controller.py`：研究闭环；
-3. `scientific/agent.py` + `tools.py` + `completion.py`：科学判断怎样对外表达；
-4. `orchestrator/compiler.py`：语义工作怎样变成任务；
-5. `orchestrator/scheduler.py`：任务和 Attempt 怎样执行；
-6. `coding/agent.py`：一个专业 Agent 怎样组装；
-7. `runtime/loop.py`：共享 Agentic Loop；
-8. `coding/completion.py` 与 `experiment/completion.py`：领域证据怎样确定性验收；
-9. `orchestrator/artifacts.py` 与 `completion.py`：证据怎样冻结，Run 怎样完成；
-10. 遇到边界对象时再查 `contracts/models.py` 和 `CONTRACTS.md`。
-
-不要第一次就顺序读完 600 多行 contracts 或 Scheduler 的全部分支。先跟一条主链，遇到对象再查定义，理解成本更低。
+遇到边界对象查 CONTRACTS，想替换实现查 INTERFACES。先回答“谁调用谁、谁负责验收”，再看具体字段，理解成本更低。
 
 ---
 

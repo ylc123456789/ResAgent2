@@ -113,9 +113,11 @@ class ReadFileTool:
 
 
 class SearchTextInput(RuntimeModel):
-    """Case-insensitive bounded text search request."""
+    """Case-insensitive bounded literal substring search, not a regex search."""
 
-    query: NonEmptyStr
+    query: NonEmptyStr = Field(
+        description="Case-insensitive literal substring; no regular expressions."
+    )
     path: str = "."
     max_results: int = Field(default=20, ge=1, le=50)
 
@@ -126,6 +128,8 @@ class SearchTextTool:
     name = "search_text"
     input_model = SearchTextInput
     model_guidance = (
+        "Search is a case-insensitive literal substring match, not regex. "
+        "a|b matches the literal text a|b; search alternatives separately. "
         "path may identify a workspace file or directory. max_results must be "
         "between 1 and 50. Use returned line numbers for a bounded read_file range."
     )

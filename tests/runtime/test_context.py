@@ -61,9 +61,10 @@ def test_snippets_keep_two_ranges_of_the_same_file() -> None:
         text_key="content",
     )
     assert [(s["path"], s["start_line"], s["end_line"]) for s in snippets] == [
-        ("a.py", 180, 210),
         ("a.py", 100, 140),
+        ("a.py", 180, 210),
     ]
+    assert [s["observed_at"] for s in snippets] == [1, 2]
 
 
 def test_snippets_pack_whole_then_truncate_newest_first() -> None:
@@ -97,15 +98,62 @@ def test_snippets_pack_whole_then_truncate_newest_first() -> None:
         text_key="content",
         max_total_chars=6000,
     )
-    # Newest first, small snippets whole, only the older large one truncated.
-    assert [s["path"] for s in snippets] == ["b.py", "a.py", "big.py"]
-    assert snippets[0]["content"] == "b" * 120
+    # Budget selection favors recent reads; presentation follows event order.
+    assert [s["path"] for s in snippets] == ["big.py", "a.py", "b.py"]
+    assert snippets[2]["content"] == "b" * 120
     assert snippets[1]["content"] == "a" * 120
-    assert snippets[0]["truncated"] is False
+    assert snippets[2]["truncated"] is False
     assert snippets[1]["truncated"] is False
-    assert snippets[2]["truncated"] is True
-    assert snippets[2]["content"].startswith("X")
-    assert snippets[2]["content"].endswith("X")
+    assert snippets[0]["truncated"] is True
+    assert snippets[0]["context_truncated"] is True
+    assert snippets[0]["content"].startswith("X")
+    assert snippets[0]["content"].endswith("X")
+    assert sum(len(s["content"]) for s in snippets) == 6000
+    # The source tool result remains complete in the durable event history.
+    original = state.events[0].data["value"]
+    assert original["truncated"] is False
+    assert len(original["content"]) == 8000
+    assert "observed_at" not in original
+    assert "context_truncated" not in original
+
+
+def test_snippets_deduplicate_ranges_but_keep_original_event_ids() -> None:
+    state = _snippet_state(
+        {"path": "a.py", "content": "first read"},
+        {"path": "b.py", "content": "other file"},
+        {"path": "a.py", "content": "latest read"},
+    )
+    for event, sequence in zip(state.events, (10, 20, 30)):
+        event.sequence = sequence
+    before = state.model_dump(mode="json")
+    snippets = recent_tool_snippets(
+        state, tool="read_file", identity_keys=("path",), text_key="content",
+    )
+    assert [(s["content"], s["observed_at"]) for s in snippets] == [
+        ("other file", 20), ("latest read", 30),
+    ]
+    # Projection values are copies, including the untruncated fast path.
+    snippets[0]["content"] = "caller mutation"
+    assert state.model_dump(mode="json") == before
+
+
+def test_snippet_limit_still_selects_most_recent_observations() -> None:
+    state = _snippet_state(*[
+        {"path": f"{index}.py", "content": str(index)} for index in range(5)
+    ])
+    snippets = recent_tool_snippets(
+        state, tool="read_file", identity_keys=("path",), text_key="content", limit=2,
+    )
+    assert [s["observed_at"] for s in snippets] == [4, 5]
+
+
+def test_tool_truncation_does_not_claim_extra_context_truncation() -> None:
+    state = _snippet_state({"path": "a.py", "content": "short prefix", "truncated": True})
+    snippet = recent_tool_snippets(
+        state, tool="read_file", identity_keys=("path",), text_key="content",
+    )[0]
+    assert snippet["truncated"] is True
+    assert "context_truncated" not in snippet
 
 
 def _listing_state(*values: dict) -> AgentState:

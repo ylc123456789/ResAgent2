@@ -165,3 +165,20 @@ def test_search_guidance_matches_bounded_input_schema(tmp_path):
     assert "50" in tool.model_guidance
     with pytest.raises(ValidationError):
         tool.input_model(query="target", max_results=51)
+
+
+def test_search_pipe_is_literal_and_guidance_does_not_promise_regex(tmp_path):
+    from resagent2_runtime.tools import tool_contracts_text
+
+    (tmp_path / "names.txt").write_text("alpha\nbeta\nALPHA|BETA\n", encoding="utf-8")
+    tool = SearchTextTool(_boundary(tmp_path))
+    result = tool.execute(_state(), tool.input_model(path="names.txt", query="alpha|beta"))
+    assert result.value["matches"] == [
+        {"path": "names.txt", "line": 3, "text": "ALPHA|BETA"},
+    ]
+    contracts = tool_contracts_text((tool,))
+    assert "literal substring match, not regex" in contracts
+    assert "search alternatives separately" in contracts
+    assert "no regular expressions" in tool.input_model.model_json_schema()[
+        "properties"
+    ]["query"]["description"]

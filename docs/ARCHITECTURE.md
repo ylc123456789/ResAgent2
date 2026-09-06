@@ -376,7 +376,11 @@ LLMCompiler 没有可信的精确输出名称输入，所以物化时不让它�
 
 `runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从 Tool 的 `input_model` 自动派生必填顶层参数与 guidance，作为 required `tool_contracts` 经 Composer 计入预算；ToolRegistry 仍在执行前做完整类型校验。
 
-共享 `recent_tool_snippets` 按工具、来源和行范围去重：最近优先，最后保留的一段可能截断，更旧内容省略。Coding/Experiment 经 capabilities 的 `workspace_context` 分别调用它，文件正文与工件正文**各限 6000 字符**，在 `workspace_reads.file_snippets` / `artifact_snippets` 中分组；读取工件不会挤掉文件片段，反之亦然。同类多个来源仍共享该类额度，不是每个文件都给 6000。有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。这是已有观测的纯投影，不是永久记忆或第二套缓存。
+共享 `recent_tool_snippets` 按工具、来源和行范围去重：优先选入最近读取，装箱的最后一段可能截断，更旧内容省略；选入后按事件顺序从旧到新展示，`observed_at` 是原始 `AgentEvent.sequence`，不是新建的文件版本。Coding/Experiment 经 capabilities 的 `workspace_context` 分别调用它，文件正文与工件正文**各限 6000 字符**，在 `workspace_reads.file_snippets` / `artifact_snippets` 中分组；读取工件不会挤掉文件片段，反之亦然。同类多个来源仍共享该类额度，不是每个文件都给 6000。有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。这是已有观测的纯投影，不是永久记忆或第二套缓存。
+
+旧片段不因修改就整批清除：`workspace_context` 从成功的 `create_file` / `replace_text` 观测推导同路径最近修改；读取早于修改时，附 `modified_after_read_at` 指向该修改事件，说明正文是修改前的观察。修改失败或其他文件的修改不触发此标记；冻结 Artifact 不套用文件修改标记。没有标记只说明未记录后续内置写入，不保证外部进程没有改文件；不自动重读磁盘、不推导最新全文，不新增持久状态。原始 Session/trace 保留不变，同一范围的重复读取仍只选最近一次进入工作集。
+
+工作集的 `truncated` 描述实际展示的片段；`context_truncated=true` 表示上下文预算又裁剪了原始工具结果。`recent_observations` 则明确标为短历史预览，使用相同原始事件编号，预览省略不改变工具原始 `truncated` 含义。模型需要缺失正文时仍按目标行范围读取。`search_text` 是大小写不敏感的字面子串搜索，不支持正则或 `a|b` 这种“二选一”语法，工具契约明确提示分别搜索。
 
 两类读取内容仍一起计入 ContextComposer 的 Agent 总输入预算。Coding/Experiment 默认上限为 **8192 tokens**，容纳两份正文及任务、工具说明、反馈；Scientific/Compiler 保持 4096。CLI 的对应模块配置和 ModelProfile 的模型可用容量上限仍有效。这里没有动态分配、自动扩容或借用另一类闲置额度：显式配置过小且 required 内容装不下时，仍明确返回预算错误，不会静默丢掉整份读取内容。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
 

@@ -108,8 +108,8 @@ def test_artifact_does_not_evict_file_ranges_or_dependencies():
         })
     reads = _reads(state)
     files = reads["file_snippets"]
-    assert [s.get("start_line") for s in files[:2]] == [50, 10]
-    assert files[-1]["content"] == "torch"
+    assert [s.get("start_line") for s in files[1:]] == [10, 50]
+    assert files[0]["content"] == "torch"
     assert reads["artifact_snippets"][0]["content"] == "A" * 6000
     for name in ("file_snippets", "artifact_snippets"):
         assert sum(len(s["content"]) for s in reads[name]) <= READ_CONTEXT_CHARS_PER_KIND
@@ -146,6 +146,7 @@ def test_each_kind_is_truncated_at_its_own_content_limit():
         snippet = reads[name][0]
         assert len(snippet["content"]) == READ_CONTEXT_CHARS_PER_KIND
         assert snippet["truncated"] is True
+        assert snippet["context_truncated"] is True
         assert (snippet["start_line"], snippet["end_line"]) == (10, 80)
     assert sum(len(s["content"]) for name in ("file_snippets", "artifact_snippets") for s in reads[name]) == 12000
 
@@ -181,3 +182,77 @@ def test_read_metadata_cannot_bypass_working_set_budget():
     assert "summary" not in data["artifact_snippets"][0]
     assert sum(map(len, data["previously_read_files"])) <= 600
     assert set(data["previously_read_files"]) <= set(state.memory["read_paths"])
+
+
+@pytest.mark.parametrize("read_path,edit_path", [
+    ("train.py", "train.py"), ("./train.py", "train.py"),
+    ("src\\train.py", "./src/train.py"),
+])
+def test_old_file_snippets_are_retained_and_marked_after_successful_edit(read_path, edit_path):
+    state = _state()
+    _observe(state, "read_file", {
+        "path": read_path, "start_line": 1, "end_line": 100,
+        "content": "old implementation", "truncated": False,
+    })
+    _observe(state, "read_file", {"path": "requirements.txt", "content": "torch"})
+    _observe(state, "replace_text", {"path": edit_path})
+    _observe(state, "read_file", {
+        "path": edit_path, "start_line": 40, "end_line": 60,
+        "content": "new implementation", "truncated": False,
+    })
+    # An immutable Artifact may describe the same file, but it is not a live read.
+    _observe(state, "read_artifact", {
+        "artifact_id": "artifact_patch", "path": edit_path, "content": "frozen old patch",
+    })
+    for _ in range(8):
+        _observe(state, "list_files", {"paths": ["train.py"]})
+    before = state.model_dump_json()
+    reads = _reads(state)
+    old, other, new = reads["file_snippets"]
+    assert [s["observed_at"] for s in (old, other, new)] == [1, 2, 4]
+    assert old["content"] == "old implementation"
+    assert old["modified_after_read_at"] == 3
+    assert old["truncated"] is False
+    assert "modified_after_read_at" not in other
+    assert new["content"] == "new implementation"
+    assert "modified_after_read_at" not in new
+    assert "modified_after_read_at" not in reads["artifact_snippets"][0]
+    assert state.model_dump_json() == before
+    # Restarting requires no second cache or version state to recover the labels.
+    assert _reads(AgentState.model_validate_json(before)) == reads
+
+
+@pytest.mark.parametrize("tool,ok,path,event_type", [
+    ("replace_text", False, "train.py", "observation"),
+    ("replace_text", True, "other.py", "observation"),
+    ("replace_text", True, "train.py", "action"),
+    ("run_verification", True, "train.py", "observation"),
+])
+def test_only_successful_recorded_writes_mark_earlier_reads(tool, ok, path, event_type):
+    state = _state()
+    _observe(state, "read_file", {"path": "train.py", "content": "old"})
+    _observe(state, tool, {"path": path}, ok=ok)
+    state.events[-1].type = event_type
+    assert "modified_after_read_at" not in _reads(state)["file_snippets"][0]
+
+
+def test_marker_uses_latest_successful_write_without_invalidating_new_reads():
+    state = _state()
+    _observe(state, "read_file", {"path": "train.py", "start_line": 1, "content": "old"})
+    _observe(state, "replace_text", {"path": "train.py"})
+    _observe(state, "read_file", {"path": "train.py", "start_line": 2, "content": "middle"})
+    _observe(state, "replace_text", {"path": "train.py"})
+    _observe(state, "read_file", {"path": "train.py", "start_line": 3, "content": "new"})
+    _observe(state, "replace_text", {"path": "train.py"}, ok=False)
+    snippets = _reads(state)["file_snippets"]
+    assert [s.get("modified_after_read_at") for s in snippets] == [4, 4, None]
+    assert [s["content"] for s in snippets] == ["old", "middle", "new"]
+
+
+def test_context_explains_chronology_and_does_not_claim_disk_freshness():
+    state = _state()
+    _observe(state, "read_file", {"path": "train.py", "content": "observed once"})
+    content = next(s.content for s in workspace_context(state) if s.name == "workspace_reads")
+    assert "oldest first" in content
+    assert "not proof of freshness" in content
+    assert "context_truncated" in content

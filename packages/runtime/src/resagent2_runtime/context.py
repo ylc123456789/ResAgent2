@@ -97,7 +97,7 @@ def recent_tool_snippets(
     limit: int = 6,
     max_total_chars: int = 6000,
 ) -> list[dict]:
-    """Return recent unique tool snippets, newest first, within one budget.
+    """Select recent unique snippets, then present them in observation order.
 
     One or several tools share this budget. Pack newest first until the budget
     is spent; only the final retained snippet is truncated and flagged (which
@@ -105,6 +105,9 @@ def recent_tool_snippets(
     older is dropped. Identity includes the tool and ``identity_keys`` (for
     read_file, ``("path", "start_line", "end_line")``),
     so two ranges of one file coexist instead of overwriting each other.
+    ``observed_at`` preserves the source event sequence, not a file version.
+    ``truncated`` describes the presented content; ``context_truncated`` marks
+    extra clipping by this projection. The original events are never changed.
     """
     if limit < 1 or max_total_chars < 1:
         raise ValueError("limit and max_total_chars must be positive")
@@ -130,7 +133,7 @@ def recent_tool_snippets(
         if identity in seen:
             continue
         seen.add(identity)
-        recent.append(value)
+        recent.append({**value, "observed_at": event.sequence})
         if len(recent) >= limit:
             break
 
@@ -147,9 +150,10 @@ def recent_tool_snippets(
         bounded = dict(value)
         bounded[text_key] = _head_tail(content, remaining)
         bounded["truncated"] = True
+        bounded["context_truncated"] = True
         selected.append(bounded)
         break
-    return selected
+    return list(reversed(selected))
 
 
 def recent_tool_listing(

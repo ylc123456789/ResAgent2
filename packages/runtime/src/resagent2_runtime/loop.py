@@ -677,23 +677,29 @@ class AgentLoop:
         limit: int = _RECENT_OBSERVATION_LIMIT,
         value_chars: int = 400,
     ) -> ContextSection | None:
-        """Build a bounded recent tool history for the LLM context."""
+        """Build bounded history previews with their durable event sequence."""
         observations = [e for e in state.events if e.type == "observation"]
         if not observations:
             return None
         recent = observations[-limit:]
         lines: list[str] = []
-        for index, event in enumerate(recent, start=1):
+        for event in recent:
             data = event.data if isinstance(event.data, dict) else {}
             summary = data.get("summary", "")
             ok = data.get("ok", True)
             lines.append(
-                f"{index}. {event.tool}: {summary} [{'ok' if ok else 'FAILED'}]"
-                f"\n   {_trim_json(data.get('value'), value_chars)}"
+                f"Event {event.sequence}. {event.tool}: {summary} "
+                f"[{'ok' if ok else 'FAILED'}]"
+                f"\n   Value preview: {_trim_json(data.get('value'), value_chars)}"
             )
         return ContextSection(
             name="recent_observations",
-            content="Recent tool history (oldest first):\n" + "\n".join(lines),
+            content=(
+                "Recent tool history (oldest first; session event sequence). "
+                "Values are bounded history previews, not complete tool results. "
+                "An ellipsis here means preview truncation; it does not change "
+                "the original read result's truncated flag.\n" + "\n".join(lines)
+            ),
             priority=950,
             required=False,
         )

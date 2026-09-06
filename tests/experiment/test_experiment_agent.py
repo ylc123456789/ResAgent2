@@ -39,7 +39,7 @@ from resagent2_experiment.models import ExperimentAction
 from resagent2_experiment.tools import RunCommandTool
 
 
-def test_experiment_context_uses_shared_dataset_catalog() -> None:
+def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
     request = ModuleTaskRequest(
         run_id="run_test",
         task_id="task_experiment",
@@ -61,7 +61,8 @@ def test_experiment_context_uses_shared_dataset_catalog() -> None:
         updated_at=now,
     )
 
-    section = next(item for item in build_context(request, state) if item.name == "datasets")
+    binding = EnvironmentBinding(_FakeManager(tmp_path), run_id=request.run_id, workspace_id="ws_test")
+    section = next(item for item in build_context(request, state, binding=binding) if item.name == "datasets")
 
     assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
 
@@ -160,7 +161,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         system_prompt=EXPERIMENT_PROMPT,
         tools=tools,
         llm_client=ScriptedLLMClient(actions),
-        context_builder=build_context,
+        context_builder=lambda request, state: build_context(request, state, binding=binding),
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(
             WorkspaceObserver(boundary),

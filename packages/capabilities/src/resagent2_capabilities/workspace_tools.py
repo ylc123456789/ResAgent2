@@ -20,6 +20,7 @@ from .artifacts import RegisteredArtifactReader
 from .environment import EnvironmentBinding
 from .git import GitBaseline, GitWorkspace
 from .process import ProcessRunner, VerificationCommandPolicy
+from .text import slice_text_lines
 from .workspace import WorkspaceBoundary
 
 
@@ -98,21 +99,14 @@ class ReadFileTool:
         if path.stat().st_size > self.max_bytes:
             raise ValueError(f"file is too large to read: {path.stat().st_size} bytes")
         text = path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines(keepends=True)
-        start = (args.start_line or 1) - 1
-        end = args.end_line or len(lines)
-        selected = "".join(lines[start:end])
-        truncated = len(selected) > self.max_chars
-        if truncated:
-            selected = selected[: self.max_chars]
         return ToolObservation(
             summary=f"Read {args.path}",
             value={
                 "path": args.path,
-                "start_line": args.start_line,
-                "end_line": args.end_line,
-                "content": selected,
-                "truncated": truncated,
+                **slice_text_lines(
+                    text, start_line=args.start_line, end_line=args.end_line,
+                    max_chars=self.max_chars,
+                ),
             },
             memory_updates={"read_paths": _remember(state, "read_paths", args.path)},
         )
@@ -131,6 +125,10 @@ class SearchTextTool:
 
     name = "search_text"
     input_model = SearchTextInput
+    model_guidance = (
+        "path may identify a workspace file or directory. max_results must be "
+        "between 1 and 50. Use returned line numbers for a bounded read_file range."
+    )
 
     def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
@@ -139,7 +137,14 @@ class SearchTextTool:
         args = cast(SearchTextInput, arguments)
         matches: list[dict] = []
         observed: list[str] = []
-        for relative in self.boundary.iter_files(args.path):
+        try:
+            files = self.boundary.iter_files(args.path)
+        except NotADirectoryError:
+            # Directory resolution already enforced its grant; resolving the
+            # file rechecks containment and symlinks. Never catch permission errors.
+            path = self.boundary.resolve_read_file(args.path)
+            files = [self.boundary.relative(path)]
+        for relative in files:
             path = self.boundary.resolve_read_file(relative)
             if path.stat().st_size > 1_000_000:
                 continue
@@ -171,9 +176,11 @@ class SearchTextTool:
 
 
 class ReadArtifactInput(RuntimeModel):
-    """Identify one registered ArtifactRef by id."""
+    """Identify one registered ArtifactRef and an optional inclusive line range."""
 
     artifact_id: NonEmptyStr
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
 
 
 class ReadArtifactTool:
@@ -181,13 +188,20 @@ class ReadArtifactTool:
 
     name = "read_artifact"
     input_model = ReadArtifactInput
+    model_guidance = (
+        "If an artifact read is truncated, read a bounded start_line/end_line "
+        "range; do not repeat the same unbounded read. The full frozen file "
+        "is integrity-checked before any range is returned."
+    )
 
     def __init__(self, reader: RegisteredArtifactReader) -> None:
         self.reader = reader
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(ReadArtifactInput, arguments)
-        value = self.reader.read_text(args.artifact_id)
+        value = self.reader.read_text(
+            args.artifact_id, start_line=args.start_line, end_line=args.end_line,
+        )
         summaries = dict(state.memory.get("read_artifact_summaries", {}))
         summaries[args.artifact_id] = {
             "summary": value["summary"],

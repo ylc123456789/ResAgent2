@@ -53,6 +53,7 @@ from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
 from .resources import ResourceLayout
 from .snapshot import WorkspaceObserver, WorkspaceSnapshot, snapshot_workspace
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
+from .workspace_context import workspace_context
 from .workspace_tools import (
     CreateFileInput,
     CreateFileTool,
@@ -135,4 +136,5 @@ __all__ = [
     "parse_command",
     "resolve_dataset_refs",
     "snapshot_workspace",
+    "workspace_context",
 ]

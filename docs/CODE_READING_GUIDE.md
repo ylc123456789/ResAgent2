@@ -378,12 +378,13 @@ runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scient
 | 能力组         | 主要文件                                 | 含义                                   |
 | -------------- | ---------------------------------------- | -------------------------------------- |
 | 工作区边界     | `workspace.py`, `workspace_tools.py`     | 路径解析、授权、读写文件               |
+| 执行上下文投影 | `workspace_context.py`                  | Coding/Experiment 共用：实时环境状态、文件/工件片段和有界来源索引；无新状态所有者 |
 | Git 与变更基线 | `git.py`, `snapshot.py`                  | Attempt 级差异和统一 WorkspaceSnapshot |
 | 进程           | `process.py`                             | shell-free 命令执行和环境变量清理      |
 | 仓库           | `repo.py`                                | clone/copy/generated 工作区物化        |
 | 环境           | `environment.py`, `environment_tools.py` | prepare/setup/audit 和环境生命周期     |
 | 数据集         | `dataset.py`, `resources.py`             | DatasetCatalog、DatasetRef 解析与三个 Agent 的共享只读资源目录 |
-| Artifact 读取  | `artifacts.py`                           | 只读已登记 Artifact                    |
+| Artifact 读取  | `artifacts.py`, `text.py`                | 先核验整份工件，再按需读取行范围；行切片与文件读取共用 |
 | 文献           | `literature.py`                          | 文献后端和规范化候选证据               |
 | 硬件           | `hardware.py`                            | 实验硬件审计上下文                     |
 

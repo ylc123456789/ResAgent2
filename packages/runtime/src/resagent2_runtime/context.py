@@ -91,7 +91,7 @@ def _head_tail(text: str, max_chars: int) -> str:
 def recent_tool_snippets(
     state: AgentState,
     *,
-    tool: str,
+    tool: str | tuple[str, ...],
     identity_keys: tuple[str, ...],
     text_key: str,
     limit: int = 6,
@@ -99,10 +99,11 @@ def recent_tool_snippets(
 ) -> list[dict]:
     """Return recent unique tool snippets, newest first, within one budget.
 
-    Packs whole snippets by recency: the newest snippet is kept in full, then
-    the next, until the budget is spent; only the final retained snippet is
-    truncated and flagged, and anything older is dropped. Identity is the tuple
-    of ``identity_keys`` (for read_file, ``("path", "start_line", "end_line")``),
+    One or several tools share this budget. Pack newest first until the budget
+    is spent; only the final retained snippet is truncated and flagged (which
+    can also be the newest snippet if it exceeds the whole budget). Anything
+    older is dropped. Identity includes the tool and ``identity_keys`` (for
+    read_file, ``("path", "start_line", "end_line")``),
     so two ranges of one file coexist instead of overwriting each other.
     """
     if limit < 1 or max_total_chars < 1:
@@ -112,17 +113,20 @@ def recent_tool_snippets(
 
     recent: list[dict] = []
     seen: set[tuple] = set()
+    tools = (tool,) if isinstance(tool, str) else tool
     for event in reversed(state.events):
-        if event.type != "observation" or event.tool != tool:
+        if event.type != "observation" or event.tool not in tools:
             continue
         data = event.data if isinstance(event.data, dict) else {}
+        if not data.get("ok", True):
+            continue
         value = data.get("value")
         if not isinstance(value, dict):
             continue
         content = value.get(text_key)
         if not isinstance(content, str):
             continue
-        identity = tuple(value.get(key) for key in identity_keys)
+        identity = (event.tool, *(value.get(key) for key in identity_keys))
         if identity in seen:
             continue
         seen.add(identity)

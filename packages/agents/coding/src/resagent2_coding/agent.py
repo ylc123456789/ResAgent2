@@ -242,7 +242,8 @@ class NativeCodingAgent:
 
             def context_builder(request, state):
                 return build_context(
-                    request, state, control_state=derive_control_state(state, binding)
+                    request, state, control_state=derive_control_state(state, binding),
+                    binding=binding,
                 )
 
             definition = AgentDefinition(

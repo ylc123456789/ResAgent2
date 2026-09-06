@@ -200,7 +200,9 @@ class NativeExperimentAgent:
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
             llm_client=self.llm_client,
-            context_builder=build_context,
+            context_builder=lambda request, state: build_context(
+                request, state, binding=binding
+            ),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
                 observer,

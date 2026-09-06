@@ -10,6 +10,8 @@ from urllib.request import url2pathname
 
 from resagent2_contracts import ArtifactRef, RunId
 
+from .text import slice_text_lines
+
 
 class ArtifactReadError(ValueError):
     """Raised when a registered ArtifactRef cannot be verified and read."""
@@ -43,7 +45,15 @@ class RegisteredArtifactReader:
             return None
         return artifact
 
-    def read_text(self, artifact_id: str, *, max_chars: int = 8_000) -> dict:
+    def read_text(
+        self,
+        artifact_id: str,
+        *,
+        max_chars: int = 8_000,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> dict:
+        """Verify the entire frozen file before returning an optional text window."""
         artifact = self.resolve_ref(artifact_id)
         if artifact is None:
             raise ArtifactReadError(f"unknown artifact id: {artifact_id}")
@@ -58,13 +68,11 @@ class RegisteredArtifactReader:
         if digest != artifact.sha256:
             raise ArtifactReadError("artifact sha256 does not match frozen content")
         text = content.decode("utf-8", errors="replace")
-        truncated = len(text) > max_chars
-        if truncated:
-            text = text[:max_chars]
         return {
             "artifact_id": artifact.id,
             "kind": artifact.kind,
             "summary": artifact.summary,
-            "content": text,
-            "truncated": truncated,
+            **slice_text_lines(
+                text, start_line=start_line, end_line=end_line, max_chars=max_chars,
+            ),
         }

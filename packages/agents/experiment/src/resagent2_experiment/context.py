@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import dataset_context
+from resagent2_capabilities import EnvironmentBinding, dataset_context, workspace_context
 from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (
     AgentState,
     ContextSection,
-    recent_tool_listing,
-    recent_tool_snippets,
 )
 
 
@@ -29,6 +27,9 @@ Rules:
   not yet supported); on failure, fix the command from its stdout/stderr.
   Re-audit with audit_env after any setup.
 - Before any experiment command, call audit_env and ensure it reports success.
+  The current environment.certified flag reflects that audit; true remains
+  valid until environment preparation/setup changes it. Do not re-audit or
+  restart inspection just because older tool observations left the context.
 - Run experiments with run_command (one shell-free command per call); the system
   refuses experiment commands until the environment is certified.
 - Before running an unfamiliar entry script, confirm its interface first: read
@@ -60,6 +61,9 @@ Rules:
   JSON file(s) that hold your measured numbers. The deterministic finalizer reads
   those JSON files to derive the typed metrics and verifies the expected
   deliverables; do not report metric values yourself.
+- run_command already records raw stdout/stderr. Do not rerun the experiment
+  just to manufacture a log by restating metrics. If you write an explanatory
+  report, label it as derived from the result file, not as raw command output.
 
 Tool arguments:
 - list_files: {"path": ".", "max_files": 200}
@@ -75,7 +79,10 @@ Tool arguments:
 """
 
 
-def build_context(request: ModuleTaskRequest, state: AgentState) -> list[ContextSection]:
+def build_context(
+    request: ModuleTaskRequest, state: AgentState,
+    *, binding: EnvironmentBinding,
+) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
         {"id": artifact.id, "kind": artifact.kind, "summary": artifact.summary}
@@ -94,12 +101,6 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
                 ensure_ascii=False,
             ),
             priority=100,
-            required=True,
-        ),
-        ContextSection(
-            name="environment",
-            content=json.dumps(state.memory.get("environment", {}), ensure_ascii=False),
-            priority=90,
             required=True,
         ),
         ContextSection(
@@ -122,28 +123,5 @@ def build_context(request: ModuleTaskRequest, state: AgentState) -> list[Context
             required=True,
         ),
     ]
-    read_files = recent_tool_snippets(
-        state,
-        tool="read_file",
-        identity_keys=("path", "start_line", "end_line"),
-        text_key="content",
-    )
-    if read_files:
-        sections.append(
-            ContextSection(
-                name="read_files",
-                content=json.dumps(read_files, ensure_ascii=False),
-                priority=60,
-                required=True,
-            )
-        )
-    listing = recent_tool_listing(state, tool="list_files", list_key="paths")
-    if listing:
-        sections.append(
-            ContextSection(
-                name="directory",
-                content=json.dumps(listing, ensure_ascii=False),
-                priority=62,
-            )
-        )
+    sections.extend(workspace_context(state, binding=binding))
     return sections

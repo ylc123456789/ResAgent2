@@ -1,6 +1,7 @@
 """Deterministic checks for shared application state across multiple Runs."""
 
 import hashlib
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -282,5 +283,5 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     state = agent.store.load(result.session.id)
     assert client.artifact_id in state.memory["read_artifact_ids"]
     reads = [e for e in state.events if e.type == "observation" and e.tool == "read_artifact"]
-    assert reads[-1].data["value"]["content"] == '{"papers": []}'
+    assert json.loads(reads[-1].data["value"]["content"]) == {"papers": []}
     assert "read_artifact_summaries" not in state.memory

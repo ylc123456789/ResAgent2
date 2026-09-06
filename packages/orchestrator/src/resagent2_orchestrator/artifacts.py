@@ -225,8 +225,10 @@ class ArtifactRegistry:
             raise ArtifactRegistrationError(
                 f"unsupported scientific artifact kind: {candidate.kind}"
             )
+        # read_artifact pages by line before applying its character limit.
+        # Keep generated records multiline so later papers remain reachable.
         encoded = json.dumps(
-            candidate.metadata, sort_keys=True, ensure_ascii=False
+            candidate.metadata, sort_keys=True, ensure_ascii=False, indent=2
         ).encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
         artifact_id = f"artifact_sci_{digest[:16]}"

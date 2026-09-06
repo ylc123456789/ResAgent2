@@ -13,8 +13,8 @@
 | S2 验证与指标 | F03/F04/F11；共享验证有效性判断 | 已完成 |
 | S3 返回验收与诊断 | F06/F07/F08/F09/F10；统一证据种类语义 D2 | 已完成 |
 | S4 Runtime 边界 | F12；互斥控制信号 D3、可选客户端能力/trace 语义 D4/D5 | 已完成 |
-| S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 本地完成；8f809cf 服务器 8/9，默认 Flash 黄金链未通过 |
-| S6 服务器反馈收敛 | 实时环境投影、共享文件/工件读取、交付名称语义对齐 | 时序收尾本地 694 passed、1 skipped；新增 Scientific 工件工作集收敛，本地 701 passed、1 skipped，mock completed；本轮服务器待验收 |
+| S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 已完成；8f809cf 的历史黄金链失败已由 S6 后续修复与 392e312 服务器回归收敛 |
+| S6 服务器反馈收敛 | 实时环境投影、共享文件/工件读取、交付名称语义对齐 | 已完成；392e312 的 9 次正常入口及 1 次持续429已核；8bcf0e2 本地 703 passed、1 skipped、mock completed，服务器新增测试 2 passed、单次 literature 真实尾部读取/引用/hash/权限已核 |
 
 不同文件的实现可并行，但按明确范围逐批检查并提交；不在同一文件里同时进行无关重构。
 
@@ -53,7 +53,9 @@
 
 ## 验收记录
 
-- S6 Scientific 读取闭环（2026-09-06）：Scientific build_context 复用 workspace_context(state)，不传环境绑定；工件正文从原始 Session 事件按来源/行范围投影，总共 6000 字符、required，移除 read_artifact_summaries 正文前缀生产缓存。Native/CLI 默认 Scientific 输入上限调整为 8192，Compiler 保持 4096，Coding/Experiment 不变。仅补职责提示：检索服务故障不得派代码/实验任务绕路，需要外部材料或决定时走已有 ask_user；replace_text 的“唯一匹配”指每次调用，可多次调用。未新增状态机、Compiler review、正文缓存、长期记忆或摘要 LLM。本地隔离 cwd 全量 **701 passed、1 skipped**，mock E2E completed、diff 检查干净；本轮服务器尚未验收，不能沿用之前 completed 或本地测试宣称真实引用质量/故障策略已通过。另记录既有 Composer 未计标题/分隔符的估算偏差，本轮不扩范围修改。最新交接与边界见 [Scientific 上下文验收单](SCIENTIFIC_CONTEXT_ACCEPTANCE.md)。
+- S6 自产文献 JSON 收尾：已审计 `392e312` 的 `/root/autodl-tmp/e2e-context-392e312-20260906/`，9 次正常入口与持续 429 注入均达到各自场景要求；3 次 literature 最终上下文可见完整 SENet 摘要，429 正确 ask_user/PAUSED 且无派单。问答原始调用为 1+1=2；检索后台 3 attempts 是首次+2 retry；repair 无科学假设时 not_applicable 合理，不称为漂移。另确认报告所称“单行 JSON 非 bug”错误：自产 >8000 字符单行列表的后文不能通过行范围取回。本次只在 register_scientific 用 indent=2 生成新工件并按新字节计算 hash，不动旧工件、reader 或预算算法。新增真实登记→冻结→尾部行范围读取回归，拒绝以空读冒充成功。代码 `8bcf0e2e899e85cd03be764c05c1c06bc134f8c9` 本地 **703 passed、1 skipped**，mock completed、diff 检查干净；服务器新增 2 项测试通过，`/root/autodl-tmp/e2e-literature-8bcf0e2-20260906/` 单次真实 literature rc=0/completed/artifacts=2，4 调用、0 客户端重试。已核新 JSON 15183 字符/137 行及 hash，真实 [100:200] 读取返回 3285 字符完整尾部并进入下一 prompt；最终 supports 依据可见 SENet 摘要且声明未读全文。trace 0700/0600、无凭据泄漏、8 包来自干净新 worktree，旧 editable 392e312 未改。标题/分隔符预算开销仍是独立已知项。详见 [Scientific 上下文验收单](SCIENTIFIC_CONTEXT_ACCEPTANCE.md#5-392e312-服务器审计记录)。
+
+- S6 Scientific 读取闭环（2026-09-06）：Scientific build_context 复用 workspace_context(state)，不传环境绑定；工件正文从原始 Session 事件按来源/行范围投影，总共 6000 字符、required，移除 read_artifact_summaries 正文前缀生产缓存。Native/CLI 默认 Scientific 输入上限调整为 8192，Compiler 保持 4096，Coding/Experiment 不变。仅补职责提示：检索服务故障不得派代码/实验任务绕路，需要外部材料或决定时走已有 ask_user；replace_text 的“唯一匹配”指每次调用，可多次调用。未新增状态机、Compiler review、正文缓存、长期记忆或摘要 LLM。本地隔离 cwd 全量 **701 passed、1 skipped**，mock E2E completed、diff 检查干净；提交时服务器尚未验收，后补 392e312 实测见上一条。另记录既有 Composer 未计标题/分隔符的估算偏差，本轮不扩范围修改。最新交接与边界见 [Scientific 上下文验收单](SCIENTIFIC_CONTEXT_ACCEPTANCE.md)。
 
 - S6 时序收尾（2026-09-06）：核读 `/root/autodl-tmp/e2e-context-b2b7056-20260906/` full trace。Flash 黄金链三次、Pro、repair、direct、跨进程问答通过，但不能据此宣称全绿：literature 遇 timeout/429 后错误转发不适用的工作，最终失败。慢轮 Coding 25 次读取中 19 次在编辑前，旧片段共存并不能解释所有重复读取。按用户裁定保留历史而非修改后清空：复用事件编号展示先后，标注后续已成功的文件修改；区分工作集/短预览截断；明确 search_text 字面搜索。没有新增文件版本库、缓存、LLM 调用、预算扩容或状态机。新代码本地及服务器验收见 [上下文时序验收单](CONTEXT_ORDER_ACCEPTANCE.md)。literature 服务失败后的错误路由尚未修复，不在本次改动中宣称解决。
 

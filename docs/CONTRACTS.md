@@ -384,6 +384,8 @@ ArtifactRef 的 provenance 有三种互斥形状：
 
 模型拒绝混合 Session 与 Task 字段、缺半个 task/attempt、非正 attempt 等非法形状；任务 owner 与当前 Run 的一致性还由登记和接收边界检查。所有 Artifact 必须有所属 run_id、Registry 计算的 sha256 和冻结 uri。读取器对静态授权和动态解析的 Ref 都在读文件前核对请求的 ArtifactId 与当前 run_id，再检查本地 URI 和 hash；不能先把跨 Run 内容交给模型，再等最终 gate 拒绝。
 
+`register_scientific` 生成的 JSON 按 `indent=2` 编码后计算 SHA256 并冻结，避免结构化文献列表整体变成超长单行、后文无法按行取回。数据含义不变；格式变化产生的新字节拥有对应的新 hash，旧 Artifact 不重写，reader 不在 hash 校验前后悄悄改写内容。
+
 `ArtifactImport` 是用户提供的最小输入，不含 provenance 或 hash；Controller 验证本地 URI、冻结复制、校验 `expected_sha256` 后生成 `orchestrator/import` ArtifactRef。
 
 ## 14. Workspace 契约

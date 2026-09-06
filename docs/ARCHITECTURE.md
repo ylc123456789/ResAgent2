@@ -573,6 +573,8 @@ Scientific Agent 只能通过本 Run 的 ArtifactRef 授权集合读取已有证
 
 ArtifactRef 的 provenance 是互斥三态（见 `CONTRACTS.md` §13）：执行 Artifact（coding/experiment + task/attempt）、Scientific Tool Artifact（scientific + session）、Orchestrator Artifact（orchestrator + source_type=import/final_report）。`literature_search` 成功后先规范化结果，通过 composition root 注入的 Artifact registration port 交给同一个 Orchestrator Artifact Registry，以当前 run/session 冻结登记，再把 ArtifactRef 返回 Agent。Scientific Tool 不能自行分配 ArtifactId、hash 或伪造 provenance。
 
+Registry 自产的 Scientific JSON 使用多行序列化（`indent=2`），使长文献列表的后部可通过现有行范围读取；SHA256 按最终冻结字节计算。只影响新工件，不重写旧工件或在读取时重新格式化，避免破坏完整性校验。
+
 observation history 的所有者是 runtime SessionStore；Orchestrator 不读取原始 prompt、reasoning 或任意 Session event。跨边界只传 ScientificPort finalizer 从 trusted Tool result 派生的 `observed_artifact_ids`，ResearchRun 持久化其已复核并集用于最终审计。
 
 ## 13. 完成判定

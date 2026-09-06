@@ -187,6 +187,7 @@ Scientific Tool: Candidate → 注入的 ArtifactRegistrationPort → 同一个 
 - **输出**：Registry 返回冻结内容的 ArtifactRef；reader 返回内容与引用信息，工具再包装为 ToolObservation。只有登记引用不等于模型已观察内容，Scientific 的 observed IDs 从成功工具记录派生。
 - **文件与状态所有权**：Registry 校验文件与来源，计算 hash；任务工件 register 使用完整单工件 staging 目录 rename 提交，import/scientific/final_report 专用入口当前采用先建目录、临时文件替换的提交方式，不能一概称为整目录事务。Controller/Scheduler 将 Ref 写入 Run；Registry 不改变 TaskStatus 或科学观点。
 - **读取规则**：按授权引用解析并核验内容完整性；动态 resolver 支持同一 turn 刚由 literature_search 登记的工件。必须在读取字节前满足当前 Run 的授权，而非等最终引用校验才拦截。
+- **自产 JSON 的可读性**：register_scientific 在冻结前按 indent=2 生成多行 JSON，再按实际字节计算 hash；让长文献列表可按行取回后部。旧工件不改写，读取器不重新格式化，空范围读取不代表已经取回缺失内容。
 - **成功与诊断**：成功依赖工件可传给下游；failed/blocked 的 Artifact 可以保存为诊断，但不能被包装成成功实验。summary、stderr 摘录和 typed metrics 各有用途，原始冻结工件保留证据根源。
 - **失败与原子性**：非法路径、丢失文件、hash 不符应拒绝。单工件 staging 不意味着一次批量登记或 Run + Session + Artifact 是跨资源事务；可能已有前面的工件登记成功，后面的登记失败。
 - **重复调用**：各入口有各自重复登记检查；最终报告已有幂等恢复路径，不能推广为所有外部副作用 exactly-once。读取可重复，授予更多工件必须经过登记和授权链。

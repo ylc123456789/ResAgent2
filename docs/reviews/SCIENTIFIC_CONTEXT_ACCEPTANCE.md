@@ -1,6 +1,6 @@
 # Scientific 工件上下文与检索职责：验收单
 
-分支：`fix/contract-foundations`。测试前记录待测提交完整 SHA 和安装指针；不使用父提交结果代替。本地隔离 cwd 全量 **701 passed、1 skipped**，mock E2E completed，`git diff --check` 干净。新增 4 项实际 Scientific 上下文/容量测试和 3 项 Prompt 静态回归；**本轮服务器尚未验收**。
+分支：`fix/contract-foundations`。`392e312` 的服务器 **9 次正常入口 + 1 次持续 HTTP 429 注入已核验**，见 §5。后续多行 JSON 小补丁代码提交为 `8bcf0e2e899e85cd03be764c05c1c06bc134f8c9`，本地隔离 cwd 全量 **703 passed、1 skipped**，mock E2E completed，`git diff --check` 干净；服务器新 workdir 单次 literature **rc=0、completed、artifacts=2**，新增 2 项确定性测试通过。已核真实尾部范围内容进入下一 prompt、工件 hash、trace 权限和安装指针，详见 §6；新旧提交的验收范围分别保留。
 
 ## 1. 本轮边界
 
@@ -9,6 +9,7 @@
 - Scientific Native/CLI 默认总输入上限 8192 tokens；Compiler 4096，Coding/Experiment 8192。显式配置及模型可用容量仍是硬上限，不因缺内容自动扩容。
 - Scientific prompt 明确检索/读取/判断是自有职责，timeout/429 经已有重试失败不能成为派代码/实验任务的理由；需要材料或恢复决定时走既有 ask_user。未修改 Compiler review、状态机或 required evidence 判据，**提示词不是确定性路由保证**。
 - `replace_text` 的唯一匹配是每次调用要求，不限制一个任务只能修改一次。未改编辑算法。
+- 后续小补丁仅将 `ArtifactRegistry.register_scientific` 生成的 JSON 按 `indent=2` 序列化再冻结，便于对结构化文献列表按行读取；新工件的 SHA256 基于新字节计算，不改旧工件，不在 reader 中改写冻结内容。
 
 ## 2. 本地确定性检查
 
@@ -77,4 +78,40 @@ ScriptedLLM 可以确定性验证数据通路，但不能证明真实模型遵�
 
 交付 MANIFEST（SHA、安装指针、逐次结果、正常/注入区分）、原始 trace、Session/Run、冻结工件及分析脚本。至少列出：关键科学论断→工件内容的对应、中部读取→下一 prompt 的证据、required section/预算结果、429 后实际控制动作、回归真实指标和已知缺口。
 
-本地绿、action_valid=true、一个 completed 或不同模型通过都不能代替上述证据。未做项明确未做；不根据测试 AI 的“模型漂移”标签跳过原始消息检查。确认完成后再另行决定 push/合并，当前文档不代表服务器已验收。
+本地绿、action_valid=true、一个 completed 或不同模型通过都不能代替上述证据。未做项明确未做；不根据测试 AI 的“模型漂移”标签跳过原始消息检查。具体已验证范围以 §5 记录为准，新补丁未验证范围见 §6；push/合并另行决定。
+
+## 5. 392e312 服务器审计记录
+
+产物根：`/root/autodl-tmp/e2e-context-392e312-20260906/`。已对照 full trace 的原始请求/响应、Session、冻结工件和 Run，不只复述测试报告。9 次正常入口包括：Flash literature ×3、code-experiment、repair、direct、ask-start/ask-resume 两个进程，以及 V4-Pro code-experiment；均达到相应场景结果。另有 1 次持续 429 故障注入，按正确暂停而非 completed 判定。
+
+| 审计项 | 已核证据与结论 |
+|---|---|
+| literature ×3 的结论依据 | 三次最终 Scientific 请求的工作集均可见完整 SENet 摘要，关键结论与摘要内容相关；这是摘要层证据，不代表读取了论文全文。对应 final call_id：`a20a623660c742c79c0c610d419888c4`、`0851f25e0be64c26a0dce74bcb0bc177`、`b00df6ede3c7442298f9f25b24cf3139`。 |
+| 持续 HTTP 429 | search call `538b9ca0b8854b15ad5f21fb2e37650b` 后，`ef650affc5914a73bda9361ec19be15e` 调 ask_user；Run 正确 PAUSED，无替代检索的 WorkRequest/代码/实验 Task。后台实际 **3 次 HTTP attempts = 首次请求 + 2 次 retry**，不是首次之外又重试 3 次；也不能把后台次数当成 LLM 调用次数。 |
+| ask-start / ask-resume | 原始 trace 分别 **1 次 / 1 次 LLM 调用，共 2 次**。暂停→新进程提交 accuracy→完成，答案得到记录；恢复后 Run 的累计数不能再与首阶段重复相加。 |
+| repair verdict | final call `e051223df6e849f7bb71da0f05b702d6` 的任务是修复并运行脚本，`hypothesis=null`；在真实修复/重跑完成的前提下，`not_applicable` 是合理的科学假设判定，不应仅因它不是 supports 就归为模型漂移。 |
+
+这些结果支持 Scientific 工件工作集及检索故障职责提示在这批运行中生效，但不证明所有模型与所有运行都必然服从 Prompt，也不消除下面的序列化缺口。§2 中标题/分隔符未计入预算的已知问题继续单独跟踪，本轮未修改。
+
+## 6. 自产单行 JSON：确认缺陷与小补丁验收
+
+原测试报告把“工件是单行 JSON”判断为非 bug，不成立。自产文献列表可能整体序列化成超过 8000 字符的一行：read_artifact 读第 1 行仍只能返回受上限约束的前缀，读第 2 行以后则为空，后文根本无法用现有行范围接口取回。工作集的 6000 字符额度不是这个问题的唯一来源；增加上下文不会让不存在的第 2 行出现。旧现场 `artifact_sci_1d6c597a030934be` 保留作例证，不能把空范围读取当作成功读取中部内容。
+
+最小修复放在生产端：register_scientific 用 `indent=2` 生成多行 JSON，保持原 JSON 数据含义，先生成新字节再计算 hash 并冻结。reader 的 Run 授权、整文件 SHA256 检查、行范围接口和 8000 字符工具上限均不改变，旧工件与其 hash 不改写。该修复针对结构化文献列表整体挤成一行，不声称能任意分页一个本身超过上限的超长字符串字段。
+
+新增确定性验收链必须使用实际登记与读取组件：
+
+1. 构造总序列化长度 **>8000 字符** 的文献工件，在列表尾部放一个可定位的真实内容标记；通过真实 register_scientific 生成并冻结，不直接手写“理想的多行文件”代替生产端。
+2. 校验新工件可被 JSON 解析且数据等价、包含多行、ArtifactRef.sha256 等于实际冻结字节的 hash。
+3. 默认读取受限后，定位尾部内容所在的真实行，用 read_artifact 的 start_line/end_line 读取，断言内容**非空且确实包含尾部标记**、范围未截断；越过文件末尾得到空串不能算通过。
+4. 有界范围正文应能进入 Scientific 下一次实际构造的模型请求；保留已有 Native/Session 工作集回归。这里的确定性客户端只验证通路，不冒充真实模型选择了正确范围。
+
+本次小补丁代码提交：`8bcf0e2e899e85cd03be764c05c1c06bc134f8c9`。本地隔离 cwd 全量 **703 passed、1 skipped**，mock E2E completed，`git diff --check` 干净。服务器已在新根 `/root/autodl-tmp/e2e-literature-8bcf0e2-20260906/` 跑该提交的单次真实 literature，日志确认 **rc=0、run status=completed、artifacts=2**；新增 2 项确定性回归也在服务器通过。
+
+此次真实 LLM 验收用时约 **80 秒**，**4 次调用、0 次客户端重试**。原始 trace 对应链路是：literature_search → 默认 read_artifact 返回 8000 字符并标截断 → read_artifact 请求 **[100:200]** → finish。新冻结 JSON 共 **15183 字符、137 行**，SHA256 与 ArtifactRef 匹配；范围读取返回从第 100 行到文件末尾的 **3285 字符**，非空且 `truncated=false`，不是超出文件行数后的空读。
+
+该范围包含末尾 SENet 的完整摘要、`paper_id=1709.01507`、`2.251%` 与约 `25%` 的错误率相对降低描述。下一次 Scientific 请求的 required `workspace_reads` 保留了这份范围正文，工件正文池合计 6000 字符；没有用旧前缀缓存替代。最终 call_id 为 `2fcf649ebc1a4b56990950e1eb950401`，verdict=supports，与可见摘要相关；limitations 明确只据摘要、没有读论文全文。该次结果验证了“自产多行工件→实际范围读取→下一 prompt→有依据的结论”，不是仅验证 completed 状态。
+
+trace 目录/文件权限为 **0700/0600**，凭据扫描未发现泄漏。8 个包的源码路径断言均指向新待测 worktree，新 worktree 干净；原 editable 安装仍指向 392e312，没有重新绑定或清理旧现场。原始记录与分析收在上述新产物根目录。
+
+旧 392e312 的单行工件和三次正常 literature 不计入新格式验收；8bcf0e2 这次单独运行也不冒充将此前所有场景再跑了一遍。标题/分隔符预算开销仍按 §2 作为独立已知项保留，不因本次通过而隐去。

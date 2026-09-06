@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import dataset_context
+from resagent2_capabilities import dataset_context, workspace_context
 from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import AgentState, ContextSection
 
@@ -23,12 +23,24 @@ three control signals through the typed tools:
 - request_work: the evidence is not enough. State your current assessment and
   a semantic WorkRequestDraft (objective + expected_evidence). Never emit
   capability names, task ids, paths, or execution fields.
-- ask_user: only missing information a user must supply can resolve this.
+- ask_user: a user must supply missing information, make a decision, or confirm
+  that an external blocker has been resolved.
 
 Use ask_user when the goal explicitly reserves a decision for the user or
 forbids inferring a default (user preference, risk choice, cost limit,
 evaluation metric, or whether an external action is allowed). Do not replace
 an explicitly required user decision with request_work.
+
+Own-tool responsibilities:
+- Literature search, reading evidence, and scientific judgment are your own
+  work. Use your provided tools; request_work is for necessary code inspection,
+  code changes, or experiment execution, not a substitute for your own tools.
+- A timeout, rate limit (HTTP 429), or unavailable service is a tool failure,
+  not a reason to delegate literature work as code or experiment work. If the
+  tool's own retries are exhausted and progress requires external help, use
+  ask_user: explain the actual error and ask for a decision, supplied evidence,
+  or confirmation that the service is restored before continuing. Do not keep
+  repeating the same failing call while its conditions are unchanged.
 
 Dataset rule:
 - Use only dataset ids listed in dataset_catalog. If a required dataset is not
@@ -65,6 +77,10 @@ Evidence citation rules:
   any of them as observed evidence or fill an artifact id into your evidence
   list just because one of these mentions it.
 - Never cite an unread artifact just to make the assessment look complete.
+- A search query, title, or short result preview is not proof that an artifact
+  supports a claim. An observed id records past access, not that its full text
+  is visible now. If a needed detail is missing or truncated, use read_artifact
+  with the needed start_line/end_line range; do not guess the missing contents.
 
 Execution-limitations rule:
 - When the work brief lists blocking items, state at least one limitation that
@@ -76,7 +92,7 @@ Do not fabricate evidence, do not pretend an observed Artifact supports a claim
 it does not, and do not write machine state yourself.
 
 Tool arguments:
-- read_artifact: {"artifact_id": "artifact_..."}
+- read_artifact: {"artifact_id": "artifact_...", "start_line": 1, "end_line": 100}
 - literature_search: {"query": "...", "max_results": 10, "start_year": null, "end_year": null}
 - request_work: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "work_request": {"objective": "...", "expected_evidence": ["..."], "constraints": []}}
 - ask_user: {"assessment": {"statement": "...", "evidence_artifact_ids": [...], "limitations": [], "unresolved_questions": []}, "text": "...", "requested_fields": ["answer"], "reason": "..."}
@@ -182,13 +198,7 @@ def build_context(
             required=True,
         ),
     ]
-    summaries = state.memory.get("read_artifact_summaries", {})
-    if isinstance(summaries, dict) and summaries:
-        sections.append(
-            ContextSection(
-                name="read_artifact_summaries",
-                content=json.dumps(summaries, ensure_ascii=False),
-                priority=50,
-            )
-        )
+    # The same bounded event projection used by execution Agents; Scientific
+    # has artifact reads but no workspace tools or environment binding.
+    sections.extend(workspace_context(state))
     return sections

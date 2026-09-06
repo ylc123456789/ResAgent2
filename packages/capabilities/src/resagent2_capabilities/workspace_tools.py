@@ -206,11 +206,6 @@ class ReadArtifactTool:
         value = self.reader.read_text(
             args.artifact_id, start_line=args.start_line, end_line=args.end_line,
         )
-        summaries = dict(state.memory.get("read_artifact_summaries", {}))
-        summaries[args.artifact_id] = {
-            "summary": value["summary"],
-            "content": value["content"][:2_000],
-        }
         return ToolObservation(
             summary=f"Read registered Artifact {args.artifact_id}",
             value=value,
@@ -220,7 +215,6 @@ class ReadArtifactTool:
                     "read_artifact_ids",
                     args.artifact_id,
                 ),
-                "read_artifact_summaries": summaries,
             },
         )
 

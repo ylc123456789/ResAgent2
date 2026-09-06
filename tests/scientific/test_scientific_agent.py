@@ -1,6 +1,7 @@
 """Tests for the native Scientific Agent (DEVELOPMENT_PLAN §7.4)."""
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -514,7 +515,7 @@ def test_repeated_first_request_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
-    """Reading A then B must keep both summaries in the session memory."""
+    """Reading A then B keeps both bodies in the actual next LLM request."""
     agent = ScientificAgent(
         ScriptedLLMClient(
             [
@@ -539,8 +540,15 @@ def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
 
     assert result.status == "completed"
     state = agent.store.load(result.session.id)
-    summaries = state.memory["read_artifact_summaries"]
-    assert set(summaries) == {"artifact_a", "artifact_b"}
+    context = agent.llm_client.contexts[-1]
+    assert "workspace_reads" in context.included_sections
+    section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
+    reads = json.loads(section.split("\n", 1)[1])
+    assert {s["artifact_id"]: s["content"] for s in reads["artifact_snippets"]} == {
+        "artifact_a": '{"value": 1}', "artifact_b": '{"value": 1}',
+    }
+    assert set(state.memory["read_artifact_ids"]) == {"artifact_a", "artifact_b"}
+    assert "read_artifact_summaries" not in state.memory
 
 
 def test_repeated_work_outcome_delivery_is_idempotent() -> None:

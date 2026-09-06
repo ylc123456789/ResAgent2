@@ -378,7 +378,7 @@ runtime 只解决“Agent 怎么运行”，不包含 read_file、git 或 scient
 | 能力组         | 主要文件                                 | 含义                                   |
 | -------------- | ---------------------------------------- | -------------------------------------- |
 | 工作区边界     | `workspace.py`, `workspace_tools.py`     | 路径解析、授权、读写文件               |
-| 执行上下文投影 | `workspace_context.py`                  | Coding/Experiment 共用：实时环境状态、文件/工件片段和有界来源索引；无新状态所有者 |
+| 读取/执行上下文投影 | `workspace_context.py`              | 三个 Agent 共用：Scientific 只取工件片段；Coding/Experiment 另取文件与环境绑定；无新状态所有者 |
 | Git 与变更基线 | `git.py`, `snapshot.py`                  | Attempt 级差异和统一 WorkspaceSnapshot |
 | 进程           | `process.py`                             | shell-free 命令执行和环境变量清理      |
 | 仓库           | `repo.py`                                | clone/copy/generated 工作区物化        |
@@ -521,6 +521,8 @@ Runtime 在工具派发前还会复查截止时间：LLM 或权限检查已耗�
 Scheduler 冻结 code patch、变更文件和 experiment metrics，生成 WorkOutcome。Controller 把它交回同一个 ScientificSession；Scientific 必须先通过 read_artifact 真正观察证据，才能在 opinion 中引用。
 
 `context.py` 调用 Scientific 内部的 `interpreter.render_work_brief`，把 `WorkOutcome` 整理成工作目的、结果和待解决问题：保留失败任务的目标与有界诊断，隐藏内部 TaskId。summary 是解释性文字，指标和原始文件仍须沿 Artifact 阅读。原始 WorkOutcome 保留作审计；最终由 Orchestrator 从 Run 对账执行问题，Scientific 用 limitations 说明其科学影响。
+
+“读过”与“当前能看到正文”是两回事。Scientific 也调用共享的 `workspace_context(state)`：从 Session 读取事件构造总共 6000 字符的 required 工件工作集，显示读取顺序、行范围和截断情况，不保留第二套正文前缀缓存。需要未展示的细节就按行范围读取冻结工件；仅有标题、说明或已读 ID 不能当作结论的支持依据。这里复用的是能力组件，不是把 Scientific 变成执行 Agent；它不传环境绑定，默认总输入预算为 8192 tokens。
 
 ### 第八步：最终完成
 

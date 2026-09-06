@@ -40,6 +40,7 @@ ScientificPort.run(request: ScientificTurnRequest) -> ScientificTurnResult
 
 - **给模型看什么**：`interpreter.render_work_brief` 将执行结果投影成目的、完成情况、解释性 narrative、警告、失败诊断和证据指针。不把原始执行对象或内部 Task ID 原样 dump 给模型。summary 可帮助模型理解，但不是机器状态或数字证据的权威。
 - **副作用**：Scientific 可调用只读工件工具、检索文献；检索产物通过注入的 registration port 登记。它不改 Workflow/Task，不直接调用 Coding 或 Experiment。
+- **自有能力与服务故障**：Prompt 要求检索、证据阅读和科学判断自行使用对应 Tool；timeout/429 经工具重试仍失败不是派代码/实验任务的理由。需要材料或恢复决定时使用已有 ask_user。这是行为指引，不是新的确定性路由保证。
 - **暂停与恢复**：一个 Run 使用同一个 Scientific Session，跨越多个 WorkRequest。原生实现按 `work_request_id` / `question_id` 缓存已交付结果，重复交付不重新追加观测或调用 LLM；这不是所有替换 Port 自动具备的能力。
 - **完成边界**：最终 gate 从 Run 对账执行问题、证据归属与观察记录；失败任务的 ID 由代码写入最终报告，不要求模型传回。用户答案的路由以已持久化问题为准，不广播到其他 Agent。
 - **接收验收**：四种响应都先校验 schema、所属 Scientific Session/状态、观察与引用的 Run 归属，再确认交付。非法回复不能消费 stable WorkOutcome、标记答案已交付或替换 Session；已发生的调用仍计账。最终 gate 是可独立调用的入口，会再验完整 completed 响应。Scientific 自己在转译失败时结算其所属 Session，不让 failed 与 completed 状态矛盾。
@@ -131,7 +132,7 @@ Tool.execute(state: AgentState, arguments: BaseModel) -> ToolObservation
 - **状态与副作用**：工具按约定不直接修改 AgentState，返回 memory_updates；Runtime 保存观测并应用更新。工具仍可操作授权文件、进程或共享 EnvironmentBinding，“不改 AgentState”不等于纯函数。
 - **错误处理**：参数校验错误、工具返回 `ok=False` 或执行时抛出的 PermissionError 等可转成反馈后继续，受预算和连续失败上限限制；PermissionPolicy 返回不允许时则立即以 permission_denied 失败，不进入重试。不可恢复异常/耗尽限制也返回模块失败。未知工具按既有拒绝策略处理，不放宽 schema 来吞错。
 - **重复与恢复**：读取通常可重复；修改文件、安装依赖和启动实验不承诺幂等。Session checkpoint 保存观测，不是外部副作用的 exactly-once 事务。
-- **共享位置**：通用片段/目录预算机制属于 runtime；capabilities.workspace_context 将该机制应用于 Coding/Experiment 的文件+工件工作集，并投影同一 EnvironmentBinding 的实时状态。安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
+- **共享位置**：通用片段/目录预算机制属于 runtime；capabilities.workspace_context 应用于三个 Agent。Coding/Experiment 使用文件+工件工作集，并投影同一 EnvironmentBinding 的实时状态；Scientific 只使用工件工作集，不传绑定、不因此获得执行能力。安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
 - **读取出口**：read_file/read_artifact 共用有界行切片，工件先核验整个文件 hash 再切片；search_text 可搜单文件或目录，是大小写不敏感的字面子串搜索，不支持正则。文件/工件正文各 6000 字符，在 workspace_reads 中分组；优先选择近期片段，按事件顺序展示。observed_at 标读取事件，modified_after_read_at 标后续成功文件修改；旧正文可保留作历史，不冒充当前版本。context_truncated 区分工作集追加截断与原始读取，短 history preview 不等于完整工具结果。复用读取逻辑不等于共享同一份局部额度，两类均计入 Agent 总输入预算。工作集不是永久记忆，省略内容可按来源/范围取回；环境已审计状态不依赖最近六条观测是否还在。
 - **截止与控制信号**：LLM/权限检查之后、真正派发工具之前再检查 wall-clock 截止时间；过期动作不执行，已发生调用仍记账。这不是执行中工具的抢占取消。ToolObservation 模型强制三种控制信号至多一个，不依赖分支顺序解释冲突。
 - **客户端与 trace**：客户端只需实现 next_action，可选预算/trace hooks 按能力检测调用；无 attempt 计量时按每请求一次记账。action_valid 记录响应解析/Action 调试状态，不证明工具 arguments 合法或工具执行成功；验收还需关联参数错误、observation.ok 和最终状态。
@@ -189,7 +190,7 @@ Scientific Tool: Candidate → 注入的 ArtifactRegistrationPort → 同一个 
 - **成功与诊断**：成功依赖工件可传给下游；failed/blocked 的 Artifact 可以保存为诊断，但不能被包装成成功实验。summary、stderr 摘录和 typed metrics 各有用途，原始冻结工件保留证据根源。
 - **失败与原子性**：非法路径、丢失文件、hash 不符应拒绝。单工件 staging 不意味着一次批量登记或 Run + Session + Artifact 是跨资源事务；可能已有前面的工件登记成功，后面的登记失败。
 - **重复调用**：各入口有各自重复登记检查；最终报告已有幂等恢复路径，不能推广为所有外部副作用 exactly-once。读取可重复，授予更多工件必须经过登记和授权链。
-- **模型可见性**：Scientific 看到授权目录、简报和主动读取内容，不应看到任意候选路径或另一 Run 的文件。full trace 是独立调试记录，不自动成为 Artifact 或科学证据。
+- **模型可见性**：Scientific 看到授权目录、简报和主动读取内容，不应看到任意候选路径或另一 Run 的文件。工件正文经共享 workspace_context 从成功读取事件投影，按来源/行范围保留，共计 6000 字符、required；不再使用 read_artifact_summaries 前缀缓存。已观察 ID 不保证正文仍可见，省略的细节可按范围重读。full trace 是独立调试记录，不自动成为 Artifact 或科学证据。
 - **读取隔离**：reader 显式绑定 Run，读取字节前核对 Ref.id/run_id；动态 resolve 显式接收 run_id，CLI/E2E 用 (run_id, artifact_id) 索引，同内容的跨 Run 工件不会相互覆盖（F02 已修）。hash 校验仍只负责内容完整性。
 - **登记失败**：不清零已发生的调用、不丢 Session/原诊断；已有原错误时追加 artifact_registration_error，禁止因登记失败自动重试。此前成功登记的工件保留为可追踪的部分结果，不承诺批量原子性。
 

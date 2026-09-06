@@ -82,8 +82,8 @@ def _model_profile() -> ModelProfile:
 
 
 def _component_context_limit(component: str) -> int:
-    # Execution Agents retain both file and artifact snippets, plus tool contracts.
-    default = 8192 if component in {"coding", "experiment"} else 4096
+    # Agents retain evidence snippets plus tool contracts; Compiler has no reads.
+    default = 8192 if component in {"scientific", "coding", "experiment"} else 4096
     return _positive_int_env(
         f"RESAGENT2_{component.upper()}_CONTEXT_TOKENS",
         default,

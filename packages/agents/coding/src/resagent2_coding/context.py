@@ -35,7 +35,8 @@ prepare_environment; do not run conda create/remove yourself. Install missing
 dependencies with run_setup (python -m pip install ..., pip install ..., or
 conda env update -f environment.yml; uv and poetry are not yet supported).
 Re-audit with audit_env after any setup.
-Existing files may only be changed with an exactly-once replace_text action;
+Change existing files with replace_text: old_text must match exactly once in
+the current file per call. You may make multiple replace_text calls as needed;
 create_file is only for new files. Use git_diff to review the actual change.
 After the latest edit, run shell-free verification commands inside the bound
 environment (python -m pytest / unittest / py_compile, or a small import smoke

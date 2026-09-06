@@ -315,13 +315,17 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。Orchestrato
 
 它可以直接使用只读 `read_artifact` 和 `literature_search` Tool。它不输出 WorkflowProposal/Patch，不选择 capability、workspace、环境或执行器，不修改 Task/Run 状态，也不直接调用 Coding/Experiment Agent。
 
+Scientific 的 `build_context` 复用 capabilities 的 `workspace_context(state)`，但不传 EnvironmentBinding；它没有 read_file 等工作区工具，因此读取工作集只有工件正文，不因此获得文件或执行能力。正文从已有 Session events 按来源、行范围和事件顺序投影，最多 6000 字符，作为 required 上下文统一计量。不再维护 `read_artifact_summaries` 正文前缀缓存：正文前 2000 字符不是语义摘要，也不能代替选定行范围。已观察 ArtifactId 只证明过去访问过，不能证明全文仍在上下文或支持当前论断。
+
+Prompt 明确文献检索、读取证据与科学判断是 Scientific 自有职责。timeout/HTTP 429 等服务故障经工具已有重试仍失败时，不应通过 request_work 派代码/实验任务绕路；需要用户提供材料或决定等待服务恢复时走现有 ask_user。此处是职责与恢复提示，不新增状态机、Compiler review 或确定性路由 gate；真实模型是否遵循仍须单独验收。
+
 #### 接口说明
 
 | 项目 | 说明 |
 |---|---|
 | 入口 / 调用方 | `ScientificPort.run(ScientificTurnRequest) -> ScientificTurnResult`；由 Controller 调用，原生实现是 ScientificAgent |
 | 输入 | 目标与要求、授权工件、上一轮工作目的与结果、未解决工作、用户答案、剩余预算及 Session 引用 |
-| 模型所见 | context builder 组织科学上下文，interpreter 生成工作简报；内部调度字段不应原样暴露；narrative 是解释，不是证据自证 |
+| 模型所见 | context builder 组织科学上下文，interpreter 生成工作简报；共享 workspace_context 提供有界工件正文；narrative 是解释，不是证据自证 |
 | 返回 | request_work：assessment + 语义工作请求；needs_user_input：assessment + 问题；completed：opinion；failed：ModuleError |
 | 状态所有者 | Scientific/runtime 保存 Session；Controller 保存 assessment、WorkRequest、PendingQuestion、opinion 及 Run 状态 |
 | 副作用与恢复 | 可检索并经 registration port 冻结文献；同 Run 的 Session 可跨多轮工作恢复，不创建执行 Task |
@@ -376,13 +380,13 @@ LLMCompiler 没有可信的精确输出名称输入，所以物化时不让它�
 
 `runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从 Tool 的 `input_model` 自动派生必填顶层参数与 guidance，作为 required `tool_contracts` 经 Composer 计入预算；ToolRegistry 仍在执行前做完整类型校验。
 
-共享 `recent_tool_snippets` 按工具、来源和行范围去重：优先选入最近读取，装箱的最后一段可能截断，更旧内容省略；选入后按事件顺序从旧到新展示，`observed_at` 是原始 `AgentEvent.sequence`，不是新建的文件版本。Coding/Experiment 经 capabilities 的 `workspace_context` 分别调用它，文件正文与工件正文**各限 6000 字符**，在 `workspace_reads.file_snippets` / `artifact_snippets` 中分组；读取工件不会挤掉文件片段，反之亦然。同类多个来源仍共享该类额度，不是每个文件都给 6000。有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。这是已有观测的纯投影，不是永久记忆或第二套缓存。
+共享 `recent_tool_snippets` 按工具、来源和行范围去重：优先选入最近读取，装箱的最后一段可能截断，更旧内容省略；选入后按事件顺序从旧到新展示，`observed_at` 是原始 `AgentEvent.sequence`，不是新建的文件版本。三个 Agent 经 capabilities 的 `workspace_context` 复用它：Coding/Experiment 的文件正文与工件正文**各限 6000 字符**，在 `workspace_reads.file_snippets` / `artifact_snippets` 中分组；Scientific 只使用总共 6000 字符的工件正文组。读取工件不会挤掉文件片段，反之亦然。同类多个来源仍共享该类额度，不是每个文件都给 6000。有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。这是已有观测的纯投影，不是永久记忆或第二套缓存。
 
 旧片段不因修改就整批清除：`workspace_context` 从成功的 `create_file` / `replace_text` 观测推导同路径最近修改；读取早于修改时，附 `modified_after_read_at` 指向该修改事件，说明正文是修改前的观察。修改失败或其他文件的修改不触发此标记；冻结 Artifact 不套用文件修改标记。没有标记只说明未记录后续内置写入，不保证外部进程没有改文件；不自动重读磁盘、不推导最新全文，不新增持久状态。原始 Session/trace 保留不变，同一范围的重复读取仍只选最近一次进入工作集。
 
 工作集的 `truncated` 描述实际展示的片段；`context_truncated=true` 表示上下文预算又裁剪了原始工具结果。`recent_observations` 则明确标为短历史预览，使用相同原始事件编号，预览省略不改变工具原始 `truncated` 含义。模型需要缺失正文时仍按目标行范围读取。`search_text` 是大小写不敏感的字面子串搜索，不支持正则或 `a|b` 这种“二选一”语法，工具契约明确提示分别搜索。
 
-两类读取内容仍一起计入 ContextComposer 的 Agent 总输入预算。Coding/Experiment 默认上限为 **8192 tokens**，容纳两份正文及任务、工具说明、反馈；Scientific/Compiler 保持 4096。CLI 的对应模块配置和 ModelProfile 的模型可用容量上限仍有效。这里没有动态分配、自动扩容或借用另一类闲置额度：显式配置过小且 required 内容装不下时，仍明确返回预算错误，不会静默丢掉整份读取内容。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
+读取内容仍计入 ContextComposer 的 Agent 总输入预算。Scientific/Coding/Experiment 的 Native 与 CLI 默认上限均为 **8192 tokens**，容纳对应正文及任务、工具说明、反馈；Compiler 保持 4096。CLI 的对应模块配置和 ModelProfile 的模型可用容量上限仍有效。这里没有动态分配、自动扩容或借用另一类闲置额度：显式配置过小且 required 内容装不下时，仍明确返回预算错误，不会静默丢掉整份读取内容。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
 
 上下文容量采用显式、配置驱动的 `ModelProfile`，不查询供应商元数据：组合根声明模型总窗口、输出预留和安全余量，每个 Scientific/Coding/Experiment/Compiler 再声明自己的输入上限；实际输入预算取「模块上限」与「模型窗口扣除输出、Action schema 和安全余量后的容量」两者较小值。三个领域 Agent 继续通过 Agentic Loop 使用 Context Composer；Workflow Compiler 经组合根适配复用同一个 Composer 和预算计算，但没有 Session、Tool 或 Agentic Loop，只有有界的草图/review/纠错调用。这样未来可给不同模块注入不同 LLM client/ModelProfile，而不改变领域 Agent 或 orchestrator 契约。
 
@@ -428,7 +432,7 @@ Runtime 恢复检查 run/task/attempt/owner/agent 与可恢复状态。循环在
 | HardwareAudit | 当前机器 → 硬件信息 | 为实验选择提供事实，不决定实验方案 |
 | LiteratureSearchBackend.search | query、条数与年份条件 → list[LiteraturePaper] | Scientific Tool 使用；可访问网络；Tool 将规范化结果交 registration port 冻结 |
 | RegisteredArtifactReader.read_text | 当前 Run + 授权 ArtifactRefs + artifact_id + 可选行范围 → 有界内容 | 先核对 Run、artifact_id、整份文件 SHA256，再切片；不允许直接传任意文件路径 |
-| workspace_context | AgentState + 可选 EnvironmentBinding → 共享 ContextSections | Coding/Experiment 复用；只投影实时绑定和已有观测，不拥有新状态；文件/工件正文各 6000 字符，均纳入总输入预算 |
+| workspace_context | AgentState + 可选 EnvironmentBinding → 共享 ContextSections | 三个 Agent 复用；Coding/Experiment 投影绑定及文件/工件，Scientific 只投影已有工件读取、不传绑定；每类正文 6000 字符，不拥有新状态，均纳入总输入预算 |
 
 这些是普通 Python 组件和部分 Tool，不要求每个能力都有自己的 Agent、Session 或“服务管理器”。例如环境准备是一项能力，决定该装什么依赖是 Agent 策略；文件内容访问属于能力，决定把哪些片段保留在模型上下文属于 Runtime 的共享上下文机制。
 

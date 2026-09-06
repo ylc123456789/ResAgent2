@@ -78,7 +78,7 @@ class NativeExperimentAgent:
         *,
         store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
-        max_context_tokens: int = 4096,
+        max_context_tokens: int = 8192,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")

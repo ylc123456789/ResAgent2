@@ -376,7 +376,9 @@ LLMCompiler 没有可信的精确输出名称输入，所以物化时不让它�
 
 `runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从 Tool 的 `input_model` 自动派生必填顶层参数与 guidance，作为 required `tool_contracts` 经 Composer 计入预算；ToolRegistry 仍在执行前做完整类型校验。
 
-共享 `recent_tool_snippets` 可按工具、来源和行范围去重，把多个工具结果放入同一预算：最近优先，最后保留的一段可能截断，更旧内容省略。Coding/Experiment 经 capabilities 的 `workspace_context` 使用它，文件和工件合计 6000 字符，不是各 6000；有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。它不是永久记忆，不增加检索服务或第二套状态机。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
+共享 `recent_tool_snippets` 按工具、来源和行范围去重：最近优先，最后保留的一段可能截断，更旧内容省略。Coding/Experiment 经 capabilities 的 `workspace_context` 分别调用它，文件正文与工件正文**各限 6000 字符**，在 `workspace_reads.file_snippets` / `artifact_snippets` 中分组；读取工件不会挤掉文件片段，反之亦然。同类多个来源仍共享该类额度，不是每个文件都给 6000。有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。这是已有观测的纯投影，不是永久记忆或第二套缓存。
+
+两类读取内容仍一起计入 ContextComposer 的 Agent 总输入预算。Coding/Experiment 默认上限为 **8192 tokens**，容纳两份正文及任务、工具说明、反馈；Scientific/Compiler 保持 4096。CLI 的对应模块配置和 ModelProfile 的模型可用容量上限仍有效。这里没有动态分配、自动扩容或借用另一类闲置额度：显式配置过小且 required 内容装不下时，仍明确返回预算错误，不会静默丢掉整份读取内容。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
 
 上下文容量采用显式、配置驱动的 `ModelProfile`，不查询供应商元数据：组合根声明模型总窗口、输出预留和安全余量，每个 Scientific/Coding/Experiment/Compiler 再声明自己的输入上限；实际输入预算取「模块上限」与「模型窗口扣除输出、Action schema 和安全余量后的容量」两者较小值。三个领域 Agent 继续通过 Agentic Loop 使用 Context Composer；Workflow Compiler 经组合根适配复用同一个 Composer 和预算计算，但没有 Session、Tool 或 Agentic Loop，只有有界的草图/review/纠错调用。这样未来可给不同模块注入不同 LLM client/ModelProfile，而不改变领域 Agent 或 orchestrator 契约。
 
@@ -422,7 +424,7 @@ Runtime 恢复检查 run/task/attempt/owner/agent 与可恢复状态。循环在
 | HardwareAudit | 当前机器 → 硬件信息 | 为实验选择提供事实，不决定实验方案 |
 | LiteratureSearchBackend.search | query、条数与年份条件 → list[LiteraturePaper] | Scientific Tool 使用；可访问网络；Tool 将规范化结果交 registration port 冻结 |
 | RegisteredArtifactReader.read_text | 当前 Run + 授权 ArtifactRefs + artifact_id + 可选行范围 → 有界内容 | 先核对 Run、artifact_id、整份文件 SHA256，再切片；不允许直接传任意文件路径 |
-| workspace_context | AgentState + 可选 EnvironmentBinding → 共享 ContextSections | Coding/Experiment 复用；只投影实时绑定和已有观测，不拥有新状态；文件和工件共用有界工作集 |
+| workspace_context | AgentState + 可选 EnvironmentBinding → 共享 ContextSections | Coding/Experiment 复用；只投影实时绑定和已有观测，不拥有新状态；文件/工件正文各 6000 字符，均纳入总输入预算 |
 
 这些是普通 Python 组件和部分 Tool，不要求每个能力都有自己的 Agent、Session 或“服务管理器”。例如环境准备是一项能力，决定该装什么依赖是 Agent 策略；文件内容访问属于能力，决定把哪些片段保留在模型上下文属于 Runtime 的共享上下文机制。
 

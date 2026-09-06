@@ -14,7 +14,7 @@
 | S3 返回验收与诊断 | F06/F07/F08/F09/F10；统一证据种类语义 D2 | 已完成 |
 | S4 Runtime 边界 | F12；互斥控制信号 D3、可选客户端能力/trace 语义 D4/D5 | 已完成 |
 | S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 本地完成；8f809cf 服务器 8/9，默认 Flash 黄金链未通过 |
-| S6 服务器反馈收敛 | 实时环境投影、共享文件/工件工作集、交付名称语义对齐 | 本地 665 passed、1 skipped；新提交服务器回归待执行 |
+| S6 服务器反馈收敛 | 实时环境投影、共享文件/工件读取、交付名称语义对齐 | 本地 677 passed、1 skipped；新提交服务器回归待执行 |
 
 不同文件的实现可并行，但按明确范围逐批检查并提交；不在同一文件里同时进行无关重构。
 
@@ -53,7 +53,8 @@
 
 ## 验收记录
 
-- S6（2026-09-06）：核读 `/root/autodl-tmp/e2e-contracts-20260906/` 原始请求/响应/reasoning、Session 与 Run。Flash Experiment 50 次调用无 run_command；前 36 次 environment={}，工件仅经短历史呈现；Pro 成功不能排除框架缺口。另有 Compiler 把描述填进精确 expected_* 的确定性语义错位。实现共享 workspace_context（绑定真值 + 文件/工件同 6000 字符预算及有界来源索引）、工件分段/整文件 hash、文件或目录搜索；LLMCompiler 不生成精确输出名，错放描述留当前 instructions，finalizer 即使无精确要求仍拒绝零证据交付。本地全量 **665 passed、1 skipped**；不宣称真实模型已稳定，不用旧服务器结果覆盖新提交验收。repair-3 的派生日志不算独立原始 stdout；文档/prompt 明确来源等级，无新日志系统。
+- S6（2026-09-06）：核读 `/root/autodl-tmp/e2e-contracts-20260906/` 原始请求/响应/reasoning、Session 与 Run。Flash Experiment 50 次调用无 run_command；前 36 次 environment={}，工件仅经短历史呈现；Pro 成功不能排除框架缺口。另有 Compiler 把描述填进精确 expected_* 的确定性语义错位。实现共享 workspace_context（绑定真值 + 文件/工件正文工作集及有界来源索引）、工件分段/整文件 hash、文件或目录搜索；LLMCompiler 不生成精确输出名，错放描述留当前 instructions，finalizer 即使无精确要求仍拒绝零证据交付。不宣称真实模型已稳定，不用旧服务器结果覆盖新提交验收。repair-3 的派生日志不算独立原始 stdout；文档/prompt 明确来源等级，无新日志系统。
+- S6 预算小调整（同日）：按用户裁定，文件与工件分别使用同一片段函数，正文各限 **6000 字符**，避免两类相互淘汰；不做动态分配或额度借用。Coding/Experiment 的 Native 与 CLI 默认输入上限同步为 **8192 tokens**，Scientific/Compiler 不变；显式配置与模型容量继续限制总输入。新增实际 Native Agent + AgentLoop 容量测试，两类放满并带真实 tool contracts、最近历史、拒绝反馈仍完整可见；显式 1024/4096 时在 LLM 调用前明确拒绝，不静默扩容。全量 **677 passed、1 skipped**，mock E2E completed；真实服务器回归待执行。
 
 - S5：最终本地 **629 passed、1 skipped**，mock E2E completed（Coding + Experiment + 最终报告）；`git diff --check` 干净。README 171→96 行，导览先讲主链、统一 Orchestrator 名称，并明确 interpreter/构建文件不构成新层。ARCHITECTURE/CONTRACTS/INTERFACES 与源码注释同步；未增业务功能、外部协议或历史迁移层。主分支未改，本轮未 push，也未运行真实 LLM/服务器验收。
 - S4：工具派发前再次检查 deadline；ToolObservation 三种控制信号互斥。新增 13 条假时钟/组合负例，Runtime 78 passed；客户端仅 next_action 必需，文档明确可选 hooks 和 action_valid 不代表执行或科学验收。

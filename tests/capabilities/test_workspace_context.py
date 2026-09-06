@@ -1,4 +1,4 @@
-"""Context must show what the actual tools know, with one bounded working set."""
+"""Context projects tool state and keeps file/artifact reading budgets separate."""
 
 from datetime import UTC, datetime
 import json
@@ -10,7 +10,7 @@ from resagent2_capabilities import (
     AuditEnvInput, AuditEnvTool, EnvironmentBinding, PreparedEnvironment,
     RunSetupInput, RunSetupTool, workspace_context,
 )
-from resagent2_capabilities.workspace_context import READ_CONTEXT_CHARS
+from resagent2_capabilities.workspace_context import READ_CONTEXT_CHARS_PER_KIND
 from resagent2_contracts import (
     AgentOwner, Capability, CodeModifyInput, ExperimentRunInput, ModuleTaskRequest, TaskBudget,
 )
@@ -93,10 +93,10 @@ def test_artifact_content_survives_short_history_without_a_second_cache():
     })
     for _ in range(10):
         _observe(state, "list_files", {"path": ".", "paths": ["train.py"]})
-    assert _reads(state)["snippets"][0]["content"] == text
+    assert _reads(state)["artifact_snippets"][0]["content"] == text
     assert "read_artifact_summaries" not in state.memory
 
-def test_files_and_artifacts_share_one_budget_and_keep_range_identity():
+def test_artifact_does_not_evict_file_ranges_or_dependencies():
     state = _state()
     state.memory["read_paths"] = ["requirements.txt", "train.py"]
     _observe(state, "read_file", {"path": "requirements.txt", "content": "torch"})
@@ -107,13 +107,47 @@ def test_files_and_artifacts_share_one_budget_and_keep_range_identity():
             "content": "B" * 1000, "truncated": False,
         })
     reads = _reads(state)
-    snippets = reads["snippets"]
-    assert [s.get("start_line") for s in snippets[:2]] == [50, 10]
-    assert snippets[-1]["artifact_id"] == "artifact_patch"
-    assert snippets[-1]["truncated"] is True
-    assert sum(len(s["content"]) for s in snippets) <= READ_CONTEXT_CHARS
+    files = reads["file_snippets"]
+    assert [s.get("start_line") for s in files[:2]] == [50, 10]
+    assert files[-1]["content"] == "torch"
+    assert reads["artifact_snippets"][0]["content"] == "A" * 6000
+    for name in ("file_snippets", "artifact_snippets"):
+        assert sum(len(s["content"]) for s in reads[name]) <= READ_CONTEXT_CHARS_PER_KIND
     # Forgotten content does not imply that the dependency file was never read.
     assert "requirements.txt" in reads["previously_read_files"]
+
+
+@pytest.mark.parametrize("newest_tool,newest_key", [
+    ("read_file", "path"), ("read_artifact", "artifact_id"),
+])
+def test_many_reads_of_one_kind_do_not_evict_the_other(newest_tool, newest_key):
+    state = _state()
+    _observe(state, "read_file", {"path": "keep.py", "content": "file context"})
+    _observe(state, "read_artifact", {"artifact_id": "artifact_keep", "content": "artifact context"})
+    for index in range(10):
+        _observe(state, newest_tool, {newest_key: str(index), "content": "X" * 2000})
+    reads = _reads(state)
+    other = "artifact_snippets" if newest_tool == "read_file" else "file_snippets"
+    expected = "artifact context" if newest_tool == "read_file" else "file context"
+    assert reads[other][0]["content"] == expected
+    for name in ("file_snippets", "artifact_snippets"):
+        assert sum(len(s["content"]) for s in reads[name]) <= READ_CONTEXT_CHARS_PER_KIND
+
+
+def test_each_kind_is_truncated_at_its_own_content_limit():
+    state = _state()
+    for tool, key in (("read_file", "path"), ("read_artifact", "artifact_id")):
+        _observe(state, tool, {
+            key: "source", "start_line": 10, "end_line": 80,
+            "content": "X" * 8000, "truncated": False,
+        })
+    reads = _reads(state)
+    for name in ("file_snippets", "artifact_snippets"):
+        snippet = reads[name][0]
+        assert len(snippet["content"]) == READ_CONTEXT_CHARS_PER_KIND
+        assert snippet["truncated"] is True
+        assert (snippet["start_line"], snippet["end_line"]) == (10, 80)
+    assert sum(len(s["content"]) for name in ("file_snippets", "artifact_snippets") for s in reads[name]) == 12000
 
 @pytest.mark.parametrize("builder,capability,inputs,prompt", [
     (coding_context, Capability.CODE_MODIFY, CodeModifyInput(instructions="Make a bounded change"), MODIFY_PROMPT),
@@ -122,8 +156,8 @@ def test_files_and_artifacts_share_one_budget_and_keep_range_identity():
 def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder, capability, inputs, prompt):
     state = _state()
     binding = _binding(tmp_path)
-    _observe(state, "read_file", {"path": "train.py", "content": "X" * 3000})
-    _observe(state, "read_artifact", {"artifact_id": "artifact_patch", "content": "Y" * 3000})
+    _observe(state, "read_file", {"path": "train.py", "content": "X" * 6000})
+    _observe(state, "read_artifact", {"artifact_id": "artifact_patch", "content": "Y" * 6000})
     request = ModuleTaskRequest(
         run_id="run_context", task_id="task_context", attempt_number=1,
         capability=capability, inputs=inputs, goal="Bounded task",
@@ -131,8 +165,8 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
     )
     sections = builder(request, state, binding=binding)
     assert {s.name for s in sections} >= {"environment", "workspace_reads"}
-    context = ContextComposer().compose(prompt, sections, max_tokens=4096)
-    assert context.estimated_tokens <= 4096
+    context = ContextComposer().compose(prompt, sections, max_tokens=8192)
+    assert context.estimated_tokens <= 8192
     assert "workspace_reads" in context.included_sections
 
 
@@ -144,6 +178,6 @@ def test_read_metadata_cannot_bypass_working_set_budget():
         "summary": "unbounded metadata " * 5000, "kind": "code_patch",
     })
     data = _reads(state)
-    assert "summary" not in data["snippets"][0]
+    assert "summary" not in data["artifact_snippets"][0]
     assert sum(map(len, data["previously_read_files"])) <= 600
     assert set(data["previously_read_files"]) <= set(state.memory["read_paths"])

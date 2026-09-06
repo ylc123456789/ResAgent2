@@ -173,9 +173,11 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 - `RESAGENT2_RESERVED_OUTPUT_TOKENS`：默认 `4096`；
 - `RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS`：默认 `1024`；
 - `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `4096`；
-- `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `4096`；
-- `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `4096`；
+- `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `8192`；
+- `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `8192`；
 - `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `4096`。
+
+Coding/Experiment 分别保留最多 6000 字符的文件正文和 6000 字符的工件正文；8192 tokens 是包含任务、工具说明、反馈和两类正文的总输入上限，不是每次都填满。两类局部额度不相互借用。显式模块配置和模型可用容量仍是硬上限；如果调小到 required 内容装不下，会明确报预算错误，不会自动扩容或静默省掉整个读取工作集。
 
 实际输入预算取“模块限制”和“模型窗口扣除输出、action schema 与安全余量后”两者的较小值。切换到更小窗口的模型时，应把 `RESAGENT2_CONTEXT_WINDOW` 改成该模型的真实容量。Compiler 复用同一个 context composer 和预算算法，但仍是无状态的一次性编译器，不进入 Agentic Loop。
 

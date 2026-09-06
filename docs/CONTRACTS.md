@@ -634,6 +634,7 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 - 可恢复失败落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它；
 - `recent_observations` 是有界最近历史（默认 6 条），用 head+tail 截断序列化值，保留首尾线索但不保证所有字段完整；需要精确正文时使用下面的专门工作集，完整观察仍留在 Session；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断最后一段）或 `recent_tool_listing`（保留最近有界目录清单，按条目数与字符数上限、不截断单个路径）作为 required context；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
+- Coding/Experiment 通过 capabilities.workspace_context 复用该机制：文件正文与工件正文分别限 6000 字符，不相互淘汰；两类均计入总预算，默认模块输入上限为 8192 tokens。字符额度不含 JSON 元数据，完整 section 仍由 ContextComposer 计量。显式更小的模块/模型预算仍优先，不动态扩容；required 内容过大时明确报预算错误；
 - 共享客户端的每次 HTTP 尝试（含重试）都计入 `llm_calls`；AgentLoop/Compiler 通过可选的 `set_attempt_limit`/`last_attempts` hooks 限制并计量实际尝试。最小 LLM 客户端只须有 `next_action`，无计数 hook 时一次调用按一次计；自带内部重试的实现应提供这两个 hooks；
 - 工具派发前重新检查 wall-clock 余量；LLM 或权限检查已用尽时间时，不再派发工具，已发生调用仍入账。这不等于能撤销或抢占已经执行的外部操作；
 - 一条 ToolObservation 的 `question`、`request_work`、`finish_candidate` 至多一个非空；普通观察可以全为空；

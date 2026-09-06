@@ -132,7 +132,7 @@ Tool.execute(state: AgentState, arguments: BaseModel) -> ToolObservation
 - **错误处理**：参数校验错误、工具返回 `ok=False` 或执行时抛出的 PermissionError 等可转成反馈后继续，受预算和连续失败上限限制；PermissionPolicy 返回不允许时则立即以 permission_denied 失败，不进入重试。不可恢复异常/耗尽限制也返回模块失败。未知工具按既有拒绝策略处理，不放宽 schema 来吞错。
 - **重复与恢复**：读取通常可重复；修改文件、安装依赖和启动实验不承诺幂等。Session checkpoint 保存观测，不是外部副作用的 exactly-once 事务。
 - **共享位置**：通用片段/目录预算机制属于 runtime；capabilities.workspace_context 将该机制应用于 Coding/Experiment 的文件+工件工作集，并投影同一 EnvironmentBinding 的实时状态。安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
-- **读取出口**：read_file/read_artifact 共用有界行切片，工件先核验整个文件 hash 再切片；search_text 可搜单文件或目录。工作集不是永久记忆，省略内容可按来源/范围取回；环境已审计状态不依赖最近六条观测是否还在。
+- **读取出口**：read_file/read_artifact 共用有界行切片，工件先核验整个文件 hash 再切片；search_text 可搜单文件或目录。文件/工件正文各 6000 字符，在 workspace_reads 中分组；复用读取逻辑不等于共享同一份局部额度，两类均计入 Agent 总输入预算。工作集不是永久记忆，省略内容可按来源/范围取回；环境已审计状态不依赖最近六条观测是否还在。
 - **截止与控制信号**：LLM/权限检查之后、真正派发工具之前再检查 wall-clock 截止时间；过期动作不执行，已发生调用仍记账。这不是执行中工具的抢占取消。ToolObservation 模型强制三种控制信号至多一个，不依赖分支顺序解释冲突。
 - **客户端与 trace**：客户端只需实现 next_action，可选预算/trace hooks 按能力检测调用；无 attempt 计量时按每请求一次记账。action_valid 记录响应解析/Action 调试状态，不证明工具 arguments 合法或工具执行成功；验收还需关联参数错误、observation.ok 和最终状态。
 

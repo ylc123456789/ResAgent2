@@ -21,6 +21,14 @@ def test_experiment_run_input_round_trips_fields() -> None:
     assert restored.confirm_before_experiment is True
 
 
+def test_experiment_input_schema_distinguishes_intent_from_exact_criteria() -> None:
+    fields = ExperimentRunInput.model_json_schema()["properties"]
+    assert "semantic evidence" in fields["instructions"]["description"]
+    assert "exact top-level numeric JSON metric keys" in fields["expected_metrics"]["description"]
+    assert "exact workspace-relative evidence file paths" in fields["expected_artifacts"]["description"]
+    assert "conditional failure logs" in fields["expected_artifacts"]["description"]
+
+
 def test_experiment_run_input_rejects_repository_source_fields() -> None:
     # The repository source moved to the unified workspace context
     # (ModuleTaskRequest.workspace_spec); it is no longer an input field.

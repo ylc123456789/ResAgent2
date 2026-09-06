@@ -652,6 +652,69 @@ def test_materialize_strips_suggested_paths_for_code_modify() -> None:
     assert result.tasks[0].inputs.suggested_paths == []
 
 
+@pytest.mark.parametrize("current", [None, current_workflow()])
+def test_materialize_keeps_evidence_descriptions_without_exact_criteria(current) -> None:
+    raw = raw_experiment("run")
+    raw["tasks"][0]["inputs"].update(
+        expected_metrics=["final accuracy reported by the experiment"],
+        expected_artifacts=["metrics output file", "error log if execution fails"],
+    )
+    result = materialize(raw, current=current)
+    tasks = result.tasks if isinstance(result, WorkflowProposal) else result.add_tasks
+    inputs = tasks[0].inputs
+    assert inputs.expected_metrics == []
+    assert inputs.expected_artifacts == []
+    assert inputs.instructions.startswith("Run run\n")
+    assert "final accuracy reported by the experiment" in inputs.instructions
+    assert "metrics output file" in inputs.instructions
+    assert "error log if execution fails" in inputs.instructions
+    assert "not exact metric keys or file paths" in inputs.instructions
+    assert "conditional items apply only when their condition holds" in inputs.instructions
+    # Sanitizing output does not mutate the input draft.
+    assert raw["tasks"][0]["inputs"]["expected_artifacts"] == [
+        "metrics output file", "error log if execution fails"
+    ]
+
+
+def test_materialize_does_not_broadcast_evidence_or_guess_exact_looking_names() -> None:
+    raw = raw_experiment("run")
+    raw["tasks"][0]["inputs"].update(
+        expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
+    )
+    raw["tasks"].append(raw_experiment("other")["tasks"][0])
+    result = materialize(raw)
+    assert result.tasks[0].inputs.expected_metrics == []
+    assert result.tasks[0].inputs.expected_artifacts == []
+    assert "accuracy" in result.tasks[0].inputs.instructions
+    assert "metrics.json" in result.tasks[0].inputs.instructions
+    assert result.tasks[1].inputs.instructions == "Run other"
+
+
+def test_deterministic_compiler_preserves_trusted_exact_experiment_criteria() -> None:
+    trusted = proposal("task_experiment")
+    trusted.tasks[0].inputs = ExperimentRunInput(
+        instructions="Measure accuracy and save the result",
+        expected_metrics=["accuracy"],
+        expected_artifacts=["results/metrics.json"],
+    )
+    result = DeterministicWorkflowCompiler(trusted).compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    ).output
+    assert result.tasks[0].inputs.expected_metrics == ["accuracy"]
+    assert result.tasks[0].inputs.expected_artifacts == ["results/metrics.json"]
+
+
+def test_compiler_prompt_places_evidence_intent_in_instructions() -> None:
+    llm = _FakeCompilerLLM(raw_experiment())
+    LLMWorkflowCompiler(llm).compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    )
+    assert "put evidence requirements in inputs.instructions" in llm.prompts[0]
+    assert "inputs.expected_metrics=[] and inputs.expected_artifacts=[]" in llm.prompts[0]
+    assert "error logs only if execution fails" in llm.prompts[0]
+    assert "Empty arrays do not waive the need to produce evidence" in llm.prompts[0]
+
+
 def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
     incomplete = raw_experiment("run")
     corrected = {

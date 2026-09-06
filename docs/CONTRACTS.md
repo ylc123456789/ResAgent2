@@ -276,6 +276,9 @@ class ExperimentResult:
 - `ExperimentResult.metrics` 由 Experiment finalizer 从完整 JSON evidence 集合读取顶层数值字段得到，LLM 不能自证数字（ADR-0011 §5.2）。该集合包含 Agent 声明、且相对 WorkspaceSnapshot 基线在本 Attempt 改变的 evidence 文件，以及满足同一条件的 `expected_artifacts`；后者即使 Agent 漏报也会被自动补入。`evidence_files` 是这个完整集合中的 workspace 相对路径。`repo_url` + `commit` 是 repo identity；`env_id` 是 `run_id + workspace_id` 绑定的基础环境 id。`delivery_issues` 记录 `expected_metrics`/`expected_artifacts` 缺失项；非空时 finalizer 返回 completed_with_warnings（code=`delivery_not_met`）。
 - 期望指标按规范化后的完整名称匹配，不做子串匹配：`accuracy` 不能满足 `balanced_accuracy` 或 `baseline_accuracy`。完整 JSON 证据集中，同一规范名出现不同数值会拒绝本次 finish，要求区分指标键；重复同值可接受，缺失交付项仍走既有 warnings。
 - `ExperimentRunInput` 仍保留 `parameters`（实验配置参数），但 `ExperimentResult` 不再有 `parameters` 字段（删除，无 production 消费者）。
+- **实验输入的两种语义**：`instructions` 表达实验及证据要求，也包括失败时才需交付的诊断；`expected_metrics` 只放已知精确 JSON 指标键（规范化后完整匹配），`expected_artifacts` 只放已知实际 workspace 相对路径。"metrics output file" 这类描述不是精确路径。LLMCompiler 无 typed 精确名称上游，确定性物化时清空草图中的两个数组，把错放的非空描述降为当前任务 instructions 中的语义说明；公开字段仍供可信直接/确定性调用方使用。
+- **最低交付门槛不因空数组而消失**：原生 Experiment finish 必须有成功实验命令、有效 Attempt 基线，以及至少一个本次新增/变化的真实 evidence 文件。没有精确名称不是可以只给 summary 的豁免。机器门槛不自动证明自然语言目标完整达成；Scientific 根据已读证据形成判断。
+- 原始执行日志是 `run_command` 实际记录的 stdout/stderr。Agent 根据 metrics 写的报告是派生说明，不能作为一份独立的原始日志佐证；此用法在 prompt 中明确，不宣称可确定性判别任意文件的全部来源。
 
 ```python
 class ModuleError:

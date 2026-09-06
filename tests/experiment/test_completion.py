@@ -93,6 +93,26 @@ def test_missing_all_evidence_is_rejected(tmp_path) -> None:
     assert "No required metric or artifact" in decision.summary
 
 
+@pytest.mark.parametrize("leftover", [False, True])
+def test_semantic_request_still_needs_new_attempt_evidence(tmp_path, leftover):
+    if leftover:
+        (tmp_path / "metrics.json").write_text('{"accuracy": 0.8}', encoding="utf-8")
+    baseline = snapshot_workspace(_boundary(tmp_path))
+    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
+    decision = _check(tmp_path).evaluate(state, _finish(evidence_files=["metrics.json"]))
+    assert decision.complete is False
+    assert decision.payload is None
+    assert "actual new/changed evidence" in decision.summary
+
+
+def test_semantic_request_can_deliver_actual_key_without_guessed_names(tmp_path):
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.8}', encoding="utf-8")
+    decision = _check(tmp_path).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
+    assert decision.complete is True
+    assert decision.warnings == []
+    assert ExperimentResult.model_validate(decision.payload).metrics == {"accuracy": 0.8}
+
+
 def test_partial_delivery_downgrades_to_warnings(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     baseline = snapshot_workspace(_boundary(tmp_path))

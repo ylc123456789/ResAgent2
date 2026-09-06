@@ -13,7 +13,8 @@
 | S2 验证与指标 | F03/F04/F11；共享验证有效性判断 | 已完成 |
 | S3 返回验收与诊断 | F06/F07/F08/F09/F10；统一证据种类语义 D2 | 已完成 |
 | S4 Runtime 边界 | F12；互斥控制信号 D3、可选客户端能力/trace 语义 D4/D5 | 已完成 |
-| S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 本地已完成；服务器验收待执行 |
+| S5 阅读整理与收尾 | 同名概念收敛、阅读入口和源码注释 D6、文档去除过期缺口、全量回归 | 本地完成；8f809cf 服务器 8/9，默认 Flash 黄金链未通过 |
+| S6 服务器反馈收敛 | 实时环境投影、共享文件/工件工作集、交付名称语义对齐 | 本地 665 passed、1 skipped；新提交服务器回归待执行 |
 
 不同文件的实现可并行，但按明确范围逐批检查并提交；不在同一文件里同时进行无关重构。
 
@@ -52,6 +53,8 @@
 
 ## 验收记录
 
+- S6（2026-09-06）：核读 `/root/autodl-tmp/e2e-contracts-20260906/` 原始请求/响应/reasoning、Session 与 Run。Flash Experiment 50 次调用无 run_command；前 36 次 environment={}，工件仅经短历史呈现；Pro 成功不能排除框架缺口。另有 Compiler 把描述填进精确 expected_* 的确定性语义错位。实现共享 workspace_context（绑定真值 + 文件/工件同 6000 字符预算及有界来源索引）、工件分段/整文件 hash、文件或目录搜索；LLMCompiler 不生成精确输出名，错放描述留当前 instructions，finalizer 即使无精确要求仍拒绝零证据交付。本地全量 **665 passed、1 skipped**；不宣称真实模型已稳定，不用旧服务器结果覆盖新提交验收。repair-3 的派生日志不算独立原始 stdout；文档/prompt 明确来源等级，无新日志系统。
+
 - S5：最终本地 **629 passed、1 skipped**，mock E2E completed（Coding + Experiment + 最终报告）；`git diff --check` 干净。README 171→96 行，导览先讲主链、统一 Orchestrator 名称，并明确 interpreter/构建文件不构成新层。ARCHITECTURE/CONTRACTS/INTERFACES 与源码注释同步；未增业务功能、外部协议或历史迁移层。主分支未改，本轮未 push，也未运行真实 LLM/服务器验收。
 - S4：工具派发前再次检查 deadline；ToolObservation 三种控制信号互斥。新增 13 条假时钟/组合负例，Runtime 78 passed；客户端仅 next_action 必需，文档明确可选 hooks 和 action_valid 不代表执行或科学验收。
 - S3：成功 payload 按 capability 验证，登记失败保留消费/Session/原诊断/warnings；Scientific 四分支先验收再确认交付，最终 gate 独立验完整响应与证据要求；Run 持久化 terminal_error。导入与新检索证据采用共享种类判据，失败 brief 保留 objective。针对测试覆盖四分支错误 Session、未观察引用、STABLE/答案不提前消费、失败原因落盘、JSON 恢复链真实 payload；独立复核补齐类型转换后的计账、独立 gate 入口重验、Native 转译失败与 Session 状态一致。最终全量见 S5。
@@ -59,7 +62,9 @@
 - S0：保存本轮接口参考文档和修复计划；原有本地基线 501 passed、1 skipped。后续记录随每批更新。
 - S1：Session ID 包含所属 Run 且长度有界；动态工件索引按 Run 隔离并在读字节前校验；每次新问题分配独立 ID；Runtime 拒绝跨 Attempt 恢复。新增跨 Run/读取/长 ID 测试 12 条，相关回归 86 passed；问答与 Runtime 恢复 24 passed。两组范围有交集，不相加冒充全量测试数。
 
-## 服务器交接（尚未执行）
+## 服务器交接（S6 新提交待执行）
+
+8f809cf 的真实结果已保存，上述 8/9 不是本次新代码验收。新代码重点跑 Flash code-experiment（保留每次结果，不重跑到绿再抹去失败），Pro code-experiment 回归、repair 真实 typo 修复。查看 environment.prepared/certified、workspace_reads 的文件/工件行范围、是否实际执行入口、JSON 实际键/值与 Scientific 引用是否一致。明确原始日志与派生说明，不能只看 completed 或 action_valid。
 
 1. 在同一个明确 Git 提交、干净代码树上运行原有 direct、code-experiment、repair、ask-start/ask-resume、literature，保留 full trace 与状态/工件；不把历史结果当本轮验收。
 2. 除 clean-workdir 主流程外，用同一 data-root 跑不同 Run，并核对同名 Task 的 Session 不冲突；问答恢复保持 Attempt，再问新问题时旧答案被拒。

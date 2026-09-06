@@ -68,6 +68,7 @@ WorkflowCompiler.compile(
 
 - **调用方 / 实现方**：Controller / `LLMWorkflowCompiler`，测试可注入确定性 Compiler。此接口在 orchestrator 内部，不是 Scientific 的输出协议。
 - **输入权威**：持久化 WorkRequest 指定本轮目的与约束；registry 给出可用 capability；current 给出已有图；workspace descriptor 是逻辑工作区摘要，不是任意文件访问授权。
+- **交付名称边界**：LLMCompiler 不读代码，也没有 typed 精确输出键/路径来源；实验语义及条件写 Task.instructions。物化时清空其猜测的 expected_metrics/expected_artifacts，错放文本降为本 Task 的语义说明。公开精确字段留给可信直接/确定性调用方，不用模糊匹配把描述当文件名。
 - **模型与代码的分工**：LLM 只生成局部 `CompilationDraft`，代码分配 Run 内 Task ID、绑定 WorkRequest、解析依赖和 workspace，随后可做一次短语义 review。这里从局部 key 到正式 ID 的“全局物化”不表示 Task ID 在不同 Run 之间唯一。不给 Compiler 代码扫描、环境安装或执行工具。
 - **输出**：无 current 时返回 Proposal；已有图时返回只追加 Patch。返回候选不等于接受候选；Controller 仍交由 Scheduler 接受并保存。
 - **状态与副作用**：不保存 Session、不修改 Run/Workflow、不执行任务；真实实现会调用外部 LLM 并产生 trace，实例维护本次调用计数。因此“无长期会话”不等于纯函数，也不保证同实例可并发调用。
@@ -130,7 +131,8 @@ Tool.execute(state: AgentState, arguments: BaseModel) -> ToolObservation
 - **状态与副作用**：工具按约定不直接修改 AgentState，返回 memory_updates；Runtime 保存观测并应用更新。工具仍可操作授权文件、进程或共享 EnvironmentBinding，“不改 AgentState”不等于纯函数。
 - **错误处理**：参数校验错误、工具返回 `ok=False` 或执行时抛出的 PermissionError 等可转成反馈后继续，受预算和连续失败上限限制；PermissionPolicy 返回不允许时则立即以 permission_denied 失败，不进入重试。不可恢复异常/耗尽限制也返回模块失败。未知工具按既有拒绝策略处理，不放宽 schema 来吞错。
 - **重复与恢复**：读取通常可重复；修改文件、安装依赖和启动实验不承诺幂等。Session checkpoint 保存观测，不是外部副作用的 exactly-once 事务。
-- **共享位置**：文件片段/目录观测的上下文保留属于 runtime；安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
+- **共享位置**：通用片段/目录预算机制属于 runtime；capabilities.workspace_context 将该机制应用于 Coding/Experiment 的文件+工件工作集，并投影同一 EnvironmentBinding 的实时状态。安全文件访问、process、Git、environment、dataset 属于 capabilities；代码验证要求和科学判断属于具体 Agent。不要为每个 Agent 再复制一套工具协议。
+- **读取出口**：read_file/read_artifact 共用有界行切片，工件先核验整个文件 hash 再切片；search_text 可搜单文件或目录。工作集不是永久记忆，省略内容可按来源/范围取回；环境已审计状态不依赖最近六条观测是否还在。
 - **截止与控制信号**：LLM/权限检查之后、真正派发工具之前再检查 wall-clock 截止时间；过期动作不执行，已发生调用仍记账。这不是执行中工具的抢占取消。ToolObservation 模型强制三种控制信号至多一个，不依赖分支顺序解释冲突。
 - **客户端与 trace**：客户端只需实现 next_action，可选预算/trace hooks 按能力检测调用；无 attempt 计量时按每请求一次记账。action_valid 记录响应解析/Action 调试状态，不证明工具 arguments 合法或工具执行成功；验收还需关联参数错误、observation.ok 和最终状态。
 
@@ -160,7 +162,7 @@ CompletionCheck.evaluate(
 `complete=True` 与 `failure` 互斥。`evaluate` 返回并不自行改变 Run/Task；Session 的结束由 Runtime 执行。
 
 - **Coding 判据**：understand 要有确实观察的文件且不改代码；modify 要有相对 Attempt baseline 的真实改动、实际验证记录及对应代码版本。检查与产出 patch 可能访问文件/Git，不应把所有 finalizer 都称为无 IO 纯函数。
-- **Experiment 判据**：实际命令结果、相对 baseline 新增/改变的证据、完整 JSON 证据集派生的 metrics。完全缺少要求的证据不放行，部分交付产生 warnings；真实非零退出/超时命令及日志可支持确定性失败出口。LLM 不能直接自证 metrics。
+- **Experiment 判据**：成功命令、有效 baseline、本 Attempt 新增/改变的真实证据、完整 JSON 证据集派生的 metrics；即使 expected_* 留空，完全没有本次证据也不放行。已知精确要求部分缺失产生 warnings；自然语言目标由 Scientific 读证据后判断。真实非零退出/超时命令及日志可支持确定性失败出口，LLM 不能直接自证 metrics。
 - **Scientific 判据**：原生 check 根据 Session 工具记录、传入的未解决任务与 required evidence 检查观点和引用，不持有完整 ResearchRun；Controller 正式完成时再独立执行基于完整 Run 的最终 gate。
 - **不是同一接口**：Orchestrator 的 `ScientificCompletionValidator.validate(run, result) -> CompletionValidation` 检查整个 Run；`FinalReportRenderer.render(data)` 只确定性渲染 typed report。它们不代替子 Agent 对测试/实验事实的领域验收。
 - **验证有效性**：Coding 提示与 gate 共用规则：验证非空、全部通过，覆盖当前 edit revision 和已认证环境 generation。prepare/setup 开始执行以及进程重新绑定环境都会使旧验证过期；重新 audit 不能替代重跑测试。Experiment 指标规范化后精确匹配，同名不同值的证据可恢复拒绝，不静默覆盖。Scientific 最终要求的替换边界见 I1。

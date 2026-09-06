@@ -542,13 +542,29 @@ class ExperimentRunInput(ContractModel):
 
     The repository source comes from the unified workspace context
     (``ModuleTaskRequest.workspace_spec``), not from this model.
+    Evidence goals and conditional requirements belong in ``instructions``;
+    ``expected_*`` are optional, exact acceptance criteria from a caller that
+    already knows the output keys/paths. Empty criteria do not waive evidence.
     """
 
     capability: Literal[Capability.EXPERIMENT_RUN] = Capability.EXPERIMENT_RUN
-    instructions: NonEmptyStr
+    instructions: NonEmptyStr = Field(
+        description="Experiment objective and semantic evidence requirements, "
+        "including when conditional evidence is needed."
+    )
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    expected_metrics: list[NonEmptyStr] = Field(default_factory=list)
-    expected_artifacts: list[NonEmptyStr] = Field(default_factory=list)
+    expected_metrics: list[NonEmptyStr] = Field(
+        default_factory=list,
+        description="Known exact top-level numeric JSON metric keys required "
+        "from evidence (normalized spelling is accepted). Not descriptions or "
+        "guessed keys; leave empty when unknown and put evidence goals in instructions.",
+    )
+    expected_artifacts: list[NonEmptyStr] = Field(
+        default_factory=list,
+        description="Known exact workspace-relative evidence file paths required "
+        "on successful completion. Not artifact kinds, descriptions, or conditional "
+        "failure logs; leave empty when unknown and put evidence goals in instructions.",
+    )
     confirm_before_experiment: bool = False
 
 

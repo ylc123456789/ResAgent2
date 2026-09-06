@@ -360,19 +360,23 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。Orchestrato
 | 项目 | 说明 |
 |---|---|
 | 入口 / 调用方 | `NativeExperimentAgent.invoke(ModuleTaskRequest) -> ModuleResult`；Scheduler 绑定 experiment_run |
-| 专属输入 | ExperimentRunInput 中的实验目标相关参数、期望指标/产物；统一请求另带 workspace、数据集、约束、预算、输出目录与 Session |
+| 专属输入 | instructions 是实验/交付语义；expected_metrics / expected_artifacts 仅是可信调用方已知的精确键/路径；统一请求另带 workspace、数据集、约束、预算、输出目录与 Session |
 | 成功返回 | ExperimentResult（metrics、evidence_files、环境/仓库身份、delivery_issues、风险）与 ArtifactCandidate；原始日志/JSON 通过登记保存 |
 | 完成依据 | 实际命令结果、相对 Attempt WorkspaceSnapshot 新增/改变的证据；metrics 由代码从完整 JSON 证据集派生，不直接相信模型填的数字 |
-| 不完整与失败 | 部分交付可 completed_with_warnings；没有要求的证据可拒绝 finish；真实失败命令可产生确定性 failed；用户问题可暂停 |
+| 不完整与失败 | 即使未指定精确名称，也必须有本 Attempt 新增/变化的证据；部分精确交付缺失可 completed_with_warnings；真实失败命令可产生确定性 failed；用户问题可暂停 |
 | 恢复 / 所有权 | 同 Attempt 恢复 Session 与 workspace snapshot；重建 EnvironmentBinding 后需重审计；不自行改变 Task/Run 状态 |
 
 summary 是解释性结果，Scientific 可以参考，但数值须追溯到证据文件。metrics 名称规范化后精确匹配，`accuracy` 不代替 `baseline_accuracy`；完整证据集内同规范名不同值会拒绝本次 finish，要求区分指标或提供一致证据。同值重复可接受，缺少部分交付仍走 warnings。Session 身份与 Coding 使用同一生成规则。见 [I3](INTERFACES.md#i3-执行任务)、[I5](INTERFACES.md#i5-完成检查)。
+
+LLMCompiler 没有可信的精确输出名称输入，所以物化时不让它猜 `expected_*`。草图里错放的描述保留为当前 Task.instructions 中的语义说明；条件性错误证据不变成成功时的精确必需产物。直接/确定性调用方仍可使用精确字段，规则不变。成功命令 + 本次证据 + 文件派生数字是机器底线，不等于自动证明所有自然语言目标达成；Scientific 必须读取证据后判断。`run_command` 保存的 stdout/stderr 才是原始命令日志，根据 metrics 编写的说明属于派生报告，不是独立佐证。
 
 源码入口：[agent.py](../packages/agents/experiment/src/resagent2_experiment/agent.py)、[tools.py](../packages/agents/experiment/src/resagent2_experiment/tools.py)、[completion.py](../packages/agents/experiment/src/resagent2_experiment/completion.py)。
 
 ### 8.5 runtime：共享运行机制
 
-`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从本轮每个 Tool 已有的 `input_model` 自动派生其必填顶层参数，作为 required `tool_contracts` ContextSection 经 Context Composer 送给模型；因此这份约束受同一输入预算和 trace 记录，而 ToolRegistry 仍在执行前做完整的类型校验。共享 `recent_tool_snippets` 以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入（仅截断最后一段），Coding 与 Experiment 都用它保留最近 `read_file` 片段作为有界 required context；Experiment 额外用 `recent_tool_listing` 保留最近有界目录清单（按条目数与字符数上限、不截断单个路径）。共享 LLM client 的 provider retry 每次都计入调用总账，并由调用方剩余预算限制下一次真实尝试数。
+`runtime` 只回答「Agent 怎样运行」：Agentic Loop、LLM client、Context Composer、Tool 协议/分发、PermissionPolicy、Session/event 持久化和统一错误映射。Loop 用 `ToolObservation.ok` 区分成功与可恢复失败，把拒绝落为持久 `runtime_feedback`（`ok=False`、最高优先级 required 注入），维护有界 `recent_observations`（head+tail 截断，保留末尾错误字段），并对连续失败计数（成功的非 finish 工具重置、completion check 拒绝的 finish 累加；连续 5 次返回 `TOOL_FAILED`）。每轮还从 Tool 的 `input_model` 自动派生必填顶层参数与 guidance，作为 required `tool_contracts` 经 Composer 计入预算；ToolRegistry 仍在执行前做完整类型校验。
+
+共享 `recent_tool_snippets` 可按工具、来源和行范围去重，把多个工具结果放入同一预算：最近优先，最后保留的一段可能截断，更旧内容省略。Coding/Experiment 经 capabilities 的 `workspace_context` 使用它，文件和工件合计 6000 字符，不是各 6000；有界已读来源索引提醒“内容省略不等于从未读过”，目录清单使用 `recent_tool_listing`。它不是永久记忆，不增加检索服务或第二套状态机。共享 LLM client 的 provider retry 每次计入总账，并受剩余预算限制。
 
 上下文容量采用显式、配置驱动的 `ModelProfile`，不查询供应商元数据：组合根声明模型总窗口、输出预留和安全余量，每个 Scientific/Coding/Experiment/Compiler 再声明自己的输入上限；实际输入预算取「模块上限」与「模型窗口扣除输出、Action schema 和安全余量后的容量」两者较小值。三个领域 Agent 继续通过 Agentic Loop 使用 Context Composer；Workflow Compiler 经组合根适配复用同一个 Composer 和预算计算，但没有 Session、Tool 或 Agentic Loop，只有有界的草图/review/纠错调用。这样未来可给不同模块注入不同 LLM client/ModelProfile，而不改变领域 Agent 或 orchestrator 契约。
 
@@ -417,11 +421,14 @@ Runtime 恢复检查 run/task/attempt/owner/agent 与可恢复状态。循环在
 | DatasetCatalog.references / resolve_dataset_refs | catalog 与 DatasetRefs → 注册引用/可读目录；辅助函数生成上下文和环境映射 | 三个 Agent 复用；不下载、不选择默认数据集；资源缺失走已有 ask_user |
 | HardwareAudit | 当前机器 → 硬件信息 | 为实验选择提供事实，不决定实验方案 |
 | LiteratureSearchBackend.search | query、条数与年份条件 → list[LiteraturePaper] | Scientific Tool 使用；可访问网络；Tool 将规范化结果交 registration port 冻结 |
-| RegisteredArtifactReader.read_text | 当前 Run + 授权 ArtifactRefs + artifact_id → 校验 hash 后的有界内容 | 静态与动态引用都在读取前核对 Run 与 artifact_id，不允许直接传任意文件路径 |
+| RegisteredArtifactReader.read_text | 当前 Run + 授权 ArtifactRefs + artifact_id + 可选行范围 → 有界内容 | 先核对 Run、artifact_id、整份文件 SHA256，再切片；不允许直接传任意文件路径 |
+| workspace_context | AgentState + 可选 EnvironmentBinding → 共享 ContextSections | Coding/Experiment 复用；只投影实时绑定和已有观测，不拥有新状态；文件和工件共用有界工作集 |
 
 这些是普通 Python 组件和部分 Tool，不要求每个能力都有自己的 Agent、Session 或“服务管理器”。例如环境准备是一项能力，决定该装什么依赖是 Agent 策略；文件内容访问属于能力，决定把哪些片段保留在模型上下文属于 Runtime 的共享上下文机制。
 
 EnvironmentBinding 是 capabilities 的公开 API，而非跨模块 wire contract。恢复已有 prefix 会重建 binding，但 certified 为 false，需要重新 audit；marker 只表示基础环境事实。绑定的 generation 在 prepare/setup 开始执行或进程重新绑定时改变，依赖旧 generation 的验证不能复用。Coding 的控制提示与完成 gate 共用同一验证规则：当前代码和环境都必须被成功验证。ProcessRunner 的 shell-free、凭据清理和路径检查有明确用途，但不是 OS 级隔离，也不能防止被授权程序做出全部不当行为。
+
+模型每轮看到的 environment 从工具实际使用的同一个 binding 生成，不从 `memory.environment` 或历史 `env_audit` 猜当前认证状态。文件与工件可按行范围重读；`search_text` 支持单文件或目录并沿用 WorkspaceBoundary 检查。分段和环境投影都属于共享能力，不在两个 Agent 各实现一套。
 
 源码入口：[capabilities 包](../packages/capabilities/src/resagent2_capabilities/)、[environment_tools.py](../packages/capabilities/src/resagent2_capabilities/environment_tools.py)、[process.py](../packages/capabilities/src/resagent2_capabilities/process.py)、[literature.py](../packages/capabilities/src/resagent2_capabilities/literature.py)。工具与工件的详细交互见 [I4](INTERFACES.md#i4-单步工具)、[I6](INTERFACES.md#i6-工件登记与读取)。
 

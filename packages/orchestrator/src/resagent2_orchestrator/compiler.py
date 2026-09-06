@@ -265,6 +265,12 @@ def _compile_prompt(
             "implement, fix or run), not as specific file paths, function "
             "locations, CLI flags or verification commands: the Coding/Experiment "
             "Agent inspects the workspace and decides those details itself.",
+            "For experiment_run, put evidence requirements in inputs.instructions, "
+            "preserving their conditions (for example, error logs only if execution "
+            "fails). Set inputs.expected_metrics=[] and inputs.expected_artifacts=[]: "
+            "those fields are exact metric keys and file paths for callers that "
+            "already know them, not places for semantic descriptions or guessed "
+            "output names. Empty arrays do not waive the need to produce evidence.",
             "Assign each task the constraints that are relevant to THAT task, "
             "drawn from the request's constraints and objective. Do not include "
             "control constraints that were already satisfied before this request "
@@ -302,16 +308,33 @@ def _compile_prompt(
     return "\n".join(lines)
 
 
-def _sanitize_inputs(capability: Capability, inputs):
-    """Strip code-location hints the Compiler must never fabricate.
+def _sanitize_inputs(capability: Capability, inputs: CapabilityInput) -> CapabilityInput:
+    """Keep semantic intent without granting guessed details hard-gate authority.
 
-    The Compiler has not read the workspace, so it cannot know file paths, CLI
-    flags or verification commands. It states only the semantic objective; the
-    Coding Agent discovers the concrete location and approach itself. The public
-    ``suggested_paths`` field remains for callers that do supply trusted hints.
+    The Compiler has no trusted output-key/path source and has not read the
+    workspace. Public exact-detail fields remain available to direct callers;
+    this LLM path leaves discovery to the execution Agent. Misplaced evidence
+    descriptions are retained only in this task's instructions, not as exact
+    acceptance criteria or as requirements broadcast to other tasks.
     """
     if capability == Capability.CODE_MODIFY:
         return inputs.model_copy(update={"suggested_paths": []})
+    if capability == Capability.EXPERIMENT_RUN:
+        instructions = inputs.instructions
+        descriptions = [*inputs.expected_metrics, *inputs.expected_artifacts]
+        if descriptions:
+            instructions += (
+                "\n\nEvidence descriptions (not exact metric keys or file paths; "
+                "conditional items apply only when their condition holds):\n- "
+                + "\n- ".join(descriptions)
+            )
+        return inputs.model_copy(
+            update={
+                "instructions": instructions,
+                "expected_metrics": [],
+                "expected_artifacts": [],
+            }
+        )
     return inputs
 
 

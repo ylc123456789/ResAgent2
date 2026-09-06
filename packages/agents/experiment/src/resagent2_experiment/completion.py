@@ -186,20 +186,17 @@ class ExperimentCompletionCheck:
         ]
         issues.extend(artifact_issues)
 
-        # A run that delivered none of the explicitly required evidence did not
-        # actually produce results; reject it instead of completing with
-        # warnings that could mask a total failure.
-        metrics_delivered = any(
-            _metric_is_present(name, metrics) for name in self.expected_metrics
-        )
-        if (
-            (self.expected_metrics or self.expected_artifacts)
-            and not metrics_delivered
-            and not evidence
-        ):
+        # Even when no exact key/path is known in advance, a successful command
+        # alone is not an experimental result. Keep the same Attempt-owned file
+        # evidence gate for semantic requests and explicitly named deliverables.
+        if not evidence:
             return CompletionDecision(
                 complete=False,
-                summary="No required metric or artifact was produced; rerun the experiment",
+                summary=(
+                    "No required metric or artifact was produced in this attempt. "
+                    "Inspect the command result and supply actual new/changed evidence "
+                    "files; do not finish with only a narrative."
+                ),
             )
 
         payload = ExperimentResult(

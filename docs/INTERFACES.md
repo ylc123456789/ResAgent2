@@ -72,6 +72,7 @@ WorkflowCompiler.compile(
 - **交付名称边界**：LLMCompiler 不读代码，也没有 typed 精确输出键/路径来源；实验语义及条件写 Task.instructions。物化时清空其猜测的 expected_metrics/expected_artifacts，错放文本降为本 Task 的语义说明。公开精确字段留给可信直接/确定性调用方，不用模糊匹配把描述当文件名。
 - **模型与代码的分工**：LLM 只生成局部 `CompilationDraft`，代码分配 Run 内 Task ID、绑定 WorkRequest、解析依赖和 workspace，随后可做一次短语义 review。这里从局部 key 到正式 ID 的“全局物化”不表示 Task ID 在不同 Run 之间唯一。不给 Compiler 代码扫描、环境安装或执行工具。
 - **输出**：无 current 时返回 Proposal；已有图时返回只追加 Patch。返回候选不等于接受候选；Controller 仍交由 Scheduler 接受并保存。
+- **接收判据**：`workflow_validation.validate_workflow_candidate` 是非空及本轮依赖的共享纯函数。Compiler 在 review 前使用它生成纠错反馈，Scheduler 在持久化前再次使用，替代 Compiler 不能绕过。Pydantic 保证图结构，物化器检查声明，Scheduler 另核实际 binding、workspace、预算与 revision；不是把不同边界的检查全部合并。
 - **状态与副作用**：不保存 Session、不修改 Run/Workflow、不执行任务；真实实现会调用外部 LLM 并产生 trace，实例维护本次调用计数。因此“无长期会话”不等于纯函数，也不保证同实例可并发调用。
 - **纠错与失败**：结构拒绝和语义拒绝**共享一次纠错重编**，总计最多两版 draft，每版最多一次 review；仍失败则抛 `CompilationError`。调用预算限制真实尝试数，Controller 负责失败状态及记账。成功从 `CompilationResult.llm_calls` 取数；当前异常路径从实现的 `llm_calls` 属性补记，新替换实现也需遵守这一计量约定。
 - **重启与重复**：COMPILING 已接受图则继续执行，未接受图则可重编。不能保证再次调用产生同一图；确定性保证落在身份物化、结构校验及接受阶段，不在 LLM 的任务选择上。

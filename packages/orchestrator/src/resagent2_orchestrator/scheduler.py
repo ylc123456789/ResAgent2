@@ -48,6 +48,7 @@ from .layout import RunLayout
 from .models import ResearchRun
 from .ports import ModuleBinding
 from .store import InMemoryRunStore, RunStore
+from .workflow_validation import validate_workflow_candidate
 
 
 class OrchestrationError(ValueError):
@@ -154,6 +155,10 @@ class WorkflowScheduler:
         run = self.store.load(run_id)
         if run.workflow is not None:
             raise OrchestrationError("run already has an accepted workflow")
+        try:
+            validate_workflow_candidate(proposal)
+        except ValueError as error:
+            raise OrchestrationError(str(error)) from error
         if len(proposal.tasks) > run.request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
         self._require_bindings(task.capability for task in proposal.tasks)
@@ -674,8 +679,14 @@ class WorkflowScheduler:
         run = self.store.load(run_id)
         if run.status == RunStatus.COMPLETED:
             raise OrchestrationError("completed workflow cannot be patched")
+        if run.workflow is None:
+            raise OrchestrationError("run has no accepted workflow to patch")
         if patch.based_on_revision != run.workflow.revision:
             raise OrchestrationError("patch is based on a stale workflow revision")
+        try:
+            validate_workflow_candidate(patch)
+        except ValueError as error:
+            raise OrchestrationError(str(error)) from error
         if len(run.workflow.tasks) + len(patch.add_tasks) > run.request.budget.max_tasks:
             raise OrchestrationError("patched workflow exceeds max_tasks budget")
         self._require_bindings(task.capability for task in patch.add_tasks)

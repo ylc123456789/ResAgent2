@@ -109,9 +109,9 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 
 这些值不由 LLM 填写，而是从 Git 编辑 revision、验证 revision、环境绑定状态派生，作为最高优先级 context 每轮注入。`CompletionCheck` 仍是最终硬 gate，不替 Agent 自动执行验证。这是把“修改后必须验证”从提示文本升级为确定性状态，不给 Coding 加固定工作流。
 
-### 7. 保留防御层
+### 7. 边界检查（接口优化后）
 
-现有 `_reject_undeclared_capabilities`、空图检查、workspace 检查、跨 WorkRequest mutation 检查继续保留，并在物化后的输出上再跑一次；Scheduler 的同类检查（budget、Workflow Pydantic DAG、binding、跨 WorkRequest mutation）也保持不变。物化器防止错误进入调度器，调度器则不信任任何调用者。
+物化器检查 capability/workspace 声明并分配身份；图模型负责结构。非空及本轮依赖政策提取为 `workflow_validation.validate_workflow_candidate`，Compiler 在 review 前调用（拒绝可进入一次纠错），Scheduler 在接受前同样调用（也约束替代 Compiler）。删除 Compiler 内四个重复的 `_reject_*` 最终函数；Scheduler 仍核预算、revision、实际 binding/workspace 与完整图。复用判据实现，不删除接收边界。
 
 ## 为什么不用其它方案
 
@@ -143,7 +143,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 - Compiler 内部多一层“草图 → 物化”的转换；
 - 每次编译多一次语义审查 LLM 调用（有界，最多两轮）；
 - 需要一套针对草图、物化器与语义审查的定向测试；
-- 保留的 `_reject_*` 与物化器存在一定冗余（这是刻意为之的 defense-in-depth）。
+- 同一判据在生成与接受两个边界调用；检查实现共享，不能只相信原生 Compiler。
 
 ## 明确不做
 

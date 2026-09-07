@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+
 import pytest
 
 from resagent2_contracts import (
@@ -636,3 +637,76 @@ def test_patch_is_append_only() -> None:
         ),
     )
     assert [t.id for t in patched.workflow.tasks] == ["task_a", "task_b"]
+
+
+@pytest.mark.parametrize("kind", ["proposal", "patch"])
+def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
+    engine = WorkflowScheduler(
+        bindings={}, store=InMemoryRunStore(),
+        artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
+    )
+    now = datetime.now(UTC)
+    run = ResearchRun(
+        run_id="run_candidate", request=research_request(), status=RunStatus.RUNNING,
+        created_at=now, updated_at=now,
+    )
+    if kind == "patch":
+        from resagent2_contracts import Workflow
+        run.workflow = Workflow(
+            run_id=run.run_id, revision=1, tasks=[],
+            created_from="work_legacy_initial",
+        )
+    engine.store.save(run)
+    before = engine.store.load(run.run_id).model_dump()
+    with pytest.raises(OrchestrationError, match="empty task graph"):
+        if kind == "proposal":
+            engine.accept_proposal(run.run_id, WorkflowProposal(
+                work_request_id="work_legacy_initial", summary="empty",
+                compilation_rationale="invalid replacement compiler", tasks=[],
+            ))
+        else:
+            engine.apply_patch(run.run_id, WorkflowPatch(
+                work_request_id="work_next", based_on_revision=1, reason="empty",
+                add_tasks=[],
+            ))
+    assert engine.store.load(run.run_id).model_dump() == before
+    assert not (tmp_path / "data" / run.run_id).exists()
+
+
+@pytest.mark.parametrize("old_status", [TaskStatus.COMPLETED, TaskStatus.FAILED])
+def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_status) -> None:
+    engine = WorkflowScheduler(
+        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+            owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([]),
+        )},
+        store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
+    )
+    run = _create_run(engine, "run_candidate", research_request(), WorkflowProposal(
+        work_request_id="work_legacy_initial", summary="first",
+        compilation_rationale="initial round",
+        tasks=[task("task_old", Capability.EXPERIMENT_RUN)],
+    ))
+    run.workflow.tasks[0].status = old_status
+    engine.store.save(run)
+    before = engine.store.load(run.run_id).model_dump()
+    with pytest.raises(OrchestrationError, match="outside the current work request"):
+        engine.apply_patch(run.run_id, WorkflowPatch(
+            work_request_id="work_next", based_on_revision=1, reason="invalid",
+            add_tasks=[task(
+                "task_new", Capability.EXPERIMENT_RUN, ["task_old"],
+                work_request_id="work_next",
+            )],
+        ))
+    assert engine.store.load(run.run_id).model_dump() == before
+
+    patched = engine.apply_patch(run.run_id, WorkflowPatch(
+        work_request_id="work_next", based_on_revision=1, reason="independent next round",
+        add_tasks=[
+            task("task_fix", Capability.EXPERIMENT_RUN, work_request_id="work_next"),
+            task("task_rerun", Capability.EXPERIMENT_RUN, ["task_fix"], work_request_id="work_next"),
+        ],
+    ))
+    assert patched.workflow.revision == 2
+    assert patched.workflow.tasks[0].status == old_status
+    assert patched.workflow.tasks[-1].depends_on == ["task_fix"]

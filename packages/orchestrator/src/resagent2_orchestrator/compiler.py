@@ -20,9 +20,9 @@ materialization" split (ADR-0010):
    attempted with the precise rejection reason as feedback; a second rejection
    fails the compile.
 
-The older ``_reject_*`` validators remain as a final defense layer and are still
-run over the materialized output (the scheduler keeps its own equivalent checks,
-so a compiler can never smuggle a bad graph past it).
+The materialized candidate passes the same round-boundary predicate used by
+Scheduler acceptance. Compilation uses rejection as feedback; Scheduler also
+checks replacement compilers before accepting any graph mutation.
 """
 
 from __future__ import annotations
@@ -52,6 +52,9 @@ from resagent2_contracts import (
     WorkspaceDescriptor,
     WorkspaceId,
 )
+
+
+from .workflow_validation import validate_workflow_candidate
 
 
 @dataclass(frozen=True)
@@ -521,74 +524,6 @@ def _materialize_draft(
     )
 
 
-def _reject_undeclared_capabilities(
-    proposal: WorkflowProposal | WorkflowPatch,
-    registry: CapabilityRegistry,
-) -> None:
-    """Reject any task whose capability the registry does not declare.
-
-    Kept as a final defense over the materialized output (ADR-0010 §7); the
-    deterministic materializer already enforces this, and the scheduler has its
-    own binding check.
-    """
-    declared = {definition.capability for definition in registry.definitions}
-    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
-    undeclared = sorted(
-        {task.capability.value for task in tasks if task.capability not in declared}
-    )
-    if undeclared:
-        raise CompilationError(
-            "compiler selected undeclared capabilities: " + ", ".join(undeclared)
-        )
-
-
-def _reject_empty_graph(proposal: WorkflowProposal | WorkflowPatch) -> None:
-    """Reject a graph with no tasks: a WorkRequest must produce at least one."""
-    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
-    if not tasks:
-        raise CompilationError("compiler produced an empty task graph")
-
-
-def _reject_cross_request_dependencies(patch: WorkflowPatch) -> None:
-    """Reject add_tasks that depend on a task outside the patch.
-
-    Existing workflow tasks are immutable history (completed or failed); a new
-    WorkRequest's tasks may only depend on other tasks it adds itself, never on
-    a prior task (a failed prior task would make the new task forever blocked).
-    """
-    add_ids = {task.id for task in patch.add_tasks}
-    for task in patch.add_tasks:
-        foreign = [dep for dep in task.depends_on if dep not in add_ids]
-        if foreign:
-            raise CompilationError(
-                f"add task {task.id} depends on tasks outside the patch: "
-                + ", ".join(foreign)
-            )
-
-
-def _reject_undeclared_workspaces(
-    proposal: WorkflowProposal | WorkflowPatch,
-    workspace_ids: set[str],
-) -> None:
-    """Reject any task whose workspace_id the composition root did not declare.
-
-    The LLM must only choose from the given logical workspace ids, never invent
-    one. Auto-fill for a single workspace happens in the materializer.
-    """
-    tasks = proposal.tasks if isinstance(proposal, WorkflowProposal) else proposal.add_tasks
-    undeclared = sorted(
-        {
-            task.workspace_id
-            for task in tasks
-            if task.workspace_id is not None and task.workspace_id not in workspace_ids
-        }
-    )
-    if undeclared:
-        raise CompilationError(
-            "compiler selected undeclared workspace_ids: " + ", ".join(undeclared)
-        )
-
-
 def _compact_error(error: Exception) -> str:
     """Render a validator failure as a short, actionable one-liner for feedback."""
     if isinstance(error, ValidationError):
@@ -676,6 +611,10 @@ class LLMWorkflowCompiler:
                     budget=budget,
                     workspaces=workspaces,
                 )
+                try:
+                    validate_workflow_candidate(compiled)
+                except ValueError as error:
+                    raise CompilationError(str(error)) from error
                 review = self._review_draft(request, draft)
             except (ValidationError, CompilationError) as error:
                 if attempt == 1:
@@ -694,17 +633,6 @@ class LLMWorkflowCompiler:
                 feedback = _review_feedback(review.issues)
                 continue
 
-            # Final defense over the materialized output (ADR-0010 §7). These are
-            # all guaranteed by _materialize_draft, but kept so a future change to
-            # the materializer cannot silently bypass them.
-            _reject_undeclared_capabilities(compiled, registry)
-            _reject_empty_graph(compiled)
-            if isinstance(compiled, WorkflowPatch):
-                _reject_cross_request_dependencies(compiled)
-            if workspaces:
-                _reject_undeclared_workspaces(
-                    compiled, {item.workspace_id for item in workspaces}
-                )
             return CompilationResult(compiled, self.llm_calls)
 
         # Unreachable: attempt 1 always returns or raises.

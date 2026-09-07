@@ -117,8 +117,8 @@ def _finish() -> dict:
     }
 
 
-def test_compiler_rejects_empty_graph() -> None:
-    from resagent2_orchestrator.compiler import _reject_empty_graph
+def test_candidate_rejects_empty_graph() -> None:
+    from resagent2_orchestrator.workflow_validation import validate_workflow_candidate
 
     proposal = WorkflowProposal(
         work_request_id="work_1",
@@ -126,12 +126,12 @@ def test_compiler_rejects_empty_graph() -> None:
         compilation_rationale="no work",
         tasks=[],
     )
-    with pytest.raises(CompilationError, match="empty task graph"):
-        _reject_empty_graph(proposal)
+    with pytest.raises(ValueError, match="empty task graph"):
+        validate_workflow_candidate(proposal)
 
 
-def test_compiler_rejects_cross_request_dependency() -> None:
-    from resagent2_orchestrator.compiler import _reject_cross_request_dependencies
+def test_candidate_rejects_cross_request_dependency() -> None:
+    from resagent2_orchestrator.workflow_validation import validate_workflow_candidate
 
     patch = WorkflowPatch(
         work_request_id="work_2",
@@ -148,8 +148,8 @@ def test_compiler_rejects_cross_request_dependency() -> None:
             )
         ],
     )
-    with pytest.raises(CompilationError, match="outside the patch"):
-        _reject_cross_request_dependencies(patch)
+    with pytest.raises(ValueError, match="outside the current work request"):
+        validate_workflow_candidate(patch)
 
 
 def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:

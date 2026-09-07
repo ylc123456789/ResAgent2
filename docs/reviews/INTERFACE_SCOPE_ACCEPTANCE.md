@@ -2,7 +2,7 @@
 
 ## 1. 待测版本与边界
 
-代码/测试基线：**`0d611a7aaaf069e00c42baf534057f5decde126f`**，分支 `fix/interface-contracts`。后续验收单提交只更新文档，不改变待测代码。本地全量 **749 passed, 1 skipped**，mock E2E completed，`git diff --check` 干净。服务器尚未验证这版，不能用 a2c6afa 的 8/9 或此前版本的全绿代替。
+代码/测试基线：**`0d611a7aaaf069e00c42baf534057f5decde126f`**，分支 `fix/interface-contracts`。本地及服务器全量 **749 passed, 1 skipped**，mock E2E completed，`git diff --check` 干净。验收已完成：E2E 9/9，CLI 问答通过；CLI 编译+实验主运行失败、独立诊断重跑通过，两次并列保留。原始 trace 复核未支持“确定是外部 provider 空响应”的归因，诊断缺口与追加收尾见 [优化计划](INTERFACE_OPTIMIZATION_PLAN.md)。以下保留这轮验收方法，不把历史结果冒充后续版本验收。
 
 仍按原 [接口优化验收单](INTERFACE_OPTIMIZATION_ACCEPTANCE.md) 的环境、资源、安全与纪律执行：仅同步/安装核验/测试/分析/报告，不改产品代码、prompt、测试目标、预算或验收断言，不合并、不 push、不清理旧 worktree/环境/缓存/数据集/失败现场。用 git bundle/fetch 和新干净 worktree 保留 Git 身份，不 scp 零散源码。
 

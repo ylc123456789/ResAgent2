@@ -236,7 +236,11 @@ LLM 只负责语义：做什么、任务之间有什么关系。所有运行时�
 
 编译与审查共用注册能力说明及职责规则。审查读每个任务的完整目标、依赖、约束及物化后输入语义，而非只看标题；代码正确性验证不替代正式实验和指标交付，预算紧张也不能扩大 Coding 的职责。此处是有界语义审查，不是确定性自然语言理解保证。Controller 在新编译前检查剩余任务名额：零名额直接以 `budget_exhausted` 结束当前 WorkRequest/Run，不调用 Compiler；已接受图的恢复优先处理，不受新增任务额度影响。
 
-LLM 调用可开启一个最小 JSONL trace（`OpenAICompatibleClient.trace_dir` + `trace_level`，off/metadata/full）：记录 run/session/task/agent/step、model、latency、retry、usage、call_id/created_at；full 档保留完整 request、最终 response，以及 provider 明确返回的 `reasoning_content`（若有），metadata 档只记 hash/tool/valid。reasoning 只用于调试，不进入 AgentState、Session 或下一轮上下文。目录 0700、文件 0600，永不记录 API key，trace 不进 ArtifactRegistry 也不进 Run JSON。
+LLM 调用可开启 JSONL trace（`OpenAICompatibleClient.trace_dir` + `trace_level`，off/metadata/full）：每次逻辑调用保留一条记录，以 call_id 关联 run/session/task/agent/step、模型、上下文计量和总延迟。`request_max_tokens` 是请求实际发送的输出上限；null 表示未指定、使用 provider 默认值，不表示无限。它与输入 Context 的模块上限不是一回事。
+
+`attempts` 按原顺序保留最多三次 HTTP 尝试的 retry_number、finish_reason、usage 和解析/传输错误；这些响应信息在解析 action JSON **之前**提取，空内容或坏 JSON 也不会丢失。顶层响应字段对应最后一次尝试，不把前次响应归到后次网络失败；顶层 retry_number+1 仍是本次消费的尝试数，不能再加一次 attempts 长度。provider 未给出的 finish_reason/usage 保持 null，不反推或编造。
+
+full 档保存请求及各次尝试的原始 response、解析候选和 provider 明确返回的 `reasoning_content`（若有）；metadata 档在顶层和 attempts 内都不保存消息/候选/思考正文，只保留 hash/tool/valid 与诊断元数据。reasoning 只用于调试，不进入 AgentState、Session 或下一轮上下文。目录 0700、文件 0600，永不记录 API key，trace 不进 ArtifactRegistry 也不进 Run JSON。日志不改变原有三次有界重试、调用预算或输出配置，也不自动修 JSON。
 
 ## 7. 完整工作流
 

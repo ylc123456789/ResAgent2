@@ -161,6 +161,8 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 `metadata` 不保存消息正文；`full` 会保存 request、response 和模型提供时的 reasoning，适合调试但可能包含源码和用户输入。full trace 目录和文件分别按 `0700` / `0600` 创建，仍应只放在可信存储上并按需清理。
 
+失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning。顶层响应字段对应最后一次尝试。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应；逐次失败细节查看 JSONL 的 attempts。
+
 ## 6. 模型与上下文预算
 
 模型配置：
@@ -182,6 +184,8 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 三个 Agent 复用同一套读取工作集：Coding/Experiment 分别保留最多 6000 字符的文件正文和 6000 字符的工件正文；Scientific 只使用工件正文这一组，总共最多 6000 字符，不持有执行环境。8192 tokens 是包含任务、工具说明、反馈和正文的总输入上限，不是每次都填满。两类局部额度不相互借用。显式模块配置和模型可用容量仍是硬上限；如果调小到 required 内容装不下，会明确报预算错误，不会自动扩容或静默省掉整个读取工作集。
 
 实际输入预算取“模块限制”和“模型窗口扣除输出、action schema 与安全余量后”两者的较小值。切换到更小窗口的模型时，应把 `RESAGENT2_CONTEXT_WINDOW` 改成该模型的真实容量。Compiler 复用同一个 context composer 和预算算法，但仍是无状态的一次性编译器，不进入 Agentic Loop。
+
+`RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 
 ## 7. 退出码与常见情况
 

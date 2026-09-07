@@ -262,57 +262,69 @@ class OpenAICompatibleClient:
             text = json.dumps(text, ensure_ascii=False, default=str)
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def _trace_record(
+    def _response_trace_fields(
         self,
-        context: ComposedContext,
-        message: str,
         parsed_action,
-        raw_response_text: str | None,
+        raw_response_text,
         raw_reasoning_text: str | None,
         validation_error: str | None,
-        started: float,
-        retry_number: int,
         usage,
-        call_id: str,
-        created_at: str,
+        finish_reason: str | None,
     ) -> dict:
-        """Build one trace record; the full level keeps prompt, response, and provider reasoning.
-
-        ``metadata`` level never records action content (which may embed source
-        code or user input); it keeps only the tool name and a hash of the
-        parsed action.
-        """
-        record = dict(self._trace_context)
+        """Project one response with the same content boundary at every attempt."""
         tool = parsed_action.get("tool") if isinstance(parsed_action, dict) else None
-        record.update(
-            {
-                "call_id": call_id,
-                "created_at": created_at,
-                "model": self.model,
-                "included_sections": context.included_sections,
-                "omitted_sections": context.omitted_sections,
-                "estimated_tokens": context.estimated_tokens,
-                "latency_ms": round((time.monotonic() - started) * 1000),
-                "retry_number": retry_number,
-                "tool": tool,
-                "action_valid": parsed_action is not None,
-                "validation_error": validation_error,
-                "usage": usage,
-            }
-        )
+        record = {
+            "tool": tool,
+            "action_valid": parsed_action is not None,
+            "validation_error": validation_error,
+            "usage": usage,
+            "finish_reason": finish_reason,
+        }
         if self.trace_level == "full":
-            record["request_text"] = message
             record["raw_response_text"] = raw_response_text
             record["parsed_action"] = parsed_action
             record["raw_reasoning_text"] = raw_reasoning_text
         else:
-            record["request_sha256"] = self._sha256(message)
             record["response_sha256"] = self._sha256(raw_response_text)
             record["action_sha256"] = (
                 self._sha256(json.dumps(parsed_action, ensure_ascii=False, default=str))
                 if parsed_action is not None
                 else None
             )
+        return record
+
+    def _trace_record(
+        self,
+        context: ComposedContext,
+        message: str,
+        started: float,
+        call_id: str,
+        created_at: str,
+        request_max_tokens: int | None,
+        attempts: list[dict],
+    ) -> dict:
+        """Keep one logical-call row; response fields describe its last attempt.
+
+        Bounded attempt details retain earlier failures without multiplying
+        logical-call rows or changing retry accounting. A null output limit
+        means the request omitted max_tokens, not that the provider is unlimited.
+        """
+        record = {**self._trace_context, **attempts[-1]}
+        record.update({
+            "call_id": call_id,
+            "created_at": created_at,
+            "model": self.model,
+            "included_sections": context.included_sections,
+            "omitted_sections": context.omitted_sections,
+            "estimated_tokens": context.estimated_tokens,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "request_max_tokens": request_max_tokens,
+            "attempts": attempts,
+        })
+        if self.trace_level == "full":
+            record["request_text"] = message
+        else:
+            record["request_sha256"] = self._sha256(message)
         return record
 
     def next_action(
@@ -350,66 +362,77 @@ class OpenAICompatibleClient:
         self._last_call_id = call_id
         started = time.monotonic()
         last_error: Exception | None = None
-        retry_number = 0
-        raw_response_text: str | None = None
         parsed_action = None
-        raw_reasoning_text: str | None = None
-        usage = None
-        for attempt in range(attempt_limit):
-            self.last_attempts = attempt + 1
-            if attempt:
-                time.sleep(1.0)
-                retry_number = attempt
-            try:
-                with urlopen(request, timeout=self.timeout_seconds) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-            except HTTPError as error:
-                detail = error.read(2000).decode("utf-8", errors="replace")
-                # A 4xx is a client error (auth/schema), not a transient one.
-                if error.code is not None and error.code < 500:
-                    self._write_trace(
-                        self._trace_record(
-                            context, message, None, None, None,
-                            f"LLM HTTP {error.code}: {detail}",
-                            started, retry_number, None, call_id, created_at,
-                        )
-                    )
-                    raise RuntimeError(f"LLM HTTP {error.code}: {detail}") from error
-                last_error = error
-                continue
-            except (URLError, TimeoutError, json.JSONDecodeError) as error:
-                last_error = error
-                continue
-            try:
-                response_message = payload["choices"][0]["message"]
-                raw_response_text = response_message["content"]
-                reasoning_content = response_message.get("reasoning_content")
-                raw_reasoning_text = (
-                    reasoning_content if isinstance(reasoning_content, str) else None
-                )
-                if not isinstance(raw_response_text, str):
-                    raise TypeError(
-                        "provider returned non-string message content: "
-                        f"{type(raw_response_text).__name__}"
-                    )
-                content = raw_response_text.strip()
-                if content.startswith("```"):
-                    content = content.removeprefix("```json").removeprefix("```")
-                    content = content.removesuffix("```").strip()
-                parsed_action = json.loads(content)
-                usage = payload.get("usage")
+        attempts: list[dict] = []
+        try:
+            for attempt in range(attempt_limit):
+                if attempt:
+                    time.sleep(1.0)
+                self.last_attempts = attempt + 1
+                # Never attribute an earlier response to a later transport failure.
+                raw_response_text = None
+                raw_reasoning_text = None
+                parsed_action = None
+                usage = None
+                finish_reason = None
                 last_error = None
-                break
-            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-                last_error = error
-                continue
-        self._write_trace(
-            self._trace_record(
-                context, message, parsed_action, raw_response_text, raw_reasoning_text,
-                str(last_error) if last_error is not None else None,
-                started, retry_number, usage, call_id, created_at,
-            )
-        )
+                try:
+                    with urlopen(request, timeout=self.timeout_seconds) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise TypeError("provider response must be an object")
+                    # Capture provider diagnostics before parsing the action JSON.
+                    usage = payload.get("usage")
+                    choice = payload["choices"][0]
+                    if not isinstance(choice, dict):
+                        raise TypeError("provider choice must be an object")
+                    finish_reason = choice.get("finish_reason")
+                    response_message = choice["message"]
+                    if not isinstance(response_message, dict):
+                        raise TypeError("provider message must be an object")
+                    reasoning_content = response_message.get("reasoning_content")
+                    raw_reasoning_text = (
+                        reasoning_content if isinstance(reasoning_content, str) else None
+                    )
+                    raw_response_text = response_message["content"]
+                    if not isinstance(raw_response_text, str):
+                        raise TypeError(
+                            "provider returned non-string message content: "
+                            f"{type(raw_response_text).__name__}"
+                        )
+                    content = raw_response_text.strip()
+                    if content.startswith("```"):
+                        content = content.removeprefix("```json").removeprefix("```")
+                        content = content.removesuffix("```").strip()
+                    parsed_action = json.loads(content)
+                    break
+                except HTTPError as error:
+                    detail = error.read(2000).decode("utf-8", errors="replace")
+                    last_error = error
+                    # Preserve the existing no-retry policy for client errors.
+                    if error.code is not None and error.code < 500:
+                        last_error = RuntimeError(f"LLM HTTP {error.code}: {detail}")
+                        raise last_error from error
+                except (
+                    URLError, TimeoutError, json.JSONDecodeError,
+                    KeyError, IndexError, TypeError,
+                ) as error:
+                    last_error = error
+                finally:
+                    attempts.append({
+                        "retry_number": attempt,
+                        **self._response_trace_fields(
+                            parsed_action, raw_response_text, raw_reasoning_text,
+                            str(last_error) if last_error is not None else None,
+                            usage, finish_reason,
+                        ),
+                    })
+        finally:
+            if attempts:
+                self._write_trace(self._trace_record(
+                    context, message, started, call_id, created_at,
+                    body_data.get("max_tokens"), attempts,
+                ))
         if last_error is not None:
             raise RuntimeError(
                 f"LLM request failed after {self.last_attempts} attempts: {last_error}"

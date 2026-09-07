@@ -140,6 +140,7 @@ Tool.execute(state: AgentState, arguments: BaseModel) -> ToolObservation
 - **读取出口**：read_file/read_artifact 共用有界行切片，工件先核验整个文件 hash 再切片；search_text 可搜单文件或目录，是大小写不敏感的字面子串搜索，不支持正则。文件/工件正文各 6000 字符，在 workspace_reads 中分组；优先选择近期片段，按事件顺序展示。observed_at 标读取事件，modified_after_read_at 标后续成功文件修改；旧正文可保留作历史，不冒充当前版本。context_truncated 区分工作集追加截断与原始读取，短 history preview 不等于完整工具结果。复用读取逻辑不等于共享同一份局部额度，两类均计入 Agent 总输入预算。工作集不是永久记忆，省略内容可按来源/范围取回；环境已审计状态不依赖最近六条观测是否还在。
 - **截止与控制信号**：LLM/权限检查之后、真正派发工具之前再检查 wall-clock 截止时间；过期动作不执行，已发生调用仍记账。这不是执行中工具的抢占取消。ToolObservation 模型强制三种控制信号至多一个，不依赖分支顺序解释冲突。
 - **客户端与 trace**：客户端只需实现 next_action，可选预算/trace hooks 按能力检测调用；无 attempt 计量时按每请求一次记账。action_valid 记录响应解析/Action 调试状态，不证明工具 arguments 合法或工具执行成功；验收还需关联参数错误、observation.ok 和最终状态。
+- **失败诊断**：OpenAI-compatible 客户端先保留 provider finish_reason/usage，再解析 action JSON；每个 call_id 的 trace 含有界 attempts，顶层响应字段指向最后一次尝试，request_max_tokens 对应实际请求值（null = 未指定）。Run 仍按真实 HTTP 尝试计数，不因增加诊断记录而多算。仅有空 JSON 不能区分输出被截断与 provider 异常，必须检查结束原因和用量；可选信息缺失则明确为未知。
 
 **源码**：[Tool 协议和 Registry](../packages/runtime/src/resagent2_runtime/tools.py)、[Loop](../packages/runtime/src/resagent2_runtime/loop.py)、[ToolObservation](../packages/runtime/src/resagent2_runtime/models.py)、[共享能力](../packages/capabilities/src/resagent2_capabilities/)。
 

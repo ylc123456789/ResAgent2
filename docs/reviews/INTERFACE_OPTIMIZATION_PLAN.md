@@ -25,7 +25,7 @@
 | P3 | 删除死缓存、无效兜底；schema 5.0 注册表只留真实声明 | 本地完成 |
 | P4a | Composer 对最终标题/分隔符计量 | 本地完成；runtime/工作集/E2E 确定性测试 146 passed |
 | P4b | 共用 Prompt 适配及 Scientific 工件登记，保留两个组合根 | 本地完成；定向测试 32 passed |
-| P5 | 本地集成、同步文档、交接真实服务器验收 | 本地完成；0d611a7 E2E 9/9，CLI 主运行有失败；诊断收尾本地完成，补验收/合并待定 |
+| P5 | 本地集成、同步文档、交接真实服务器验收 | 本地完成；0d611a7 E2E 9/9，da00fe6 诊断验收通过；输出配置收尾补验收/合并待定 |
 
 注册表 `request_model/result_model/side_effects/permission_policy/completion_evidence` 没有运行消费者，用户已明确批准删除并按现有版本规则升至 5.0。旧 4.0 Run 不续跑，既有记录原样保留，不引入迁移或兼容分支。
 
@@ -65,11 +65,12 @@
 | R1 | Scientific 区分已知前置修改和假设未来失败；编译/审查共用能力语义；审查含实际输入投影、约束和依赖 | `a458405`，定向 55 passed |
 | R2 | Controller 零任务名额预检：不调用任何 Compiler；当前 WorkRequest/Run 都保留预算失败；已接受工作仍可恢复 | `6d81045`，集成 747 passed, 1 skipped |
 | R3 | 生产组合根适配器验证完整审查仍计入 4096，超限前拒绝且消费不多算；同步验收单 | `0d611a7`，本地/服务器 749 passed, 1 skipped；E2E 9/9；CLI 主失败和诊断通过并列保留 |
-| R4 | 共享 LLM 客户端在 JSON 解析前保留诊断；按尝试区分响应；同步输入/输出预算说明 | `da00fe6`，本地 761 passed, 1 skipped；不改输出额度、重试策略或 schema；[真实补验收](LLM_DIAGNOSTICS_ACCEPTANCE.md)待执行 |
+| R4 | 共享 LLM 客户端在 JSON 解析前保留诊断；按尝试区分响应；同步输入/输出预算说明 | `da00fe6`，本地/服务器 761 passed, 1 skipped；[诊断补验收](LLM_DIAGNOSTICS_ACCEPTANCE.md)通过 |
+| R5 | 参考官方实现配置 CLI 模型容量/宽裕输出额度及网络等待；模块输入策略不变 | [依据与范围](MODEL_OUTPUT_DEFAULTS.md)，本地 775 passed, 1 skipped；真实补验收待执行 |
 
 本次 schema 仍为 5.0，旧记录原样保留。预算预检是确定性保证；规划/职责规则和语义 review 仍依赖模型判断，单测只证明输入、反馈和拒绝链正确，不能宣称永久消除重读循环。
 
-`0d611a7aaaf069e00c42baf534057f5decde126f` 的 [任务职责收口验收](INTERFACE_SCOPE_ACCEPTANCE.md) 已完成并复核原始 trace，见下。当前仍未合并、未 push，R4 的真实补验收通过后再交由用户决定。
+`0d611a7aaaf069e00c42baf534057f5decde126f` 的 [任务职责收口验收](INTERFACE_SCOPE_ACCEPTANCE.md) 及 da00fe6 诊断验收已完成并复核原始 trace，见下。当前仍未合并、未 push，R5 新配置补验收后再交由用户决定。
 
 ## 0d611a7 原始 trace 复核与诊断收尾
 
@@ -78,3 +79,5 @@
 失败 call_id `52f8e485448e4707adbf9fabda9fe7e1` 的末次 response content 为空，但 reasoning 有 21,221 字符。旧 trace 只保留末次响应，retry_number=2 证明尝试了三次，不能证明三次 content 都为空。且旧代码仅在 action JSON 解析成功后取 usage，并未记录 finish_reason，无法断言 provider 无响应，也无法排除思考耗尽输出额度。CLI 默认显式发送 max_tokens=4096，E2E 不显式发送该输出限制，不能以另一入口成功证明它是随机波动。
 
 R4 只修共享诊断边界：保留实际 request_max_tokens、每次 finish_reason/usage/response，并避免响应跨尝试混淆。保持一次逻辑调用一条 trace、同一 call_id、原 retry_number/调用计数；不依赖模型名、Compiler 或测试场景，也不引入自动修 JSON、自增输出额度或新 Provider 抽象。单测模拟 length+空 content 只证明记录正确，不能替代历史现场的缺失证据。
+
+da00fe6 新现场 `/root/autodl-tmp/e2e-diag-da00fe6-eEfCwu/`：4096 输出额度的两次重放中，四次尝试真实 length，completion_tokens=reasoning_tokens=4096 且 content 空；另一次 stop 成功。16384 组一次 stop 成功、实际消费 3421；CLI 问答及诊断记录/权限通过。确认的是新重放的截断原因，历史未记录的逐次值仍不可恢复；单次高额度成功不证明阈值或永久稳定。R5 据此按模型官方容量及官方 Harness 的默认策略留宽裕余量，详见上表，不再逐档加数字碰运气。

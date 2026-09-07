@@ -67,12 +67,12 @@ def _positive_int_env(name: str, default: int) -> int:
 
 
 def _model_profile() -> ModelProfile:
-    """Read one explicit model-capacity profile from the composition boundary."""
+    """Deployment defaults match V4 capacity; module input policies stay small."""
 
     return ModelProfile(
-        context_window=_positive_int_env("RESAGENT2_CONTEXT_WINDOW", 65_536),
+        context_window=_positive_int_env("RESAGENT2_CONTEXT_WINDOW", 1_000_000),
         reserved_output_tokens=_positive_int_env(
-            "RESAGENT2_RESERVED_OUTPUT_TOKENS", 4096
+            "RESAGENT2_RESERVED_OUTPUT_TOKENS", 256_000
         ),
         safety_margin_tokens=_positive_int_env(
             "RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS", 1024
@@ -95,6 +95,7 @@ def _client() -> OpenAICompatibleClient:
         api_base=os.environ.get("RESAGENT2_API_BASE", "https://api.deepseek.com/v1"),
         api_key_env=os.environ.get("RESAGENT2_API_KEY_ENV", "DEEPSEEK_API_KEY"),
         model_profile=_model_profile(),
+        timeout_seconds=_positive_int_env("RESAGENT2_LLM_TIMEOUT_SECONDS", 600),
         trace_dir=_trace_dir(),
         trace_level=os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off"),
     )

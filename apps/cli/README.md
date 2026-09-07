@@ -173,19 +173,25 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 上下文容量是显式配置，不依赖 provider 查询：
 
-- `RESAGENT2_CONTEXT_WINDOW`：默认 `65536`；
-- `RESAGENT2_RESERVED_OUTPUT_TOKENS`：默认 `4096`；
+- `RESAGENT2_CONTEXT_WINDOW`：默认 `1000000`；
+- `RESAGENT2_RESERVED_OUTPUT_TOKENS`：默认 `256000`（思考 + 最终输出的请求上限，不是目标长度）；
 - `RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS`：默认 `1024`；
 - `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `8192`；
 - `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `8192`；
 - `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `8192`；
 - `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `4096`。
 
+网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
+
 三个 Agent 复用同一套读取工作集：Coding/Experiment 分别保留最多 6000 字符的文件正文和 6000 字符的工件正文；Scientific 只使用工件正文这一组，总共最多 6000 字符，不持有执行环境。8192 tokens 是包含任务、工具说明、反馈和正文的总输入上限，不是每次都填满。两类局部额度不相互借用。显式模块配置和模型可用容量仍是硬上限；如果调小到 required 内容装不下，会明确报预算错误，不会自动扩容或静默省掉整个读取工作集。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出、action schema 与安全余量后”两者的较小值。切换到更小窗口的模型时，应把 `RESAGENT2_CONTEXT_WINDOW` 改成该模型的真实容量。Compiler 复用同一个 context composer 和预算算法，但仍是无状态的一次性编译器，不进入 Agentic Loop。
+实际输入预算取“模块限制”和“模型窗口扣除输出、action schema 与安全余量后”两者的较小值。1M 是默认 V4 模型容量，不会把模块输入自动扩到 1M：各 Agent 仍为 8192、Compiler 仍为 4096。切换到其他模型/网关时，应同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和 provider 接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合会在调用前拒绝，不按模型名字猜容量。Compiler 复用同一个 context composer 和预算算法，但仍是无状态的一次性编译器，不进入 Agentic Loop。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
+
+默认值采用 DeepSeek 官方 Harness 的 1M 容量 / 256000 输出额度策略；依据、取舍和验收见 [模型输出默认配置](../../docs/reviews/MODEL_OUTPUT_DEFAULTS.md)。更大上限不强迫输出到上限，但允许长思考消耗更多时间和 tokens；这不是对任意任务永不截断的保证。
+
+**升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。程序化客户端和独立 E2E 组合根不会自动继承 CLI 的部署默认值。
 
 ## 7. 退出码与常见情况
 

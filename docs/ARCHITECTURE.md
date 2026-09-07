@@ -238,6 +238,8 @@ LLM 只负责语义：做什么、任务之间有什么关系。所有运行时�
 
 LLM 调用可开启 JSONL trace（`OpenAICompatibleClient.trace_dir` + `trace_level`，off/metadata/full）：每次逻辑调用保留一条记录，以 call_id 关联 run/session/task/agent/step、模型、上下文计量和总延迟。`request_max_tokens` 是请求实际发送的输出上限；null 表示未指定、使用 provider 默认值，不表示无限。它与输入 Context 的模块上限不是一回事。
 
+模型容量/输出额度由组合根负责。CLI 为当前默认 V4 部署配置 1,000,000 总容量、256,000 输出预留及 600 秒网络等待参数，并允许环境变量覆盖；模块输入仍受 Compiler 4096 / Agent 8192 的独立策略约束。runtime 不维护模型表、不识别 Flash/Pro，不因该部署选择改变自身默认值或自动扩容；E2E 保留独立配置。完整依据与适用边界见 [模型输出默认配置](reviews/MODEL_OUTPUT_DEFAULTS.md)。
+
 `attempts` 按原顺序保留最多三次 HTTP 尝试的 retry_number、finish_reason、usage 和解析/传输错误；这些响应信息在解析 action JSON **之前**提取，空内容或坏 JSON 也不会丢失。顶层响应字段对应最后一次尝试，不把前次响应归到后次网络失败；顶层 retry_number+1 仍是本次消费的尝试数，不能再加一次 attempts 长度。provider 未给出的 finish_reason/usage 保持 null，不反推或编造。
 
 full 档保存请求及各次尝试的原始 response、解析候选和 provider 明确返回的 `reasoning_content`（若有）；metadata 档在顶层和 attempts 内都不保存消息/候选/思考正文，只保留 hash/tool/valid 与诊断元数据。reasoning 只用于调试，不进入 AgentState、Session 或下一轮上下文。目录 0700、文件 0600，永不记录 API key，trace 不进 ArtifactRegistry 也不进 Run JSON。日志不改变原有三次有界重试、调用预算或输出配置，也不自动修 JSON。

@@ -422,6 +422,8 @@ LoopRequest 只要求 run/task/attempt、预算和父 Session；Scientific 的 t
 
 **LLM 客户端的最小约定**：必需方法只有 `next_action(context, action_type)`。Runtime 通过 `getattr` 使用可选的 `context_budget`、`set_attempt_limit`、`last_attempts`、`set_trace_context`、`record_validation`，没有这些 hooks 的客户端仍可运行。缺少计量 hook 时按一次请求计一次调用；若客户端内部会重试，应提供真实 attempts 和限制 hook。换客户端不需要新增 Provider 层，但应测试预算、计量与错误约定。
 
+**上下文计量**：Composer 对最终渲染文本估算，包含 section 标题与段间分隔符；`estimated_tokens == estimate_tokens(text)`，不超过输入上限。required 保持顺序，optional 按优先级稳定选入，装不下的大段不会阻止后面较小的可选段。仍使用字符数/4 的近似值，不宣称等于供应商 tokenizer；Action schema、输出预留及安全余量由 ModelProfile 另外扣除。
+
 **trace 的含义**：`action_valid` 只表示 provider 初步解析得到了候选动作；后续外层 Action schema 错误以同一 `call_id` 的补充记录关联。它不证明工具参数通过 `input_model` 校验、工具执行成功、finalizer 通过或科学结论正确。调试时结合原始响应、关联校验记录和 Session 的 action/observation/error，不以“全部 action_valid=True”代替验收。
 
 Runtime 恢复检查 run/task/attempt/owner/agent 与可恢复状态。循环在工具派发前重新检查 deadline：LLM 或权限检查耗尽时间后不再启动工具，已发生的调用仍计账；这不是对运行中工具的强制抢占。`ToolObservation` 的 question、request_work、finish_candidate 至多携带一种，防止相互矛盾的控制信号。

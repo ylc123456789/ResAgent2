@@ -45,33 +45,25 @@ class ContextComposer:
         )
 
         included: list[ContextSection] = []
-        used = 0
-        for section in required:
-            cost = self.estimate_tokens(section.content)
-            if used + cost > max_tokens:
-                raise ContextBudgetExceeded(
-                    f"required context section {section.name!r} exceeds budget"
-                )
-            included.append(section)
-            used += cost
-
         omitted: list[str] = []
-        for section in optional:
-            cost = self.estimate_tokens(section.content)
-            if used + cost <= max_tokens:
-                included.append(section)
-                used += cost
-            else:
+        text = ""
+        for section in [*required, *optional]:
+            rendered = f"## {section.name}\n{section.content}"
+            candidate = f"{text}\n\n{rendered}" if included else rendered
+            if self.estimate_tokens(candidate) > max_tokens:
+                if section.required:
+                    raise ContextBudgetExceeded(
+                        f"required context section {section.name!r} exceeds budget"
+                    )
                 omitted.append(section.name)
-
-        text = "\n\n".join(
-            f"## {section.name}\n{section.content}" for section in included
-        )
+                continue
+            included.append(section)
+            text = candidate
         return ComposedContext(
             text=text,
             included_sections=[section.name for section in included],
             omitted_sections=omitted,
-            estimated_tokens=used,
+            estimated_tokens=self.estimate_tokens(text),
         )
 
 

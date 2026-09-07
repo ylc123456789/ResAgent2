@@ -200,11 +200,13 @@ def test_context_composer_respects_total_budget_and_priority() -> None:
             ContextSection(name="high", content="important", priority=10),
             ContextSection(name="low", content="x" * 100, priority=1),
         ],
-        max_tokens=12,
+        max_tokens=15,
     )
 
     assert context.included_sections == ["system", "required", "high"]
     assert context.omitted_sections == ["low"]
+    # The rendered text, including headings and separators, is 58 characters.
+    assert context.estimated_tokens == composer.estimate_tokens(context.text) == 15
 
 
 def test_required_context_cannot_silently_overflow_budget() -> None:

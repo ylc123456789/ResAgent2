@@ -2,10 +2,15 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
 from resagent2_contracts import AgentOwner
 from resagent2_runtime import (
     AgentEvent,
     AgentState,
+    ContextBudgetExceeded,
+    ContextComposer,
+    ContextSection,
     recent_tool_listing,
     recent_tool_snippets,
 )
@@ -221,3 +226,44 @@ def test_recent_listing_bounds_total_chars_without_truncating_entries() -> None:
     assert listing["paths"] == ["aaa.py", "bbb.py"]
     assert listing["truncated"] is True
     assert listing["path"] == "."
+
+
+def test_context_rejects_zero_budget() -> None:
+    with pytest.raises(ContextBudgetExceeded, match="positive"):
+        ContextComposer().compose("", [], max_tokens=0)
+
+
+def test_empty_system_still_accounts_for_its_heading() -> None:
+    composer = ContextComposer()
+    context = composer.compose("", [], max_tokens=3)
+    assert context.text == "## system\n"
+    assert context.estimated_tokens == composer.estimate_tokens(context.text) == 3
+    with pytest.raises(ContextBudgetExceeded, match="system"):
+        composer.compose("", [], max_tokens=2)
+
+
+def test_required_context_includes_separator_at_budget_boundary() -> None:
+    composer = ContextComposer()
+    sections = [ContextSection(name="goal", content="", required=True)]
+    context = composer.compose("ab", sections, max_tokens=6)
+    # The two sections alone are 20 characters; their separator makes 22.
+    assert context.text == "## system\nab\n\n## goal\n"
+    assert context.estimated_tokens == composer.estimate_tokens(context.text) == 6
+    assert context.included_sections == ["system", "goal"]
+    with pytest.raises(ContextBudgetExceeded, match="goal"):
+        composer.compose("ab", sections, max_tokens=5)
+
+
+def test_context_skips_large_optional_and_keeps_priority_tie_order() -> None:
+    composer = ContextComposer()
+    large_name = "optional_heading_exceeds_remaining_budget"
+    sections = [
+        ContextSection(name="first", content="", priority=1),
+        ContextSection(name=large_name, content="", priority=10),
+        ContextSection(name="last", content="", priority=1),
+    ]
+    context = composer.compose("ab", sections, max_tokens=6)
+    assert context.included_sections == ["system", "first"]
+    assert context.omitted_sections == [large_name, "last"]
+    assert context.text == "## system\nab\n\n## first\n"
+    assert context.estimated_tokens == composer.estimate_tokens(context.text) == 6

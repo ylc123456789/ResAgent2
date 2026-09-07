@@ -26,6 +26,8 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 计算实际预算，并把 Action schema 计入模型容量。模型能力来自组合根配置，runtime
 不查询供应商，也不维护模型名称表。
 
+ContextComposer 对包含标题和分隔符的最终文本统一估算预算，必需段装不下就拒绝，不先调用 LLM。这个值仍是字符估算，不是供应商的精确 token 数。
+
 文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略
 均不属于 runtime。
 

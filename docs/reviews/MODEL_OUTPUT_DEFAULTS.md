@@ -36,6 +36,32 @@ CLI 当前默认面向 DeepSeek V4，采用以下部署配置：
 
 确定性测试不调用真实服务。服务器补验收只检查新默认下的完整编译及 CLI 问答，不跑训练、不创建受管环境。上一轮诊断结果见 [LLM 诊断验收单](LLM_DIAGNOSTICS_ACCEPTANCE.md)，其 4096/16384 是历史对照配置，不是现在的默认值。
 
+## 验收结论与保留观察（2026-09-07）
+
+**验收通过，用户已授权收尾合并推送。** 服务器待测代码 `ab5066f55f4d8fa941ee66d51829631d8a033dcd`，干净 worktree `/root/autodl-tmp/projects/ResAgent2-ab5066f`；八包 editable 指向该 checkout。产物完整保留在 `/root/autodl-tmp/e2e-output-ab5066f-Sl6yzC/`。本次收尾只改文档，不移动服务器安装指针、不删除历史现场。
+
+- 本地与服务器全量确定性测试均为 **775 passed, 1 skipped**，mock E2E completed，diff-check 干净。
+- 真实完整 Compiler：Flash ×3、Pro ×1 均通过 draft→review；图均为 code_modify（实现并验证）→ experiment_run（正式训练与指标），保留依赖。此次仅编译，不执行这些任务。
+- CLI 纯问答：run 暂停（exit 3）→ show（0）→ answer（0）；实际 requested_fields=["answer"]，最终意见明确记录 accuracy。
+- 从默认配置加载 1000000 / 256000 / 1024 / 600；所有实际请求 max_tokens=256000，Compiler 输入估算为 1112–1289，未扩大 4096 模块输入上限。所有尝试 finish_reason=stop，未观测到 length。
+- 四次编译分别消费 2/2/3/2 次请求；连同问答共 **10 次逻辑调用、11 次 HTTP 尝试**。与 trace 的 retry_number+1 及 CompilationResult.llm_calls 对应，未重复计数。驱动不保存 Run，旧 Run 字节未变；不宣称本次探针更新过 Run 总账。
+- 五个 trace 目录/文件权限 0700/0600；验收方凭据扫描 NONE，主开发方另行只读复核原始请求、响应、尝试记录及权限。
+
+### 非阻断观察：额度宽裕仍有一次 stop / 空正文
+
+不能把本轮记为“零错误”或“所有空响应已根除”。`traces/compile-flash-3/llm_traces.jsonl` 的 call_id `e0e0910c5b5f48abacf0f48fa332949b`：
+
+| 尝试 | finish_reason | completion / reasoning tokens | 正文与处理 |
+|---|---|---|---|
+| 0 | stop | 11023 / 11023 | 原始 content 为空；JSON 解析受控失败，记录 Expecting value |
+| 1 | stop | 9622 / 8970 | 合法任务草图；既有有界重试恢复，随后 review 通过 |
+
+本次上限为 256000、响应结束原因是 stop，**不支持继续归因为 4096 额度截断，也不支持继续加额度**。客户端在 strip/JSON 解析前保存的原始 content 已为空，不是本地工作集裁剪；为什么服务在此处停止且不返回正文，现有证据不能确定。第二次成功说明本次恢复有效，不证明以后相同请求必然成功。
+
+按当前范围保留现有最多三次、受剩余调用预算约束的重试及逐次诊断，不新增 JSON 修补、自动升档或 Provider 分支。若后续在额度未耗尽时连续复现 stop/空正文并耗尽重试，再携完整 trace 单独诊断。更高额度仍可能增加实际成本/延迟，且没有全 Run 的货币/总输出 token 硬预算；这些边界保持不变。
+
+以下保留原验收方法以便复现；其中“不合并/push”是服务器测试角色的操作边界，不代表验收仍未完成。
+
 ## 服务器收尾验收
 
 代码基线 **`ab5066f55f4d8fa941ee66d51829631d8a033dcd`**，`fix/interface-contracts`；后续文档提交不改变待测代码。沿用前轮纪律：新干净 worktree、核验八包 import 指针并记录前后、隔离 cwd 跑 775/1 与 mock、单一新产物根、全 full trace、权限 0700/0600、不打印凭据，不清理旧工作树/环境/数据集，不合并/push。

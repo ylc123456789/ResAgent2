@@ -27,6 +27,7 @@ checks replacement compilers before accepting any graph mutation.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Annotated, Protocol
 
@@ -214,6 +215,23 @@ class DeterministicWorkflowCompiler:
         return CompilationResult(self._patch)
 
 
+def _capability_context(registry: CapabilityRegistry) -> str:
+    """Use the same capability meanings and scope rules in draft and review."""
+    lines = ["Available capabilities:"]
+    for item in registry.definitions:
+        suffix = f" — {item.description}" if item.description else ""
+        lines.append(f"- {item.capability.value}{suffix}")
+    lines.append(
+        "Keep each task within its capability's responsibility. code_modify "
+        "changes code and verifies code correctness; experiment_run performs "
+        "the research experiment and delivers measured metrics and artifacts. "
+        "Code-level verification does not replace formal experiment delivery. "
+        "A small task budget does not expand a capability: never pack another "
+        "capability's work into one task merely to fit the budget."
+    )
+    return "\n".join(lines)
+
+
 def _compile_prompt(
     request: WorkRequest,
     current: Workflow | None,
@@ -234,11 +252,8 @@ def _compile_prompt(
         f"Objective: {request.request.objective}",
         f"Expected evidence: {', '.join(request.request.expected_evidence)}",
         f"Constraints: {', '.join(request.request.constraints) or '(none)'}",
-        "Available capabilities:",
+        _capability_context(registry),
     ]
-    for item in registry.definitions:
-        suffix = f" — {item.description}" if item.description else ""
-        lines.append(f"- {item.capability.value}{suffix}")
     lines.extend(
         [
             "Use only capabilities from the list above; do not invent new ones.",
@@ -351,11 +366,20 @@ def _sanitize_inputs(capability: Capability, inputs: CapabilityInput) -> Capabil
     return inputs
 
 
-def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
-    """Ask a short, bounded semantic-completeness review of one draft."""
+def _review_prompt(
+    request: WorkRequest, draft: CompilationDraft, registry: CapabilityRegistry,
+) -> str:
+    """Review the full task semantics, using the materializer's input projection.
+
+    Local keys preserve dependencies without exposing execution identities.
+    Sanitization is shared with materialization, so the review sees the inputs
+    that will be dispatched, not discarded path guesses or exact criteria.
+    """
     tasks = [
         f"- {task.key} [{task.capability.value}]: {task.goal}; "
-        f"depends_on={task.depends_on or []}"
+        f"depends_on={task.depends_on or []}\n"
+        f"  constraints={json.dumps(task.constraints, ensure_ascii=False)}\n"
+        f"  inputs={_sanitize_inputs(task.capability, task.inputs).model_dump_json()}"
         for task in draft.tasks
     ]
     return (
@@ -364,7 +388,8 @@ def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
         f"Work request objective: {request.request.objective}\n"
         f"Expected evidence: {', '.join(request.request.expected_evidence)}\n"
         f"Constraints: {', '.join(request.request.constraints) or '(none)'}\n\n"
-        "Draft tasks:\n"
+        + _capability_context(registry)
+        + "\n\nDraft tasks:\n"
         + ("\n".join(tasks) or "(none)")
         + "\n\n"
         "Decide whether this is the minimal CURRENTLY EXECUTABLE round. It must "
@@ -373,9 +398,13 @@ def _review_prompt(request: WorkRequest, draft: CompilationDraft) -> str:
         "on another task in this same draft failing: failures return to the Scientific "
         "Agent and repair is compiled as a new WorkRequest. Do not demand unrelated "
         "extra work.\n"
-        "Return accepted=true only when both completeness and the one-round rule "
-        "hold; otherwise accepted=false with issues listing concrete missing or "
-        "speculative tasks."
+        "Read each task's goal, inputs and constraints together. A requirement "
+        "present in inputs or constraints need not be repeated in the goal. "
+        "Check whether the assigned capability can deliver the requested work, "
+        "not merely whether the goal promises it.\n"
+        "Return accepted=true only when completeness, capability scope and the "
+        "one-round rule hold; otherwise accepted=false with issues listing "
+        "concrete omissions, scope violations or speculative tasks."
     )
 
 
@@ -654,7 +683,7 @@ class LLMWorkflowCompiler:
                     validate_workflow_candidate(compiled)
                 except ValueError as error:
                     raise CompilationError(str(error)) from error
-                review = self._review_draft(request, draft)
+                review = self._review_draft(request, draft, registry)
             except (ValidationError, CompilationError) as error:
                 if attempt == 1:
                     raise CompilationError(
@@ -691,7 +720,7 @@ class LLMWorkflowCompiler:
             setter(self._remaining_calls - self.llm_calls)
 
     def _review_draft(
-        self, request: WorkRequest, draft: CompilationDraft
+        self, request: WorkRequest, draft: CompilationDraft, registry: CapabilityRegistry,
     ) -> CompilationReview:
         """Run one bounded semantic-completeness review of the draft."""
         tracer = getattr(self._client, "set_trace_context", None)
@@ -704,7 +733,7 @@ class LLMWorkflowCompiler:
             )
         self._check_budget()
         self._limit_next_call()
-        prompt = _review_prompt(request, draft)
+        prompt = _review_prompt(request, draft, registry)
         try:
             raw = self._client.next_action(prompt, CompilationReview)
         finally:

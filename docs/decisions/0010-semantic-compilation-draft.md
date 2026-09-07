@@ -88,7 +88,9 @@ LLM **也不输出代码细节**：具体文件路径（如 `models/selayer.py`�
 
 因此 Compiler 在结构校验通过后，再做**一次短小的语义审查**（evaluator-optimizer 压缩进 Compiler 内部，不是新 Agent、不加新模块）：
 
-- 输入是 WorkRequest 的 objective/evidence/constraints 和草图的 capability+goal 列表；
+- 输入是 WorkRequest 的 objective/evidence/constraints、与 draft 阶段相同的注册能力说明，以及每项任务的 capability/goal/depends_on/constraints/inputs；inputs 使用物化器同一个纯函数投影，避免审查已经丢弃的路径猜测或误放的精确验收字段；不暴露全局执行身份；
+- 审查完整任务语义，不要求 inputs/constraints 中已存在的要求重复写进 goal；同时检查 capability 是否承担了职责之外的工作，而不只是看目标是否声称能够完成；
+- `code_modify` 的代码正确性验证不替代 `experiment_run` 的正式实验与指标/工件交付；任务预算紧张不扩大能力职责。职责规则和能力说明由同一提示构造函数提供给 draft/review，不新增审查 Agent；
 - 一个草图只描述当前可执行的一轮；不得提前加入依赖本轮失败才需要的 diagnose/fix/rerun，失败事实返回 Scientific 后另建 WorkRequest；
 - 输出只有 `CompilationReview(accepted: bool, issues: list[str])`；
 - `accepted=false` 时，把遗漏前置条件或多余条件任务写入 `issues`，交给现有的“一次纠错重编译”；
@@ -135,7 +137,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 - 偶发的非法草稿通过一次反馈重编恢复，而不是让整个 Run 失败；
 - Compiler 的输出契约变窄，更易测试（物化器是纯函数）；
 - 全局 TaskId / WorkRequestId 的 traceability 成为代码保证，不依赖模型；
-- “漏编前置任务”（如只生成 experiment_run 而漏掉 code_modify）由语义审查兜底，一次缺失项反馈重编即可补上；
+- “漏编前置任务”和能力越界可经语义审查反馈后重编；这仍依赖模型判断，不保证每次都识别或修正，第二版仍不合格则失败；
 - Coding 的“修改后必须验证”从提示文本变成每轮注入的确定性状态，不再依赖模型临时记忆。
 
 代价：

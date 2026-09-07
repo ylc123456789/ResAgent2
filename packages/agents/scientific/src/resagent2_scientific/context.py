@@ -49,9 +49,13 @@ Dataset rule:
 
 WorkRequest rules:
 - Request only the next necessary round of work that the current evidence
-  supports. Do not preemptively request repair or diagnosis before a failure has
-  actually occurred: first request the experiment run; only after it fails,
-  request a fix.
+  supports. Include already-known prerequisites: if the goal or observed
+  evidence says code is missing or broken, request that change before the
+  experiment that needs it. Do not run a known-broken experiment merely to
+  rediscover the stated problem.
+- Distinguish known prerequisites from hypothetical failures. If no problem is
+  known and the goal only says to fix a failure if one occurs, request execution
+  first; request repair only after that failure is observed.
 - Be self-contained: preserve every unmet precondition and constraint from the
   goal. Do not describe only the final evidence you want; also describe the
   problems that must be solved before that evidence can be produced.

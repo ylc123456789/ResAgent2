@@ -20,6 +20,15 @@ def test_scientific_prompt_distinguishes_previews_from_visible_evidence() -> Non
     assert "do not guess the missing contents" in SCIENTIFIC_PROMPT
 
 
+def test_scientific_prompt_separates_known_prerequisites_from_contingencies() -> None:
+    assert "Include already-known prerequisites" in SCIENTIFIC_PROMPT
+    assert "request that change before the" in SCIENTIFIC_PROMPT
+    assert "Do not run a known-broken experiment" in SCIENTIFIC_PROMPT
+    assert "Distinguish known prerequisites from hypothetical failures" in SCIENTIFIC_PROMPT
+    assert "request repair only after that failure is observed" in SCIENTIFIC_PROMPT
+    assert "first request the experiment run; only after it fails" not in SCIENTIFIC_PROMPT
+
+
 def test_coding_prompt_allows_multiple_uniquely_matching_edits() -> None:
     assert "old_text must match exactly once" in MODIFY_PROMPT
     assert "current file per call" in MODIFY_PROMPT

@@ -7,6 +7,7 @@ compiler assigns every runtime identity/scope field and emits a schema-valid
 """
 
 from datetime import UTC, datetime
+import json
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -798,6 +799,70 @@ def test_semantic_review_accepts_experiment_only_request() -> None:
     assert [task.capability.value for task in result.tasks] == ["experiment_run"]
 
 
+def test_review_receives_effective_inputs_constraints_and_shared_capabilities() -> None:
+    capabilities = registry()
+    capabilities.definitions[0].description = "Modify and verify code, not research metrics."
+    capabilities.definitions[1].description = "Measure and deliver experimental evidence."
+    raw = raw_repair()
+    raw["tasks"][0]["inputs"]["suggested_paths"] = ["guessed.py"]
+    raw["tasks"][1]["inputs"].update(
+        instructions="Stop on failure; do not modify code.",
+        expected_artifacts=["error log only if execution fails"],
+    )
+    raw["tasks"][1]["constraints"] = ["Use registered data only; do not download."]
+    llm = _FakeCompilerLLM(raw)
+    result = LLMWorkflowCompiler(llm).compile(
+        work_request(), current=None, registry=capabilities, budget=budget(),
+    )
+    draft_prompt, review_prompt = llm.prompts
+    for description in (item.description for item in capabilities.definitions):
+        assert description in draft_prompt and description in review_prompt
+    for prompt in llm.prompts:
+        assert "A small task budget does not expand a capability" in prompt
+        assert "Code-level verification does not replace formal experiment delivery" in prompt
+    projected_inputs = [
+        json.loads(line.removeprefix("  inputs="))
+        for line in review_prompt.splitlines() if line.startswith("  inputs=")
+    ]
+    assert projected_inputs == [t.inputs.model_dump(mode="json") for t in result.output.tasks]
+    assert "guessed.py" not in review_prompt
+    assert "Stop on failure; do not modify code." in review_prompt
+    assert "Use registered data only; do not download." in review_prompt
+    assert "depends_on=['fix']" in review_prompt
+    assert "need not be repeated in the goal" in review_prompt
+    assert "task_fix" not in review_prompt and "work_round1" not in review_prompt
+    assert raw["tasks"][0]["inputs"]["suggested_paths"] == ["guessed.py"]
+
+
+@pytest.mark.parametrize("max_tasks", [1, 2])
+def test_scope_review_uses_existing_retry_without_squeezing_experiment_into_coding(max_tasks) -> None:
+    """Scripted rejection tests wiring, not a guarantee of model judgment."""
+    combined = raw_repair()
+    combined["tasks"] = [combined["tasks"][0]]
+    combined["tasks"][0]["goal"] = "Change code and deliver formal experiment metrics"
+    combined["tasks"][0]["inputs"]["instructions"] = combined["tasks"][0]["goal"]
+    llm = _ScriptedCompilerLLM(
+        drafts=[combined, raw_repair()],
+        reviews=[{"accepted": False, "issues": ["Formal measurements require experiment_run"]}],
+    )
+    compiler = LLMWorkflowCompiler(llm)
+    if max_tasks == 1:
+        with pytest.raises(CompilationError, match="2 tasks but only 1 remain") as caught:
+            compiler.compile(work_request(), current=None, registry=registry(), budget=budget(1))
+        assert caught.value.llm_calls == 3
+        assert len(llm.prompts) == 3  # no review of a graph that cannot fit
+    else:
+        result = compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget(2),
+        )
+        assert [t.capability for t in result.output.tasks] == [
+            Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN,
+        ]
+        assert result.output.tasks[1].depends_on == [result.output.tasks[0].id]
+        assert result.llm_calls == 4
+    assert "Formal measurements require experiment_run" in llm.prompts[2]
+
+
 def test_compilation_review_verdict_and_issues_are_consistent() -> None:
     with pytest.raises(ValidationError, match="accepted review cannot carry issues"):
         CompilationReview(accepted=True, issues=["unexpected"])
@@ -998,7 +1063,7 @@ def test_compile_review_prompt_failure_preserves_one_call(monkeypatch) -> None:
 
     failure = RuntimeError("review prompt failed")
 
-    def fail_prompt(request, draft):
+    def fail_prompt(request, draft, registry):
         raise failure
 
     monkeypatch.setattr(compiler_module, "_review_prompt", fail_prompt)

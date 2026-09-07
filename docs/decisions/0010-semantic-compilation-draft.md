@@ -113,6 +113,8 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 
 ### 7. 边界检查（接口优化后）
 
+Controller 在调用任何 Compiler 之前检查是否还有新任务名额。名额为零时，把当前 WorkRequest 和 Run 标为失败，保留 `budget_exhausted` 原因，既有任务/Attempt 不变，Compiler 调用数为零。不请求模型在“必须非空”和“最多零项”之间纠错。此检查位于已接受图的恢复分支之后：已经接受的任务占满预算仍可继续执行，不会被误拦截。正数名额不足以容纳必要任务时，仍由物化器的预算检查拒绝，不通过合并跨能力职责来凑数。
+
 物化器检查 capability/workspace 声明并分配身份；图模型负责结构。非空及本轮依赖政策提取为 `workflow_validation.validate_workflow_candidate`，Compiler 在 review 前调用（拒绝可进入一次纠错），Scheduler 在接受前同样调用（也约束替代 Compiler）。删除 Compiler 内四个重复的 `_reject_*` 最终函数；Scheduler 仍核预算、revision、实际 binding/workspace 与完整图。复用判据实现，不删除接收边界。
 
 ## 为什么不用其它方案

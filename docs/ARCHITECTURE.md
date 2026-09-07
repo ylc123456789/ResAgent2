@@ -234,6 +234,8 @@ LLM 只负责语义：做什么、任务之间有什么关系。所有运行时�
 
 下游任务的约束只来自 `WorkflowTask.constraints`——由 Compiler 从最新 WorkRequest 分配给每个 Task；Scheduler 只传 `task.constraints`，不再把 `ResearchRequest.constraints` 原样广播给每个子 Agent。
 
+编译与审查共用注册能力说明及职责规则。审查读每个任务的完整目标、依赖、约束及物化后输入语义，而非只看标题；代码正确性验证不替代正式实验和指标交付，预算紧张也不能扩大 Coding 的职责。此处是有界语义审查，不是确定性自然语言理解保证。Controller 在新编译前检查剩余任务名额：零名额直接以 `budget_exhausted` 结束当前 WorkRequest/Run，不调用 Compiler；已接受图的恢复优先处理，不受新增任务额度影响。
+
 LLM 调用可开启一个最小 JSONL trace（`OpenAICompatibleClient.trace_dir` + `trace_level`，off/metadata/full）：记录 run/session/task/agent/step、model、latency、retry、usage、call_id/created_at；full 档保留完整 request、最终 response，以及 provider 明确返回的 `reasoning_content`（若有），metadata 档只记 hash/tool/valid。reasoning 只用于调试，不进入 AgentState、Session 或下一轮上下文。目录 0700、文件 0600，永不记录 API key，trace 不进 ArtifactRegistry 也不进 Run JSON。
 
 ## 7. 完整工作流
@@ -332,6 +334,8 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。Orchestrato
 Scientific 的 `build_context` 复用 capabilities 的 `workspace_context(state)`，但不传 EnvironmentBinding；它没有 read_file 等工作区工具，因此读取工作集只有工件正文，不因此获得文件或执行能力。正文从已有 Session events 按来源、行范围和事件顺序投影，最多 6000 字符，作为 required 上下文统一计量。不再维护 `read_artifact_summaries` 正文前缀缓存：正文前 2000 字符不是语义摘要，也不能代替选定行范围。已观察 ArtifactId 只证明过去访问过，不能证明全文仍在上下文或支持当前论断。
 
 Prompt 明确文献检索、读取证据与科学判断是 Scientific 自有职责。timeout/HTTP 429 等服务故障经工具已有重试仍失败时，不应通过 request_work 派代码/实验任务绕路；需要用户提供材料或决定等待服务恢复时走现有 ask_user。此处是职责与恢复提示，不新增状态机、Compiler review 或确定性路由 gate；真实模型是否遵循仍须单独验收。
+
+规划提示区分“已知前置工作”和“假设未来失败”：目标或已有证据明确说明代码缺失/损坏时，先请求必要修改，再获取实验结果；仅在没有已知故障、目标只是要求失败后修复时，先执行再根据真实失败请求修复。不能把后一条误用成“所有场景都必须先运行一次”。
 
 #### 接口说明
 

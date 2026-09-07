@@ -428,6 +428,19 @@ class ResearchController:
                 self._save(run)
                 return self.scheduler.run_until_stable(run_id)
 
+        # Only a NEW candidate needs task slots. Accepted work above must still
+        # resume when its tasks have already filled the budget. Guard the Port
+        # here so replacement compilers also avoid futile zero-slot calls.
+        used_tasks = len(run.workflow.tasks) if run.workflow is not None else 0
+        if used_tasks >= run.request.budget.max_tasks:
+            error = ModuleError(
+                code=ErrorCode.BUDGET_EXHAUSTED,
+                message="No remaining task slots for a new work request",
+                retryable=False,
+            )
+            _transition_work_request(active, WorkRequestStatus.FAILED, error=error)
+            return self._fail_run(run, error)
+
         # REQUESTED or COMPILING: the compiler is stateless, so a crash after
         # marking COMPILING is safely retried. Only REQUESTED needs a
         # transition; an already-COMPILING request (crash between the COMPILING

@@ -69,6 +69,8 @@ WorkflowCompiler.compile(
 
 - **调用方 / 实现方**：Controller / `LLMWorkflowCompiler`，测试可注入确定性 Compiler。此接口在 orchestrator 内部，不是 Scientific 的输出协议。
 - **输入权威**：持久化 WorkRequest 指定本轮目的与约束；registry 给出可用 capability；current 给出已有图；workspace descriptor 是逻辑工作区摘要，不是任意文件访问授权。
+- **调用前置**：Controller 调用新编译前检查剩余任务名额；名额耗尽时，当前 WorkRequest/Run 以 `budget_exhausted` 失败，不调用 Compiler、不追加任务、不增加编译消费。已接受图（含接收后尚未迁移至 executing 的恢复窗口）优先恢复，不因任务名额已占满而中止。
+- **审查输入与职责**：draft/review 共用能力说明；review 同时读目标、依赖、约束和与物化器一致的输入投影。要求写在 inputs/constraints 中即有效，不必在标题重复。代码验证不等于正式实验交付，不能为适应任务名额让一种能力承担另一种能力的职责。语义审查可能漏判，不能冒充结构硬校验。
 - **交付名称边界**：LLMCompiler 不读代码，也没有 typed 精确输出键/路径来源；实验语义及条件写 Task.instructions。物化时清空其猜测的 expected_metrics/expected_artifacts，错放文本降为本 Task 的语义说明。公开精确字段留给可信直接/确定性调用方，不用模糊匹配把描述当文件名。
 - **模型与代码的分工**：LLM 只生成局部 `CompilationDraft`，代码分配 Run 内 Task ID、绑定 WorkRequest、解析依赖和 workspace，随后可做一次短语义 review。这里从局部 key 到正式 ID 的“全局物化”不表示 Task ID 在不同 Run 之间唯一。不给 Compiler 代码扫描、环境安装或执行工具。
 - **输出**：无 current 时返回 Proposal；已有图时返回只追加 Patch。返回候选不等于接受候选；Controller 仍交由 Scheduler 接受并保存。

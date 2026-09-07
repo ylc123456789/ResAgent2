@@ -595,7 +595,8 @@ def test_compilation_failure_fails_run() -> None:
     assert run.work_requests[0].status.value == "failed"
 
 
-def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> None:
+@pytest.mark.parametrize("accepted_status", [WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING])
+def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accepted_status) -> None:
     """Do not compile/apply a second graph after the acceptance crash window."""
 
     class _MustNotCompile:
@@ -647,10 +648,12 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> Non
         created_at=NOW,
         updated_at=NOW,
     )
+    request = research_request()
+    request.budget.max_tasks = 1
     store.save(
         ResearchRun(
             run_id="run_accept_recovery",
-            request=research_request(),
+            request=request,
             status=RunStatus.RUNNING,
             work_requests=[compiling],
             created_at=datetime.now(UTC),
@@ -663,6 +666,11 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> Non
         "run_accept_recovery",
         proposal("work_1"),
     )
+    accepted = store.load("run_accept_recovery")
+    accepted.work_requests[0].status = accepted_status
+    if accepted_status == WorkRequestStatus.EXECUTING:
+        accepted.work_requests[0].workflow_revision = accepted.workflow.revision
+    store.save(accepted)
     controller = ResearchController(
         scientific_port=_FinishingPort(),
         compiler=_MustNotCompile(),
@@ -675,6 +683,71 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path) -> Non
     assert run.status == RunStatus.COMPLETED
     assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
     assert run.workflow.revision == 1
+
+
+@pytest.mark.parametrize("previous_failed", [False, True])
+def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, previous_failed) -> None:
+    class CountingCompiler:
+        calls = 0
+
+        def compile(self, request, **kwargs):
+            self.calls += 1
+            assert kwargs["current"] is None, "zero-slot round must not reach any compiler"
+            return CompilationResult(proposal(request.id))
+
+    first_result = (
+        ModuleResult(
+            status=ModuleStatus.FAILED, summary="Execution failed",
+            error=ModuleError(code=ErrorCode.TOOL_FAILED, message="Original failure", retryable=False),
+        )
+        if previous_failed else completed_result()
+    )
+    scheduler = WorkflowScheduler(
+        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+            owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([first_result]),
+        )},
+        store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
+    )
+    compiler = CountingCompiler()
+    controller = ResearchController(
+        scientific_port=ScientificAgent(
+            ScriptedLLMClient([request_work_action(), request_work_action()]),
+            store=InMemorySessionStore(),
+        ),
+        compiler=compiler, scheduler=scheduler, registry=registry(),
+    )
+    request = research_request()
+    request.budget.max_tasks = 1
+    run = controller.create_run("run_task_slots", request)
+
+    assert run.status == RunStatus.FAILED
+    assert run.terminal_error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert "No remaining task slots" in run.terminal_error.message
+    assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
+    assert run.work_requests[-1].status == WorkRequestStatus.FAILED
+    assert run.work_requests[-1].error == run.terminal_error
+    assert compiler.calls == 1
+    assert run.llm_calls_used == 2  # only the two Scientific turns
+    assert len(run.workflow.tasks) == 1
+    assert run.workflow.tasks[0].status.value == ("failed" if previous_failed else "completed")
+    history = run.workflow.model_dump_json()
+
+    # A restart from COMPILING before candidate acceptance must use the same
+    # preflight, not loop into a zero-slot compiler call or leave work active.
+    run.status = RunStatus.RUNNING
+    run.terminal_error = None
+    run.work_requests[-1].status = WorkRequestStatus.COMPILING
+    run.work_requests[-1].error = None
+    scheduler.store.save(run)
+    resumed = controller.run_until_stable(run.run_id)
+    assert resumed.status == RunStatus.FAILED
+    assert resumed.terminal_error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert resumed.work_requests[-1].status == WorkRequestStatus.FAILED
+    assert resumed.work_requests[-1].error == resumed.terminal_error
+    assert resumed.llm_calls_used == 2
+    assert compiler.calls == 1
+    assert resumed.workflow.model_dump_json() == history
 
 
 def test_second_work_outcome_contains_only_second_round_tasks() -> None:

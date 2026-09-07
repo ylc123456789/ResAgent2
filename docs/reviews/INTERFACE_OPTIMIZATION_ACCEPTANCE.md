@@ -4,7 +4,7 @@
 
 待测代码：**a2c6afa2da07b33f864be74c9d6b067403b3ca8f**，分支 `fix/interface-contracts`。本验收单是其后续纯文档提交；服务器请 checkout 上述代码 SHA，不只按分支名猜测版本。
 
-本地已完成：隔离 cwd 全量 **740 passed, 1 skipped**，mock E2E completed，`git diff --check` 干净。服务器尚未验收，不能沿用 schema 4.0 的历史成功记录。
+该基线本地与服务器均为 **740 passed, 1 skipped**，mock E2E completed。首轮服务器 E2E 为 8/9、CLI 2/2；接口/计量核心通过，但 ce-flash-2 暴露已知前置工作、能力分工、审查信息和零任务名额处理缺口，不能据此宣布全部收尾。本单保留原验收范围；追加修复的确切 SHA 与要求见 [任务职责收口验收单](INTERFACE_SCOPE_ACCEPTANCE.md)。
 
 只允许同步、安装指针核验、测试、分析和报告：
 

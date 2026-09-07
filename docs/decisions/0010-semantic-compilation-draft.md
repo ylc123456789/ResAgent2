@@ -127,7 +127,7 @@ Controller 在调用任何 Compiler 之前检查是否还有新任务名额。�
 ## 不变的原则
 
 - Workflow 的接受、状态转换和 Artifact 登记仍由确定性代码决定；
-- Scientific / Experiment Agent、Agentic Loop、Scheduler 状态机、ArtifactRegistry、Workspace/Environment、公共 schema 版本均不改；Coding Agent 的自主性（自己探索、自己验证）和最终硬 gate 不变，只新增由确定性代码派生的控制状态；
+- Scientific / Experiment 的公开接口、Agentic Loop、Scheduler 状态机、ArtifactRegistry、Workspace/Environment 不因本次收口改变；公共 schema 保持 5.0。Scientific 规划提示区分已知前置修改与未来条件故障，不能一律要求先执行；Coding 的自主探索、代码验证及最终硬 gate 保持不变；
 - WorkflowProposal / WorkflowPatch 仍存在，仍是 typed boundary；
 - LLM 不直接修改 RunStatus、TaskStatus 或历史 Attempt。
 

@@ -34,6 +34,7 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
+    CompilationError,
     CompilationResult,
     DeterministicWorkflowCompiler,
     InMemoryRunStore,
@@ -1060,3 +1061,45 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
     assert run.status == RunStatus.COMPLETED
     # 7 compiler calls + 2 Scientific calls (request_work + finish).
     assert run.llm_calls_used == 9
+
+
+@pytest.mark.parametrize("usage_known", [True, False])
+def test_failed_compiler_usage_comes_from_error(tmp_path, usage_known) -> None:
+    class _FailingCompiler:
+        # A stale implementation attribute must never override invocation usage.
+        llm_calls = 99
+        invocations = 0
+
+        def compile(
+            self, request, *, current, registry, budget,
+            workspaces=None, remaining_calls=None,
+        ):
+            self.invocations += 1
+            if usage_known:
+                raise CompilationError("compiler failed", llm_calls=3)
+            raise RuntimeError("compiler failed")
+
+    compiler = _FailingCompiler()
+    scheduler = WorkflowScheduler(
+        bindings={},
+        store=InMemoryRunStore(),
+        artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "runs",
+    )
+    controller = ResearchController(
+        scientific_port=ScientificAgent(
+            ScriptedLLMClient([request_work_action()]),
+            store=InMemorySessionStore(),
+        ),
+        compiler=compiler,
+        scheduler=scheduler,
+        registry=registry(),
+    )
+    run = controller.create_run("run_compiler_usage_failure", research_request())
+
+    assert compiler.invocations == 1
+    assert run.status == RunStatus.FAILED
+    assert run.work_requests[0].status.value == "failed"
+    assert run.llm_calls_used == (4 if usage_known else 1)
+    assert run.terminal_error is not None
+    assert run.terminal_error.details["compiler_usage_known"] is usage_known

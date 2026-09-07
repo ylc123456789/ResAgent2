@@ -21,13 +21,13 @@
 |---|---|---|
 | P0 | 规范、基线、公开变化裁定 | 本地完成；字段删减版本取舍另列 |
 | P1 | 共享图候选判据；Compiler 纠错 + Scheduler 接收 | 本地完成 |
-| P2 | 编译失败携带本次消费；不读实现属性 | 待实施 |
+| P2 | 编译失败携带本次消费；不读实现属性 | 本地完成 |
 | P3 | 删除死缓存、无效兜底；注册表字段逐项裁定 | 待实施 |
 | P4a | Composer 对最终标题/分隔符计量 | 待实施 |
 | P4b | 共用 Prompt 适配及 Scientific 工件登记，保留两个组合根 | 待实施 |
 | P5 | 本地集成、同步文档、交接真实服务器验收 | 待实施 |
 
-注册表 `request_model/result_model/side_effects/permission_policy/completion_evidence` 当前没有运行消费者，但删除会改变公开构造和 schema。按现有版本规则须单列不兼容变更；是否删除并升级版本待用户选择，不擅自引入版本例外或兼容分支。
+注册表 `request_model/result_model/side_effects/permission_policy/completion_evidence` 没有运行消费者，用户已明确批准删除并按现有版本规则升至 5.0。旧 4.0 Run 不续跑，既有记录原样保留，不引入迁移或兼容分支。
 
 基线验证：隔离 cwd、`PYTHONPATH=/home/cyl/ResAgent2`，本地全量 `703 passed, 1 skipped`；不使用服务器历史测试代替本轮验证。
 

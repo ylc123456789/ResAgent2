@@ -585,6 +585,8 @@ work_outcome 按 work_request_id、answers 按 question_id 幂等：重复投递
 
 WorkflowCompiler 的输入是 `WorkRequest`、CapabilityRegistry、预算、当前 Workflow 与逻辑工作区摘要；返回内部 `CompilationResult(output, llm_calls)`，其中 output 是 `WorkflowProposal` 或 `WorkflowPatch`。这层计量包装不新增跨模块 wire 类型。
 
+失败出口为 `CompilationError(message, llm_calls=...)`，计数是本次调用（包括没有返回结果的 HTTP 尝试），不是实例历史累计。Controller 不读取实现属性补账；非守约异常仍受控失败，但在终止错误中标记 compiler_usage_known=False。原生 Compiler 包装失败并保留原因链。
+
 production `LLMWorkflowCompiler` 不让 LLM 直接输出 Proposal/Patch：LLM 只输出 orchestrator 内部的 `CompilationDraft`（顶层 summary/rationale + 每任务 key/capability/goal/depends_on/workspace_id/constraints/inputs），再由确定性 `_materialize_draft` 分配全局 TaskId、绑定 `work_request_id`、解析 workspace、转换局部依赖并产出 Proposal（首轮）或只追加 Patch（修复轮）。每个草图只表示当前可执行的一轮，不预编译依赖本轮失败才需要的条件任务；失败经 WorkOutcome 返回 Scientific 后另建修复 WorkRequest。
 
 结构校验通过后再做一次语义审查（`CompilationReview`），同时检查遗漏前置条件和多余条件任务。结构拒绝与语义拒绝共享一次带精确反馈的纠错重编，总计最多两版草图，每版最多一次 review；仍失败则 Compiler 抛 CompilationError，由 Controller 将 WorkRequest/Run 置为 failed。图模型、Compiler 与 Scheduler 分担身份、revision、DAG、能力、预算和 inputs 检查，不是三套完全相同的 validator。精确入口和失败计量约定见 [I2](INTERFACES.md#i2-工作编译)。

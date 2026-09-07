@@ -74,7 +74,7 @@ WorkflowCompiler.compile(
 - **输出**：无 current 时返回 Proposal；已有图时返回只追加 Patch。返回候选不等于接受候选；Controller 仍交由 Scheduler 接受并保存。
 - **接收判据**：`workflow_validation.validate_workflow_candidate` 是非空及本轮依赖的共享纯函数。Compiler 在 review 前使用它生成纠错反馈，Scheduler 在持久化前再次使用，替代 Compiler 不能绕过。Pydantic 保证图结构，物化器检查声明，Scheduler 另核实际 binding、workspace、预算与 revision；不是把不同边界的检查全部合并。
 - **状态与副作用**：不保存 Session、不修改 Run/Workflow、不执行任务；真实实现会调用外部 LLM 并产生 trace，实例维护本次调用计数。因此“无长期会话”不等于纯函数，也不保证同实例可并发调用。
-- **纠错与失败**：结构拒绝和语义拒绝**共享一次纠错重编**，总计最多两版 draft，每版最多一次 review；仍失败则抛 `CompilationError`。调用预算限制真实尝试数，Controller 负责失败状态及记账。成功从 `CompilationResult.llm_calls` 取数；当前异常路径从实现的 `llm_calls` 属性补记，新替换实现也需遵守这一计量约定。
+- **纠错与失败**：结构拒绝和语义拒绝**共享一次纠错重编**，总计最多两版 draft，每版最多一次 review；仍失败则抛 `CompilationError`。调用预算限制真实尝试数，Controller 负责失败状态及记账。成功从 `CompilationResult.llm_calls` 取数；失败必须由 `CompilationError.llm_calls` 报告本次消费，保留 cause，不读取实现实例的隐藏属性。替代实现抛其它异常时受控结束 Run，标记 `compiler_usage_known=False`，账目只是已知消费下界，不把未知消费当成确定零次。
 - **重启与重复**：COMPILING 已接受图则继续执行，未接受图则可重编。不能保证再次调用产生同一图；确定性保证落在身份物化、结构校验及接受阶段，不在 LLM 的任务选择上。
 - **依赖语义**：`depends_on` 表示上游成功后才可运行；不是“上游失败则执行”。条件修复须等失败成为 WorkOutcome，再由 Scientific 发下一轮 WorkRequest，不能提前塞进成功依赖图。
 - **边界提醒**：“Workflow Validator”是模型校验、Compiler 检查、Scheduler 接受检查的合称，不存在额外独立服务；各处检查范围并不完全相同。语义 review 也不是自然语言目标必然完整的证明。

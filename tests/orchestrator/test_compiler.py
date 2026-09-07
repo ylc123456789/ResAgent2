@@ -903,3 +903,85 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
     scheduler.run_until_stable("run_x")
     assert port.requests[0].constraints == ["use accuracy"]
     assert "stale run-level constraint" not in port.requests[0].constraints
+
+
+@pytest.mark.parametrize("failure_stage", [CompilationDraft, CompilationReview])
+def test_compile_failure_reports_provider_attempts(failure_stage) -> None:
+    failure = RuntimeError("provider unavailable")
+
+    class _FailingProvider:
+        last_attempts = 0
+
+        def next_action(self, prompt, action_type):
+            self.last_attempts = 3 if action_type is failure_stage else 1
+            if action_type is failure_stage:
+                raise failure
+            return raw_experiment()
+
+    compiler = LLMWorkflowCompiler(_FailingProvider())
+    with pytest.raises(CompilationError, match="provider unavailable") as caught:
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget()
+        )
+    assert caught.value.llm_calls == (3 if failure_stage is CompilationDraft else 4)
+    assert caught.value.__cause__ is failure
+
+
+def test_compile_usage_is_per_invocation_after_success_and_failure() -> None:
+    class _RecoverableProvider(_FakeCompilerLLM):
+        fail_next = False
+
+        def next_action(self, prompt, action_type):
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("temporary failure")
+            return super().next_action(prompt, action_type)
+
+    client = _RecoverableProvider(raw_experiment())
+    compiler = LLMWorkflowCompiler(client)
+    first = compiler.compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    )
+    assert first.llm_calls == 2
+    client.fail_next = True
+    with pytest.raises(CompilationError, match="temporary failure") as caught:
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget()
+        )
+    assert caught.value.llm_calls == 1
+    recovered = compiler.compile(
+        work_request(), current=None, registry=registry(), budget=budget()
+    )
+    assert recovered.llm_calls == 2
+    assert first.llm_calls == 2
+    assert caught.value.llm_calls == 1
+
+
+def test_compile_review_prompt_failure_preserves_one_call(monkeypatch) -> None:
+    import resagent2_orchestrator.compiler as compiler_module
+
+    failure = RuntimeError("review prompt failed")
+
+    def fail_prompt(request, draft):
+        raise failure
+
+    monkeypatch.setattr(compiler_module, "_review_prompt", fail_prompt)
+    client = _FakeCompilerLLM(raw_experiment())
+    with pytest.raises(CompilationError, match="review prompt failed") as caught:
+        LLMWorkflowCompiler(client).compile(
+            work_request(), current=None, registry=registry(), budget=budget()
+        )
+    assert len(client.prompts) == 1
+    assert caught.value.llm_calls == 1
+    assert caught.value.__cause__ is failure
+
+
+def test_compile_rejection_preserves_consumption() -> None:
+    invalid = {"summary": "invalid", "rationale": "invalid", "tasks": []}
+    compiler = LLMWorkflowCompiler(_ScriptedCompilerLLM([invalid, invalid]))
+    with pytest.raises(CompilationError, match="2 attempts") as caught:
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget()
+        )
+    assert caught.value.llm_calls == 2
+    assert isinstance(caught.value.__cause__, CompilationError)

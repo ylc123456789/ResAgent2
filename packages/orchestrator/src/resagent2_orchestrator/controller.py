@@ -40,7 +40,7 @@ from resagent2_contracts import (
     scientific_session_id,
 )
 
-from .compiler import WorkflowCompiler
+from .compiler import CompilationError, WorkflowCompiler
 from .completion import (
     CompletionValidation,
     FinalReportRenderer,
@@ -453,8 +453,10 @@ class ResearchController:
                 remaining_calls=remaining_calls,
             )
         except Exception as error:
-            # Preserve the compiler's consumed calls even when it fails.
-            run.llm_calls_used += getattr(self.compiler, "llm_calls", 0)
+            # Only the invocation's error can authoritatively report its usage.
+            usage_known = isinstance(error, CompilationError)
+            if usage_known:
+                run.llm_calls_used += error.llm_calls
             _transition_work_request(
                 active,
                 WorkRequestStatus.FAILED,
@@ -462,6 +464,7 @@ class ResearchController:
                     code=ErrorCode.CONTRACT_ERROR,
                     message=f"compilation failed: {error}",
                     retryable=False,
+                    details={"compiler_usage_known": usage_known},
                 ),
             )
             assert active.error is not None

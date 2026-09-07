@@ -306,7 +306,7 @@ Scientific、Coding 或 Experiment 都只能产生 `QuestionDraft`。Orchestrato
 | `ResearchController.create_run(run_id, ResearchRequest)` | CLI/程序化调用方提供目标、资源声明与预算 | 返回推进到稳定状态的 ResearchRun | 创建并保存 Run，随后同步执行；不是“仅创建” |
 | `run_until_stable(run_id)` | CLI resume 或 Controller 的继续执行路径 | completed / failed / paused 的 Run | 负责中断整理与后续推进；paused 不会因调用 resume 自动越过待答问题 |
 | `answer_question(run_id, UserAnswer)` | UI 提交当前问题的答案 | 保存答案后继续推进并返回 Run | 校验 question_id/字段；只送对应 Scientific 或 Task；任务级续跑复用 Attempt |
-| `WorkflowCompiler.compile(...)` | Controller 传 WorkRequest、现有图、registry、预算与逻辑工作区 | CompilationResult：候选 Proposal/Patch + llm_calls | 不保存图、不调用执行 Agent；详见 [I2](INTERFACES.md#i2-工作编译) |
+| `WorkflowCompiler.compile(...)` | Controller 传 WorkRequest、现有图、registry、预算与逻辑工作区 | 成功 CompilationResult；失败 CompilationError；两者均报告本次 llm_calls | 不保存图、不调用执行 Agent；详见 [I2](INTERFACES.md#i2-工作编译) |
 | 图校验与接受：`accept_proposal` / `apply_patch` | Controller 向 Scheduler 提交候选图 | 已接受图所在的 ResearchRun | 模型及接受检查验证 DAG、版本、能力绑定等；接受过程还会物化工作区，不是纯校验函数 |
 | 任务执行：Scheduler `execute_task` / `run_until_stable` | Controller 驱动内部调度，按已接受图选择 ready Task | 更新后的 Run；图稳定后生成 WorkOutcome | 调用 ModulePort、保存 Attempt、登记工件、处理 retry；**不决定 Run completed** |
 | 结果汇总：`_build_work_outcome` | Scheduler 内部读取当前 WorkRequest 的任务结果 | WorkOutcome，经 Controller 交给 Scientific | 区分完成、失败、警告与工件；全图 failed/blocked 另由 Controller `_unresolved_tasks` 汇总 |

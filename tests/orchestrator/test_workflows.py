@@ -670,7 +670,7 @@ def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
                 add_tasks=[],
             ))
     assert engine.store.load(run.run_id).model_dump() == before
-    assert not (tmp_path / "data" / run.run_id).exists()
+    assert not engine.run_layout.run_dir(run.run_id).exists()
 
 
 @pytest.mark.parametrize("old_status", [TaskStatus.COMPLETED, TaskStatus.FAILED])

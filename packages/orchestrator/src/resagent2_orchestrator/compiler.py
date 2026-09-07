@@ -82,11 +82,21 @@ class WorkflowCompiler(Protocol):
         workspaces: list[WorkspaceDescriptor] | None = None,
         remaining_calls: int | None = None,
     ) -> CompilationResult:
-        """Return a Proposal when ``current`` is None, else a Patch."""
+        """Return a Proposal when ``current`` is None, else a Patch.
+
+        On failure, raise ``CompilationError`` with this invocation's actual
+        ``llm_calls``, including provider attempts that did not return a result.
+        """
 
 
 class CompilationError(ValueError):
-    """Raised when a compiler cannot produce a schema-valid graph."""
+    """A failed compilation and the LLM calls consumed by that invocation."""
+
+    def __init__(self, message: str, *, llm_calls: int = 0) -> None:
+        super().__init__(message)
+        if isinstance(llm_calls, bool) or not isinstance(llm_calls, int) or llm_calls < 0:
+            raise ValueError("llm_calls must be a non-negative integer")
+        self.llm_calls = llm_calls
 
 
 class CompilerLLM(Protocol):
@@ -580,8 +590,32 @@ class LLMWorkflowCompiler:
         workspaces: list[WorkspaceDescriptor] | None = None,
         remaining_calls: int | None = None,
     ) -> CompilationResult:
-        workspaces = workspaces or []
         self.llm_calls = 0
+        try:
+            return self._compile(
+                request,
+                current=current,
+                registry=registry,
+                budget=budget,
+                workspaces=workspaces,
+                remaining_calls=remaining_calls,
+            )
+        except Exception as error:
+            raise CompilationError(
+                str(error) or type(error).__name__, llm_calls=self.llm_calls
+            ) from error
+
+    def _compile(
+        self,
+        request: WorkRequest,
+        *,
+        current: Workflow | None,
+        registry: CapabilityRegistry,
+        budget: RunBudget,
+        workspaces: list[WorkspaceDescriptor] | None,
+        remaining_calls: int | None,
+    ) -> CompilationResult:
+        workspaces = workspaces or []
         self._remaining_calls = remaining_calls
         feedback: str | None = None
         for attempt in (0, 1):
@@ -665,10 +699,9 @@ class LLMWorkflowCompiler:
             )
         self._check_budget()
         self._limit_next_call()
+        prompt = _review_prompt(request, draft)
         try:
-            raw = self._client.next_action(
-                _review_prompt(request, draft), CompilationReview
-            )
+            raw = self._client.next_action(prompt, CompilationReview)
         finally:
             self.llm_calls += getattr(self._client, "last_attempts", 1)
         try:

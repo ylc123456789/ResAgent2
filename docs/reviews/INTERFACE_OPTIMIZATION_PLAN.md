@@ -66,7 +66,7 @@
 | R2 | Controller 零任务名额预检：不调用任何 Compiler；当前 WorkRequest/Run 都保留预算失败；已接受工作仍可恢复 | `6d81045`，集成 747 passed, 1 skipped |
 | R3 | 生产组合根适配器验证完整审查仍计入 4096，超限前拒绝且消费不多算；同步验收单 | `0d611a7`，本地/服务器 749 passed, 1 skipped；E2E 9/9；CLI 主失败和诊断通过并列保留 |
 | R4 | 共享 LLM 客户端在 JSON 解析前保留诊断；按尝试区分响应；同步输入/输出预算说明 | `da00fe6`，本地/服务器 761 passed, 1 skipped；[诊断补验收](LLM_DIAGNOSTICS_ACCEPTANCE.md)通过 |
-| R5 | 参考官方实现配置 CLI 模型容量/宽裕输出额度及网络等待；模块输入策略不变 | [依据与范围](MODEL_OUTPUT_DEFAULTS.md)，本地 775 passed, 1 skipped；真实补验收待执行 |
+| R5 | 参考官方实现配置 CLI 模型容量/宽裕输出额度及网络等待；模块输入策略不变 | `ab5066f`，[依据与验收](MODEL_OUTPUT_DEFAULTS.md)，本地 775 passed, 1 skipped；真实补验收待执行 |
 
 本次 schema 仍为 5.0，旧记录原样保留。预算预检是确定性保证；规划/职责规则和语义 review 仍依赖模型判断，单测只证明输入、反馈和拒绝链正确，不能宣称永久消除重读循环。
 

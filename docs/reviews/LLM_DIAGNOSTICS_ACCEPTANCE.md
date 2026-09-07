@@ -1,5 +1,7 @@
 # LLM 失败诊断补验收（无需训练）
 
+状态更新：da00fe6 诊断验收已完成，重放真实观察到输出截断。以下保留旧 4096/16384 对照方法；新 CLI 默认配置与下一步验收见 [模型输出默认配置](MODEL_OUTPUT_DEFAULTS.md)，不要把本页历史对照额度当成当前默认。
+
 ## 1. 版本、目的与边界
 
 待测代码：**`da00fe6d248c6bf6c1ed37a2b65619b2070f9242`**，分支 `fix/interface-contracts`。后续验收单提交只改文档。本地 **761 passed, 1 skipped**，mock E2E completed，`git diff --check` 干净。

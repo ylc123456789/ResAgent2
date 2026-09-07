@@ -35,3 +35,67 @@ CLI 当前默认面向 DeepSeek V4，采用以下部署配置：
 新增 14 个配置测试覆盖：五类 action/draft/review 的输入上限不扩大；Flash/Pro wire 都发送 256000、timeout=600；自定义模型/小容量/输出/timeout 可覆盖；非法组合在网络前拒绝；实际 CLI adapter + LLMWorkflowCompiler 的 draft/review 全链在新默认下计量、trace、两次消费一致。全量 775 passed, 1 skipped，mock E2E completed。
 
 确定性测试不调用真实服务。服务器补验收只检查新默认下的完整编译及 CLI 问答，不跑训练、不创建受管环境。上一轮诊断结果见 [LLM 诊断验收单](LLM_DIAGNOSTICS_ACCEPTANCE.md)，其 4096/16384 是历史对照配置，不是现在的默认值。
+
+## 服务器收尾验收
+
+代码基线 **`ab5066f55f4d8fa941ee66d51829631d8a033dcd`**，`fix/interface-contracts`；后续文档提交不改变待测代码。沿用前轮纪律：新干净 worktree、核验八包 import 指针并记录前后、隔离 cwd 跑 775/1 与 mock、单一新产物根、全 full trace、权限 0700/0600、不打印凭据，不清理旧工作树/环境/数据集，不合并/push。
+
+### 配置预检
+
+先加载现有凭据，再在**本轮进程环境**移除这些覆盖（不改 .bashrc 或持久部署配置）：RESAGENT2_CONTEXT_WINDOW、RESAGENT2_RESERVED_OUTPUT_TOKENS、RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS、RESAGENT2_LLM_TIMEOUT_SECONDS，以及四个 RESAGENT2_<COMPONENT>_CONTEXT_TOKENS。读取 `_model_profile()` / `_client().timeout_seconds` / `_component_context_limit()`，确认使用代码默认 1000000 / 256000 / 1024 / 600 和 8192/4096，而不是用 export 新值掩盖默认值错误。保留正确 API base/key 引用，模型按矩阵选择。
+
+### 真实矩阵（无训练）
+
+1. **完整 Compiler：Flash ×3、Pro ×1**。每次新进程、新 trace 子目录，用 CLI 的 `_compiler_client()`、`_registry()` 和真实 `LLMWorkflowCompiler.compile()`。读取下面旧 Run 的 WorkRequest/预算/逻辑 workspace 描述，不重新改写目标或简化 schema。必须包含 draft→review；不是只校验一个原始 draft。
+2. **CLI 纯问答 ×1**：默认 Flash，无 workspace，沿用“只询问并记录指标偏好，不执行工作”的目标，fresh data-root，run→paused(3)、show→0、读取实际字段、answer accuracy→completed(0)。不启动训练或环境搭建。
+
+可将以下驱动保存于本轮产物根 `ops/compile_default.py`。代码不创建 Controller，不执行任何 Task，也不写回旧 Run：
+
+```python
+from pathlib import Path
+from resagent2_cli import composition
+from resagent2_contracts import WorkspaceDescriptor
+from resagent2_orchestrator import ResearchRun, LLMWorkflowCompiler, CompilationError
+
+source = Path("/root/autodl-tmp/e2e-scope-0d611a7-X9BKAu/workdirs/cli-ce/state/run_cli_ce_1.json")
+original = source.read_bytes()
+run = ResearchRun.model_validate_json(original)
+assert run.workflow is None and len(run.work_requests) == 1
+profile = composition._model_profile()
+assert (profile.context_window, profile.reserved_output_tokens,
+        profile.safety_margin_tokens) == (1000000, 256000, 1024)
+client = composition._client()
+assert client.timeout_seconds == 600
+assert client.trace_level == "full" and client.trace_dir is not None
+assert not (client.trace_dir / "llm_traces.jsonl").exists(), "use a fresh trace directory"
+assert client.model in {"deepseek-v4-flash", "deepseek-v4-pro"}
+limit = composition._component_context_limit("compiler")
+assert limit == 4096
+compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=limit))
+try:
+    result = compiler.compile(
+        run.work_requests[0], current=None, registry=composition._registry(),
+        budget=run.request.budget,
+        workspaces=[WorkspaceDescriptor(workspace_id=w.workspace_id,
+                                        source_kind=w.source.source_kind)
+                    for w in run.workspaces.values()],
+        remaining_calls=run.request.budget.max_llm_calls - run.llm_calls_used,
+    )
+    print("compiled", "llm_calls=", result.llm_calls)
+    print(result.output.model_dump_json(indent=2))
+except CompilationError as error:
+    print("compilation_failed", "llm_calls=", error.llm_calls, str(error))
+    raise SystemExit(1)
+finally:
+    assert source.read_bytes() == original, "historical run must remain unchanged"
+```
+
+### 必看证据与停止条件
+
+- 编译和 CLI 所有实际请求 `request_max_tokens=256000`；Flash/Pro model 字段正确；网络 timeout 预检为 600。
+- Compiler draft/review 都有 system+compiler_request，estimated_tokens≤4096；各 Agent 的输入默认仍为 8192。总容量 1M 不能当作实际输入长度。
+- 实际图正确保留“修改并验证 → 实验”的职责和依赖；不能只以 JSON 可解析为通过。
+- 每次尝试分别列 finish_reason、completion_tokens、reasoning_tokens、正文长度及延迟，读取原始消息核验；没有 length 才能说本次未截断。若有 length/timeout/坏 JSON，保留第一次失败并报告，**不再临时调大额度、改 thinking/prompt 或重跑到绿**。
+- CompilationResult/CompilationError.llm_calls 与主 trace 行的 retry_number+1 求和对应；attempts 不重复加账。驱动不保存 Run，不能宣称它更新过历史 Run 总账。
+- 问答必须实际消费 accuracy；凭据扫描只输出是否命中；目录 0700、文件 0600。
+- 报告包含 SHA、安装指针、原始失败/成功、call_id、配置实值、结果和所有警告。有限样本通过不宣称永久稳定；本轮无需重跑训练矩阵。验收后只报告，不合并/push。

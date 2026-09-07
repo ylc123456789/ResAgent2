@@ -14,6 +14,7 @@ from urllib.request import url2pathname
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
+    ArtifactId,
     ArtifactImport,
     ArtifactRef,
     RunId,
@@ -21,6 +22,8 @@ from resagent2_contracts import (
     TaskId,
     WorkspaceGrant,
 )
+
+from .store import RunStore
 
 
 class ArtifactRegistrationError(ValueError):
@@ -315,3 +318,31 @@ class ArtifactRegistry:
             metadata=candidate.metadata,
         )
         return artifact
+
+
+class ScientificArtifactRegistration:
+    """Freeze Scientific artifacts, persist their Run index, and resolve live refs.
+
+    Structurally satisfies the caller's registration Port without importing
+    an Agent or capability package. Each lookup is scoped to its Run.
+    """
+
+    def __init__(self, registry: ArtifactRegistry, store: RunStore) -> None:
+        self._registry = registry
+        self._store = store
+        self._live: dict[tuple[RunId, ArtifactId], ArtifactRef] = {}
+
+    def register_scientific(
+        self, candidate: ArtifactCandidate, *, run_id: RunId, session_id: SessionId,
+    ) -> ArtifactRef:
+        artifact = self._registry.register_scientific(
+            candidate, run_id=run_id, session_id=session_id,
+        )
+        run = self._store.load(run_id)
+        run.artifacts[artifact.id] = artifact
+        self._store.save(run)
+        self._live[(run_id, artifact.id)] = artifact
+        return artifact
+
+    def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
+        return self._live.get((run_id, artifact_id))

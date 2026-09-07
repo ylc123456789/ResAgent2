@@ -45,17 +45,17 @@ from resagent2_capabilities import ArxivLiteratureBackend, ResourceLayout
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
-    ArtifactRegistry,
     JsonRunStore,
     LLMWorkflowCompiler,
     ModuleBinding,
     ResearchController,
+    ScientificArtifactRegistration,
     WorkflowScheduler,
 )
 from resagent2_runtime import (
-    ComposedContext,
     JsonSessionStore,
     OpenAICompatibleClient,
+    PromptLLMClient,
 )
 from resagent2_scientific import ScientificAgent
 
@@ -350,67 +350,6 @@ def _scientific_agent(
     )
 
 
-class _ScientificArtifactRegistration:
-    """Record a Scientific Tool artifact into the run's artifact index.
-
-    ``ScientificAgent`` calls ``register_scientific(candidate, run_id,
-    session_id)`` on the injected ``ArtifactRegistrationPort`` (CONTRACTS
-    §20.12); ``ArtifactRegistry.register_scientific`` only freezes the file. The
-    controller's observed-review reads ``run.artifacts``, so this adapter also
-    stores the returned ArtifactRef in the run snapshot, otherwise the
-    literature artifact would be rejected as unknown.
-    """
-
-    def __init__(self, registry: ArtifactRegistry, store) -> None:
-        self._registry = registry
-        self._store = store
-        self._live: dict = {}
-
-    def register_scientific(self, candidate, *, run_id, session_id):
-        artifact = self._registry.register_scientific(
-            candidate, run_id=run_id, session_id=session_id
-        )
-        run = self._store.load(run_id)
-        run.artifacts[artifact.id] = artifact
-        self._store.save(run)
-        self._live[(run_id, artifact.id)] = artifact
-        return artifact
-
-    def resolve(self, artifact_id, *, run_id):
-        return self._live.get((run_id, artifact_id))
-
-
-class _CompilerClient:
-    """Adapt the runtime OpenAI client to the orchestrator CompilerLLM seam.
-
-    The runtime client consumes a ``ComposedContext``; the compiler supplies a
-    plain prompt string. This adapter bridges the two without importing the
-    runtime into the orchestrator.
-    """
-
-    def __init__(self) -> None:
-        self._client = _new_llm_client()
-
-    def set_trace_context(self, **kwargs) -> None:
-        self._client.set_trace_context(**kwargs)
-
-    def set_attempt_limit(self, max_attempts: int) -> None:
-        self._client.set_attempt_limit(max_attempts)
-
-    @property
-    def last_attempts(self) -> int:
-        return self._client.last_attempts
-
-    def next_action(self, prompt: str, action_type):
-        context = ComposedContext(
-            text=prompt,
-            included_sections=[],
-            omitted_sections=[],
-            estimated_tokens=0,
-        )
-        return self._client.next_action(context, action_type)
-
-
 def _registry() -> CapabilityRegistry:
     return CapabilityRegistry(
         definitions=[
@@ -485,11 +424,16 @@ def _build_controller(workdir: Path, repo: Path | None):
     )
     controller = ResearchController(
         scientific_port=_scientific_agent(
-            _ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
+            ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
             JsonSessionStore(workdir / "scientific_sessions"),
         ),
         compiler=LLMWorkflowCompiler(
-            _CompilerClient()
+            PromptLLMClient(
+                _new_llm_client(),
+                system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
+                max_context_tokens=4096,
+                section_name="compiler_request",
+            )
         ),
         scheduler=scheduler,
         registry=registry,

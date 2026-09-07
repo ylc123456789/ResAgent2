@@ -28,6 +28,8 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 
 ContextComposer 对包含标题和分隔符的最终文本统一估算预算，必需段装不下就拒绝，不先调用 LLM。这个值仍是字符估算，不是供应商的精确 token 数。
 
+非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 都使用它；runtime 不认识编译器业务。
+
 文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略
 均不属于 runtime。
 

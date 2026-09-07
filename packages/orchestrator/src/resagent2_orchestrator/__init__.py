@@ -1,6 +1,10 @@
 """Stable public imports for the ResAgent2 Research Orchestrator."""
 
-from .artifacts import ArtifactRegistrationError, ArtifactRegistry
+from .artifacts import (
+    ArtifactRegistrationError,
+    ArtifactRegistry,
+    ScientificArtifactRegistration,
+)
 from .compiler import (
     CompilationError,
     CompilationResult,
@@ -52,6 +56,7 @@ __all__ = [
     "RenderedFinalReport",
     "RunLayout",
     "RunStore",
+    "ScientificArtifactRegistration",
     "ScientificGate",
     "ScientificCompletionValidator",
     "ScientificPort",

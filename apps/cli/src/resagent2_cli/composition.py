@@ -26,19 +26,18 @@ from resagent2_contracts import (
 )
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
-    ArtifactRegistry,
     JsonRunStore,
     LLMWorkflowCompiler,
     ModuleBinding,
     ResearchController,
+    ScientificArtifactRegistration,
     WorkflowScheduler,
 )
 from resagent2_runtime import (
-    ContextComposer,
-    ContextSection,
     JsonSessionStore,
     ModelProfile,
     OpenAICompatibleClient,
+    PromptLLMClient,
 )
 from resagent2_scientific import ScientificAgent
 
@@ -101,68 +100,13 @@ def _client() -> OpenAICompatibleClient:
     )
 
 
-class _CompilerClient:
-    """Bridge the runtime LLM client to the compiler's plain-prompt Port."""
-
-    def __init__(self, *, max_context_tokens: int) -> None:
-        self._client = _client()
-        self._composer = ContextComposer()
-        self._max_context_tokens = max_context_tokens
-
-    def set_trace_context(self, **kwargs) -> None:
-        self._client.set_trace_context(**kwargs)
-
-    def set_attempt_limit(self, max_attempts: int) -> None:
-        self._client.set_attempt_limit(max_attempts)
-
-    @property
-    def last_attempts(self) -> int:
-        return self._client.last_attempts
-
-    def next_action(self, prompt: str, action_type):
-        max_tokens = self._client.context_budget(
-            action_type,
-            self._max_context_tokens,
-        )
-        context = self._composer.compose(
-            "You are the stateless ResAgent2 Workflow Compiler.",
-            [
-                ContextSection(
-                    name="compiler_request",
-                    content=prompt,
-                    required=True,
-                )
-            ],
-            max_tokens=max_tokens,
-        )
-        return self._client.next_action(
-            context,
-            action_type,
-        )
-
-
-class _ScientificArtifactRegistration:
-    """Freeze a Scientific Tool artifact and add it to the Run index."""
-
-    def __init__(self, registry: ArtifactRegistry, store: JsonRunStore) -> None:
-        self._registry = registry
-        self._store = store
-        self._live: dict = {}
-
-    def register_scientific(self, candidate, *, run_id, session_id):
-        artifact = self._registry.register_scientific(
-            candidate,
-            run_id=run_id,
-            session_id=session_id,
-        )
-        run = self._store.load(run_id)
-        run.artifacts[artifact.id] = artifact
-        self._store.save(run)
-        self._live[(run_id, artifact.id)] = artifact
-        return artifact
-
-    def resolve(self, artifact_id, *, run_id):
-        return self._live.get((run_id, artifact_id))
+def _compiler_client(*, max_context_tokens: int) -> PromptLLMClient:
+    return PromptLLMClient(
+        _client(),
+        system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
+        max_context_tokens=max_context_tokens,
+        section_name="compiler_request",
+    )
 
 
 def _registry() -> CapabilityRegistry:
@@ -258,7 +202,7 @@ def build_application(
         data_root=root,
         workspaces=workspaces,
     )
-    registration = _ScientificArtifactRegistration(
+    registration = ScientificArtifactRegistration(
         scheduler.artifact_registry,
         run_store,
     )
@@ -272,7 +216,7 @@ def build_application(
     controller = ResearchController(
         scientific_port=scientific,
         compiler=LLMWorkflowCompiler(
-            _CompilerClient(max_context_tokens=compiler_context_tokens)
+            _compiler_client(max_context_tokens=compiler_context_tokens)
         ),
         scheduler=scheduler,
         registry=registry,

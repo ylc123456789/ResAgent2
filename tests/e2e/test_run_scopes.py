@@ -39,7 +39,8 @@ from resagent2_contracts import (
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
-    ArtifactRegistry, JsonRunStore, ResearchController, ResearchRun, WorkflowScheduler,
+    ArtifactRegistry, InMemoryRunStore, JsonRunStore, ResearchController, ResearchRun,
+    ScientificArtifactRegistration, WorkflowScheduler,
 )
 from resagent2_runtime import JsonSessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
@@ -219,20 +220,19 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     assert "private evidence" not in client.contexts[-1].text
 
 
-@pytest.fixture(params=["cli", "e2e"])
+@pytest.fixture(params=["memory", "json"])
 def registration(tmp_path, request):
-    if request.param == "cli":
-        from resagent2_cli.composition import _ScientificArtifactRegistration
-    else:
-        from e2e.real_e2e import _ScientificArtifactRegistration
-    store = JsonRunStore(tmp_path / "runs")
+    store = (
+        InMemoryRunStore() if request.param == "memory"
+        else JsonRunStore(tmp_path / "runs")
+    )
     now = datetime.now(UTC)
     for run_id in ("run_a", "run_b"):
         store.save(ResearchRun(
             run_id=run_id, request=_research(), status=RunStatus.RUNNING,
             created_at=now, updated_at=now,
         ))
-    return _ScientificArtifactRegistration(ArtifactRegistry(tmp_path / "artifacts"), store)
+    return ScientificArtifactRegistration(ArtifactRegistry(tmp_path / "artifacts"), store)
 
 
 def test_live_registration_is_scoped_even_when_content_ids_match(registration):
@@ -241,9 +241,13 @@ def test_live_registration_is_scoped_even_when_content_ids_match(registration):
         summary="shared query", metadata={"papers": []},
     )
     first = registration.register_scientific(candidate, run_id="run_a", session_id="session_a")
+    assert registration._store.load("run_a").artifacts[first.id] == first
+    assert first.session_id == "session_a"
     assert registration.resolve(first.id, run_id="run_b") is None
     second = registration.register_scientific(candidate, run_id="run_b", session_id="session_b")
     assert first.id == second.id
+    assert registration._store.load("run_b").artifacts[second.id] == second
+    assert first.uri != second.uri
     assert registration.resolve(first.id, run_id="run_a") == first
     assert registration.resolve(second.id, run_id="run_b") == second
 

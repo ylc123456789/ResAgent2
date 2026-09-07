@@ -186,17 +186,17 @@ Scientific Tool: Candidate → 注入的 ArtifactRegistrationPort → 同一个 
 
 - **输入权威**：Candidate 只声明文件和用途，不能自行声称 hash 或生产者身份；Registry 从调用上下文绑定 run/task/attempt 或 session/orchestrator provenance。读取使用已授权 ArtifactRef，不接受模型任意指定文件路径。
 - **输出**：Registry 返回冻结内容的 ArtifactRef；reader 返回内容与引用信息，工具再包装为 ToolObservation。只有登记引用不等于模型已观察内容，Scientific 的 observed IDs 从成功工具记录派生。
-- **文件与状态所有权**：Registry 校验文件与来源，计算 hash；任务工件 register 使用完整单工件 staging 目录 rename 提交，import/scientific/final_report 专用入口当前采用先建目录、临时文件替换的提交方式，不能一概称为整目录事务。Controller/Scheduler 将 Ref 写入 Run；Registry 不改变 TaskStatus 或科学观点。
+- **文件与状态所有权**：Registry 校验文件与来源，计算 hash；任务工件 register 使用完整单工件 staging 目录 rename 提交，import/scientific/final_report 专用入口当前采用先建目录、临时文件替换的提交方式，不能一概称为整目录事务。Controller/Scheduler 将执行工件 Ref 写入 Run；Scientific 的共享 `ScientificArtifactRegistration` 冻结后更新 Run 索引及本进程动态查找。Registry 不改变 TaskStatus 或科学观点。
 - **读取规则**：按授权引用解析并核验内容完整性；动态 resolver 支持同一 turn 刚由 literature_search 登记的工件。必须在读取字节前满足当前 Run 的授权，而非等最终引用校验才拦截。
 - **自产 JSON 的可读性**：register_scientific 在冻结前按 indent=2 生成多行 JSON，再按实际字节计算 hash；让长文献列表可按行取回后部。旧工件不改写，读取器不重新格式化，空范围读取不代表已经取回缺失内容。
 - **成功与诊断**：成功依赖工件可传给下游；failed/blocked 的 Artifact 可以保存为诊断，但不能被包装成成功实验。summary、stderr 摘录和 typed metrics 各有用途，原始冻结工件保留证据根源。
 - **失败与原子性**：非法路径、丢失文件、hash 不符应拒绝。单工件 staging 不意味着一次批量登记或 Run + Session + Artifact 是跨资源事务；可能已有前面的工件登记成功，后面的登记失败。
 - **重复调用**：各入口有各自重复登记检查；最终报告已有幂等恢复路径，不能推广为所有外部副作用 exactly-once。读取可重复，授予更多工件必须经过登记和授权链。
 - **模型可见性**：Scientific 看到授权目录、简报和主动读取内容，不应看到任意候选路径或另一 Run 的文件。工件正文经共享 workspace_context 从成功读取事件投影，按来源/行范围保留，共计 6000 字符、required；不再使用 read_artifact_summaries 前缀缓存。已观察 ID 不保证正文仍可见，省略的细节可按范围重读。full trace 是独立调试记录，不自动成为 Artifact 或科学证据。
-- **读取隔离**：reader 显式绑定 Run，读取字节前核对 Ref.id/run_id；动态 resolve 显式接收 run_id，CLI/E2E 用 (run_id, artifact_id) 索引，同内容的跨 Run 工件不会相互覆盖（F02 已修）。hash 校验仍只负责内容完整性。
+- **读取隔离**：reader 显式绑定 Run，读取字节前核对 Ref.id/run_id；动态 resolve 显式接收 run_id，共享登记适配器用 (run_id, artifact_id) 索引，同内容的跨 Run 工件不会相互覆盖。CLI/E2E 各自注入 Registry/RunStore，不复制登记机制；重启后已持久化的 Ref 由下一轮授权集合提供，动态表不是第二个持久化仓库。hash 校验仍只负责内容完整性。
 - **登记失败**：不清零已发生的调用、不丢 Session/原诊断；已有原错误时追加 artifact_registration_error，禁止因登记失败自动重试。此前成功登记的工件保留为可追踪的部分结果，不承诺批量原子性。
 
-**源码**：[ArtifactRegistry](../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[RegisteredArtifactReader](../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[CLI registration adapter](../apps/cli/src/resagent2_cli/composition.py)、[Scientific tools](../packages/agents/scientific/src/resagent2_scientific/tools.py)。
+**源码**：[ArtifactRegistry / ScientificArtifactRegistration](../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[RegisteredArtifactReader](../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[Scientific tools](../packages/agents/scientific/src/resagent2_scientific/tools.py)。
 
 **契约 / 已有测试**：[CONTRACTS §13](CONTRACTS.md#13-artifact-契约)；[持久化与工件](../tests/orchestrator/test_persistence_and_artifacts.py)、[最终报告登记](../tests/orchestrator/test_scientific_completion.py)。
 

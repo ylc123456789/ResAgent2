@@ -413,12 +413,15 @@ LLMCompiler 没有可信的精确输出名称输入，所以物化时不让它�
 | `ContextBuilder(request, state)` | 领域请求和 AgentState → list[ContextSection] | Agent 选择需要什么内容；Runtime 统一补工具契约/反馈等，不各自拼第二套完整 prompt |
 | `ContextComposer.compose(...)` | sections + 输入预算 → ComposedContext | 统一装入和省略；必需段装不下则显式失败，不静默丢掉必需条件；Compiler 可经组合根适配直接复用，无需使用 Loop |
 | `LLMClient.next_action(context, action_type)` | 已组合上下文与 action 类型 → action 对象或 dict | 只提供候选动作；Loop/ToolRegistry 才做后续验收。协议不意味着输出天然有效 |
+| `PromptLLMClient.next_action(prompt, action_type)` | 普通 prompt 与结果类型 → 底层客户端返回值 | 共享 Composer/模型预算及计量转发，不运行 Loop；system prompt 和模块上限由组合根注入 |
 | `PermissionPolicy.check(action, state, request)` | 动作及当前范围 → PermissionDecision | 在分发前允许或拒绝；不是操作系统沙箱或人工审批 UI |
 | `Tool.execute(state, parsed_arguments)` | 已验证参数 → ToolObservation | 操作能力并返回观测/状态更新建议；见 [I4](INTERFACES.md#i4-单步工具) |
 | `CompletionCheck.evaluate(state, candidate)` | 真实记录与完成提议 → CompletionDecision | 继续 / 成功 / 确定性失败；见 [I5](INTERFACES.md#i5-完成检查) |
 | SessionStore | 保存/加载 AgentState 和事件 | 独占 Agent 内部会话；上层仅持有 SessionRef，不读它来调度任务 |
 
 LoopRequest 只要求 run/task/attempt、预算和父 Session；Scientific 的 task/attempt 可为空。领域 inputs、工作区和研究语义由注入的 context builder、工具及 finalizer 使用，因此共享 Runtime 不依赖具体 Agent。
+
+CLI 与 E2E 是独立组合根：各自选择模型、资源根、会话和预算，但都通过 runtime 的 `PromptLLMClient` 适配普通编译提示，通过 orchestrator 的 `ScientificArtifactRegistration` 完成 Scientific 工件冻结、Run 登记及同轮查找。前者不认识 Compiler，后者不 import 具体 Agent。E2E Compiler 现在同样执行 4096 输入上限，不再用 estimated_tokens=0 的裸包装绕过预算；这项变化需要真实 E2E 验收。
 
 **LLM 客户端的最小约定**：必需方法只有 `next_action(context, action_type)`。Runtime 通过 `getattr` 使用可选的 `context_budget`、`set_attempt_limit`、`last_attempts`、`set_trace_context`、`record_validation`，没有这些 hooks 的客户端仍可运行。缺少计量 hook 时按一次请求计一次调用；若客户端内部会重试，应提供真实 attempts 和限制 hook。换客户端不需要新增 Provider 层，但应测试预算、计量与错误约定。
 

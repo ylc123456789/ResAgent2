@@ -18,6 +18,7 @@ from .llm import (
     LLMExhaustedError,
     ModelProfile,
     OpenAICompatibleClient,
+    PromptLLMClient,
     ScriptedLLMClient,
 )
 from .loop import (
@@ -81,6 +82,7 @@ __all__ = [
     "OpenAICompatibleClient",
     "PermissionDecision",
     "PermissionPolicy",
+    "PromptLLMClient",
     "ReadValueInput",
     "ReadValueTool",
     "recent_tool_listing",

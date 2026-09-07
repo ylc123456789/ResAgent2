@@ -110,8 +110,8 @@ class CompilerLLM(Protocol):
         self,
         prompt: str,
         action_type: type[BaseModel],
-    ) -> dict:
-        """Return one JSON dict matching ``action_type``'s schema."""
+    ) -> BaseModel | dict:
+        """Return a structured candidate for validation against the supplied schema."""
 
 
 # A local draft key must be a valid suffix of a global ``TaskId``

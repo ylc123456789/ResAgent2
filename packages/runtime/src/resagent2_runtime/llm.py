@@ -15,8 +15,10 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from pydantic import BaseModel
+
 from .context import ContextBudgetExceeded, ContextComposer
-from .models import AgentAction, ComposedContext
+from .models import ComposedContext, ContextSection
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +73,68 @@ class LLMClient(Protocol):
     def next_action(
         self,
         context: ComposedContext,
-        action_type: type[AgentAction],
-    ) -> AgentAction | dict:
-        """Return one action candidate for schema validation by AgentLoop."""
+        action_type: type[BaseModel],
+    ) -> BaseModel | dict:
+        """Return one structured candidate; the caller validates its own schema."""
+
+
+class PromptLLMClient:
+    """Adapt plain prompts to budgeted context without running an AgentLoop.
+
+    The caller supplies its own system prompt and section label. Optional
+    provider hooks retain the same semantics as direct runtime-client use.
+    """
+
+    def __init__(
+        self,
+        client: LLMClient,
+        *,
+        system_prompt: str,
+        max_context_tokens: int,
+        section_name: str = "request",
+    ) -> None:
+        if max_context_tokens < 1:
+            raise ValueError("max_context_tokens must be positive")
+        self._client = client
+        self._system_prompt = system_prompt
+        self._max_context_tokens = max_context_tokens
+        self._section_name = section_name
+        self._composer = ContextComposer()
+        self.last_attempts = 0
+
+    def set_trace_context(self, **kwargs) -> None:
+        tracer = getattr(self._client, "set_trace_context", None)
+        if tracer is not None:
+            tracer(**kwargs)
+
+    def set_attempt_limit(self, max_attempts: int) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        limiter = getattr(self._client, "set_attempt_limit", None)
+        if limiter is not None:
+            limiter(max_attempts)
+
+    def next_action(
+        self, prompt: str, action_type: type[BaseModel],
+    ) -> BaseModel | dict:
+        # A budget failure makes no provider call, even after a previous retry.
+        self.last_attempts = 0
+        budgeter = getattr(self._client, "context_budget", None)
+        max_tokens = (
+            budgeter(action_type, self._max_context_tokens)
+            if budgeter is not None else self._max_context_tokens
+        )
+        context = self._composer.compose(
+            self._system_prompt,
+            [ContextSection(
+                name=self._section_name, content=prompt, required=True,
+            )],
+            max_tokens=max_tokens,
+        )
+        try:
+            return self._client.next_action(context, action_type)
+        finally:
+            self.last_attempts = getattr(self._client, "last_attempts", 1)
 
 
 class LLMExhaustedError(RuntimeError):
@@ -81,18 +142,18 @@ class LLMExhaustedError(RuntimeError):
 
 
 class ScriptedLLMClient:
-    """Deterministic mock LLM that returns a predefined action sequence."""
+    """Deterministic mock LLM that returns predefined structured candidates."""
 
-    def __init__(self, actions: list[AgentAction | dict]) -> None:
+    def __init__(self, actions: list[BaseModel | dict]) -> None:
         self._actions = deque(actions)
         self.contexts: list[ComposedContext] = []
 
     def next_action(
         self,
         context: ComposedContext,
-        action_type: type[AgentAction],
-    ) -> AgentAction | dict:
-        """Record context and return the next scripted action."""
+        action_type: type[BaseModel],
+    ) -> BaseModel | dict:
+        """Record context and return the next scripted candidate."""
 
         self.contexts.append(context)
         if not self._actions:
@@ -101,7 +162,7 @@ class ScriptedLLMClient:
 
 
 class OpenAICompatibleClient:
-    """Minimal stateless client for one JSON action per chat-completions call."""
+    """Minimal stateless client for one JSON response per chat-completions call."""
 
     def __init__(
         self,
@@ -128,7 +189,7 @@ class OpenAICompatibleClient:
         self._attempt_limit: int | None = None
 
     @staticmethod
-    def _action_instruction(action_type: type[AgentAction]) -> str:
+    def _action_instruction(action_type: type[BaseModel]) -> str:
         schema = json.dumps(action_type.model_json_schema(), ensure_ascii=False)
         return (
             "Return exactly one JSON object matching this action schema. "
@@ -138,7 +199,7 @@ class OpenAICompatibleClient:
 
     def context_budget(
         self,
-        action_type: type[AgentAction],
+        action_type: type[BaseModel],
         component_limit: int,
     ) -> int:
         """Return this component's usable input budget for one action schema."""
@@ -257,8 +318,8 @@ class OpenAICompatibleClient:
     def next_action(
         self,
         context: ComposedContext,
-        action_type: type[AgentAction],
-    ) -> AgentAction | dict:
+        action_type: type[BaseModel],
+    ) -> BaseModel | dict:
         attempt_limit = min(3, self._attempt_limit or 3)
         self._attempt_limit = None
         self.last_attempts = 0

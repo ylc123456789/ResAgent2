@@ -114,7 +114,7 @@ def test_compiler_reuses_context_composer_without_agent_loop(monkeypatch):
 
     runtime_client = _Client()
     monkeypatch.setattr(composition, "_client", lambda: runtime_client)
-    compiler_client = composition._CompilerClient(max_context_tokens=512)
+    compiler_client = composition._compiler_client(max_context_tokens=512)
 
     compiler_client.next_action("Compile this objective", AgentAction)
 

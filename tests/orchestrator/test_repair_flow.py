@@ -51,18 +51,10 @@ def _registry() -> CapabilityRegistry:
             CapabilityDefinition(
                 capability=Capability.CODE_MODIFY,
                 owner=AgentOwner.CODING,
-                request_model="CodeModifyInput",
-                result_model="CodeModifyResult",
-                permission_policy="read_write_workspace",
-                completion_evidence=["code_change"],
             ),
             CapabilityDefinition(
                 capability=Capability.EXPERIMENT_RUN,
                 owner=AgentOwner.EXPERIMENT,
-                request_model="ExperimentRunInput",
-                result_model="ExperimentResult",
-                permission_policy="read_write_workspace",
-                completion_evidence=["experiment_result"],
             ),
         ]
     )

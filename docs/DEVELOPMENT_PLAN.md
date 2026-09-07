@@ -40,7 +40,7 @@
 | Stabilization 3.1 | 状态恢复边界：中断 Attempt、Scientific 首次 Session 与终态 gate 收敛（ADR-0012） | completed（`a9b1a5e`；本地 422 passed、服务器 clean-workdir 五场景验收通过） |
 | Phase 8 | 按需高级能力 | not_started |
 
-Phase 1—7 是历史实施记录。当前 production 只保留 schema 4.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；schema 4.0 是 clean break，旧 3.0 state 不恢复。Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。Stabilization 3.1 随后完成中断恢复收敛，并以 `2c2b56f` 合入输入边界、结果语义与 CLI 组合根的一致性修复。
+Phase 1—7 是历史实施记录。当前 production 只保留 schema 5.0 和唯一 Scientific 路径（`ResearchController` + 原生 `ScientificAgent` + `LLMWorkflowCompiler`）；schema 5.0 删除能力注册表的无消费者字段，是不兼容升级，旧 4.0 及更早的 Run 不恢复。既有 state/session/trace 原样保留，不迁移、不重写、不自动清理；Session 的解析边界见 CONTRACTS §18。Stabilization 3.0 已完成本地全量测试、mock E2E 和服务器 clean-workdir 五场景验收。repair 连续通过 3 次；ask/resume 完成两次真实跨进程恢复；五场景均保留权限为目录 `0700`、文件 `0600` 的 full LLM trace。Stabilization 3.1 随后完成中断恢复收敛，并以 `2c2b56f` 合入输入边界、结果语义与 CLI 组合根的一致性修复。
 
 ## 3. Phase 0：仓库与架构基线
 

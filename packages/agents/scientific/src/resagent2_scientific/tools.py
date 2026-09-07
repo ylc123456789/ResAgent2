@@ -68,8 +68,6 @@ class RequestWorkTool:
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RequestWorkInput, arguments)
-        if not args.work_request.expected_evidence:
-            raise ValueError("request_work requires at least one expected_evidence")
         unobserved = _unobserved_evidence(
             state, args.assessment.evidence_artifact_ids
         )

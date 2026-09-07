@@ -175,10 +175,6 @@ def _registry() -> CapabilityRegistry:
                     "Read-only code inspection; use only when the goal is to "
                     "analyze or explain code without changing it."
                 ),
-                request_model="CodeUnderstandInput",
-                result_model="CodeUnderstandResult",
-                permission_policy="read_only_workspace",
-                completion_evidence=[],
             ),
             CapabilityDefinition(
                 capability=Capability.CODE_MODIFY,
@@ -187,10 +183,6 @@ def _registry() -> CapabilityRegistry:
                     "Change code to implement a feature or fix a bug; it already "
                     "reads and diagnoses the code before editing."
                 ),
-                request_model="CodeModifyInput",
-                result_model="CodeModifyResult",
-                permission_policy="read_write_workspace",
-                completion_evidence=["code_change"],
             ),
             CapabilityDefinition(
                 capability=Capability.EXPERIMENT_RUN,
@@ -198,10 +190,6 @@ def _registry() -> CapabilityRegistry:
                 description=(
                     "Run an experiment and record its measured metrics and artifacts."
                 ),
-                request_model="ExperimentRunInput",
-                result_model="ExperimentResult",
-                permission_policy="read_write_workspace",
-                completion_evidence=["experiment_result"],
             ),
         ]
     )

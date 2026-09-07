@@ -36,7 +36,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `4.0`（`SCHEMA_VERSION="4.0"`），不保留旧 schema 的第二条运行路径；旧 state/session 不作兼容恢复。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `5.0`（`SCHEMA_VERSION="5.0"`），不保留旧 schema 的第二条运行路径；旧 4.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS §18](docs/CONTRACTS.md#18-schema-版本规则)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
 
 本轮契约修复涉及会话身份、问答恢复、验证新鲜性、指标冲突、证据授权、响应验收和失败记录。改动与验收进度见 [CONTRACT_FIXES.md](docs/reviews/CONTRACT_FIXES.md)。历史服务器成功记录不能代替本轮代码验收；本轮服务器验收尚未执行。
 

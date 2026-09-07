@@ -4,7 +4,7 @@
 
 **语义上级**：`ARCHITECTURE.md`；本文件不得改变其中的模块职责和控制流。
 
-**当前实现**：`resagent2-contracts 0.1.0`，wire schema `4.0`（`SCHEMA_VERSION="4.0"`）。schema 1.0/1.1/2.0/3.0 的历史演进记录在 `DEVELOPMENT_PLAN.md`、`docs/decisions/` 与 `docs/reviews/`，本文件只描述当前 4.0。schema 4.0 是一次 clean break：3.0 及更早的 `state/`、`sessions/` 是开发/测试产物，升级后不可恢复，应删除或归档后重新发起 Run（不实现迁移或 fallback）。
+**当前实现**：`resagent2-contracts 0.1.0`，wire schema `5.0`（`SCHEMA_VERSION="5.0"`）。schema 1.0/1.1/2.0/3.0/4.0 的历史演进记录在 `DEVELOPMENT_PLAN.md`、`docs/decisions/` 与 `docs/reviews/`，本文件只描述当前 5.0。本次删除 `CapabilityDefinition` 的无消费者字段，按 §18 的既有规则发布不兼容版本。旧 4.0 及更早的 Run 不提供恢复路径；既有 `state/`、`sessions/`、trace 原样保留，不迁移、不重写、不自动清理。Session 的实际解析范围见 §18。
 
 ## 1. 使用规则
 
@@ -21,7 +21,7 @@
 所有公共模型：
 
 - 继承严格 `ContractModel`（`extra="forbid"`）；
-- 序列化 `schema_version: "4.0"`（`ContractModel.schema_version: Literal["4.0"]`）；
+- 序列化 `schema_version: "5.0"`（`ContractModel.schema_version: Literal["5.0"]`）；
 - 以下示意代码省略每个模型继承得到的 `schema_version`，但 wire 数据不能省略其版本语义。
 
 ## 2. 跨模块对象范围
@@ -169,7 +169,15 @@ class WorkflowTask:
 
 Literature Search 是 Scientific Agent 的 Tool；ask-user 是 control signal；实验准备属于 `experiment_run` 内部流程。这些都不是顶层 task capability。
 
-`CapabilityDefinition` / `CapabilityRegistry` 描述 owner、request/result model、side effects、permission policy 和 completion evidence。Registry 拒绝同一 capability 出现两次，从而保证每个 capability 恰有一个 owner；同一个 owner 可以拥有多个不同 capability。
+`CapabilityDefinition` 只保留能力标识、owner 和说明；`CapabilityRegistry` 拒绝同一 capability 出现两次，从而保证每个已声明 capability 恰有一个 owner。同一个 owner 可以拥有多个不同 capability。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| capability | Capability | 已声明的能力标识 |
+| owner | AgentOwner | 该能力的唯一归属模块 |
+| description | str，默认空字符串 | 向 Compiler 提供的能力说明 |
+
+输入类型由 `CapabilityInput` 判别联合定义，成功 payload 由 Scheduler 按 capability 校验；工作区授权、工具权限和完成证据由各自执行边界强制检查。Registry 不重复声明模型名称、权限策略、副作用或完成证据要求，也不把这些执行规则变成动态配置。
 
 ## 8. ModuleTaskRequest
 
@@ -630,6 +638,10 @@ completed 若未通过 Validator，不得写 Run completed；这种不一致属�
 - schema 版本策略发生改变时必须先写 ADR。
 
 历史字段增删矩阵保留在 `DEVELOPMENT_PLAN.md` 和 ADR-0011；当前接口不要求同时维护旧 schema 路径。
+
+schema 5.0 沿用上述版本策略，不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但其必填 `request: ResearchRequest` 等公共契约带版本；`JsonRunStore.load` 对整个 Run 重新校验，因此正常保存的 4.0 Run 会因嵌套公共契约版本不符被拒绝。读取失败不改写记录，旧文件保留作审计或人工查阅，继续工作应发起新 Run。
+
+`AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径。本次升级不修改 Session 顶层结构，也不重写或清理任何既有 state/session/trace。
 
 ## 19. 运行时反馈与连续失败保护
 

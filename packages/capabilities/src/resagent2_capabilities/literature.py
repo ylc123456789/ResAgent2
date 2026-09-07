@@ -272,14 +272,6 @@ class LiteratureSearchTool:
             data = paper.model_dump(mode="json")
             data["abstract"] = (data.get("abstract") or "")[:200]
             brief.append(data)
-        summaries = list(state.memory.get("literature_summaries", []))
-        summaries.append(
-            {
-                "artifact_id": artifact.id,
-                "query": args.query,
-                "papers": brief,
-            }
-        )
         return ToolObservation(
             summary=f"Found {len(papers)} papers for {args.query!r}",
             value={
@@ -288,6 +280,5 @@ class LiteratureSearchTool:
             },
             memory_updates={
                 "literature_artifact_ids": observed,
-                "literature_summaries": summaries,
             },
         )

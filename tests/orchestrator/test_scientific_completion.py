@@ -48,10 +48,6 @@ def registry() -> CapabilityRegistry:
             CapabilityDefinition(
                 capability=Capability.EXPERIMENT_RUN,
                 owner=AgentOwner.EXPERIMENT,
-                request_model="ExperimentRunInput",
-                result_model="ExperimentResult",
-                permission_policy="read_write_workspace",
-                completion_evidence=["experiment_result"],
             )
         ]
     )

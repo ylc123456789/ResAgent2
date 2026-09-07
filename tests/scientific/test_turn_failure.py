@@ -42,6 +42,7 @@ def _ref(state):
 
 @pytest.mark.parametrize("case", [
     "invalid_completion", "invalid_work_signal", "unobserved_work", "unobserved_question",
+    "missing_question",
 ])
 def test_translation_failure_settles_owned_session_and_caches_original_error(
     tmp_path, monkeypatch, case,
@@ -56,10 +57,13 @@ def test_translation_failure_settles_owned_session_and_caches_original_error(
     common = dict(summary="Shared loop returned", session=_ref(state), llm_calls=3)
     if completed:
         module_result = ModuleResult(status=ModuleStatus.COMPLETED, payload={}, **common)
-    elif case == "unobserved_question":
+    elif case in {"unobserved_question", "missing_question"}:
         module_result = ModuleResult(status=ModuleStatus.NEEDS_USER_INPUT, question=QuestionDraft(
             text="Which metric?", requested_fields=["metric"], reason="User preference",
         ), **common)
+        if case == "missing_question":
+            # Simulate a damaged result that bypassed the ModuleResult validator.
+            module_result = module_result.model_copy(update={"question": None})
     else:
         signal = {} if case == "invalid_work_signal" else {
             "assessment": assessment,
@@ -77,6 +81,7 @@ def test_translation_failure_settles_owned_session_and_caches_original_error(
     expected = (
         "valid opinion" if completed else
         "valid assessment/work_request" if case == "invalid_work_signal" else
+        "did not carry a question" if case == "missing_question" else
         "not observed by any Tool"
     )
     assert expected in result.error.message

@@ -24,7 +24,8 @@ from resagent2_contracts import (
     WorkTaskOutcome,
 )
 from resagent2_scientific import ScientificAgent
-from resagent2_runtime import ScriptedLLMClient
+from resagent2_scientific.tools import RequestWorkTool
+from resagent2_runtime import AgentState, ScriptedLLMClient, ToolRegistry
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
@@ -150,6 +151,27 @@ def test_request_work_pauses_with_assessment_and_draft() -> None:
     assert result.work_request.expected_evidence == ["accuracy"]
 
 
+def test_empty_expected_evidence_is_rejected_before_tool_execution(monkeypatch) -> None:
+    tool = RequestWorkTool()
+    monkeypatch.setattr(
+        tool, "execute", lambda *_: pytest.fail("invalid arguments reached the tool")
+    )
+    state = AgentState(
+        session_id="session_validation", agent_name="scientific",
+        owner=AgentOwner.SCIENTIFIC, run_id="run_example",
+        created_at=NOW, updated_at=NOW,
+    )
+    with pytest.raises(ValidationError) as error:
+        ToolRegistry((tool,)).dispatch("request_work", {
+            "assessment": {"statement": "need more evidence"},
+            "work_request": {
+                "objective": "Run the experiment", "expected_evidence": [],
+            },
+        }, state)
+
+    assert error.value.errors()[0]["loc"] == ("work_request", "expected_evidence")
+
+
 def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
     from resagent2_capabilities import LiteraturePaper
 
@@ -264,6 +286,8 @@ def test_ask_user_pauses_with_question_and_assessment() -> None:
 
     assert result.status == "needs_user_input"
     assert result.question.text == "Which dataset?"
+    assert result.question.requested_fields == ["dataset"]
+    assert result.question.reason == "no dataset selected"
     assert result.assessment.statement == "need dataset choice"
 
 

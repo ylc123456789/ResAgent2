@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "4.0"
+SCHEMA_VERSION = "5.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["4.0"] = SCHEMA_VERSION
+    schema_version: Literal["5.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -955,16 +955,11 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
 
 
 class CapabilityDefinition(ContractModel):
-    """Public registry entry describing ownership and completion evidence."""
+    """Public registry entry describing a capability and its owner."""
 
     capability: Capability
     owner: AgentOwner
     description: str = ""
-    request_model: NonEmptyStr
-    result_model: NonEmptyStr
-    side_effects: list[NonEmptyStr] = Field(default_factory=list)
-    permission_policy: NonEmptyStr
-    completion_evidence: list[NonEmptyStr]
 
 
 class CapabilityRegistry(ContractModel):

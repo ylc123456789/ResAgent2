@@ -20,7 +20,6 @@ from resagent2_contracts import (
     ModuleError,
     ModuleResult,
     ModuleStatus,
-    QuestionDraft,
     RunId,
     ScientificAssessment,
     ScientificCompletedResult,
@@ -231,10 +230,13 @@ class ScientificAgent:
             )
 
         if result.status == ModuleStatus.NEEDS_USER_INPUT:
+            if result.question is None:
+                return self._translation_failure(
+                    request, result, session_id,
+                    message="needs_user_input signal did not carry a question",
+                    llm_calls=llm_calls,
+                )
             assessment = self._latest_assessment(session_id)
-            question = result.question or QuestionDraft(
-                text="Input required", reason="Scientific Agent paused for input"
-            )
             if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
                 return self._translation_failure(
                     request, result, session_id,
@@ -244,7 +246,7 @@ class ScientificAgent:
             return ScientificQuestionResult(
                 status="needs_user_input",
                 assessment=assessment,
-                question=question,
+                question=result.question,
                 session=result.session,
                 observed_artifact_ids=observed,
                 llm_calls=llm_calls,

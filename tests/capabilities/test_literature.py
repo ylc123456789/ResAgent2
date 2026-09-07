@@ -131,6 +131,28 @@ def test_tool_records_observed_artifact_in_memory() -> None:
     assert second.memory_updates["literature_artifact_ids"] == ["artifact_lit"]
 
 
+def test_tool_keeps_preview_and_full_artifact_without_summary_cache() -> None:
+    full_abstract = "Scientific evidence. " * 100
+    result_paper = paper("1").model_copy(update={"abstract": full_abstract})
+    register = _FakeRegister()
+    tool = LiteratureSearchTool(_FakeBackend([result_paper]), register)
+    original = state(memory={
+        "literature_artifact_ids": ["artifact_previous"],
+        "literature_summaries": [{"legacy": "do not mutate stored history"}],
+    })
+    before = original.model_copy(deep=True)
+
+    observation = tool.execute(original, LiteratureSearchToolInput(query="evidence"))
+
+    assert observation.memory_updates == {
+        "literature_artifact_ids": ["artifact_previous", "artifact_lit"],
+    }
+    assert observation.value["papers"][0]["abstract"] == full_abstract[:200]
+    assert observation.value["artifact"]["id"] == "artifact_lit"
+    assert register.last_candidate.metadata["papers"][0]["abstract"] == full_abstract
+    assert original == before
+
+
 def test_tool_forwards_query_and_bounds() -> None:
     backend = _FakeBackend([paper("1")])
     tool = LiteratureSearchTool(backend, _FakeRegister())

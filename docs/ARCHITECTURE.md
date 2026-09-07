@@ -2,7 +2,7 @@
 
 **文档角色**：系统概念、职责边界、控制流和状态语义的最高级事实来源（semantic source of truth）。
 
-**当前基线**：Stabilization 3.0（ADR-0011）之后的 wire schema `4.0`（输入与证据闭环收敛）。`ResearchController` 是研究 Run 唯一入口与状态负责人；`WorkflowScheduler` 只执行任务图、不决定 Run 完成；pause/resume 走同一 Attempt；dataset / environment / input artifact / workspace 各有唯一权威来源；公共契约只保留有 production producer+consumer 的字段。schema 4.0 是 clean break，旧 3.0 state 不恢复。
+**当前基线**：Stabilization 3.0（ADR-0011）之后的 wire schema `5.0`（能力注册表契约收敛）。`ResearchController` 是研究 Run 唯一入口与状态负责人；`WorkflowScheduler` 只执行任务图、不决定 Run 完成；pause/resume 走同一 Attempt；dataset / environment / input artifact / workspace 各有唯一权威来源；公共契约只保留有 production producer+consumer 的字段。schema 5.0 是不兼容升级，旧 4.0 及更早的 Run 不恢复；既有记录原样保留，Session 的解析边界见 [CONTRACTS §18](CONTRACTS.md#18-schema-版本规则)。
 
 任何改变系统概念、模块职责、控制流或状态语义的变更，必须先修改本文件，再修改契约、开发计划、代码和测试。
 
@@ -464,7 +464,7 @@ contracts 不是运行中的 Actor，没有 run/invoke 方法，不持有 Sessio
 |---|---|---|
 | Python 数据或持久化 JSON | ResearchRequest、WorkRequest、Workflow、ModuleTaskRequest/Result、ScientificTurnResult 等 typed 对象，或 ValidationError | 不操作工作区、不运行 LLM、不判断自然语言目标是否实现 |
 | 合法模型 | JSON/schema，用于持久化与调用约束 | schema 声明不能代替接收方实际调用校验 |
-| CapabilityRegistry 与专属 inputs | 能力声明、路由所需类型及结构一致性 | registry 不持有具体 Agent；实际绑定由组合根提供 |
+| CapabilityRegistry 与专属 inputs | registry 声明 capability、owner、description；专属 inputs 约束输入结构 | registry 不持有具体 Agent 或执行策略；实际绑定由组合根提供 |
 
 结构校验只能证明检查过的规则。`ModuleResult` 外壳合法，并不自动证明 payload 与 capability 相配、Session 属于当前 Run、证据已读或依赖变更后测试仍有效；这些需要接收方与领域完成检查共同落实。因此可替换实现要通过同一组接收边界测试，不能仅凭返回类型名称宣称守约。
 

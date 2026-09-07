@@ -302,16 +302,18 @@ contracts 不是业务实现，也不是数据库模型集合。它是模块之�
 | ----------------- | ----------------- | ------------------------------------------------ | ----------------------------------------------------------- |
 | 用户/入口         | Controller        | `ResearchRequest`                                | 用户确认的研究目标、约束和总预算                            |
 | Controller        | Scientific        | `ScientificTurnRequest`                          | 本轮允许 Scientific 看到的目标、状态、回答和证据            |
-| Scientific        | Controller        | `ScientificTurnResult`                           | 当前观点以及 request_work / ask_user / finish / failed 之一 |
+| Scientific        | Controller        | `ScientificTurnResult`                           | 当前观点以及 request_work / needs_user_input / completed / failed 之一 |
 | Scientific        | Controller        | `WorkRequestDraft`                               | 还缺什么工作，不含 capability、TaskId 或依赖图              |
 | Controller        | Compiler          | `WorkRequest`                                    | 已持久化、可追踪的语义工作请求                              |
-| Compiler          | Controller        | `CompilationResult(output, llm_calls)`            | 执行图候选（Proposal/Patch）及本次实际调用数                                        |
+| Compiler          | Controller        | `CompilationResult` / `CompilationError`         | 成功给图候选（Proposal/Patch）；失败给原因；两者带本次 llm_calls |
 | Scheduler         | Coding/Experiment | `ModuleTaskRequest`                              | 一个 Attempt 被授权执行的目标、输入、工作区和预算           |
 | Coding/Experiment | Scheduler         | `ModuleResult`                                   | 强类型状态、payload、问题、错误和 ArtifactCandidate         |
 | Scheduler         | Scientific        | `WorkOutcome`（经 Controller）                   | 一次 WorkRequest 稳定后的成功、失败、警告和证据汇总         |
 | Agent             | Controller/User   | `QuestionDraft → PendingQuestion → UserAnswer` | 可以持久化并跨进程恢复的问题链                              |
 
 ### 6.3 阅读 contracts 的正确方法
+
+接口优化没有新增另一层总控：Compiler 与 Scheduler 共用 workflow_validation.py 的本轮图判据；失败计量通过异常显式返回，不再访问实现属性。CLI/E2E 仍分别装配，只复用 runtime 的 PromptLLMClient 和 orchestrator 的 ScientificArtifactRegistration。能力注册表只声明 capability、owner、description；真实输入类型、权限和完成标准仍由原有执行边界负责。
 
 不要从 `models.py` 第一行开始背字段。每遇到一个边界对象，按四个问题理解：
 

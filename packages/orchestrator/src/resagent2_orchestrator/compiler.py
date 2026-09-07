@@ -636,7 +636,12 @@ class LLMWorkflowCompiler:
             finally:
                 self.llm_calls += getattr(self._client, "last_attempts", 1)
             try:
-                draft = CompilationDraft.model_validate(raw)
+                # Typed clients are not trusted more than JSON clients: a
+                # model_copy/model_construct instance may bypass field checks.
+                draft = CompilationDraft.model_validate(
+                    raw.model_dump(mode="python", warnings=False)
+                    if isinstance(raw, BaseModel) else raw
+                )
                 compiled = _materialize_draft(
                     draft,
                     request=request,
@@ -705,7 +710,10 @@ class LLMWorkflowCompiler:
         finally:
             self.llm_calls += getattr(self._client, "last_attempts", 1)
         try:
-            return CompilationReview.model_validate(raw)
+            return CompilationReview.model_validate(
+                raw.model_dump(mode="python", warnings=False)
+                if isinstance(raw, BaseModel) else raw
+            )
         except ValidationError as error:
             raise CompilationError(
                 f"semantic review returned an invalid result: {_compact_error(error)}"

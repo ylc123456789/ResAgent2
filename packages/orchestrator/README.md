@@ -12,14 +12,14 @@ ResAgent2 的顶层控制模块。
 - capability 路由；
 - Module Port/Adapter；
 - retry、Ask User 和 finish gate；
-- ScientificCompletionValidator 与 deterministic final report renderer（Phase 7 目标）；
+- ScientificCompletionValidator 与 deterministic final report renderer；
 - Artifact index。
 
-它不直接实现科学判断、代码修改和实验执行。普通调度必须由确定性代码完成；Phase 7 允许内部 WorkflowCompiler 用一次有界结构化 LLM 调用把语义工作请求翻译成任务图，但 LLM 不直接修改状态。
+它不直接实现科学判断、代码修改和实验执行。普通调度由确定性代码完成；内部 WorkflowCompiler 用有界 draft/review 把语义工作请求翻译成任务图，结构与语义拒绝共享一次纠错，LLM 不直接修改状态。
 
 ## 当前已实现
 
-- WorkflowProposal 校验后创建 ResearchRun；
+- ResearchController 根据 ResearchRequest 创建 ResearchRun；已有 Run 中的工作请求再编译、接受为 WorkflowProposal/Patch；
 - 按原始任务顺序稳定计算 ready Task 集合；
 - capability → ModuleBinding → ModulePort 路由；
 - Task/Attempt 状态机和自动 retry；
@@ -30,11 +30,11 @@ ResAgent2 的顶层控制模块。
 - revision-bound WorkflowPatch 和旧 revision 历史；
 - finish gate；
 - 内存 RunStore 和原子 JSON RunStore；
-- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，一次结构化调用）。
+- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft、各最多一次 review）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [I2](../../docs/INTERFACES.md#i2-工作编译)。
 
 当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding/Experiment/Scientific 三个 legacy adapter 已分别在 Phase 5/6/7 删除，全部由原生 Agent 取代。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Phase 7.7 原子切换后，production composition root 走 `ResearchController`：自然语言 `create_run(request)` 进入科学控制循环，`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 Proposal/Patch，Scheduler 执行 Coding/Experiment 图，`WorkOutcome` 回传后形成最终 `ScientificOpinion` 并经 `ScientificCompletionValidator` 写 completed。旧 PlanningPort 路径已删除，不保留两套总控逻辑。
+production composition root 走 `ResearchController`：`create_run(run_id, request)` 进入科学控制循环，`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 Proposal/Patch，Scheduler 执行 Coding/Experiment 图，`WorkOutcome` 回传后形成最终 `ScientificOpinion` 并经 `ScientificCompletionValidator` 写 completed。旧 PlanningPort 路径已删除，不保留两套总控逻辑。
 
 ## 最小使用方式
 

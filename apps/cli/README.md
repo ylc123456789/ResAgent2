@@ -7,6 +7,8 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
+当前 contracts schema 为 5.0。旧 4.0 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，仅复用普通 Prompt 的预算适配与 Scientific 工件登记机制。
+
 ## 1. 安装与基本配置
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：

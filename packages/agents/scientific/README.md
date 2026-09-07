@@ -5,8 +5,9 @@
 实现 ScientificPort 边界（`docs/CONTRACTS.md` §16、`docs/INTERFACES.md` I1）：`ScientificAgent.run(ScientificTurnRequest)` 返回四态 `ScientificTurnResult`。
 
 - `request_work`：当前 `ScientificAssessment` + 语义化 `WorkRequestDraft`；
-- `ask_user`：带 assessment 的用户问题；
-- `finish`：最终 `ScientificOpinion`。
+- `needs_user_input`：带 assessment 的用户问题（模型通过 ask_user 提议）；
+- `completed`：最终 `ScientificOpinion`（模型通过 finish 提议）；
+- `failed`：带原始诊断的模块失败。
 
 允许：只读 Artifact、文献检索、科学推理。禁止：输出 WorkflowProposal/Patch、选择 capability/依赖/物理环境、修改 TaskStatus、调用其他子 Agent、把建议描述成已执行事实。
 

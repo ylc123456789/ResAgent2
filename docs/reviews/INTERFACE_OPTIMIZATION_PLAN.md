@@ -24,14 +24,18 @@
 | P2 | 编译失败携带本次消费；不读实现属性 | 本地完成 |
 | P3 | 删除死缓存、无效兜底；schema 5.0 注册表只留真实声明 | 本地完成 |
 | P4a | Composer 对最终标题/分隔符计量 | 本地完成；runtime/工作集/E2E 确定性测试 146 passed |
-| P4b | 共用 Prompt 适配及 Scientific 工件登记，保留两个组合根 | 本地完成；定向测试 31 passed（随后补类型测试） |
-| P5 | 本地集成、同步文档、交接真实服务器验收 | 待实施 |
+| P4b | 共用 Prompt 适配及 Scientific 工件登记，保留两个组合根 | 本地完成；定向测试 32 passed |
+| P5 | 本地集成、同步文档、交接真实服务器验收 | 本地完成；服务器待验收 |
 
 注册表 `request_model/result_model/side_effects/permission_policy/completion_evidence` 没有运行消费者，用户已明确批准删除并按现有版本规则升至 5.0。旧 4.0 Run 不续跑，既有记录原样保留，不引入迁移或兼容分支。
 
 基线验证：隔离 cwd、`PYTHONPATH=/home/cyl/ResAgent2`，本地全量 `703 passed, 1 skipped`；不使用服务器历史测试代替本轮验证。
 
 阶段验证：P1 orchestrator `184 passed`；P2 Compiler/Controller `70 passed`；P3 集成全量 `724 passed, 1 skipped`。P3 删除的文献 summaries 只是无人读取的累计副本，完整工件、短预览、观察 ID 和历史不动。缺失暂停问题走既有失败出口，不再生成虚构问题。公开删字段见 CONTRACTS 的 CapabilityRegistry 说明及 §18。
+
+最终本地集成：隔离 cwd 全量 **740 passed, 1 skipped**，mock E2E completed，`git diff --check` 干净。额外锁定：旧 4.0 Run 读取拒绝后文件字节不变；共享图候选拒绝进入一次有界纠错；typed LLM 模型实例经值投影重验，不能利用 model_copy 绕过 schema。
+
+本轮未增加 MCP/A2A、插件或统一 bootstrap；正常任务目标和执行策略不改。可观察变化明确包括 schema 5.0、不再接受空图/跨轮依赖、标题分隔符计入预算、E2E Compiler 开始执行 4096 模块上限。E2E 保留其原有无 ModelProfile 的测试配置；CLI 保留配置驱动的 ModelProfile，适配器在底层提供模型容量 hook 时取更小值，不强行统一入口配置。
 
 ## 最小验收
 

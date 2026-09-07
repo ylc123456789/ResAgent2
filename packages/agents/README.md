@@ -8,6 +8,6 @@ coding     = 程序员
 experiment = 实验员/操作员
 ```
 
-子 Agent 之间禁止直接调用。跨模块需求通过 ModuleResult 返回给 orchestrator，由 Workflow 创建或调度新的 Task。
+子 Agent 之间禁止直接调用。Scientific 通过 ScientificTurnResult 提出 WorkRequestDraft；Controller 接收后交 Compiler 编译，再由 Scheduler 执行。Coding/Experiment 通过 ModuleResult 返回任务结果或问题，不自行创建下一轮研究任务。
 
-当前实现状态：Coding Agent vNext 与 Experiment Agent vNext 已完成；Scientific 尚未原生实现。
+当前三个原生 Agent 均已实现；模块输入、返回分支及替代实现要求见 docs/INTERFACES.md。

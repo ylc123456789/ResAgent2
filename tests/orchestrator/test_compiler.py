@@ -403,6 +403,50 @@ def test_compile_produces_proposal() -> None:
     assert [task.id for task in result.tasks] == ["task_run"]
 
 
+def test_shared_candidate_rejection_enters_bounded_recompile(monkeypatch) -> None:
+    import resagent2_orchestrator.compiler as compiler_module
+
+    materialize = compiler_module._materialize_draft
+    materializations = 0
+
+    def damage_first_candidate(*args, **kwargs):
+        nonlocal materializations
+        materializations += 1
+        candidate = materialize(*args, **kwargs)
+        if materializations == 1:
+            return candidate.model_copy(update={"tasks": []})
+        return candidate
+
+    monkeypatch.setattr(compiler_module, "_materialize_draft", damage_first_candidate)
+    client = _FakeCompilerLLM(raw_experiment("run"))
+    result = LLMWorkflowCompiler(client).compile(
+        work_request(), current=None, registry=registry(), budget=budget(),
+    )
+
+    assert materializations == 2
+    assert result.llm_calls == 3  # rejected draft, corrected draft, accepted review
+    assert "empty task graph" in client.prompts[1]
+    assert [task.id for task in result.output.tasks] == ["task_run"]
+
+
+@pytest.mark.parametrize("damaged_type", [CompilationDraft, CompilationReview])
+def test_typed_compiler_candidates_are_revalidated(damaged_type) -> None:
+    draft = CompilationDraft.model_validate(raw_experiment())
+    review = CompilationReview(accepted=True)
+    if damaged_type is CompilationDraft:
+        draft = draft.model_copy(update={"tasks": []})
+    else:
+        # A nonempty string must not be accepted as a truthy review verdict.
+        review = review.model_copy(update={"accepted": "false"})
+    compiler = LLMWorkflowCompiler(_FakeCompilerLLM(draft, review=review))
+
+    with pytest.raises(CompilationError, match="2 attempts") as error:
+        compiler.compile(
+            work_request(), current=None, registry=registry(), budget=budget(),
+        )
+    assert error.value.llm_calls == (2 if damaged_type is CompilationDraft else 4)
+
+
 def test_compile_produces_append_only_patch() -> None:
     compiler = LLMWorkflowCompiler(_FakeCompilerLLM(raw_repair()))
     result = compiler.compile(

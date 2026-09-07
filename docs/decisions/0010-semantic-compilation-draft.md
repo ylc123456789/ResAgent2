@@ -30,9 +30,9 @@ class CompilationTaskDraft(BaseModel):
     key: str                 # 仅在本 Draft 内有效的局部标识，如 fix_code、rerun
     capability: Capability
     goal: str
-    rationale: str
     depends_on: list[str] = []   # 只能引用本 Draft 的 key
     workspace_id: WorkspaceId | None = None
+    constraints: list[str] = []
     inputs: CapabilityInput
 
 class CompilationDraft(BaseModel):
@@ -116,7 +116,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 ## 为什么不用其它方案
 
 - **不引入 LLMCompiler / LangGraph / Magentic-One 框架**：它们的价值在分层思想，不在组件本身；这里只需几个内部模型 + 一个纯函数物化器 + 有界的“草图 + 审查”循环。
-- **不做多候选投票或无限反思**：成本/复杂度远超收益；结构拒绝用一次精确反馈重编，语义不完整用一次缺失项反馈重编，各最多一次。
+- **不做多候选投票或无限反思**：成本/复杂度远超收益；结构拒绝与语义不完整共享一次纠错机会，总计最多两版 draft，各最多一次 review。
 - **语义审查不是新 Agent**：它是 Compiler 内部的一次短 LLM 调用，输出只有 `accepted`/`issues`，不新增 Planner/Reviewer Agent、不加包、不改状态机。
 - **Coding 控制状态不是固定工作流**：确定性代码只告诉 Coding 当前还有“必须验证最新修改”这一项责任，不限制它看哪些文件、怎么改、用什么验证命令。
 
@@ -150,7 +150,7 @@ Compiler 不越权决定代码细节（§1），Coding Agent 自己探索工作�
 - 不把 `CompilationDraft` / `CompilationReview` 提升为公共 contract 或新包；
 - 不做投票、树搜索、多候选或无限反思；
 - 不为 Compiler 建立 Session 或持久化其 LLM 调用历史；
-- 不修改 `llm_calls_used` 的统计语义（CONTRACTS 只统计 ScientificPort）；
+- 不另建预算系统；当前 Compiler 的成功和失败调用均进入 Run 总账（以当前 CONTRACTS 的计量约定为准）；
 - 不让 Compiler 扫描源码、指定文件、决定验证命令或把工作区文件列表塞给它；
 - 不新增 Planner/Reviewer Agent、不新增停滞检测器、不自动替 Coding 执行验证、不为 SE/CIFAR/train.py 写规则、不调大 Coding 步数或任务总预算。
 

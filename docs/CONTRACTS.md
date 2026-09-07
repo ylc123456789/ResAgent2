@@ -155,7 +155,7 @@ class WorkflowTask:
 
 - `WorkflowProposal` 是 Compiler 产生的初始图候选；`WorkflowPatch` 是**只追加**的修订（schema 3.0 删除 `supersede_task_ids`/`pending_task_updates`/`PendingTaskUpdate`，修复模型是「新 WorkRequest 增加新 Task、保留旧历史」，见 ADR-0011 §5）。
 - `TaskProposal`/`WorkflowTask` 不再有 `required`、`rationale` 或 `success_criteria`；编译理由只在 proposal/patch 级保留为 `compilation_rationale`。
-- `capability` 必须与 discriminated `inputs.capability` 一致；`depends_on` 只能引用同图中的 TaskId，图必须无环；Attempt number 必须从 1 连续递增；Task 的 `work_request_id` 必须等于所属 Proposal/Patch 的 `work_request_id`。
+- `capability` 必须与 discriminated `inputs.capability` 一致；图必须无环；Attempt number 必须从 1 连续递增；Task 的 `work_request_id` 必须等于所属 Proposal/Patch 的 `work_request_id`。图候选接收时必须非空，`depends_on` 只能引用本 Proposal/Patch 新增的 TaskId，不得依赖历史 WorkRequest 的 Task（无论旧 Task 成功还是失败）；共享判据在 Compiler 纠错与 Scheduler 接收两处调用。
 
 ## 7. Capability 与路由
 

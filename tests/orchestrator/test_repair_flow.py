@@ -32,7 +32,6 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
-    CompilationError,
     DeterministicWorkflowCompiler,
     InMemoryRunStore,
     LLMWorkflowCompiler,

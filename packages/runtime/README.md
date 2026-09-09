@@ -2,7 +2,7 @@
 
 三个专业 Agent 共享的运行底座。
 
-Phase 4 已实现：
+共享机制：
 
 - AgentDefinition；
 - AgentLoop；
@@ -17,8 +17,7 @@ Phase 4 已实现：
 
 runtime 提供机制，不包含科研、代码修改或实验策略，也不包含 ResAgent Workflow Scheduler。
 
-Phase 5 曾在本包内孵化 workspace、process、Git、Artifact 读取等可复用实现；
-Phase 6.5 已将这些具体能力迁移到 `resagent2_capabilities`。runtime 当前只保留
+workspace、process、Git、Artifact 读取等具体能力位于 `resagent2_capabilities`。runtime 只保留
 Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool。
 
 `ModelProfile` 只描述一个已注入模型的上下文窗口、输出预留和安全余量；

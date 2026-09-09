@@ -15,7 +15,7 @@
 
 本包只表达语义，不执行 LLM、文件、进程、Git 或工作流。它不得依赖 runtime、orchestrator 或任何具体 Agent。
 
-权威字段说明见 `docs/CONTRACTS.md`。
+方法、字段和接收规则见 [模块接口与契约](../../docs/current/CONTRACTS.md)。
 
 ## 安装与测试
 

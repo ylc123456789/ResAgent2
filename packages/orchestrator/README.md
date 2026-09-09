@@ -30,7 +30,7 @@ ResAgent2 的顶层控制模块。
 - revision-bound WorkflowPatch 和旧 revision 历史；
 - finish gate；
 - 内存 RunStore 和原子 JSON RunStore；
-- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft、各最多一次 review）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [I2](../../docs/INTERFACES.md#i2-工作编译)。
+- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft、各最多一次 review）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [接口](../../docs/current/CONTRACTS.md#compiler)。
 
 当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding/Experiment/Scientific 三个 legacy adapter 已分别在 Phase 5/6/7 删除，全部由原生 Agent 取代。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 

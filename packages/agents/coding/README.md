@@ -7,7 +7,7 @@
 
 复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Git 与 Artifact 能力。代码策略、验证策略和 patch finalizer 属于本模块。
 
-本模块是第一个完成重写的专业 Agent。Phase 5 的原生实现提供两个 profile：
+原生实现提供两个 profile：
 
 - `code_understand`：只读 list/read/search/Artifact/Git 工具，输出有证据路径的解释；
 - `code_modify`：准备/复用仓库后在 WorkspaceGrant 内进行精确替换或创建文件，根据项目实际自主选择 shell-free 验证命令（经 `VerificationCommandPolicy` 约束），并由 finalizer 生成真实变化和 ArtifactCandidate。

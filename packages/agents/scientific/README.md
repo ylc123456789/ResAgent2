@@ -2,7 +2,7 @@
 
 科学顾问。
 
-实现 ScientificPort 边界（`docs/CONTRACTS.md` §16、`docs/INTERFACES.md` I1）：`ScientificAgent.run(ScientificTurnRequest)` 返回四态 `ScientificTurnResult`。
+实现 ScientificPort 边界（[接口与契约](../../../docs/current/CONTRACTS.md#scientific)）：`ScientificAgent.run(ScientificTurnRequest)` 返回四态 `ScientificTurnResult`。
 
 - `request_work`：当前 `ScientificAssessment` + 语义化 `WorkRequestDraft`；
 - `needs_user_input`：带 assessment 的用户问题（模型通过 ask_user 提议）；
@@ -23,4 +23,4 @@ Native 与 CLI 默认输入上限为 8192 tokens，显式配置和模型容量�
 
 ## 外部检索失败时
 
-文献检索、证据阅读与科学判断是本 Agent 自有工作。Prompt 要求 timeout/HTTP 429 经工具已有重试仍失败时，不通过 request_work 派代码/实验任务绕路；需要用户补充材料、作决定或确认服务恢复时用现有 ask_user。它是职责指引，不是确定性保证；正常检索与真实 LLM 故障注入验收见 `docs/reviews/SCIENTIFIC_CONTEXT_ACCEPTANCE.md`。
+文献检索、证据阅读与科学判断是本 Agent 自有工作。Prompt 要求 timeout/HTTP 429 经工具已有重试仍失败时，不通过 request_work 派代码/实验任务绕路；需要用户补充材料、作决定或确认服务恢复时用现有 ask_user。它是职责指引，不是确定性保证；正常检索与真实 LLM 故障注入验收见 `docs/history/reviews/SCIENTIFIC_CONTEXT_ACCEPTANCE.md`。

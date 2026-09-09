@@ -36,9 +36,9 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `5.0`（`SCHEMA_VERSION="5.0"`），不保留旧 schema 的第二条运行路径；旧 4.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS §18](docs/CONTRACTS.md#18-schema-版本规则)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `5.0`（`SCHEMA_VERSION="5.0"`），不保留旧 schema 的第二条运行路径；旧 4.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
 
-本轮契约修复涉及会话身份、问答恢复、验证新鲜性、指标冲突、证据授权、响应验收和失败记录。改动与验收进度见 [CONTRACT_FIXES.md](docs/reviews/CONTRACT_FIXES.md)。历史服务器成功记录不能代替本轮代码验收；本轮服务器验收尚未执行。
+接口契约优化已完成并合入 main。分阶段提交、真实服务器验收及已知边界见 [决策与历史](docs/history/README.md)；当前文档不再维护一份重复的轮次清单。
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 
@@ -60,7 +60,7 @@ packages/
   contracts/                  跨模块对象、字段与组合约束
 tests/                        本地契约与行为测试
 e2e/                          独立的端到端装配和验收入口
-docs/                         架构、契约、接口与开发记录
+docs/                         current / history / guides 三类文档
 ```
 
 ## 本地开发
@@ -77,13 +77,13 @@ python -m pytest tests apps/cli/tests
 
 ## 文档入口
 
-- [项目理解与代码导览](docs/CODE_READING_GUIDE.md)：先建立整体认识，再按需进入代码；
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md)：职责、控制流和状态语义；
-- [CONTRACTS.md](docs/CONTRACTS.md)：跨模块字段、类型、组合约束与 wire 版本；
-- [INTERFACES.md](docs/INTERFACES.md)：谁调用谁、如何接收、恢复及替换实现；
-- [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) 与 [决策记录](docs/decisions/)：开发历史、验收证据和重要设计理由。
+统一从 [文档导航](docs/README.md) 进入：
 
-README 和导览是摘要，不另造规则；代码与测试是当前实现行为的证据。改变公开行为时，同步对应文档和测试。
+- [当前实现与规范](docs/current/ARCHITECTURE.md)：架构，以及已合并的 [模块接口与契约](docs/current/CONTRACTS.md)。
+- [决策与历史](docs/history/README.md)：为什么这样设计、各轮计划和验收，不代替现行规则。
+- [入门与实践](docs/guides/README.md)：从一次任务理解系统，再学习使用和开发。
+
+命令和部署参数仍集中在 [CLI README](apps/cli/README.md)。教程解释规则，历史保留事实，不再分别维护 contracts 和 interfaces 两套参考。
 
 ## 开发约束
 

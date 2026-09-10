@@ -42,6 +42,23 @@
 
 JSON 协议失败另见 [专项记录](LLM_JSON_OUTPUT_FOLLOWUP.md)：八场景 192 次尝试中 31 次 JSON 解析失败，两次耗尽客户端重试后发生任务 Attempt 重试；不修改 JSON 处理，不归为资源闭环已修问题。
 
+## 2026-09-10 用户回答上下文补齐
+
+`d03abee` 的 §8 现场在 `/root/autodl-tmp/acceptance-closeout/`。共享目录提示已到达、CLI 展示测试通过、最终指标为 `{"value":42.0}`，但不能认定全部行为通过：Experiment 在目录仍缺时先执行了 `python run.py`（KeyError），随后一次环境映射诊断成功、一次 `ls` 被拒绝，再次 ask_user；不是三次实验命令均失败。
+
+原始请求与驱动显示 UserAnswer 已传入 ModuleTaskRequest，却未进入 Coding/Experiment 的 context builder。模型只能看到历史 ask_user 成功观测，无法看到实际回答；Scientific 已有答案段，不存在这一遗漏。回答不可见是确定性代码缺口，但不据此宣称它是所有模型偏离的唯一原因。
+
+修复沿用现有 ContextSection → ContextComposer：
+
+- runtime.context 增加纯函数 `user_answers_section`，仅投影调用方传入的回答，不新增状态或缓存；按传入顺序完整呈现为 required 段，共享现有预算。
+- Coding 两种模式与 Experiment 接入同一个函数，每一步都呈现；Scientific 原有答案段不动。Scheduler 的 Task 答案作用域、同 Session/Attempt 恢复规则不变。
+- 共享资源提示明确：回答后所需目录仍缺就再次询问；历史 ask_user 成功不代表资源已就绪，旧命令结果也不是刷新后的资源视图。
+- 不增加强制资源闸口、不改公共 schema、调度状态机、JSON 解析或重试。
+
+定向 **73 passed**；全量 **805 passed, 1 skipped**；mock_e2e completed；git diff --check 干净，使用隔离 cwd `/tmp/resagent2-answer-context.0bWfVV`。新增三项 helper 测试，覆盖顺序、无缓存/无修改与必需段预算；扩展四种模式的三进程测试，验证恢复首步及实际读取文件后的下一步仍含准确答案且只注入一次。脚本驱动不证明真实模型一定遵循资源提示；新补验要求见 [§9](RUNTIME_RESOURCES_ACCEPTANCE.md#9-用户回答上下文补验)。
+
+§8 三个子 Agent trace 文件共 **24 个逻辑调用、25 行记录**，多出一行是 schema 校验补充记录；JSON 解析错误 0、schema 错误 1。JSON 专项保持未解决，不因本轮未复现而关闭。
+
 ## 分阶段验证说明
 
 阶段 3 调度回归：208 passed。ResearchRun 用一个累计 user_wait_seconds 和

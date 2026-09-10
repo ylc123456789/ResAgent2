@@ -1,10 +1,11 @@
 """Shared bounded context helpers."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
 
-from resagent2_contracts import AgentOwner
+from resagent2_contracts import AgentOwner, UserAnswer
 from resagent2_runtime import (
     AgentEvent,
     AgentState,
@@ -13,7 +14,55 @@ from resagent2_runtime import (
     ContextSection,
     recent_tool_listing,
     recent_tool_snippets,
+    user_answers_section,
 )
+
+
+def test_user_answers_section_is_absent_without_supplied_answers():
+    assert user_answers_section([]) is None
+
+
+def test_user_answers_section_preserves_supplied_replies_and_order():
+    now = datetime.now(UTC)
+    answers = [
+        UserAnswer(question_id="question_first", values={"choice": "甲"}, answered_at=now),
+        UserAnswer(question_id="question_second", values={"choice": "乙"}, answered_at=now),
+    ]
+    before = [answer.model_dump(mode="json") for answer in answers]
+
+    section = user_answers_section(answers)
+
+    assert section.name == "answers"
+    assert section.required
+    guidance, payload = section.content.split("\n", 1)
+    assert "An earlier ask_user [ok] only means a question was issued" in guidance
+    assert "current checked context" in guidance
+    assert json.loads(payload) == before
+    assert [answer.model_dump(mode="json") for answer in answers] == before
+    # No reply is retained across invocations or borrowed from another task.
+    other = user_answers_section([answers[1]])
+    assert "question_first" not in other.content
+    assert user_answers_section([]) is None
+
+
+def test_user_answers_share_composer_budget_and_are_not_optional():
+    answer = UserAnswer(
+        question_id="question_choice", values={"choice": "keep existing format"},
+        answered_at=datetime.now(UTC),
+    )
+    section = user_answers_section([answer])
+    composer = ContextComposer()
+    expected = composer.compose("system", [section], max_tokens=1000)
+    with_optional = composer.compose(
+        "system", [ContextSection(name="optional", content="x" * 10000), section],
+        max_tokens=expected.estimated_tokens,
+    )
+    assert with_optional.text == expected.text
+    assert with_optional.included_sections == ["system", "answers"]
+    assert with_optional.omitted_sections == ["optional"]
+    # Required answers fail explicitly instead of disappearing or being clipped.
+    with pytest.raises(ContextBudgetExceeded, match="answers"):
+        composer.compose("system", [section], max_tokens=expected.estimated_tokens - 1)
 
 
 def _snippet_state(*values: dict) -> AgentState:

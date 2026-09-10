@@ -27,6 +27,8 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 
 ContextComposer 对包含标题和分隔符的最终文本统一估算预算，必需段装不下就拒绝，不先调用 LLM。这个值仍是字符估算，不是供应商的精确 token 数。
 
+`user_answers_section(answers)` 将调用方已选定作用域的 UserAnswer 按传入顺序投影为 required `answers` 段；没有回答时不生成段。Coding/Experiment 的 context builder 共用它，Scientific 保留原有答案段。它不读取 Session、不缓存答案、不改变问题路由；答案与其他上下文一起计入 Composer 预算，超限明确失败而非静默遗漏。历史 `ask_user [ok]` 只表示问题已发出，不能代替真实回答或前提已满足的证据。
+
 非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 都使用它；runtime 不认识编译器业务。
 
 文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略

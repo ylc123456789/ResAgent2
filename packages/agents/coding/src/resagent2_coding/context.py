@@ -8,7 +8,7 @@ from resagent2_capabilities import (
     DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
 )
 from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import AgentState, ContextSection
+from resagent2_runtime import AgentState, ContextSection, user_answers_section
 
 
 UNDERSTAND_PROMPT = """You are the read-only Coding Agent.
@@ -105,6 +105,9 @@ def build_context(
             required=True,
         ),
     ]
+    answers = user_answers_section(request.answers)
+    if answers is not None:
+        sections.append(answers)
     sections.extend(workspace_context(state, binding=binding))
     if control_state is not None:
         sections.insert(

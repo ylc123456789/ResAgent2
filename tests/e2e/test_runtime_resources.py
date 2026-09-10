@@ -1,5 +1,6 @@
 """Resource refresh uses existing pause/session machinery, without a provider."""
 
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -49,9 +50,14 @@ def _probe(root, kind, phase):
     )
     sessions = JsonSessionStore(root / "sessions")
     before = sessions.load(session_id) if phase else None
-    client = ScriptedLLMClient([_ask(scientific)])
+    actions = [_ask(scientific)]
+    if phase and not scientific:
+        # Recompose after a real tool observation as well as on the resume step.
+        actions.insert(0, {"tool": "read_file", "arguments": {"path": "util.py"}})
+    client = ScriptedLLMClient(actions)
     answers = [] if phase == 0 else [UserAnswer(
-        question_id=f"question_ready_{phase}", values={"dataset_ready": "yes"},
+        question_id=f"question_ready_{phase}",
+        values={"dataset_ready": f"yes, reply_phase_{phase}"},
         answered_at=datetime.now(UTC),
     )]
     common = dict(
@@ -105,6 +111,15 @@ def _probe(root, kind, phase):
     shared_context = dataset_context(resolve_dataset_refs(layout.dataset_root, refs))
     assert shared_context["availability_basis"] in text
     assert shared_context["missing_dataset_guidance"] in text
+    for context in client.contexts:
+        if answers:
+            assert context.included_sections.count("answers") == 1
+            assert context.text.count("## answers\n") == 1
+            assert json.dumps(answers[0].model_dump(mode="json"), ensure_ascii=False) in context.text
+            # The caller supplied only this reply; do not retrieve others from memory.
+            assert f"reply_phase_{phase - 1}" not in context.text
+        elif not scientific:
+            assert "answers" not in context.included_sections
     after = sessions.load(session_id)
     assert after.attempt_number == (None if scientific else 1)
     if before is not None:

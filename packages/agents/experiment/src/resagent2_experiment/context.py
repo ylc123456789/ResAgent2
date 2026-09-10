@@ -11,6 +11,7 @@ from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (
     AgentState,
     ContextSection,
+    user_answers_section,
 )
 
 
@@ -126,5 +127,8 @@ def build_context(
             required=True,
         ),
     ]
+    answers = user_answers_section(request.answers)
+    if answers is not None:
+        sections.append(answers)
     sections.extend(workspace_context(state, binding=binding))
     return sections

@@ -12,6 +12,7 @@ from .context import (
     ContextComposer,
     recent_tool_listing,
     recent_tool_snippets,
+    user_answers_section,
 )
 from .llm import (
     LLMClient,
@@ -87,6 +88,7 @@ __all__ = [
     "ReadValueTool",
     "recent_tool_listing",
     "recent_tool_snippets",
+    "user_answers_section",
     "ScriptedLLMClient",
     "SessionStore",
     "Tool",

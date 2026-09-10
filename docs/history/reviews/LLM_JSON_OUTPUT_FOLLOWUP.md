@@ -39,6 +39,10 @@
 - `tests/runtime/test_llm_recovery.py`、`test_llm_attempt_trace.py` 已覆盖恢复与计量机制；它们不证明真实 provider 总能返回合法 JSON。
 - 本轮不增加额度、自动修 JSON、无限重试或模型专用解析分支。
 
+## d03abee 小收尾补验观察
+
+`/root/autodl-tmp/acceptance-closeout/` 的三个子 Agent trace 共 24 个逻辑调用、25 行记录；一行是 schema 校验补充记录（不是新调用）。本轮 JSON 解析错误为 0，另有一次 `extra_forbidden` schema 错误并恢复。未复现不等于 577b8489 的 31 次失败已修复；后续用户回答上下文补齐也不修改 provider、JSON 解析、重试或额度。
+
 ## 后续调查（未执行）
 
 1. 保留上述现场。用其中一个失败请求做独立、有界复现；核对真实模型/endpoint、消息包装和 json_object 配置，不执行返回的工具、不覆盖历史 Run。

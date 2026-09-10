@@ -435,7 +435,7 @@ class ModuleTaskRequest:
 | capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
 | dataset_refs | Scheduler 从 ResearchRun 提供的已知目录引用，非用户要求、非 LLM 生成，也不表示都要用；Agent 检查哪些目录实际可用 |
-| answers | 只包含属于本 Task 的已持久化回答 |
+| answers | 只包含属于本 Task 的已持久化回答，可含该 Task 的较早回答；Coding/Experiment 每一步经共享 user_answers_section 按传入顺序呈现为 required answers 段，不从 Session 另取一份 |
 | workspace / workspace_id / workspace_spec | 此 Attempt 的物理授权范围、逻辑工作区 id、来源声明（Agent 在 loop 前确定性 materialize） |
 | environment_spec | 上游声明的环境硬约束（`EnvironmentSpec.python_version`） |
 | output_dir | code_modify / experiment_run 的输出目录 |
@@ -605,6 +605,7 @@ off 不记录；metadata 不保存请求/响应/源码正文；full 保存原始
 `ToolObservation.ok` 是机器可读的成功标志：成功读取/命令为 True，失败命令（非零退出）、参数拒绝、路径缺失等可恢复失败为 False。下游不得靠解析 `summary` 文本判断失败。AgentLoop 的反馈语义：
 
 - 可恢复失败落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它；
+- 用户答案由调用方限定作用域，经 Agent 的 context builder 进入同一 ContextComposer。Coding/Experiment 共用 `user_answers_section`，Scientific 保留已有 `answers` 段；不重复注入、不缓存或静默裁掉答案，必需段装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - `recent_observations` 是有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 明确是最多 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整，预览省略不等于工具返回值自身不完整；需要精确正文时使用下面的专门工作集，完整观察仍留在 Session；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现）或 `recent_tool_listing`（保留最近有界目录清单，按条目数与字符数上限、不截断单个路径）作为 required context；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。capabilities 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
@@ -856,7 +857,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 - 共享上下文明确区分 `available_dataset_ids`（已登记且目录存在）与 `unavailable_dataset_ids`（已登记但目录不存在）；两边都没有的 ID 在当前视图中未登记，不表示可用。当前任务需要的 ID 不在 available 列表时，应先 ask_user 再做依赖该数据的工作，不能只检查 unavailable 列表。
 - 非法 JSON/登记格式、重复 ID 引用、绝对或越界路径（含软链逃逸）仍明确报错。
 - 只有可用目录进入 `RESAGENT2_DATASETS_JSON` 的 ID→路径映射；该变量是 JSON 内容，不是 catalog 文件路径；`catalog.json` 固定在 dataset_root 下。Coding 验证与 Experiment 正式命令均获得该映射及 `RESAGENT2_DATASET_ROOT`。
-- Agent 在运行中判断需要什么；缺少所需数据时用已有 ask_user，用户放置并登记后回答。恢复时重新检查，口头“已准备”不使目录自动变为可用。
+- Agent 在运行中判断需要什么；缺少所需数据时用已有 ask_user，用户放置并登记后回答。恢复时重新检查，口头“已准备”不使目录自动变为可用；所需数据仍不在 available 列表时应再次询问，曾经问过不等于可以继续依赖该数据的工作。旧命令结果描述当时的资源状态，不覆盖本轮重新检查的视图。
 - 目录存在只证明可定位；内部文件缺失或内容错误仍需从实际读取诊断。prompt 要求请求用户处理，不下载、不猜路径、不替代数据；这是行为指引，不是 OS 沙箱或强制资源选择器。
 
 不新增资源 Agent、通用 Resource 类、自动扫描或下载器。当前目录规模用精简 ID 上下文；不宣称大规模资源检索或实时热更新。实际恢复路径和验证见 [资源验收单](../history/reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。

@@ -4,7 +4,7 @@
 
 ## 最近已完成的主线
 
-后续分支 `fix/runtime-resources` 的 schema 6.0 资源与等待预算调整，见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收要求](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。`577b8489` 服务器基线已复核；共享提示/CLI 展示小收尾的真实模型补验待执行。另有 [JSON 输出专项记录](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md)，已复现但未在资源分支修复。
+后续分支 `fix/runtime-resources` 的 schema 6.0 资源与等待预算调整，见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收要求](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。`577b8489` 基线与 `d03abee` 小收尾已复核；后者仍有 Experiment 未先询问便执行缺数据命令的行为失败。复核发现执行 Agent 未把已传入的用户回答放进上下文，现补齐共享答案投影；本轮真实模型补验按 [§9](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md#9-用户回答上下文补验) 执行，不沿用前一轮通过结论。另有 [JSON 输出专项记录](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md)，已复现但未在资源分支修复。
 
 截至文档整理基线 `808e8f1`：接口契约优化 P0–P5 与后续收尾已合入 main，公共 schema 为 5.0。最后一轮模型输出配置验收对应产品代码 `ab5066f`，随后是文档收尾；不要把分阶段验收误写成最终每个提交都重新跑过完整矩阵。
 

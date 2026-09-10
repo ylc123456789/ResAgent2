@@ -110,3 +110,34 @@ git -C "$repo_dir" diff --check
 - 保存 full trace 的共享目录片段和真实动作；询问不可误称 `RESAGENT2_DATASETS_JSON` 为 catalog 文件路径，不可把 unavailable 解释为目录已存在。提示到达和模型遵循分别报告，不拿脚本动作当真实模型结果。
 - CLI 展示由本地公共 renderer 测试验证：最终意见不和旧过程判断并排显示，旧判断仍留在 Run；无最终意见时仍显示标注 interim 的过程判断。无需为展示单独付费跑 LLM。
 - JSON/Schema 错误和任何模型偏离仍逐条记录，不通过重跑覆盖失败。[JSON 专项](LLM_JSON_OUTPUT_FOLLOWUP.md) 本轮只记录、不修复。
+
+## 9. 用户回答上下文补验
+
+本轮修复 Coding/Experiment 的用户回答未进入模型上下文；仍用原有 Composer，不改状态机、预算、JSON 处理或 Scientific 答案逻辑。`d03abee` 的 §8 现场保留，不能用旧结果替代新验收。无需重跑 GPU 训练矩阵、重装 torch 或新增环境池。
+
+### 同步与确定性基线
+
+按 §1/§2 同步本轮完整提交到新干净 worktree，记录 HEAD、8 包 editable 指针与产物根；不要只复制零散源码。确定性基线为 **805 passed, 1 skipped**；执行 mock_e2e 与 diff-check。重点测试为 `tests/runtime/test_context.py`、`tests/e2e/test_runtime_resources.py` 和 `tests/orchestrator/test_workflows.py`（Task 回答作用域）。
+
+### 真实资源恢复
+
+复用 §8 的小型原生 Coding/Experiment 驱动与目标，但在独立目录建立新 Run/Session，不能覆盖旧现场。各跑一套真实 Flash 三阶段：
+
+1. 未登记：应 ask_user。允许调查代码，不应执行依赖尚缺数据的命令。
+2. 仅登记但目录仍缺，新进程按实际 requested_fields 回答“ready”：应再次 ask_user；不能因为先前已问过而执行依赖该数据的工作。环境审计或只读诊断与真正的数据依赖命令分开记录。
+3. 建目录并放置 sample.json，再按实际问题回答：同 Session/Attempt 恢复。Coding 读实际代码后完成；Experiment 真执行脚本、冻结并交付 metrics.json。不得把口头回答当作目录/内容已检查的证明。
+
+对每次恢复的完整请求核对：`included_sections` 含且只含一个 `answers`；正文包含驱动实际传入的 UserAnswer 值，而非仅有历史 ask_user 的观测。发生非终止工具调用时，检查后续请求仍包含这些答案；与本次刷新后的 available/unavailable 视图同时可见。记录旧工具观察及其时间顺序，不要求删除历史。Scientific 的既有答案路径做一次小型 CLI ask/answer 冒烟即可。
+
+### 回答必须真的被消费
+
+另加一个不依赖数据目录变化的用户选择用例，分别测 Coding（code_understand）和 Experiment：任务先询问两个候选中的选择；驱动在暂停后才指定答案，并经现有 UserAnswer/新进程 resume 传入，不把答案预写进初始 goal。
+
+- Coding：让用户选择解释哪个辅助文件，完成时读取/引用并解释用户选中的文件。
+- Experiment：一个标准库小脚本接受用户选择参数，不同参数产出不同的已知数字指标；完成时实际执行、冻结指标与该答案一致。
+
+这验证“收到回答并据此行动”，而非只凭新建目录恢复。可复用现有环境，无须大数据或训练。保留一个无数据依赖且目录中有无关缺失条目的只读任务，确认仍可完成。
+
+### 报告口径
+
+分别报告：代码确定性投影、原始 prompt 中实际可见、模型是否遵循、真实结果是否符合答案。缺数据仍先运行就是行为失败，即便最终完成也不能记全绿；不要求本次提示具有确定性强制保证。JSON 解析错误、schema 校验补充行、重试和 Task Attempt 分开统计，逻辑调用按 call_id 去重；保留所有失败，不重跑覆盖、不修改产品 prompt 或预算。[JSON 专项](LLM_JSON_OUTPUT_FOLLOWUP.md) 仍待独立调查。

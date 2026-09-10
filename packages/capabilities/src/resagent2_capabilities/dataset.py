@@ -104,7 +104,11 @@ def dataset_context(availability: DatasetAvailability) -> dict:
             "path in catalog.json under that root, then answer. "
             f"{RESAGENT2_DATASETS_JSON} contains the ID-to-path JSON for scripts, "
             "not a catalog file path. This checked view, not a user's "
-            "confirmation alone, determines availability after resume. Missing "
+            "confirmation alone, determines availability after resume. If the "
+            "required dataset is still not in available_dataset_ids after a reply, "
+            "ask_user again; having asked once is not permission to run without it. "
+            "Earlier command results describe the earlier resource state, not "
+            "the refreshed view. Missing "
             "files or invalid contents also require user help; do not download, "
             "invent a path, or substitute data."
         ),

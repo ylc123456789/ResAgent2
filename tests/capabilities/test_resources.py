@@ -552,6 +552,9 @@ def test_dataset_context_explains_readiness_without_a_negative_list_gate(tmp_pat
     guidance = context["missing_dataset_guidance"]
     assert "not in available_dataset_ids, call ask_user" in guidance
     assert "before work that needs it" in guidance
+    assert "still not in available_dataset_ids after a reply, ask_user again" in guidance
+    assert "having asked once is not permission to run without it" in guidance
+    assert "Earlier command results describe the earlier resource state" in guidance
     assert "Do not block on unrelated missing datasets" in guidance
     assert "catalog.json under that root" in guidance
     assert "RESAGENT2_DATASETS_JSON contains the ID-to-path JSON for scripts, not a catalog file path" in guidance

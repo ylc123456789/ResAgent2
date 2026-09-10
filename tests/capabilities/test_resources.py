@@ -483,10 +483,11 @@ def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> Non
 
     resolved = resolve_dataset_refs(root, refs)
 
-    assert [entry["dataset_id"] for entry in resolved] == ["cifar10", "mnist"]
-    assert resolved[0]["path"] == str((root / "cifar10").resolve())
-    assert resolved[1]["path"] == str((root / "mnist").resolve())
-    assert all(entry["access"] == "read_only" for entry in resolved)
+    assert [entry["dataset_id"] for entry in resolved.available] == ["cifar10", "mnist"]
+    assert resolved.available[0]["path"] == str((root / "cifar10").resolve())
+    assert resolved.available[1]["path"] == str((root / "mnist").resolve())
+    assert all(entry["access"] == "read_only" for entry in resolved.available)
+    assert resolved.unavailable_ids == []
 
 
 def test_dataset_catalog_loads_registered_directories(tmp_path) -> None:
@@ -510,18 +511,22 @@ def test_dataset_catalog_is_empty_until_resources_are_registered(tmp_path) -> No
     assert DatasetCatalog(tmp_path / "datasets").references() == []
 
 
-def test_dataset_catalog_rejects_missing_registered_directory(tmp_path) -> None:
+def test_dataset_catalog_keeps_missing_registered_directory(tmp_path) -> None:
     root = tmp_path / "datasets"
     root.mkdir()
     (root / "catalog.json").write_text('{"cifar10": "missing"}', encoding="utf-8")
 
-    with pytest.raises(DatasetResolutionError, match="does not exist"):
-        DatasetCatalog(root).references()
+    refs = DatasetCatalog(root).references()
+    assert refs == [DatasetRef(dataset_id="cifar10", relative_path="missing")]
+    assert resolve_dataset_refs(root, refs).unavailable_ids == ["cifar10"]
 
 
-def test_dataset_context_has_one_shared_missing_resource_policy() -> None:
+def test_dataset_context_has_one_shared_missing_resource_policy(tmp_path) -> None:
+    (tmp_path / "cifar-10").mkdir()
     context = dataset_context(
-        [DatasetRef(dataset_id="cifar10", relative_path="cifar-10")]
+        resolve_dataset_refs(
+            tmp_path, [DatasetRef(dataset_id="cifar10", relative_path="cifar-10")]
+        )
     )
 
     assert context["available_dataset_ids"] == ["cifar10"]
@@ -530,19 +535,53 @@ def test_dataset_context_has_one_shared_missing_resource_policy() -> None:
     assert context["substitution_allowed"] is False
 
 
-def test_resolve_dataset_refs_rejects_missing_path(tmp_path) -> None:
+def test_resolve_dataset_refs_reports_missing_path(tmp_path) -> None:
     root = tmp_path / "datasets"
     root.mkdir()
 
-    with pytest.raises(DatasetResolutionError, match="does not exist"):
-        resolve_dataset_refs(
-            root, [DatasetRef(dataset_id="x", relative_path="missing")]
-        )
+    checked = resolve_dataset_refs(
+        root, [DatasetRef(dataset_id="x", relative_path="missing")]
+    )
+    assert checked.available == []
+    assert checked.unavailable_ids == ["x"]
 
 
 def test_dataset_ref_rejects_escaping_relative_path() -> None:
     with pytest.raises(ValidationError, match="relative"):
         DatasetRef(dataset_id="x", relative_path="../escape")
+
+
+def test_missing_dataset_does_not_hide_ready_datasets_or_enter_script_map(tmp_path):
+    (tmp_path / "ready").mkdir()
+    refs = [
+        DatasetRef(dataset_id="ready", relative_path="ready"),
+        DatasetRef(dataset_id="later", relative_path="later"),
+    ]
+    checked = resolve_dataset_refs(tmp_path, refs)
+    context = dataset_context(checked)
+    mapping = json.loads(dataset_env_overrides(tmp_path, checked)["RESAGENT2_DATASETS_JSON"])
+    assert context["available_dataset_ids"] == list(mapping) == ["ready"]
+    assert context["unavailable_dataset_ids"] == ["later"]
+    (tmp_path / "later").mkdir()
+    assert dataset_context(resolve_dataset_refs(tmp_path, refs))["unavailable_dataset_ids"] == []
+    # An earlier check is a snapshot, not silently mutated state.
+    assert checked.unavailable_ids == ["later"]
+
+
+@pytest.mark.parametrize("raw", ["[]", "{", '{"x": "../outside"}', '{"x": 12}'])
+def test_catalog_configuration_errors_are_not_missing_resources(tmp_path, raw):
+    (tmp_path / "catalog.json").write_text(raw, encoding="utf-8")
+    with pytest.raises(DatasetResolutionError):
+        DatasetCatalog(tmp_path).references()
+
+
+def test_dataset_catalog_rejects_symlink_escape_even_when_target_missing(tmp_path):
+    root = tmp_path / "datasets"
+    root.mkdir()
+    (root / "link").symlink_to(tmp_path / "outside", target_is_directory=True)
+    (root / "catalog.json").write_text('{"x": "link"}', encoding="utf-8")
+    with pytest.raises(DatasetResolutionError, match="escapes"):
+        DatasetCatalog(root).references()
 
 
 def test_hardware_audit_returns_structured_summary() -> None:

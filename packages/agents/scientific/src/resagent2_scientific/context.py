@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import dataset_context, workspace_context
+from resagent2_capabilities import DatasetAvailability, dataset_context, workspace_context
 from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import AgentState, ContextSection
 
@@ -131,6 +131,8 @@ def _evidence_control_state(turn: ScientificTurnRequest, state: AgentState) -> d
 def build_context(
     turn: ScientificTurnRequest,
     state: AgentState,
+    *,
+    datasets: DatasetAvailability | None = None,
 ) -> list[ContextSection]:
     """Compose fixed scientific partitions from one turn and generic state."""
 
@@ -177,7 +179,7 @@ def build_context(
         ContextSection(
             name="dataset_catalog",
             content=json.dumps(
-                dataset_context(list(turn.dataset_refs)),
+                dataset_context(datasets or DatasetAvailability()),
                 ensure_ascii=False,
             ),
             priority=98,

@@ -343,12 +343,14 @@ def _experiment_agent(
 def _scientific_agent(
     registration_port,
     session_store: JsonSessionStore,
+    resource_layout: ResourceLayout,
 ) -> ScientificAgent:
     return ScientificAgent(
         _new_llm_client(),
         literature_backend=ArxivLiteratureBackend(),
         registration_port=registration_port,
         store=session_store,
+        resource_layout=resource_layout,
     )
 
 
@@ -432,6 +434,7 @@ def _build_controller(workdir: Path, repo: Path | None):
         scientific_port=_scientific_agent(
             ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
             JsonSessionStore(workdir / "scientific_sessions"),
+            resource_layout,
         ),
         compiler=LLMWorkflowCompiler(
             PromptLLMClient(

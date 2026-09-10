@@ -70,6 +70,9 @@ _AUDIT = {"tool": "audit_env", "arguments": {}}
 
 
 def test_coding_context_uses_shared_dataset_catalog(tmp_path) -> None:
+    from resagent2_capabilities import resolve_dataset_refs
+
+    (tmp_path / "cifar-10").mkdir()
     task = request(tmp_path, capability=Capability.CODE_UNDERSTAND).model_copy(
         update={
             "dataset_refs": [
@@ -88,7 +91,10 @@ def test_coding_context_uses_shared_dataset_catalog(tmp_path) -> None:
         updated_at=now,
     )
 
-    section = next(item for item in build_context(task, state) if item.name == "dataset_catalog")
+    sections = build_context(
+        task, state, datasets=resolve_dataset_refs(tmp_path, task.dataset_refs)
+    )
+    section = next(item for item in sections if item.name == "dataset_catalog")
 
     assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
 

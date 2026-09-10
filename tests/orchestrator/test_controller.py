@@ -421,6 +421,62 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
     assert completed.request == request
 
 
+
+
+def test_catalog_refresh_survives_controller_restart_and_verbal_confirmation(tmp_path):
+    from resagent2_capabilities import DatasetCatalog, ResourceLayout
+
+    layout = ResourceLayout(resource_root=tmp_path / "resources")
+    layout.dataset_root.mkdir(parents=True)
+    ask = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "Need demo data"},
+            "text": "Place and register demo, then confirm",
+            "requested_fields": ["dataset_ready"],
+            "reason": "missing data",
+        },
+    }
+
+    def rebuild(actions):
+        controller = _build_recoverable_controller(
+            JsonRunStore(tmp_path / "runs"),
+            JsonSessionStore(tmp_path / "sessions"), actions,
+        )
+        controller.dataset_ref_source = DatasetCatalog(layout.dataset_root)
+        controller.scientific_port.resource_layout = layout
+        return controller
+
+    original = research_request()
+    first = rebuild([ask])
+    paused = first.create_run("run_catalog", original)
+    session_id = paused.scientific_session.id
+    (layout.dataset_root / "catalog.json").write_text('{"demo": "demo"}', encoding="utf-8")
+
+    second = rebuild([ask])
+    still_missing = second.answer_question(paused.run_id, UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset_ready": "yes"}, answered_at=datetime.now(UTC),
+    ))
+    text = second.scientific_port.llm_client.contexts[0].text
+    assert '"available_dataset_ids": []' in text
+    assert '"unavailable_dataset_ids": ["demo"]' in text
+    assert still_missing.status == RunStatus.PAUSED
+    assert still_missing.pending_question.id != paused.pending_question.id
+
+    (layout.dataset_root / "demo").mkdir()
+    third = rebuild([finish_action()])
+    completed = third.answer_question(paused.run_id, UserAnswer(
+        question_id=still_missing.pending_question.id,
+        values={"dataset_ready": "yes"}, answered_at=datetime.now(UTC),
+    ))
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.scientific_session.id == session_id
+    assert completed.request == original
+    assert completed.dataset_refs == DatasetCatalog(layout.dataset_root).references()
+    assert '"available_dataset_ids": ["demo"]' in third.scientific_port.llm_client.contexts[0].text
+
+
 def test_dataset_binding_cannot_be_remapped_during_run() -> None:
     class _DatasetSource:
         def references(self):

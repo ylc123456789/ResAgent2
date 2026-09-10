@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import EnvironmentBinding, dataset_context, workspace_context
+from resagent2_capabilities import (
+    DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
+)
 from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (
     AgentState,
@@ -82,6 +84,7 @@ Tool arguments:
 def build_context(
     request: ModuleTaskRequest, state: AgentState,
     *, binding: EnvironmentBinding,
+    datasets: DatasetAvailability | None = None,
 ) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
@@ -116,7 +119,7 @@ def build_context(
         ContextSection(
             name="datasets",
             content=json.dumps(
-                dataset_context(list(request.dataset_refs)),
+                dataset_context(datasets or DatasetAvailability()),
                 ensure_ascii=False,
             ),
             priority=65,

@@ -398,7 +398,10 @@ def test_failure_without_stderr_tail_has_no_diagnostic_excerpt() -> None:
     assert "diagnostic_use" not in item
 
 
-def test_build_context_emits_single_work_brief_section() -> None:
+def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
+    from resagent2_capabilities import resolve_dataset_refs
+
+    (tmp_path / "cifar-10").mkdir()
     turn = ScientificTurnRequest(
         run_id="run_example",
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
@@ -423,7 +426,9 @@ def test_build_context_emits_single_work_brief_section() -> None:
         budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
         parent_session_id="session_x",
     )
-    sections = build_context(turn, _state())
+    sections = build_context(
+        turn, _state(), datasets=resolve_dataset_refs(tmp_path, turn.dataset_refs)
+    )
 
     names = [section.name for section in sections]
     assert "dataset_catalog" in names

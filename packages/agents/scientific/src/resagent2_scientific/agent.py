@@ -38,10 +38,13 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     ArtifactRegistrationPort,
+    DatasetResolutionError,
     LiteratureSearchBackend,
     LiteratureSearchTool,
     ReadArtifactTool,
     RegisteredArtifactReader,
+    ResourceLayout,
+    resolve_dataset_refs,
 )
 from resagent2_runtime import (
     AgentDefinition,
@@ -86,6 +89,7 @@ class ScientificAgent:
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
         max_context_tokens: int = 8192,
+        resource_layout: ResourceLayout | None = None,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -94,9 +98,21 @@ class ScientificAgent:
         self.registration_port = registration_port
         self.store = store or InMemorySessionStore()
         self.max_context_tokens = max_context_tokens
+        self.resource_layout = resource_layout or ResourceLayout.from_env()
         self.loop = AgentLoop(store=self.store)
 
     def run(self, request: ScientificTurnRequest) -> ScientificTurnResult:
+        try:
+            datasets = resolve_dataset_refs(
+                self.resource_layout.dataset_root, list(request.dataset_refs)
+            )
+        except DatasetResolutionError as error:
+            return ScientificFailedResult(
+                status="failed",
+                error=ModuleError(
+                    code=ErrorCode.INVALID_INPUT, message=str(error), retryable=False,
+                ),
+            )
         resolve = getattr(self.registration_port, "resolve", None)
         reader = RegisteredArtifactReader(
             request.authorized_artifacts,
@@ -123,7 +139,9 @@ class ScientificAgent:
             system_prompt=SCIENTIFIC_PROMPT,
             tools=tools,
             llm_client=self.llm_client,
-            context_builder=lambda _loop_request, state: build_context(request, state),
+            context_builder=lambda _loop_request, state: build_context(
+                request, state, datasets=datasets
+            ),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(
                 list(request.unresolved_task_outcomes),

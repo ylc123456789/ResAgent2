@@ -40,6 +40,9 @@ from resagent2_experiment.tools import RunCommandTool
 
 
 def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
+    from resagent2_capabilities import resolve_dataset_refs
+
+    (tmp_path / "cifar-10").mkdir()
     request = ModuleTaskRequest(
         run_id="run_test",
         task_id="task_experiment",
@@ -62,7 +65,11 @@ def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
     )
 
     binding = EnvironmentBinding(_FakeManager(tmp_path), run_id=request.run_id, workspace_id="ws_test")
-    section = next(item for item in build_context(request, state, binding=binding) if item.name == "datasets")
+    sections = build_context(
+        request, state, binding=binding,
+        datasets=resolve_dataset_refs(tmp_path, request.dataset_refs),
+    )
+    section = next(item for item in sections if item.name == "datasets")
 
     assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
 

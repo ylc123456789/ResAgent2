@@ -270,6 +270,7 @@ def test_coding_and_experiment_share_resource_layout(tmp_path: Path):
     # a code_modify prepare_environment and a follow-on experiment_run see the
     # same physical env prefix.
     assert coding.resource_layout is experiment.resource_layout
+    assert application.controller.scientific_port.resource_layout is coding.resource_layout
 
 
 def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(

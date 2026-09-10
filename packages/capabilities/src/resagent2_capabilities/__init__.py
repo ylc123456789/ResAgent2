@@ -8,6 +8,7 @@ Agents assemble the subset they need through their Tool Profile.
 
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
 from .dataset import (
+    DatasetAvailability,
     DatasetCatalog,
     DatasetResolutionError,
     dataset_context,
@@ -75,6 +76,7 @@ from .workspace_tools import (
 )
 
 __all__ = [
+    "DatasetAvailability",
     "ArtifactReadError",
     "ArtifactRegistrationPort",
     "ArxivLiteratureBackend",

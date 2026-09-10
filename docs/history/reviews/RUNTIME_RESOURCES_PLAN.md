@@ -1,6 +1,6 @@
 # 运行期资源管理（schema 6.0）
 
-状态：实施中。基于 `95f965f`，分支 `fix/runtime-resources`。
+状态：阶段 1–2 已实现，预算和最终文档待收尾。基于 `95f965f`，分支 `fix/runtime-resources`。
 
 目标：调用方只提交研究意图；系统提供数据集目录，Agent 在运行中发现需求。
 复用现有 DatasetCatalog、环境安装/审计和 ask_user，不引入统一 Resource 框架。
@@ -13,6 +13,14 @@
 4. 全量本地验证、当前文档与服务器验收要求。
 
 ## 边界
+
+阶段 2 本地全量：789 passed, 1 skipped。新增检查使用真实目录和 JsonSessionStore，
+Scientific / Coding understand / Coding modify / Experiment 各用三个独立进程核对
+“未登记 → 登记但缺失且用户确认 → 实际补齐”的上下文及 Session 复用。
+模型动作是脚本驱动；不能据此宣称任意真实模型都会选择 ask_user。
+
+DatasetAvailability 是一次目录检查的结果（可用路径、不可用 ID），不是新的管理器或状态机；
+三个 Agent 的上下文和脚本环境映射消费同一检查结果，恢复调用重新计算。
 
 - 目录路径属于部署配置，不是 ResearchRequest；Run 引用快照不等于实际使用清单。
 - 数据集由用户放置并登记；系统不下载、不猜路径、不替换数据集。

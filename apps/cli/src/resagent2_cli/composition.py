@@ -213,6 +213,7 @@ def build_application(
         registration_port=registration,
         store=scientific_store,
         max_context_tokens=scientific_context_tokens,
+        resource_layout=resource_layout,
     )
     controller = ResearchController(
         scientific_port=scientific,

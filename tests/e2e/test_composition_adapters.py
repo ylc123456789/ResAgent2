@@ -14,6 +14,12 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
     client = ScriptedLLMClient([{"tool": "finish"}])
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
     controller, _ = real_e2e._build_controller(tmp_path, None)
+    layout = controller.scientific_port.resource_layout
+    assert all(
+        binding.port.resource_layout is layout
+        for binding in controller.scheduler.bindings.values()
+    )
+    assert controller.dataset_ref_source.dataset_root == layout.dataset_root.resolve()
     adapter = controller.compiler._client
     assert isinstance(adapter, PromptLLMClient)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from resagent2_contracts import DatasetRef
@@ -21,13 +22,25 @@ class DatasetResolutionError(ValueError):
     """Raised when a task-level dataset reference cannot be safely resolved."""
 
 
+@dataclass
+class DatasetAvailability:
+    """One checked view shared by Agent context and script environment.
+
+    Directory existence is not validation of dataset contents. Missing entries
+    are recoverable; malformed references and unsafe paths remain errors.
+    """
+
+    available: list[dict] = field(default_factory=list)
+    unavailable_ids: list[str] = field(default_factory=list)
+
+
 class DatasetCatalog:
     """Read the deployment-owned ``dataset_id -> relative path`` catalog.
 
     The catalog lives under the shared dataset root and is the only place where
     physical dataset directories are registered.  An absent catalog means that
-    no datasets are available; a malformed catalog or missing registered path
-    is an explicit configuration error.
+    no datasets are registered. Malformed/unsafe entries are configuration
+    errors; a missing directory is registered but not yet available.
     """
 
     def __init__(self, dataset_root: str | Path) -> None:
@@ -64,17 +77,29 @@ class DatasetCatalog:
         return refs
 
 
-def dataset_context(refs: list[DatasetRef]) -> dict:
+def dataset_context(availability: DatasetAvailability) -> dict:
     """Render one compact policy/context payload shared by all Agents."""
 
     return {
-        "available_dataset_ids": sorted(ref.dataset_id for ref in refs),
+        "available_dataset_ids": sorted(
+            entry["dataset_id"] for entry in availability.available
+        ),
+        "unavailable_dataset_ids": sorted(availability.unavailable_ids),
+        "availability_basis": "registered directory exists; contents not validated",
         "access": "read_only",
         "environment": {
             "root": RESAGENT2_DATASET_ROOT,
             "id_to_path_map": RESAGENT2_DATASETS_JSON,
         },
         "missing_dataset_action": "ask_user",
+        "missing_dataset_guidance": (
+            "Only ask for a dataset needed by the current task. Ask the user to "
+            "place its data under the dataset root, register its id and relative "
+            "path in catalog.json, then answer. This checked view, not a user's "
+            "confirmation alone, determines availability after resume. Missing "
+            "files or invalid contents also require user help; do not download, "
+            "invent a path, or substitute data."
+        ),
         "download_allowed": False,
         "substitution_allowed": False,
     }
@@ -82,17 +107,17 @@ def dataset_context(refs: list[DatasetRef]) -> dict:
 
 def resolve_dataset_refs(
     dataset_root: str | Path, refs: list[DatasetRef]
-) -> list[dict]:
-    """Resolve task-level dataset references to read-only paths under the root.
+) -> DatasetAvailability:
+    """Check registered references without blocking on unrelated missing data.
 
     Each reference's ``relative_path`` is joined under ``dataset_root``, then
-    checked for directory escape (``..`` / absolute) and existence. The result
-    is a list of ``{dataset_id, path, access}`` entries; the dataset root is the
-    shared "all datasets" directory, never one specific dataset. A duplicate
+    checked for directory escape (``..`` / absolute) and existence. Available
+    entries contain ``{dataset_id, path, access}``; missing IDs are kept apart.
+    The root is the shared directory, never one specific dataset. A duplicate
     ``dataset_id`` is rejected so one id can never resolve to two paths.
     """
     root = Path(dataset_root).expanduser().resolve()
-    resolved: list[dict] = []
+    availability = DatasetAvailability()
     seen: set[str] = set()
     for ref in refs:
         if ref.dataset_id in seen:
@@ -104,19 +129,20 @@ def resolve_dataset_refs(
                 f"dataset relative_path escapes the root: {ref.relative_path!r}"
             )
         if not candidate.is_dir():
-            raise DatasetResolutionError(f"dataset path does not exist: {candidate}")
-        resolved.append(
+            availability.unavailable_ids.append(ref.dataset_id)
+            continue
+        availability.available.append(
             {
                 "dataset_id": ref.dataset_id,
                 "path": str(candidate),
                 "access": "read_only",
             }
         )
-    return resolved
+    return availability
 
 
 def dataset_env_overrides(
-    dataset_root: str | Path, resolved: list[dict]
+    dataset_root: str | Path, availability: DatasetAvailability
 ) -> dict[str, str]:
     """Expose resolved datasets to scripts as a generic ``id -> path`` map.
 
@@ -127,7 +153,7 @@ def dataset_env_overrides(
     return {
         RESAGENT2_DATASET_ROOT: str(Path(dataset_root).expanduser().resolve()),
         RESAGENT2_DATASETS_JSON: json.dumps(
-            {entry["dataset_id"]: entry["path"] for entry in resolved},
+            {entry["dataset_id"]: entry["path"] for entry in availability.available},
             ensure_ascii=False,
         ),
     }

@@ -191,7 +191,9 @@ class NativeCodingAgent:
                 system_prompt=UNDERSTAND_PROMPT,
                 tools=common_tools,
                 llm_client=self.llm_client,
-                context_builder=build_context,
+                context_builder=lambda request, state: build_context(
+                    request, state, datasets=datasets
+                ),
                 permission_policy=AllowListPermissionPolicy(
                     {tool.name for tool in common_tools}
                 ),
@@ -243,7 +245,7 @@ class NativeCodingAgent:
             def context_builder(request, state):
                 return build_context(
                     request, state, control_state=derive_control_state(state, binding),
-                    binding=binding,
+                    binding=binding, datasets=datasets,
                 )
 
             definition = AgentDefinition(

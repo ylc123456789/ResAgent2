@@ -99,6 +99,8 @@ resagent2 resume run_20260901_120000_ab12cd34
 
 `answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。若 Run 在 workspace 持久化前就暂停，回答或恢复时需要再次提供相同的 `--workspace` 或 `--git`。
 
+摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
+
 常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
 
 ## 4. 数据集资源库
@@ -131,7 +133,9 @@ export RESAGENT2_DATASET_ROOT=/data/datasets
 
 - key 是 Agent 看到的稳定 `dataset_id`，value 是相对共享根的目录；
 - Run 保存系统发现的目录引用，不改写用户目标，也不表示全部数据集都要用；catalog 缺失表示当前没有新登记；
-- 已登记但目录不存在：标为不可用，不阻塞不需要它的任务；只有实际存在的目录进入脚本的路径映射；
+- `available_dataset_ids` 是已登记且目录存在的 ID，`unavailable_dataset_ids` 是已登记但目录不存在的 ID；两张列表都没有的 ID 在当前视图中尚未登记，不能当作可用；
+- 当前任务需要的数据集不在 available 列表时，Agent 应先询问用户，再做依赖该数据的工作；不因无关数据集缺失阻塞其他工作。目录存在不等于内容已校验；
+- `catalog.json` 位于共享数据集根下；`RESAGENT2_DATASETS_JSON` 是传给脚本的 ID→绝对路径 JSON 内容，不是 catalog 文件路径，且只包含可用目录；
 - 非法 JSON、登记格式或越界路径仍是配置错误，不当作普通数据缺失；
 - Scientific、Coding、Experiment 使用同一份只读目录策略，不自行下载、不猜路径、不静默替换数据集；
 - 缺少必需数据集时，对应 Agent 应通过 `ask_user` 暂停。部署者准备目录并更新 catalog 后，回答问题即可让同一个 Run 继续并看到新增资源；

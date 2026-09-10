@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from resagent2_capabilities import DatasetCatalog, ResourceLayout
+from resagent2_capabilities import (
+    DatasetCatalog, ResourceLayout, dataset_context, resolve_dataset_refs,
+)
 from resagent2_contracts import (
     Capability, CodeModifyInput, CodeUnderstandInput, ExperimentRunInput,
     ModuleTaskRequest, ResearchRequest, RunBudget, ScientificTurnRequest,
@@ -98,6 +100,11 @@ def _probe(root, kind, phase):
     assert f'"available_dataset_ids": {expected}' in text
     missing = '["demo"]' if phase == 1 else "[]"
     assert f'"unavailable_dataset_ids": {missing}' in text
+    # All four Agent modes receive the shared guidance, including after resume.
+    # Scripted actions do not prove that a real model obeys it.
+    shared_context = dataset_context(resolve_dataset_refs(layout.dataset_root, refs))
+    assert shared_context["availability_basis"] in text
+    assert shared_context["missing_dataset_guidance"] in text
     after = sessions.load(session_id)
     assert after.attempt_number == (None if scientific else 1)
     if before is not None:

@@ -1,6 +1,6 @@
 # 运行期资源与人工等待：服务器验收单
 
-状态：待执行。分支 `fix/runtime-resources`，schema 6.0。
+状态：`577b8489` 基线已执行并复核；本轮小收尾 §8 待执行。分支 `fix/runtime-resources`，schema 6.0。基线结果及保留问题见 [实施记录](RUNTIME_RESOURCES_PLAN.md)。
 测试 AI 只同步、测试、分析、报告，不改产品代码/prompt/既有场景目标/预算，不合并 main，不删旧环境、数据集、缓存和失败现场。
 
 ## 1. 同步与记录
@@ -100,3 +100,13 @@ git -C "$repo_dir" diff --check
 - 本次所有 commit、模型实测值、调用计数、资源/环境绑定、产物路径、editable 指针变化。
 - 未合并 main；交开发方复核后决定是否合并。不得把有限样本称为永久稳定。
 
+## 8. 本轮小收尾补验
+
+仅共享资源提示和 CLI 展示变化，不要求重跑整套 GPU 训练矩阵。先按 §1/§2 同步新的完整提交并跑本地确定性基线，保留 `577b8489` 的所有原始现场。
+
+- Coding（code_understand）目标表达“先确认 resource_probe 就绪，再解释 data_reader.py”；Experiment 目标表达“用 resource_probe/sample.json 运行小脚本并产出 metrics.json”。不要在测试目标中自行把“缺少”改写为“只在 unavailable 列表时询问”，也不要改产品提示、预算或手工改状态。
+- 两类都从未登记开始：预期 ask_user；仅登记且目录仍缺，再回答“ready”：预期再次 ask_user；实际补齐目录/文件后回答：预期同 Session/Attempt 完成，Coding 引用读到的代码，Experiment 真执行并交付指标。
+- 加一个不需要数据集的只读代码任务，catalog 含无关缺失条目：应能完成，不因该条目强制询问。
+- 保存 full trace 的共享目录片段和真实动作；询问不可误称 `RESAGENT2_DATASETS_JSON` 为 catalog 文件路径，不可把 unavailable 解释为目录已存在。提示到达和模型遵循分别报告，不拿脚本动作当真实模型结果。
+- CLI 展示由本地公共 renderer 测试验证：最终意见不和旧过程判断并排显示，旧判断仍留在 Run；无最终意见时仍显示标注 interim 的过程判断。无需为展示单独付费跑 LLM。
+- JSON/Schema 错误和任何模型偏离仍逐条记录，不通过重跑覆盖失败。[JSON 专项](LLM_JSON_OUTPUT_FOLLOWUP.md) 本轮只记录、不修复。

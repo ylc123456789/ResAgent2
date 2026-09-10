@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
+
+import pytest
 
 from resagent2_cli.render import (
     render_artifacts,
@@ -96,6 +99,36 @@ def test_render_final_basic_summary():
     assert "Status: completed" in joined
     assert "Goal: my goal" in joined
     assert "LLM calls: 5/200" in joined
+
+
+def test_render_final_prefers_final_opinion_without_changing_interim_history():
+    run = _run(status="completed")
+    run.latest_scientific_assessment = SimpleNamespace(statement="Dataset is missing")
+    run.final_opinion = SimpleNamespace(
+        verdict=SimpleNamespace(value="inconclusive"),
+        statement="Dataset directory is now available; contents not validated",
+    )
+    before = deepcopy(run)
+
+    joined = "\n".join(render_final(run))
+
+    assert "Final opinion:" in joined
+    assert "Dataset directory is now available" in joined
+    assert "Scientific assessment" not in joined
+    assert "Dataset is missing" not in joined
+    assert run == before
+
+
+@pytest.mark.parametrize("status", ["running", "paused", "failed"])
+def test_render_final_keeps_interim_assessment_without_final_opinion(status):
+    run = _run(status=status)
+    run.latest_scientific_assessment = SimpleNamespace(statement="Need user-provided data")
+
+    joined = "\n".join(render_final(run))
+
+    assert "Scientific assessment (interim):" in joined
+    assert "Need user-provided data" in joined
+    assert "Final opinion:" not in joined
 
 
 def test_render_final_pending_question_fields():

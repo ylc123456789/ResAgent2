@@ -535,6 +535,28 @@ def test_dataset_context_has_one_shared_missing_resource_policy(tmp_path) -> Non
     assert context["substitution_allowed"] is False
 
 
+@pytest.mark.parametrize("phase", ["unregistered", "missing", "available"])
+def test_dataset_context_explains_readiness_without_a_negative_list_gate(tmp_path, phase):
+    if phase != "unregistered":
+        (tmp_path / "catalog.json").write_text('{"demo": "demo"}', encoding="utf-8")
+    if phase == "available":
+        (tmp_path / "demo").mkdir()
+    checked = resolve_dataset_refs(tmp_path, DatasetCatalog(tmp_path).references())
+    context = dataset_context(checked)
+
+    assert context["available_dataset_ids"] == (["demo"] if phase == "available" else [])
+    assert context["unavailable_dataset_ids"] == (["demo"] if phase == "missing" else [])
+    assert "registered directories that exist; contents not validated" in context["availability_basis"]
+    assert "registered IDs whose directories do not exist" in context["availability_basis"]
+    assert "neither list is unregistered in this view, not confirmed available" in context["availability_basis"]
+    guidance = context["missing_dataset_guidance"]
+    assert "not in available_dataset_ids, call ask_user" in guidance
+    assert "before work that needs it" in guidance
+    assert "Do not block on unrelated missing datasets" in guidance
+    assert "catalog.json under that root" in guidance
+    assert "RESAGENT2_DATASETS_JSON contains the ID-to-path JSON for scripts, not a catalog file path" in guidance
+
+
 def test_resolve_dataset_refs_reports_missing_path(tmp_path) -> None:
     root = tmp_path / "datasets"
     root.mkdir()

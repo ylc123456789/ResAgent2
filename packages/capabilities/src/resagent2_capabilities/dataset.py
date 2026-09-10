@@ -85,7 +85,11 @@ def dataset_context(availability: DatasetAvailability) -> dict:
             entry["dataset_id"] for entry in availability.available
         ),
         "unavailable_dataset_ids": sorted(availability.unavailable_ids),
-        "availability_basis": "registered directory exists; contents not validated",
+        "availability_basis": (
+            "available_dataset_ids: registered directories that exist; contents not validated. "
+            "unavailable_dataset_ids: registered IDs whose directories do not exist. "
+            "An ID in neither list is unregistered in this view, not confirmed available."
+        ),
         "access": "read_only",
         "environment": {
             "root": RESAGENT2_DATASET_ROOT,
@@ -93,9 +97,13 @@ def dataset_context(availability: DatasetAvailability) -> dict:
         },
         "missing_dataset_action": "ask_user",
         "missing_dataset_guidance": (
-            "Only ask for a dataset needed by the current task. Ask the user to "
+            "If a dataset needed by the current task is not in available_dataset_ids, "
+            "call ask_user before work that needs it, including when it is absent "
+            "from both lists. Do not block on unrelated missing datasets. Ask the user to "
             "place its data under the dataset root, register its id and relative "
-            "path in catalog.json, then answer. This checked view, not a user's "
+            "path in catalog.json under that root, then answer. "
+            f"{RESAGENT2_DATASETS_JSON} contains the ID-to-path JSON for scripts, "
+            "not a catalog file path. This checked view, not a user's "
             "confirmation alone, determines availability after resume. Missing "
             "files or invalid contents also require user help; do not download, "
             "invent a path, or substitute data."

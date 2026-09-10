@@ -1,6 +1,6 @@
 # 运行期资源管理（schema 6.0）
 
-状态：阶段 1–4 本地完成；真实服务器验收待执行，未合并/推送。基于 `95f965f`，分支 `fix/runtime-resources`。
+状态：阶段 1–4 本地完成；`577b8489` 的服务器基线已执行并复核，资源提示与 CLI 展示的小收尾补验待执行，未合并/推送。基于 `95f965f`，分支 `fix/runtime-resources`。
 
 目标：调用方只提交研究意图；系统提供数据集目录，Agent 在运行中发现需求。
 复用现有 DatasetCatalog、环境安装/审计和 ask_user，不引入统一 Resource 框架。
@@ -12,7 +12,7 @@
 3. 所有 ask_user 等待统一不计入 Run 超时；不重置已用时间或 LLM 预算。
 4. 全量本地验证、当前文档与服务器验收要求。
 
-## 最终本地验证
+## 初次本地验证（577b8489）
 
 - 795 passed, 1 skipped；mock_e2e completed；git diff --check 干净。
 - 最终全量使用 WSL --cd 显式隔离在 `/tmp/resagent2-resource-final.QBUI1J`，避免跨 shell 变量展开干扰测试 cwd。
@@ -24,6 +24,23 @@
 
 本地测试未调用真实模型或安装外部依赖；未上服务器、未清理旧数据。
 服务器仍须按 [验收单](RUNTIME_RESOURCES_ACCEPTANCE.md) 检查真实模型的资源选择与 ask_user 行为。
+
+## 2026-09-10 服务器复核与小收尾
+
+以上 795/1 是初次本地记录。服务器 `577b8489` 也为 795 passed、1 skipped，八个回归 Run 最终 completed；资源目录更新、口头确认不改变目录事实、同 Session 恢复、人工等待及调用计量均已核对。证据根为 `/root/autodl-tmp/acceptance-runtime-resources/`，不是后续收尾提交已验收的证明。
+
+复核不接受“全部无缺口”的表述：Coding 未登记探针的任务明确要求先确认数据集，但询问条件被写成只看 unavailable 列表。模型据此绕过询问并完成；这是行为验收缺口，不是“任务没有提数据集”。原始 trace 保留。
+
+本轮仅两处产品调整：
+
+- capabilities.dataset_context 明确 available/不可用/未登记三种语义；需要的数据不在 available 中就先询问。仍是共享行为提示，不新增资源闸口或字段；同时说明脚本 JSON 映射不是 catalog 路径。
+- CLI 公共 renderer 有 final_opinion 时隐藏旧过程判断，无最终意见时标注 interim；不改写 Run 历史，不复制或同步两个结果字段。
+
+回归覆盖共享提示到四种 Agent 模式的实际上下文、三种资源情况，以及 CLI 最终/运行/暂停/失败展示与渲染无副作用。真实模型补验见 [验收单 §8](RUNTIME_RESOURCES_ACCEPTANCE.md#8-本轮小收尾补验)。
+
+本轮本地验证：定向 72 passed；全量 **802 passed, 1 skipped**；mock_e2e completed；git diff --check 干净。使用 `/tmp/resagent2-resource-closeout.Xu7SSK` 隔离 cwd。新增 7 个用例，不调用真实 LLM、不安装依赖、不修改服务器状态；这些结果不替代 §8 的真实模型补验。
+
+JSON 协议失败另见 [专项记录](LLM_JSON_OUTPUT_FOLLOWUP.md)：八场景 192 次尝试中 31 次 JSON 解析失败，两次耗尽客户端重试后发生任务 Attempt 重试；不修改 JSON 处理，不归为资源闭环已修问题。
 
 ## 分阶段验证说明
 

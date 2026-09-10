@@ -79,8 +79,9 @@ def render_final(run: Any) -> list[str]:
     ]
     if run.terminal_error is not None:
         lines.append(f"Error: {run.terminal_error.code.value}: {run.terminal_error.message}")
-    if run.latest_scientific_assessment is not None:
-        lines.append("Scientific assessment:")
+    # Keep the interim history in Run state, but prefer its final conclusion.
+    if run.final_opinion is None and run.latest_scientific_assessment is not None:
+        lines.append("Scientific assessment (interim):")
         lines.append(f"  {run.latest_scientific_assessment.statement}")
     if run.workflow is not None:
         lines.append("Tasks:")

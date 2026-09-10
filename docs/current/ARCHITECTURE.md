@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **5.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **6.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -70,7 +70,7 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 
 ## 3. 一次工作如何往返
 
-1. **创建 Run**：入口提供 ResearchRequest 与授权工作区。Controller 保存目标、资源和导入工件，然后启动科学回合。
+1. **创建 Run**：入口提供 ResearchRequest 与授权工作区，不预填资源。Controller 保存目标和导入工件，从部署目录发现数据集引用并保存到 Run，再启动科学回合；后续推进及回答恢复时可发现新登记。
 2. **提出需求**：Scientific 自己检索、读证据、判断；需要执行工作时返回 WorkRequestDraft，只表达目标、期望证据和约束。
 3. **编译当前一轮**：LLM 产生语义草图；代码分配身份、解析依赖和工作区，校验后做有界 review。结构与语义拒绝共用一次纠错，最多两版草图；review 不保证自然语言需求一定完整。
 4. **接受并执行图**：Scheduler 校验候选图、绑定、预算和 revision 后接受；只执行依赖成功的 ready Task。已知代码前置条件先交 Coding，正式实验交 Experiment。
@@ -136,11 +136,13 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 ## 6. 共享能力与上下文
 
+资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用 → Agent 的实际可用性检查。缺所需资源复用 ask_user，不增资源状态机。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
+
 能力组件是普通 Python 对象或 Tool，不要求每项能力配一个 Agent、Session 或管理器。
 
 - WorkspaceBoundary 管文件访问范围；WorkspaceObserver 在 Git 下用 Attempt baseline，非 Git 下用有界文件 hash 观察变化。
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
-- DatasetCatalog 管已注册只读数据集。Agent 选择所需资源；缺少时通过已有 ask_user 请用户准备，不擅自下载。
+- DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
 - Runtime 负责片段选择与预算，workspace_context 从真实记录投影。Coding/Experiment 的文件与工件正文各 6000 字符；Scientific 只用工件组。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。
 
@@ -153,7 +155,7 @@ LLM client 必需方法为 next_action，计量、预算和 trace hooks 可选�
 ## 7. 开发时保持的边界
 
 1. 自然语言表达意图；身份、状态、权限、预算和证据记录由代码控制。不解析 summary 推断机器状态。
-2. 一个事实只有一个权威来源：Task 约束来自已编译 Task，数据集来自 Run 请求，物理授权来自 WorkspaceGrant，当前环境来自实际 binding。
+2. 一个事实只有一个权威来源：Task 约束来自已编译 Task，数据集登记来自部署 catalog、Run 保存已知引用，可用性来自实际检查，物理授权来自 WorkspaceGrant，当前环境来自实际 binding。
 3. 调用方只依赖公开输入输出和行为约定，不读下游私有 Session 或猜内部步骤。
 4. 同一行为保留一条生产主线。已有共享能力优先复用；至少两个语义一致的消费者才考虑新抽象，不为“将来可能开放”先造框架。
 5. 接收方校验响应，领域 finalizer 校验执行事实。可共享纯判据，不把不同边界检查硬合成一层。

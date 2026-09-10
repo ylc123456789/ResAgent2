@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 5.0。旧 4.0 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，仅复用普通 Prompt 的预算适配与 Scientific 工件登记机制。
+当前 contracts schema 为 6.0。旧 5.0 及更早 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同的资源组件，而非合并成一个总入口。
 
 ## 1. 安装与基本配置
 
@@ -109,7 +109,7 @@ resagent2 resume run_20260901_120000_ab12cd34
 export RESAGENT2_DATASET_ROOT=/data/datasets
 ```
 
-然后在 `/data/datasets/catalog.json` 注册已经准备好的数据集目录：
+然后在 `/data/datasets/catalog.json` 登记数据集 ID 和目录（目录尚未准备好时会标为不可用）：
 
 ```json
 {
@@ -130,13 +130,25 @@ export RESAGENT2_DATASET_ROOT=/data/datasets
 规则保持简单：
 
 - key 是 Agent 看到的稳定 `dataset_id`，value 是相对共享根的目录；
-- 只有 catalog 中已注册且真实存在的目录会进入 Run；catalog 缺失表示当前没有已注册数据集；
-- 非法 JSON、越界路径或不存在的已注册目录会在执行前明确报错；
+- Run 保存系统发现的目录引用，不改写用户目标，也不表示全部数据集都要用；catalog 缺失表示当前没有新登记；
+- 已登记但目录不存在：标为不可用，不阻塞不需要它的任务；只有实际存在的目录进入脚本的路径映射；
+- 非法 JSON、登记格式或越界路径仍是配置错误，不当作普通数据缺失；
 - Scientific、Coding、Experiment 使用同一份只读目录策略，不自行下载、不猜路径、不静默替换数据集；
 - 缺少必需数据集时，对应 Agent 应通过 `ask_user` 暂停。部署者准备目录并更新 catalog 后，回答问题即可让同一个 Run 继续并看到新增资源；
 - 同一个 Run 已绑定的 `dataset_id` 不允许被悄悄改到另一个目录。
 
-因此，普通用户运行任务时不需要也不能传 `--dataset ID=PATH`。
+因此，普通用户运行任务时不需要也不能传 `--dataset ID=PATH`，不必在开始前知道最终需要哪些资源。
+
+遇到缺数据集时：
+
+1. 用 `show` 查看当前问题及实际 `requested_fields`。
+2. 将数据放到共享根目录，在 catalog 登记 ID→相对路径；不要让 Agent 临时下载或替换。
+3. 用 `answer --field 实际字段=已准备好` 回答当前 Run（命令格式见上节），系统继续原任务并重新检查。
+
+只回答“好了”不会让缺失目录变为可用。目录存在也不保证内部文件完整，读取失败仍需据实处理。
+系统不后台监视目录，`resume` 不代替回答。等待用户的 paused 时间不计入 Run 超时，安装/执行等时间照常计入，已用 LLM 次数不重置。
+
+Python 依赖不进 catalog。Coding/Experiment 按项目和运行需要使用现有安装、审计工具；pip/conda 自己管理下载缓存，镜像由部署配置负责，不要求每个 Run 填写依赖或缓存参数。
 
 ## 5. 数据、资源与 trace
 
@@ -147,7 +159,7 @@ export RESAGENT2_DATA_ROOT=/data/resagent2
 # 或对单次命令使用：--data-root /data/resagent2
 ```
 
-CLI 从这个根创建一个共享 `ResourceLayout`，并注入 Coding 与 Experiment，使顺序任务复用同一环境和资源根。可按部署需要覆盖：
+CLI 从这个根创建一个共享 `ResourceLayout`，注入三个 Agent。Scientific 只检查数据集，不获得执行环境工具；Coding 与 Experiment 在同 Run、同 Workspace 复用环境。可按部署需要覆盖：
 
 - `RESAGENT2_RESOURCE_ROOT`：共享资源根；
 - `RESAGENT2_DATASET_ROOT`：数据集根；
@@ -207,6 +219,6 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 常见处理：
 
 - `Status: paused`：查看 `Pending question` 和 `Fields`，使用 `answer`；不要用空 `resume` 代替回答；
-- catalog 报目录不存在：准备好目录或修正 `catalog.json`，不要注册一个尚未落盘的占位路径；
+- 所需数据集不可用：准备目录并登记，按当前问题字段回答；无关条目暂缺不会提前使整个任务失败；
 - 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。

@@ -26,7 +26,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="5.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="6.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -61,7 +61,6 @@ class ResearchRequest:
     context: str = ""
     constraints: list[NonEmptyStr] = []
     input_artifacts: list[ArtifactImport] = []
-    dataset_refs: list[DatasetRef] = []
     required_evidence_kinds: list[RequiredEvidenceKind] = []  # 当前仅 literature_search
     budget: RunBudget
 ```
@@ -73,9 +72,13 @@ class ResearchRequest:
 | context | 已确认背景，不包含未授权文件内容 |
 | constraints | 整个 Run 必须遵守的限制 |
 | input_artifacts | 用户提供的**最小输入**（`ArtifactImport`），由 Controller 创建 Run 时验证本地 URI、冻结复制、校验 hash 并生成 `orchestrator/import` ArtifactRef |
-| dataset_refs | 整个 Run 的**唯一**数据集注册表（[数据集与环境](#resources)） |
 | required_evidence_kinds | 必须被已登记、已观察且最终引用的 Artifact.kind 满足；约束证据种类，不强制某次 Tool 调用，导入证据也可满足 |
 | budget | max_tasks、max_attempts_per_task、max_llm_calls、timeout_seconds |
+
+ResearchRequest 只表达研究意图和调用方约束，不承载数据集目录、catalog 路径或依赖缓存配置。部署目录由组合根注入；内部资源引用归 ResearchRun，见 [资源](#resources)。
+
+`timeout_seconds` 是 Run 墙钟额度，但扣除显式 `ask_user` 等待。安装、LLM 延迟、执行和普通进程中断仍计时；不是 CPU 时间，也不抢占已运行工具。Controller/Scheduler 共用 `ResearchRun.remaining_timeout_seconds(now)`。
+`user_wait_seconds` 记录已结束暂停的累计秒数；当前暂停从 PendingQuestion.created_at 推导。回答时按系统时钟结算，与答案、任务恢复一次保存，不使用用户的 answered_at 延长预算；重复答案不会重复增加等待时长或重置 LLM 计数。
 
 <a id="questions"></a>
 
@@ -213,6 +216,7 @@ verdict 与 RunStatus 独立：`inconclusive` 可以是一个成功完成的科�
 class ScientificTurnRequest:
     run_id: RunId
     research: ResearchRequest
+    dataset_refs: list[DatasetRef] = []  # Controller 提供的系统目录引用
     authorized_artifacts: list[ArtifactRef] = []
     work_outcome: WorkOutcome | None = None
     previous_work_request: WorkRequestDraft | None = None
@@ -430,7 +434,7 @@ class ModuleTaskRequest:
 | run/task/attempt | provenance 与幂等边界 |
 | capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
-| dataset_refs | 本 Task 继承的 Run 已注册数据集集合（Scheduler 确定性写入，非 LLM 生成；当前不提前设计任务级子集） |
+| dataset_refs | Scheduler 从 ResearchRun 提供的已知目录引用，非用户要求、非 LLM 生成，也不表示都要用；Agent 检查哪些目录实际可用 |
 | answers | 只包含属于本 Task 的已持久化回答 |
 | workspace / workspace_id / workspace_spec | 此 Attempt 的物理授权范围、逻辑工作区 id、来源声明（Agent 在 loop 前确定性 materialize） |
 | environment_spec | 上游声明的环境硬约束（`EnvironmentSpec.python_version`） |
@@ -842,11 +846,23 @@ class EnvironmentSpec:
     python_version: str | None = None
 ```
 
-`dataset_root`（`ResourceLayout.dataset_root`）永远表示「所有数据集的公共根目录」。部署者只在根目录的 `catalog.json` 中维护一个 `dataset_id → relative_path` JSON 对象；CLI 组合根把 `DatasetCatalog` 作为只读 Port 注入 `ResearchController`，Controller 在创建/恢复执行时把新注册资源合入 Run 的 `ResearchRequest.dataset_refs`，调用 CLI 的普通用户不逐次提供物理路径。catalog 缺失表示未注册数据集；格式错误、越界路径或已注册目录不存在会在 Run 执行前失败。已有同名绑定不可在 Run 中改写，目录新增则可在 `ask_user` 后继续同一 Run。
+`dataset_root`（`ResourceLayout.dataset_root`）是所有数据集的共享根，不是某个数据集目录。部署者在根下 `catalog.json` 维护 `dataset_id → relative_path`；CLI/E2E 各自把 DatasetCatalog 经现有 DatasetRefSource Port 注入 Controller。调用方不提交目录路径或完整表。Controller 在推进回合及回答后的恢复入口读取目录，将新增引用保存到 `ResearchRun.dataset_refs`，不改写 ResearchRequest。
 
-`DatasetRef` 把 `relative_path` 解析到 `dataset_root` 下，拒绝 `..`/绝对路径逃逸，默认只读。`ResearchRequest.dataset_refs` 仍是 Run 内**唯一**数据集注册表，Scheduler 经 `ModuleTaskRequest.dataset_refs` 同时传给 Coding 与 Experiment；`ExperimentRunInput` 不携带 `dataset_refs`。三个 Agent 看到同一份不允许下载/替换、缺失时 `ask_user` 的目录上下文；Coding 验证命令与 Experiment 实验命令都获得 `RESAGENT2_DATASET_ROOT` / `RESAGENT2_DATASETS_JSON`。解析结果仍是 `{dataset_id, path, access="read_only"}` 列表，重复 `dataset_id` 拒绝。
+Run 中保存的是本 Run 累计发现的目录引用，不是实际使用清单、完整数据内容或数据版本快照。已有同名引用不允许改路径，不因后来删掉 catalog 条目而撤销 Run 中已有引用；但实际目录的存在性会重新检查。数据内容不复制、不做整库 hash，不承诺目录内部数据未被外部修改。
+
+Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这些内部引用；三个 Agent 注入同一 ResourceLayout，各次调用通过共享 `resolve_dataset_refs` 检查。它返回一个轻量 DatasetAvailability：available 为 `{dataset_id, path, access="read_only"}` 列表，unavailable_ids 为目录暂不存在的 ID。上下文与命令环境映射使用同一个检查结果，不维护第二份可用性状态。
+
+- catalog 缺失意味着当前没有新登记；已登记目录缺失标为不可用，不阻塞无关工作。
+- 非法 JSON/登记格式、重复 ID 引用、绝对或越界路径（含软链逃逸）仍明确报错。
+- 只有可用目录进入 `RESAGENT2_DATASETS_JSON` 的 ID→路径映射；Coding 验证与 Experiment 正式命令均获得它及 `RESAGENT2_DATASET_ROOT`。
+- Agent 在运行中判断需要什么；缺少所需数据时用已有 ask_user，用户放置并登记后回答。恢复时重新检查，口头“已准备”不使目录自动变为可用。
+- 目录存在只证明可定位；内部文件缺失或内容错误仍需从实际读取诊断。prompt 要求请求用户处理，不下载、不猜路径、不替代数据；这是行为指引，不是 OS 沙箱或强制资源选择器。
+
+不新增资源 Agent、通用 Resource 类、自动扫描或下载器。当前目录规模用精简 ID 上下文；不宣称大规模资源检索或实时热更新。实际恢复路径和验证见 [资源验收单](../history/reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。
 
 环境能力由 Coding 与 Experiment 共用（ADR-0009）：
+
+依赖需求可由代码和运行时反馈发现，沿用 prepare_environment → run_setup → audit_env。镜像与 pip/conda 包缓存属于部署/包管理器配置，不新增到 ResearchRequest，也不与数据集登记表合并；同名依赖或缓存命中不代替环境审计。
 
 - `EnvironmentSpec.python_version` 有值表示硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断；
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用），不同 Workspace/Run 隔离；`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`；
@@ -867,9 +883,9 @@ class EnvironmentSpec:
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-schema 5.0 沿用上述版本策略，不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但其必填 `request: ResearchRequest` 等公共契约带版本；`JsonRunStore.load` 对整个 Run 重新校验，因此正常保存的 4.0 Run 会因嵌套公共契约版本不符被拒绝。读取失败不改写记录，旧文件保留作审计或人工查阅，继续工作应发起新 Run。
+schema 6.0 删除 ResearchRequest.dataset_refs，将内部引用移到 ResearchRun/ScientificTurnRequest，并明确问答等待不计入 Run 超时（[ADR-0013](../history/decisions/0013-runtime-resources.md)）。不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 5.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
-`AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径。schema 5.0 没有改变 Session 顶层结构，也不重写或清理任何既有 state/session/trace。
+`AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径。schema 6.0 没有改变 Session 顶层结构，也不重写或清理任何既有 state/session/trace。
 
 <a id="exports"></a>
 

@@ -4,6 +4,8 @@
 
 ## 最近已完成的主线
 
+后续分支 `fix/runtime-resources` 的 schema 6.0 资源与等待预算调整，见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收要求](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。服务器结果尚待补充，不把本地通过写成真实模型验收通过。
+
 截至文档整理基线 `808e8f1`：接口契约优化 P0–P5 与后续收尾已合入 main，公共 schema 为 5.0。最后一轮模型输出配置验收对应产品代码 `ab5066f`，随后是文档收尾；不要把分阶段验收误写成最终每个提交都重新跑过完整矩阵。
 
 - [接口优化计划与完成情况](reviews/INTERFACE_OPTIMIZATION_PLAN.md)：阶段、范围和提交。

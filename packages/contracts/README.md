@@ -27,4 +27,4 @@ python -m pip install -e 'packages/contracts[test]'
 python -m pytest tests/contracts
 ```
 
-稳定导入路径是 `resagent2_contracts`。包版本为 `0.1.0`，当前 wire schema 版本为 `5.0`。
+稳定导入路径是 `resagent2_contracts`。包版本为 `0.1.0`，当前 wire schema 版本为 `6.0`。ResearchRequest 不含部署资源；dataset_refs 只在系统状态和内部调用中传递，旧 Run 不迁移。

@@ -1,6 +1,5 @@
 """Resource refresh uses existing pause/session machinery, without a provider."""
 
-import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -160,4 +159,3 @@ def test_scientific_invalid_resource_is_a_controlled_failure(tmp_path):
     assert result.status == "failed"
     assert result.error.code == "invalid_input"
     assert not client.contexts
-

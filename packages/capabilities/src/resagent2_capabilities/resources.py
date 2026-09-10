@@ -1,4 +1,4 @@
-"""Shared resource directory layout (dataset/env/model caches)."""
+"""Deployment roots for datasets and managed environments."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def _env_or(default: Path, name: str) -> Path:
 
 
 class ResourceLayout:
-    """Resolve shared dataset/env/model cache roots.
+    """Resolve dataset and environment roots, not pip/conda package caches.
 
     Precedence: explicit constructor argument > the matching environment
     variable > derived from ``resource_root`` > derived from

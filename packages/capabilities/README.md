@@ -1,5 +1,9 @@
 # Capabilities
 
+数据集能力集中在 `dataset.py`：DatasetCatalog 读取部署登记；resolve_dataset_refs 返回 DatasetAvailability（可用路径 / 不可用 ID）；dataset_context 与 dataset_env_overrides 消费同一结果。目录缺失不阻塞无关工作；危险路径和坏配置仍拒绝。三个 Agent 复用它，调用/恢复时重新检查；目录存在不保证内容完整。此检查结果不持久化成第二份资源状态，也不是新的管理器。
+
+依赖安装仍由 EnvironmentManager、run_setup、audit_env 配合；包缓存归 pip/conda，不归 DatasetCatalog。
+
 Agent 能做什么（可装配的具体能力）：文件、Git、进程、Artifact、仓库、环境、数据集、硬件等。
 
 `workspace_context.py::workspace_context` 是三个 Agent 共用的轻量上下文投影，不是新 Agent 或缓存服务。Coding/Experiment 使用文件、工件与可选环境绑定；Scientific 只用工件读取，不传环境绑定：

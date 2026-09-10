@@ -197,7 +197,7 @@ class ResearchController:
                 return run
 
     def _merge_registered_datasets(self, run: ResearchRun) -> None:
-        """Add newly provisioned resources without changing prior Run bindings."""
+        """Add newly registered references without changing prior Run bindings."""
 
         if self.dataset_ref_source is None:
             return

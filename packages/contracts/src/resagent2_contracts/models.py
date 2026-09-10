@@ -340,7 +340,7 @@ class ArtifactCandidate(ContractModel):
 
 
 class RunBudget(ContractModel):
-    """Hard orchestration limits for one research run."""
+    """Run limits; timeout counts wall time except explicit ask_user pauses."""
 
     max_tasks: int = Field(ge=1)
     max_attempts_per_task: int = Field(ge=1)

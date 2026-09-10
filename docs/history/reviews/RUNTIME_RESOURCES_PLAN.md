@@ -1,6 +1,6 @@
 # 运行期资源管理（schema 6.0）
 
-状态：阶段 1–2 已实现，预算和最终文档待收尾。基于 `95f965f`，分支 `fix/runtime-resources`。
+状态：阶段 1–3 已实现，最终文档及全量验收待收尾。基于 `95f965f`，分支 `fix/runtime-resources`。
 
 目标：调用方只提交研究意图；系统提供数据集目录，Agent 在运行中发现需求。
 复用现有 DatasetCatalog、环境安装/审计和 ask_user，不引入统一 Resource 框架。
@@ -13,6 +13,11 @@
 4. 全量本地验证、当前文档与服务器验收要求。
 
 ## 边界
+
+阶段 3 调度回归：208 passed。ResearchRun 用一个累计 user_wait_seconds 和
+remaining_timeout_seconds(now) 统一剩余超时；Controller 结算回答时用系统时钟，
+与答案、Task 恢复一次保存。当前开放暂停从 PendingQuestion.created_at 推导。
+覆盖跨日等待、重建控制器、多次暂停、伪造 answered_at、重复答案、普通宕机计时。
 
 阶段 2 本地全量：789 passed, 1 skipped。新增检查使用真实目录和 JsonSessionStore，
 Scientific / Coding understand / Coding modify / Experiment 各用三个独立进程核对

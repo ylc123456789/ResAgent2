@@ -380,10 +380,7 @@ class WorkflowScheduler:
                 max_llm_calls=min(50, remaining_calls),
                 timeout_seconds=max(
                     1,
-                    int(
-                        run.request.budget.timeout_seconds
-                        - (datetime.now(UTC) - run.created_at).total_seconds()
-                    ),
+                    int(run.remaining_timeout_seconds(datetime.now(UTC))),
                 ),
             ),
             workspace=grant,
@@ -598,7 +595,7 @@ class WorkflowScheduler:
             # decides the run has failed (ADR-0011 §7).
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
                 return run
-            if (datetime.now(UTC) - run.created_at).total_seconds() >= run.request.budget.timeout_seconds:
+            if run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
                 return run
             ready = self._ready_task_ids(run)
             if not ready:

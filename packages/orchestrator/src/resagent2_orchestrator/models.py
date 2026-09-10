@@ -79,10 +79,24 @@ class ResearchRun(OrchestratorModel):
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
     llm_calls_used: int = Field(default=0, ge=0)
+    # Settled ask_user pauses only; the currently open pause is derived below.
+    user_wait_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
     terminal_error: ModuleError | None = None
     created_at: datetime
     updated_at: datetime
+
+    def remaining_timeout_seconds(self, now: datetime) -> float:
+        """One Run clock for Controller and Scheduler: wall time minus user wait.
+
+        Installation, provider latency and ordinary process downtime still count.
+        No user-supplied answer timestamp is used to extend this budget.
+        """
+        waited = self.user_wait_seconds
+        if self.status == RunStatus.PAUSED and self.pending_question is not None:
+            waited += max(0.0, (now - self.pending_question.created_at).total_seconds())
+        elapsed = max(0.0, (now - self.created_at).total_seconds() - waited)
+        return max(0.0, self.request.budget.timeout_seconds - elapsed)
 
     @model_validator(mode="after")
     def validate_active_work_requests(self) -> "ResearchRun":

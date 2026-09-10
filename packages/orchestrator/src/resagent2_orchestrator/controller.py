@@ -137,6 +137,11 @@ class ResearchController:
         question = run.pending_question
         _validate_answer(question, answer)
         assert question is not None
+        # Settle the pause in the SAME snapshot as the answer and Task resume.
+        # Use the host clock, never the caller-controlled answered_at timestamp.
+        run.user_wait_seconds += max(
+            0.0, (datetime.now(UTC) - question.created_at).total_seconds()
+        )
         run.answers.append(answer)
         run.pending_question = None
         run.status = RunStatus.RUNNING
@@ -164,13 +169,11 @@ class ResearchController:
                 self._save(run)
                 continue
 
-            # Wall-clock deadline: fail deterministically when the run budget is
-            # exhausted (ADR-0011 §7.3). Preemptive per-tool cancellation is out
-            # of scope; this is the run-level remaining-timeout gate.
-            elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
-            if elapsed >= run.request.budget.timeout_seconds:
+            # Shared wall-clock budget excludes explicit ask_user waits only.
+            # This does not preempt or undo an already running external command.
+            if run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
                 return self._fail_run(run, ModuleError(
-                    code=ErrorCode.TIMEOUT, message="Run wall-clock budget exhausted", retryable=False,
+                    code=ErrorCode.TIMEOUT, message="Run execution-time budget exhausted", retryable=False,
                 ))
 
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
@@ -233,8 +236,7 @@ class ResearchController:
             # checkpoint without pretending it was paused.
             parent_session_id = run.scientific_session.id
         remaining = run.request.budget.max_llm_calls - run.llm_calls_used
-        elapsed = (datetime.now(UTC) - run.created_at).total_seconds()
-        remaining_timeout = max(1, int(run.request.budget.timeout_seconds - elapsed))
+        remaining_timeout = max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))
         return self.scientific_port.run(
             ScientificTurnRequest(
                 run_id=run.run_id,

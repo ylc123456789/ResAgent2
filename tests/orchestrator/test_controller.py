@@ -51,6 +51,160 @@ from resagent2_scientific import ScientificAgent
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
+@pytest.fixture
+def run_clock(monkeypatch):
+    from datetime import timedelta
+    from resagent2_orchestrator import controller as controller_module
+    from resagent2_orchestrator import scheduler as scheduler_module
+
+    class Clock:
+        value = datetime.now(UTC)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.value
+
+        @classmethod
+        def advance(cls, seconds):
+            cls.value += timedelta(seconds=seconds)
+
+    monkeypatch.setattr(controller_module, "datetime", Clock)
+    monkeypatch.setattr(scheduler_module, "datetime", Clock)
+    return Clock
+
+
+def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, run_clock):
+    from datetime import timedelta
+    from resagent2_orchestrator import OrchestrationError
+
+    ask = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "Need user-provisioned resources"},
+            "text": "Prepare the resources, then confirm.",
+            "requested_fields": ["ready"], "reason": "missing resource",
+        },
+    }
+
+    class TimedClient(ScriptedLLMClient):
+        def next_action(self, context, action_type):
+            run_clock.advance(10)  # Real work before each pause/finish must still count.
+            return super().next_action(context, action_type)
+
+    def rebuild(actions):
+        controller = _build_recoverable_controller(
+            JsonRunStore(tmp_path / "runs"), JsonSessionStore(tmp_path / "sessions"), actions,
+        )
+        controller.scientific_port.llm_client = TimedClient(actions)
+        return controller
+
+    first = rebuild([ask])
+    paused = first.create_run("run_wait", research_request())
+    assert paused.remaining_timeout_seconds(run_clock.now()) == 50
+    assert paused.llm_calls_used == 1
+    run_clock.advance(2 * 86400)
+    assert paused.remaining_timeout_seconds(run_clock.now()) == 50
+
+    second = rebuild([ask])
+    budgets = []
+    original_run = second.scientific_port.run
+
+    def capture(request):
+        budgets.append(request.budget.timeout_seconds)
+        return original_run(request)
+
+    second.scientific_port.run = capture
+    answer = UserAnswer(
+        question_id=paused.pending_question.id, values={"ready": "yes"},
+        answered_at=run_clock.now() + timedelta(days=100),  # Not the trusted clock.
+    )
+    again = second.answer_question(paused.run_id, answer)
+    assert again.status == RunStatus.PAUSED
+    assert budgets == [50]
+    assert again.user_wait_seconds == 2 * 86400
+    assert again.remaining_timeout_seconds(run_clock.now()) == 40
+    assert again.llm_calls_used == 2
+    assert again.scientific_session.id == paused.scientific_session.id
+    before = second.scheduler.store.load(paused.run_id).model_dump_json()
+    with pytest.raises(OrchestrationError, match="does not match"):
+        second.answer_question(paused.run_id, answer)
+    assert second.scheduler.store.load(paused.run_id).model_dump_json() == before
+
+    run_clock.advance(3600)
+    third = rebuild([finish_action()])
+    completed = third.answer_question(again.run_id, UserAnswer(
+        question_id=again.pending_question.id, values={"ready": "yes"},
+        answered_at=run_clock.now(),
+    ))
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.user_wait_seconds == 2 * 86400 + 3600
+    assert completed.remaining_timeout_seconds(run_clock.now()) == 30
+    assert completed.llm_calls_used == 3
+
+
+def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
+    class Source:
+        refs = []
+
+        def references(self):
+            return list(self.refs)
+
+    source = Source()
+    controller = build_controller(
+        actions=[request_work_action(), finish_action()], dataset_ref_source=source,
+    )
+    port = ScriptedModulePort([_task_question_result(), completed_result()])
+    controller.scheduler.bindings[Capability.EXPERIMENT_RUN] = ModuleBinding(
+        owner=AgentOwner.EXPERIMENT, port=port,
+    )
+    paused = controller.create_run("run_task_wait", research_request())
+    assert paused.status == RunStatus.PAUSED
+    attempt = paused.workflow.tasks[0].attempts[0]
+    run_clock.advance(86400)
+    source.refs = [DatasetRef(dataset_id="new_data", relative_path="new-data")]
+    completed = controller.answer_question(paused.run_id, UserAnswer(
+        question_id=paused.pending_question.id,
+        values={"dataset": "ready"}, answered_at=run_clock.now(),
+    ))
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.user_wait_seconds == 86400
+    assert port.requests[-1].budget.timeout_seconds == 60
+    assert port.requests[-1].dataset_refs == source.refs
+    assert port.requests[-1].parent_session_id == attempt.session.id
+    assert port.requests[-1].attempt_number == attempt.number
+    assert port.requests[-1].output_dir == port.requests[0].output_dir
+    assert len(completed.workflow.tasks[0].attempts) == 1
+
+
+def test_ordinary_downtime_is_not_user_wait(run_clock):
+    controller = build_controller(actions=[])
+    now = run_clock.now()
+    run = ResearchRun(
+        run_id="run_downtime", request=research_request(), status=RunStatus.RUNNING,
+        created_at=now, updated_at=now,
+    )
+    controller.scheduler.store.save(run)
+    run_clock.advance(61)
+    assert run.remaining_timeout_seconds(run_clock.now()) == 0
+    failed = controller.run_until_stable(run.run_id)
+    assert failed.status == RunStatus.FAILED
+    assert failed.terminal_error.code == ErrorCode.TIMEOUT
+    assert failed.user_wait_seconds == 0
+
+
+@pytest.mark.parametrize("invalid", [-1, float("inf"), float("nan")])
+def test_run_rejects_invalid_user_wait(invalid):
+    from pydantic import ValidationError
+
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError):
+        ResearchRun(
+            run_id="run_wait_invalid", request=research_request(), status=RunStatus.RUNNING,
+            created_at=now, updated_at=now, user_wait_seconds=invalid,
+        )
+
+
+
 def research_request() -> ResearchRequest:
     return ResearchRequest(
         goal="Evaluate the method",

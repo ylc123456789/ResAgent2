@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "5.0"
+SCHEMA_VERSION = "6.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["5.0"] = SCHEMA_VERSION
+    schema_version: Literal["6.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +382,6 @@ class ResearchRequest(ContractModel):
     context: str = ""
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     input_artifacts: list[ArtifactImport] = Field(default_factory=list)
-    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
     budget: RunBudget
 
@@ -509,7 +508,7 @@ class CodeModifyResult(ContractModel):
 
 
 class DatasetRef(ContractModel):
-    """A task-level reference to one dataset under the shared dataset root.
+    """System-supplied catalog entry, not a caller requirement or usage record.
 
     ``relative_path`` is resolved against the ResourceLayout dataset root at
     runtime; it is the dataset's directory relative to that root (never an
@@ -1118,6 +1117,7 @@ class ScientificTurnRequest(ContractModel):
 
     run_id: RunId
     research: ResearchRequest
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     authorized_artifacts: list[ArtifactRef] = Field(default_factory=list)
     work_outcome: WorkOutcome | None = None
     previous_work_request: WorkRequestDraft | None = None

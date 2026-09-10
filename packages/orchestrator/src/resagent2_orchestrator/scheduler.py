@@ -368,7 +368,7 @@ class WorkflowScheduler:
             goal=task.goal,
             inputs=task.inputs,
             input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
-            dataset_refs=list(run.request.dataset_refs),
+            dataset_refs=list(run.dataset_refs),
             constraints=task.constraints,
             answers=[
                 answer

@@ -70,6 +70,21 @@ def module_error() -> ModuleError:
     )
 
 
+def test_research_request_does_not_accept_deployment_resources() -> None:
+    from resagent2_contracts import ResearchRequest
+
+    assert "dataset_refs" not in ResearchRequest.model_fields
+    with pytest.raises(ValidationError, match="dataset_refs"):
+        ResearchRequest(
+            goal="Discover resources during execution",
+            budget=RunBudget(
+                max_tasks=1, max_attempts_per_task=1,
+                max_llm_calls=5, timeout_seconds=60,
+            ),
+            dataset_refs=[],
+        )
+
+
 def test_schema_round_trip_preserves_contract() -> None:
     workflow = Workflow(
         run_id="run_example",
@@ -81,10 +96,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "5.0"
+    assert restored.schema_version == "6.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(

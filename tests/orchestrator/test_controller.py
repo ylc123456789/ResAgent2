@@ -401,8 +401,10 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
         actions=[ask_action, finish_action()],
         dataset_ref_source=source,
     )
-    paused = controller.create_run("run_dataset_refresh", research_request())
-    assert paused.request.dataset_refs == []
+    request = research_request()
+    paused = controller.create_run("run_dataset_refresh", request)
+    assert paused.dataset_refs == []
+    assert paused.request == request
 
     source.refs = [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]
     completed = controller.answer_question(
@@ -415,7 +417,8 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
     )
 
     assert completed.status == RunStatus.COMPLETED
-    assert completed.request.dataset_refs == source.refs
+    assert completed.dataset_refs == source.refs
+    assert completed.request == request
 
 
 def test_dataset_binding_cannot_be_remapped_during_run() -> None:
@@ -423,20 +426,18 @@ def test_dataset_binding_cannot_be_remapped_during_run() -> None:
         def references(self):
             return [DatasetRef(dataset_id="cifar10", relative_path="other")]
 
-    request = research_request().model_copy(
-        update={
-            "dataset_refs": [
-                DatasetRef(dataset_id="cifar10", relative_path="cifar10")
-            ]
-        }
-    )
     controller = build_controller(
         actions=[finish_action()],
         dataset_ref_source=_DatasetSource(),
     )
-
+    now = datetime.now(UTC)
+    controller.scheduler.store.save(ResearchRun(
+        run_id="run_dataset_remap", request=research_request(),
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
+        status=RunStatus.RUNNING, created_at=now, updated_at=now,
+    ))
     with pytest.raises(ValueError, match="remapped during the Run"):
-        controller.create_run("run_dataset_remap", request)
+        controller.run_until_stable("run_dataset_remap")
 
 
 def _task_question_result() -> ModuleResult:

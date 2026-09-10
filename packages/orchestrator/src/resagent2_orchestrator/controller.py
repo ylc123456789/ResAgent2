@@ -198,7 +198,7 @@ class ResearchController:
 
         if self.dataset_ref_source is None:
             return
-        existing = {ref.dataset_id: ref for ref in run.request.dataset_refs}
+        existing = {ref.dataset_id: ref for ref in run.dataset_refs}
         additions: list[DatasetRef] = []
         for ref in self.dataset_ref_source.references():
             previous = existing.get(ref.dataset_id)
@@ -212,9 +212,7 @@ class ResearchController:
             additions.append(ref)
         if not additions:
             return
-        run.request = run.request.model_copy(
-            update={"dataset_refs": [*run.request.dataset_refs, *additions]}
-        )
+        run.dataset_refs.extend(additions)
         self._save(run)
 
     def _scientific_turn(self, run: ResearchRun) -> ScientificTurnResult:
@@ -241,6 +239,7 @@ class ResearchController:
             ScientificTurnRequest(
                 run_id=run.run_id,
                 research=run.request,
+                dataset_refs=list(run.dataset_refs),
                 authorized_artifacts=self._authorized_artifacts(run),
                 work_outcome=work_outcome,
                 previous_work_request=previous_work_request,

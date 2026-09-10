@@ -24,7 +24,6 @@ from resagent2_contracts import (
     CapabilityDefinition,
     CapabilityRegistry,
     CodeModifyInput,
-    DatasetRef,
     ExperimentRunInput,
     ModuleResult,
     ModuleStatus,
@@ -41,7 +40,7 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_capabilities import ArxivLiteratureBackend, ResourceLayout
+from resagent2_capabilities import ArxivLiteratureBackend, DatasetCatalog, ResourceLayout
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
@@ -321,10 +320,13 @@ def _grant(repo: Path) -> WorkspaceGrant:
     )
 
 
-def _coding_agent(session_store) -> NativeCodingAgent:
+def _coding_agent(
+    session_store, resource_layout: ResourceLayout | None = None
+) -> NativeCodingAgent:
     return NativeCodingAgent(
         _new_llm_client(),
         store=session_store,
+        resource_layout=resource_layout,
     )
 
 
@@ -404,11 +406,15 @@ def _build_controller(workdir: Path, repo: Path | None):
         bindings={
             Capability.CODE_UNDERSTAND: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_UNDERSTAND),
-                port=_coding_agent(JsonSessionStore(workdir / "coding_sessions")),
+                port=_coding_agent(
+                    JsonSessionStore(workdir / "coding_sessions"), resource_layout
+                ),
             ),
             Capability.CODE_MODIFY: ModuleBinding(
                 owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=_coding_agent(JsonSessionStore(workdir / "coding_sessions")),
+                port=_coding_agent(
+                    JsonSessionStore(workdir / "coding_sessions"), resource_layout
+                ),
             ),
             Capability.EXPERIMENT_RUN: ModuleBinding(
                 owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
@@ -437,6 +443,7 @@ def _build_controller(workdir: Path, repo: Path | None):
         ),
         scheduler=scheduler,
         registry=registry,
+        dataset_ref_source=DatasetCatalog(resource_layout.dataset_root),
     )
     return controller, run_store
 
@@ -541,7 +548,7 @@ def run_experiment(workdir: Path) -> ModuleResult:
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
         ),
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
+        dataset_refs=DatasetCatalog(resource_layout.dataset_root).references(),
         budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
         output_dir=str(workdir / "out"),
@@ -570,7 +577,6 @@ def run_full(workdir: Path) -> bool:
             "be changed. Conclude whether the SE block improves accuracy over "
             "the baseline."
         ),
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         budget=RunBudget(
             max_tasks=2, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),

@@ -177,7 +177,7 @@ def build_context(
         ContextSection(
             name="dataset_catalog",
             content=json.dumps(
-                dataset_context(list(turn.research.dataset_refs)),
+                dataset_context(list(turn.dataset_refs)),
                 ensure_ascii=False,
             ),
             priority=98,

@@ -285,7 +285,6 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
     )
     request = ResearchRequest(
         goal="Run",
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         budget=RunBudget(
             max_tasks=5, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60
         ),
@@ -306,6 +305,9 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
         ],
     )
     _create_run(engine, "run_env", request, proposal)
+    run = engine.store.load("run_env")
+    run.dataset_refs = [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]
+    engine.store.save(run)
     engine.run_until_stable("run_env")
 
     req = port.requests[0]

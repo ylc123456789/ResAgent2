@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from resagent2_contracts import (
     ArtifactId,
     ArtifactRef,
+    DatasetRef,
     ModuleError,
     PendingQuestion,
     QuestionId,
@@ -60,6 +61,8 @@ class ResearchRun(OrchestratorModel):
 
     run_id: RunId
     request: ResearchRequest
+    # Catalog references discovered by the system, not datasets actually used.
+    dataset_refs: list[DatasetRef] = Field(default_factory=list)
     status: RunStatus
     workflow: Workflow | None = None
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)

@@ -401,11 +401,9 @@ def test_failure_without_stderr_tail_has_no_diagnostic_excerpt() -> None:
 def test_build_context_emits_single_work_brief_section() -> None:
     turn = ScientificTurnRequest(
         run_id="run_example",
+        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
         research=ResearchRequest(
             goal="Evaluate the method",
-            dataset_refs=[
-                DatasetRef(dataset_id="cifar10", relative_path="cifar-10")
-            ],
             budget=RunBudget(
                 max_tasks=5,
                 max_attempts_per_task=2,

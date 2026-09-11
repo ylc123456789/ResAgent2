@@ -345,23 +345,36 @@ class AgentLoop:
                 if isinstance(raw_action, dict):
                     raw_action.pop("reasoning_summary", None)
                 action = definition.action_type.model_validate(raw_action)
-            except ValidationError as error:
-                validator = getattr(definition.llm_client, "record_validation", None)
-                if validator is not None:
-                    validator(str(self._validation_details(error)))
+            except (json.JSONDecodeError, ValidationError) as error:
+                if isinstance(error, json.JSONDecodeError):
+                    # next_action raised before the success-path accounting.
+                    # Count any preceding transport retries as well.
+                    attempts = getattr(definition.llm_client, "last_attempts", 1)
+                    self._run_llm_calls += attempts
+                    state.llm_calls_used += attempts
+                    summary = (
+                        f"LLM output was not valid JSON: {error}. "
+                        "Return exactly one JSON object matching the action "
+                        "schema and tool contracts, with no surrounding text "
+                        "or additional actions. No tool was executed."
+                    )
+                    # Never copy the invalid response or reasoning into Session
+                    # or feedback. Full provider text belongs only in full trace.
+                    details = None
+                else:
+                    details = self._validation_details(error)
+                    validator = getattr(definition.llm_client, "record_validation", None)
+                    if validator is not None:
+                        validator(str(details))
+                    summary = "LLM action did not match the action schema: " + str(details)
                 # A malformed action is recoverable: record it as durable
                 # feedback and let the LLM correct it, bounded by the same
                 # consecutive-failure limit as any other recoverable error.
                 self._feedback(
                     state,
-                    "LLM action did not match the action schema: "
-                    + str(self._validation_details(error)),
+                    summary,
                     tool="llm",
-                    value={
-                        "validation_errors": self._validation_details(error)[
-                            "validation_errors"
-                        ]
-                    },
+                    value=details,
                 )
                 failure = self._note_failure(state, consecutive_failures)
                 if failure is not None:

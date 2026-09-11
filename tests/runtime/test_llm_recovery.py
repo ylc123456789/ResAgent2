@@ -1,13 +1,11 @@
-"""Cross-layer recovery: client bad-JSON exhausts retries, loop returns retryable.
-
-The pieces (client bounded retry, loop TOOL_FAILED, scheduler attempt retry) are
-each tested in isolation elsewhere; this test verifies the two runtime links in
-the chain — the client and the loop — do not break between them.
-"""
+"""Malformed output uses existing bounded feedback, not a new Task Attempt."""
 
 import json
 from datetime import UTC, datetime
 from unittest import mock
+from urllib.error import URLError
+
+import pytest
 
 from resagent2_contracts import (
     AgentOwner,
@@ -40,6 +38,7 @@ from resagent2_runtime import (
     FinishTool,
     InMemorySessionStore,
     OpenAICompatibleClient,
+    WriteValueTool,
 )
 
 
@@ -70,7 +69,13 @@ def _context(request, state) -> list[ContextSection]:
     ]
 
 
-def test_bad_json_exhausts_client_and_loop_returns_retryable(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("call_budget, expected_code, calls", [
+    (50, ErrorCode.TOOL_FAILED, 5),
+    (2, ErrorCode.BUDGET_EXHAUSTED, 2),
+])
+def test_bad_json_stops_at_existing_limits(
+    monkeypatch, tmp_path, call_budget, expected_code, calls,
+) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
     client = OpenAICompatibleClient(
         model="test-model",
@@ -97,7 +102,7 @@ def test_bad_json_exhausts_client_and_loop_returns_retryable(monkeypatch, tmp_pa
         capability=Capability.CODE_UNDERSTAND,
         goal="exercise recovery",
         inputs=CodeUnderstandInput(question="q"),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        budget=TaskBudget(max_steps=50, max_llm_calls=call_budget, timeout_seconds=60),
     )
 
     with (
@@ -110,14 +115,17 @@ def test_bad_json_exhausts_client_and_loop_returns_retryable(monkeypatch, tmp_pa
 
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
-    assert result.error.code == ErrorCode.TOOL_FAILED
-    assert result.error.retryable is True
-    assert client.last_attempts == 3
+    assert result.error.code == expected_code
+    assert result.error.retryable is False
+    assert result.llm_calls == calls
+    assert client.last_attempts == 1
+    assert "not valid JSON" in result.error.details["runtime_feedback"]["summary"]
 
     trace_file = tmp_path / "traces" / "llm_traces.jsonl"
     record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
     assert record["raw_response_text"] == "not valid json"
     assert record["action_valid"] is False
+    assert len(trace_file.read_text().splitlines()) == calls
 
 
 class _LoopPort:
@@ -133,8 +141,11 @@ class _LoopPort:
         )
 
 
-def test_bad_json_recovers_through_scheduler_attempt_retry(monkeypatch, tmp_path) -> None:
-    """A client failure becomes one failed attempt, then a normal retry succeeds."""
+@pytest.mark.parametrize("network_failure", [False, True])
+def test_scheduler_keeps_attempt_for_json_but_retries_transport(
+    monkeypatch, tmp_path, network_failure,
+) -> None:
+    """Correct JSON in-place; unchanged transport exhaustion retries the Task."""
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
     client = OpenAICompatibleClient(
         model="test-model",
@@ -195,13 +206,15 @@ def test_bad_json_recovers_through_scheduler_attempt_retry(monkeypatch, tmp_path
                     id="task_recovery",
                     work_request_id="work_legacy_initial",
                     capability=Capability.CODE_UNDERSTAND,
-                    goal="Finish after one retryable provider failure",
+                    goal="Finish after a provider failure",
                     inputs=CodeUnderstandInput(question="q"),
                 )
             ],
         ),
     )
     bad = _FakeResponse({"choices": [{"message": {"content": "not valid json"}}]})
+    if network_failure:
+        bad = URLError("unavailable")
     valid = _FakeResponse(
         {
             "choices": [
@@ -229,11 +242,12 @@ def test_bad_json_recovers_through_scheduler_attempt_retry(monkeypatch, tmp_path
 
     workflow_task = run.workflow.tasks[0]
     assert workflow_task.status == TaskStatus.COMPLETED
-    assert [item.status.value for item in workflow_task.attempts] == [
-        "failed",
-        "completed",
-    ]
-    assert [item.attempt_number for item in port.requests] == [1, 2]
+    assert [item.status.value for item in workflow_task.attempts] == (
+        ["failed", "completed"] if network_failure else ["completed"]
+    )
+    assert [item.attempt_number for item in port.requests] == (
+        [1, 2] if network_failure else [1]
+    )
     assert run.llm_calls_used == 4
 
     records = [
@@ -242,6 +256,172 @@ def test_bad_json_recovers_through_scheduler_attempt_retry(monkeypatch, tmp_path
         .read_text(encoding="utf-8")
         .splitlines()
     ]
-    assert [record["action_valid"] for record in records] == [False, True]
-    assert records[0]["raw_response_text"] == "not valid json"
-    assert records[1]["parsed_action"]["tool"] == "finish"
+    assert [record["action_valid"] for record in records] == (
+        [False, True] if network_failure else [False, False, False, True]
+    )
+    assert sum(len(record["attempts"]) for record in records) == 4
+    assert records[-1]["parsed_action"]["tool"] == "finish"
+    if not network_failure:
+        assert len({record["session_id"] for record in records}) == 1
+        assert "runtime_feedback" in records[-1]["included_sections"]
+
+
+@pytest.fixture
+def recovery(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    monkeypatch.setattr("resagent2_runtime.llm.time.sleep", lambda _: None)
+    client = OpenAICompatibleClient(
+        model="test-model", api_base="https://example.invalid/v1",
+        api_key_env="TEST_LLM_KEY", trace_dir=tmp_path / "traces", trace_level="full",
+    )
+    definition = AgentDefinition(
+        name="recovery", owner=AgentOwner.CODING,
+        system_prompt="Use the provided tools only.",
+        tools=(WriteValueTool(), FinishTool()), llm_client=client,
+        context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"write_value", "finish"}),
+        completion_check=_AcceptFinish(),
+    )
+    request = ModuleTaskRequest(
+        run_id="run_r", task_id="task_r", attempt_number=1,
+        capability=Capability.CODE_UNDERSTAND, goal="exercise recovery",
+        inputs=CodeUnderstandInput(question="q"),
+        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+    )
+    return definition, request, InMemorySessionStore()
+
+
+def _response(content):
+    return _FakeResponse({
+        "choices": [{"finish_reason": "stop", "message": {
+            "content": content, "reasoning_content": "PRIVATE_REASONING",
+        }}],
+        "usage": {"completion_tokens": 20},
+    })
+
+
+_FINISH = '{"tool":"finish","arguments":{"result":{}}}'
+_WRITE = '{"tool":"write_value","arguments":{"key":"kept","value":7}}'
+
+
+@pytest.mark.parametrize("bad", [
+    "   ", "PRIVATE_BROKEN_JSON",
+    _WRITE + "\n<DSML>PRIVATE_SECOND_ACTION</DSML>",
+    _WRITE + "\nLet me continue.", _WRITE + "\n" + _FINISH,
+])
+def test_bad_json_feedback_preserves_state_and_never_executes_prefix(recovery, bad):
+    definition, request, store = recovery
+    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+        _response(bad), _response(_WRITE), _response(_FINISH),
+    ]):
+        result = AgentLoop(store=store).run(definition, request, session_id="session_r")
+
+    state = store.load("session_r")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == state.llm_calls_used == 3
+    assert state.step == 2
+    assert state.memory["kept"] == 7
+    assert [e.tool for e in state.events if e.type == "action"] == ["write_value", "finish"]
+    assert state.runtime_feedback is None
+    assert "PRIVATE_" not in state.model_dump_json()
+    records = [json.loads(line) for line in
+               (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert len(records) == 3
+    assert records[0]["raw_response_text"] == bad
+    assert records[0]["action_valid"] is False
+    assert records[0]["finish_reason"] == "stop"
+    assert records[0]["usage"] == {"completion_tokens": 20}
+    assert records[1]["included_sections"].count("runtime_feedback") == 1
+    assert "Return exactly one JSON object" in records[1]["request_text"]
+    assert "No tool was executed" in records[1]["request_text"]
+    assert "PRIVATE_" not in records[1]["request_text"]
+    assert "runtime_feedback" not in records[2]["included_sections"]
+
+
+@pytest.mark.parametrize("call_budget", [2, 3])
+def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
+    recovery, call_budget,
+):
+    definition, request, store = recovery
+    request = request.model_copy(update={"budget": TaskBudget(
+        max_steps=10, max_llm_calls=call_budget, timeout_seconds=60,
+    )})
+    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+        URLError("transient"), _response("bad JSON"), _response(_FINISH),
+    ]) as provider:
+        result = AgentLoop(store=store).run(definition, request, session_id="session_r")
+    assert result.llm_calls == provider.call_count == call_budget
+    assert store.load("session_r").llm_calls_used == call_budget
+    if call_budget == 2:
+        assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    else:
+        assert result.status == ModuleStatus.COMPLETED
+    records = [json.loads(line) for line in
+               (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert len(records[0]["attempts"]) == 2
+    assert records[0]["attempts"][0]["raw_response_text"] is None
+    assert records[0]["attempts"][1]["raw_response_text"] == "bad JSON"
+    assert sum(r["retry_number"] + 1 for r in records) == result.llm_calls
+
+
+def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
+    definition, request, store = recovery
+    bad_schema = '{"tool":"finish","result":{}}'
+    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+        _response("bad JSON"), _response(bad_schema), _response("bad JSON"),
+        _response(bad_schema), _response("bad JSON"), _response(_FINISH),
+    ]) as provider:
+        result = AgentLoop(store=store).run(definition, request, session_id="session_r")
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert result.error.retryable is False
+    assert result.llm_calls == provider.call_count == 5
+    records = [json.loads(line) for line in
+               (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert sum("model" in r for r in records) == 5
+    assert sum("schema_validation_error" in r for r in records) == 2
+
+
+def test_json_correction_still_respects_wall_clock(recovery):
+    definition, request, store = recovery
+    ticks = iter([0, 0, 61])  # start, first call, next iteration
+    with mock.patch("resagent2_runtime.llm.urlopen", return_value=_response("bad JSON")) as provider:
+        result = AgentLoop(store=store, clock=lambda: next(ticks)).run(
+            definition, request, session_id="session_r",
+        )
+    assert result.error.code == ErrorCode.TIMEOUT
+    assert result.llm_calls == provider.call_count == 1
+    assert store.load("session_r").step == 0
+
+
+def test_json_feedback_is_provider_neutral(recovery):
+    from dataclasses import replace
+
+    class OtherClient:
+        def __init__(self):
+            self.contexts = []
+
+        def next_action(self, context, action_type):
+            self.contexts.append(context)
+            return json.loads("bad JSON" if len(self.contexts) == 1 else _FINISH)
+
+    definition, request, store = recovery
+    client = OtherClient()
+    result = AgentLoop(store=store).run(
+        replace(definition, llm_client=client), request, session_id="session_r",
+    )
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == 2
+    assert "runtime_feedback" in client.contexts[1].included_sections
+
+
+def test_correction_keeps_previously_completed_work(recovery):
+    definition, request, store = recovery
+    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+        _response(_WRITE), _response("bad JSON"), _response(_FINISH),
+    ]):
+        result = AgentLoop(store=store).run(definition, request, session_id="session_r")
+    state = store.load("session_r")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == state.llm_calls_used == 3
+    assert state.memory["kept"] == 7
+    assert [e.tool for e in state.events if e.type == "action"] == ["write_value", "finish"]

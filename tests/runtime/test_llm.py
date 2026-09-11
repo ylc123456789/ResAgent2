@@ -216,7 +216,7 @@ def test_trace_preserves_bad_json_response(monkeypatch, tmp_path) -> None:
         mock.patch("resagent2_runtime.llm.time.sleep"),
         mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
     ):
-        with pytest.raises(RuntimeError, match="3 attempts"):
+        with pytest.raises(json.JSONDecodeError, match="Expecting value"):
             client.next_action(_context(), AgentAction)
 
     trace_file = tmp_path / "traces" / "llm_traces.jsonl"
@@ -273,7 +273,7 @@ def test_client_error_counts_one_attempt_after_prior_retry(monkeypatch) -> None:
     assert client.last_attempts == 1
 
 
-def test_malformed_json_is_retried(monkeypatch) -> None:
+def test_malformed_json_returns_to_caller_without_identical_retry(monkeypatch) -> None:
     client = _client(monkeypatch)
     malformed = _FakeResponse(
         {"choices": [{"message": {"content": "not valid json"}}]}
@@ -287,10 +287,10 @@ def test_malformed_json_is_retried(monkeypatch) -> None:
             "resagent2_runtime.llm.urlopen", side_effect=[malformed, ok]
         ) as urlopen_mock,
     ):
-        result = client.next_action(_context(), AgentAction)
+        with pytest.raises(json.JSONDecodeError):
+            client.next_action(_context(), AgentAction)
 
-    assert result == {"tool": "finish"}
-    assert urlopen_mock.call_count == 2
+    assert client.last_attempts == urlopen_mock.call_count == 1
 
 
 @pytest.mark.parametrize("content", [None, ["a", "b"], {"tool": "finish"}, 42])

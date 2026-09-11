@@ -51,6 +51,67 @@ from resagent2_orchestrator.compiler import (
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("stage, repeat, remaining", [
+    ("draft", False, 10), ("review", False, 10),
+    ("draft", True, 10), ("review", True, 10), ("draft", False, 1),
+])
+def test_invalid_json_uses_existing_compiler_correction_budget(
+    monkeypatch, tmp_path, stage, repeat, remaining,
+):
+    """Exercise the real prompt adapter/client without adding a compiler loop."""
+    from io import BytesIO
+    from resagent2_runtime import OpenAICompatibleClient, PromptLLMClient
+
+    monkeypatch.setenv("TEST_LLM_KEY", "dummy")
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.invalid/v1", api_key_env="TEST_LLM_KEY",
+        trace_dir=tmp_path / "traces", trace_level="full",
+    )
+    adapter = PromptLLMClient(
+        client, system_prompt="Compile one JSON result.", max_context_tokens=4096,
+        section_name="compiler_request",
+    )
+    draft = json.dumps(raw_experiment())
+    valid_review = '{"accepted":true}'
+    bad = 'PRIVATE_INVALID_JSON'
+    contents = (
+        [bad, bad if repeat else draft, valid_review] if stage == "draft"
+        else [draft, bad, draft, bad if repeat else valid_review]
+    )
+    responses = iter(contents)
+    requests = []
+
+    def respond(request, **kwargs):
+        requests.append(json.loads(request.data))
+        return BytesIO(json.dumps({
+            "choices": [{"finish_reason": "stop", "message": {"content": next(responses)}}],
+        }).encode())
+
+    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    compiler = LLMWorkflowCompiler(adapter)
+    kwargs = dict(current=None, registry=registry(), budget=budget(), remaining_calls=remaining)
+    if repeat or remaining == 1:
+        with pytest.raises(CompilationError) as caught:
+            compiler.compile(work_request(), **kwargs)
+        assert caught.value.llm_calls == len(requests)
+        assert len(requests) == (1 if remaining == 1 else (2 if stage == "draft" else 4))
+    else:
+        result = compiler.compile(work_request(), **kwargs)
+        assert result.llm_calls == len(requests) == (3 if stage == "draft" else 4)
+        assert len(result.output.tasks) == 1
+    if remaining > 1:
+        corrective = requests[1 if stage == "draft" else 2]["messages"][0]["content"]
+        assert "Expecting value" in corrective
+        assert "Return a corrected draft" in corrective
+        assert "PRIVATE_INVALID_JSON" not in corrective
+    records = [json.loads(line) for line in
+               (client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert len(records) == len(requests) == compiler.llm_calls
+    assert all(len(r["attempts"]) == 1 for r in records)
+    assert all("compiler_request" in r["included_sections"] for r in records)
+    assert all("tool_contracts" not in r["included_sections"] for r in records)
+
+
 def _create_run(engine, run_id, request, proposal):
     now = datetime.now(UTC)
     engine.store.save(

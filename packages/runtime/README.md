@@ -50,6 +50,9 @@ ContextComposer 对包含标题和分隔符的最终文本统一估算预算，�
 ```
 
 `AgentAction.arguments` 保持通用对象，以便同一 Loop 复用不同 Tool 集；Loop 会从每个 Tool 的既有 `input_model` 自动渲染必填顶层参数契约，并让 Context Composer 统一裁剪、计账和记录 trace。模型得到这份短契约后仍由 ToolRegistry 做完整输入模型校验；因此没有为每个 Agent 复制一套参数提示，也不会把未校验的参数直接交给 Tool。
+
+模型正文解析失败以标准 `json.JSONDecodeError` 交还调用方，不在客户端原样重试。AgentLoop 把解析原因送入现有 required `runtime_feedback`，同 Session/Attempt 纠正；与 schema 错误共用连续失败上限、调用预算和超时，不执行非法 JSON 中看似正确的动作前缀。只把简短原因送回模型，原始坏正文和 reasoning 仅在 full trace 保留。网络/响应封装故障仍按原有策略有界重试，每次实际尝试都入账。非循环调用方经 PromptLLMClient 收到相同异常，自行使用其既有纠错边界；适配器不增加隐藏重试。
+
 Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果，由 AgentLoop 统一应用。`FinishTool` 只能产生 FinishCandidate，最终 ModuleStatus 由 CompletionCheck 决定。CompletionCheck 的 `CompletionDecision` 支持三种结果：`complete=True` 得 completed；`failure` 非空得 failed（确定性失败出口，由 finalizer 用真实 Tool observation 验证，LLM 不能自证失败）；两者皆否时继续循环。
 
 `full` trace 还会保存 provider 明确返回的 `reasoning_content`（若有）。它只用于调试，不进入 AgentState、Session 或下一轮上下文；`metadata` 与 `off` 档不保存该内容。

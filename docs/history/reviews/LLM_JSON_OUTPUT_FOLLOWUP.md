@@ -1,7 +1,7 @@
-# LLM JSON 输出问题：已复现，待单独调查
+# LLM JSON 输出问题：历史证据与有界格式纠错
 
 记录日期：2026-09-10。观察代码：`fix/runtime-resources @ 577b8489`。
-本项不属于资源发现或暂停恢复的实现变更；本轮只记证据，不修改 provider、解析、重试或预算。
+最初仅记录证据，不属于资源发现或暂停恢复的实现变更。下文保留各轮事实；2026-09-11 的独立修复见末节，不把历史失败改写为已通过。
 
 ## 已确认的事实
 
@@ -32,7 +32,7 @@
 
 该提交的 OpenAICompatibleClient 已请求 `response_format={"type":"json_object"}`、`temperature=0`，但收到的 content 仍出现上述内容。只能确认返回内容未遵守本地 JSON 动作协议；仅凭 trace 不能判定具体是模型、provider 服务或其他协议适配环节的根因，也不能断言由资源改动引入。
 
-## 当前处理及边界
+## 577b8489 时的处理及边界
 
 - 保持严格解析，不截取第一个 JSON 冒充完整回答，不把 reasoning 或 DSML 当作可执行动作。
 - 客户端仍是有界重试；耗尽后返回 retryable 错误，Scheduler 在剩余 Task/Run 预算内决定新 Attempt。失败记录和用量保留。
@@ -49,10 +49,28 @@
 
 可定位的原始失败：choice-coding `1d20c9ad926346898fc91531644a108b`、sci-smoke `6fb3e144f4ba42f5ba3f8a04bb490fe7`。这轮只修改回答上下文，未修改解析、协议或重试；上述 schema 错误与此前 31 次解析错误分开跟踪。资源主线收尾不关闭本专项。
 
-## 后续调查（未执行）
+## 最初的后续调查计划
 
 1. 保留上述现场。用其中一个失败请求做独立、有界复现；核对真实模型/endpoint、消息包装和 json_object 配置，不执行返回的工具、不覆盖历史 Run。
 2. 区分纯空白、多个 JSON、夹带文本与 schema 不匹配；同时记录 finish_reason、usage 和每次尝试。不能把所有失败统称为网络波动或输出截断。
 3. 根据复现与 provider 的实际协议决定最小修复，再评估是否需要把解析错误变成结构化反馈。当前不预选新框架、原生工具协议迁移或容错抽取方案。
 
 本项从“潜在风险”升级为“已复现、待调查”；资源提示与 CLI 展示收尾不声称修复了它。
+
+## 2026-09-11：共享格式反馈修复
+
+结论分两层：历史正文确实违反 JSON 协议；不能仅凭客户端记录断定是模型权重、服务端输出约束还是协议转换的问题。DeepSeek 官方承认 JSON Output 偶发空内容，但这不能替代对本项目每次失败的证据分析。
+
+本次使用已有机制补齐恢复，不增加框架、错误类型、预算或模型专用分支：
+
+- 客户端只将模型正文的 `JSONDecodeError` 直接交还调用方；网络及响应封装错误保留原有重试。
+- AgentLoop 将其接入既有 required runtime_feedback，与 schema 错误共用连续失败上限 5、调用预算和超时；保持同 Session/Attempt。不给坏动作副作用，不自动修补/抽取 JSON。
+- Compiler 共用该客户端，所以 draft/review 的 JSON 错误也进入现有一次重编反馈；不导入 runtime、不增加 Loop。
+- trace 仍保留原始正文、reasoning、finish_reason、usage 和每次 HTTP 尝试。纠正是新 call_id；不把解析失败记作 schema 补充行，不重复计量。
+- 不迁移原生工具调用，不提高输出额度，不宣称解决上游模型输出可靠性。当前 wire schema 仍为 6.0，历史 Run/Session/trace 不修改。
+
+确定性覆盖：空白、夹带文字/工具标记、多个 JSON；无非法动作执行；同 Attempt 保留已完成工作；网络重试后遇坏 JSON 的精确计量；JSON/schema 混合错误共用上限；预算/超时；另一个最小客户端；Compiler draft/review 的有限纠正。服务器真实验收按 [JSON_OUTPUT_ACCEPTANCE.md](JSON_OUTPUT_ACCEPTANCE.md) 执行，未执行前不宣称真实模型已恢复。
+
+参考（借鉴边界，不引入依赖）：[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[PI 参数校验与错误反馈](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/agent-loop.ts)、[PydanticAI 有界校验反馈](https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/)。
+
+本地结果：2026-09-11 在隔离目录完成全量 **825 passed, 1 skipped**（新增 20 个用例）、mock E2E completed、diff 检查干净。真实模型的纠正效果仍待服务器验收，历史 31 次错误不因确定性测试通过而关闭归因调查。

@@ -112,7 +112,7 @@ class CompilerLLM(Protocol):
         prompt: str,
         action_type: type[BaseModel],
     ) -> BaseModel | dict:
-        """Return a structured candidate for validation against the supplied schema."""
+        """Return a candidate, or raise JSONDecodeError for malformed output."""
 
 
 # A local draft key must be a valid suffix of a global ``TaskId``
@@ -597,7 +597,7 @@ class LLMWorkflowCompiler:
 
     The LLM produces a local ``CompilationDraft``; ``_materialize_draft``
     deterministically assigns global identity and scope and emits a valid
-    Proposal or append-only Patch. A structurally invalid draft is retried once
+    Proposal or append-only Patch. Invalid JSON or an invalid draft is retried once
     with the validator reason as feedback. A structurally valid but semantically
     invalid draft (a prerequisite is missing or speculative conditional work was
     added) is caught by one bounded semantic review and retried once with its
@@ -661,10 +661,10 @@ class LLMWorkflowCompiler:
                     work_request_id=request.id,
                 )
             try:
-                raw = self._client.next_action(prompt, CompilationDraft)
-            finally:
-                self.llm_calls += getattr(self._client, "last_attempts", 1)
-            try:
+                try:
+                    raw = self._client.next_action(prompt, CompilationDraft)
+                finally:
+                    self.llm_calls += getattr(self._client, "last_attempts", 1)
                 # Typed clients are not trusted more than JSON clients: a
                 # model_copy/model_construct instance may bypass field checks.
                 draft = CompilationDraft.model_validate(
@@ -684,7 +684,7 @@ class LLMWorkflowCompiler:
                 except ValueError as error:
                     raise CompilationError(str(error)) from error
                 review = self._review_draft(request, draft, registry)
-            except (ValidationError, CompilationError) as error:
+            except (json.JSONDecodeError, ValidationError, CompilationError) as error:
                 if attempt == 1:
                     raise CompilationError(
                         "compiler failed after 2 attempts: " + _compact_error(error)

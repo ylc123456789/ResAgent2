@@ -48,7 +48,7 @@ def _record(client):
     return records[0]
 
 
-def test_empty_length_limited_response_preserves_every_attempt(client, monkeypatch):
+def test_empty_length_limited_response_reaches_caller_with_diagnostics(client, monkeypatch):
     client.model_profile = ModelProfile(context_window=65536)
     requests = []
 
@@ -60,16 +60,16 @@ def test_empty_length_limited_response_preserves_every_attempt(client, monkeypat
         )
 
     monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
-    with pytest.raises(RuntimeError, match="after 3 attempts"):
+    with pytest.raises(json.JSONDecodeError):
         _invoke(client)
 
     record = _record(client)
-    assert [request["max_tokens"] for request in requests] == [4096] * 3
+    assert [request["max_tokens"] for request in requests] == [4096]
     assert record["request_max_tokens"] == 4096
-    assert client.last_attempts == record["retry_number"] + 1 == 3
-    assert [a["retry_number"] for a in record["attempts"]] == [0, 1, 2]
+    assert client.last_attempts == record["retry_number"] + 1 == 1
+    assert [a["retry_number"] for a in record["attempts"]] == [0]
     assert [a["raw_reasoning_text"] for a in record["attempts"]] == [
-        f"reasoning from attempt {n}" for n in (1, 2, 3)
+        "reasoning from attempt 1"
     ]
     for attempt in [record, *record["attempts"]]:
         assert attempt["finish_reason"] == "length"
@@ -78,33 +78,41 @@ def test_empty_length_limited_response_preserves_every_attempt(client, monkeypat
         assert attempt["action_valid"] is False
         assert attempt["validation_error"]
     # Trace data does not change the next request or increase its output budget.
-    assert requests[0] == requests[1] == requests[2]
+    assert len(requests) == 1
     assert "reasoning from attempt" not in record["request_text"]
 
 
-def test_success_after_bad_json_retains_prior_diagnostics(client, monkeypatch):
+def test_success_after_bad_json_is_a_new_logical_call(client, monkeypatch):
     responses = iter([
         _response("broken JSON", finish_reason="length", reasoning="earlier", tokens=40),
         _response('{"tool":"finish"}', reasoning="final", tokens=20),
     ])
     monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k: next(responses))
+    with pytest.raises(json.JSONDecodeError):
+        _invoke(client)
+    first = _record(client)
+    assert first["raw_response_text"] == "broken JSON"
+    assert first["usage"] == {"completion_tokens": 40}
+    assert first["validation_error"]
     assert _invoke(client) == {"tool": "finish"}
-    record = _record(client)
+    rows = [json.loads(line) for line in
+            (client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert len(rows) == 2
+    record = rows[1]
+    assert first["call_id"] != record["call_id"]
     assert record["request_max_tokens"] is None  # Provider default, not unlimited.
     assert record["finish_reason"] == "stop"
     assert record["usage"] == {"completion_tokens": 20}
     assert record["raw_reasoning_text"] == "final"
     assert record["validation_error"] is None
     assert record["action_valid"] is True
-    assert record["retry_number"] == 1
-    assert record["attempts"][0]["raw_response_text"] == "broken JSON"
-    assert record["attempts"][0]["usage"] == {"completion_tokens": 40}
-    assert record["attempts"][0]["validation_error"]
+    assert record["retry_number"] == 0
+    assert len(record["attempts"]) == client.last_attempts == 1
     client.record_validation("caller rejected schema")
     rows = [json.loads(line) for line in
             (client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
-    assert rows[1]["call_id"] == record["call_id"]
-    assert rows[1]["schema_validation_error"] == "caller rejected schema"
+    assert rows[2]["call_id"] == record["call_id"]
+    assert rows[2]["schema_validation_error"] == "caller rejected schema"
 
 
 @pytest.mark.parametrize("failure", ["network", "timeout", "http500", "http400"])
@@ -128,13 +136,21 @@ def test_later_transport_failure_cannot_reuse_earlier_response(
         return item
 
     monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    with pytest.raises(json.JSONDecodeError):
+        _invoke(client)
+    first = _record(client)
+    assert first["usage"] == {"completion_tokens": 40}
+    assert first["raw_reasoning_text"] == "old"
+    client.set_attempt_limit(1)
     with pytest.raises(RuntimeError):
         _invoke(client)
-    record = _record(client)
-    assert client.last_attempts == len(record["attempts"]) == 2
-    assert record["attempts"][0]["usage"] == {"completion_tokens": 40}
-    assert record["attempts"][0]["raw_reasoning_text"] == "old"
-    for attempt in (record, record["attempts"][1]):
+    records = [json.loads(line) for line in
+               (client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
+    assert len(records) == 2
+    record = records[-1]
+    assert record["call_id"] != first["call_id"]
+    assert client.last_attempts == len(record["attempts"]) == 1
+    for attempt in (record, record["attempts"][0]):
         assert attempt["raw_response_text"] is None
         assert attempt["raw_reasoning_text"] is None
         assert attempt["usage"] is None
@@ -143,14 +159,19 @@ def test_later_transport_failure_cannot_reuse_earlier_response(
         assert attempt["action_valid"] is False
 
 
-def test_metadata_does_not_leak_content_through_attempts(client, monkeypatch):
+@pytest.mark.parametrize("content, invalid", [
+    ("PRIVATE_BROKEN_JSON", True),
+    ('{"tool":"finish","arguments":{"secret":"PRIVATE_ACTION"}}', False),
+])
+def test_metadata_does_not_leak_content_through_attempts(client, monkeypatch, content, invalid):
     client.trace_level = "metadata"
-    responses = iter([
-        _response("PRIVATE_BROKEN_JSON", reasoning="PRIVATE_REASONING", tokens=40),
-        _response('{"tool":"finish","arguments":{"secret":"PRIVATE_ACTION"}}'),
-    ])
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k: next(responses))
-    _invoke(client)
+    monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k:
+                        _response(content, reasoning="PRIVATE_REASONING", tokens=40))
+    if invalid:
+        with pytest.raises(json.JSONDecodeError):
+            _invoke(client)
+    else:
+        _invoke(client)
     record = _record(client)
     assert "PRIVATE_" not in json.dumps(record)
     for attempt in [record, *record["attempts"]]:
@@ -173,12 +194,12 @@ def test_missing_optional_provider_metadata_is_not_invented(client, monkeypatch)
     assert record["usage"] is None
 
 
-def test_trace_off_still_keeps_retry_accounting_without_files(client, monkeypatch):
+def test_trace_off_still_keeps_failed_output_accounting_without_files(client, monkeypatch):
     client.trace_level = "off"
     monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k: _response(""))
-    with pytest.raises(RuntimeError, match="3 attempts"):
+    with pytest.raises(json.JSONDecodeError):
         _invoke(client)
-    assert client.last_attempts == 3
+    assert client.last_attempts == 1
     assert not client.trace_dir.exists()
 
 
@@ -190,3 +211,14 @@ def test_invalid_response_envelope_remains_a_recorded_failure(client, monkeypatc
         _invoke(client)
     assert _record(client)["validation_error"]
     assert client.last_attempts == 1
+
+
+def test_envelope_json_error_still_retries_as_provider_failure(client, monkeypatch):
+    responses = iter([BytesIO(b'broken HTTP response'), _response('{"tool":"finish"}')])
+    monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k: next(responses))
+    assert _invoke(client) == {"tool": "finish"}
+    record = _record(client)
+    assert client.last_attempts == len(record["attempts"]) == 2
+    assert record["attempts"][0]["raw_response_text"] is None
+    assert record["attempts"][0]["validation_error"]
+    assert record["attempts"][1]["action_valid"] is True

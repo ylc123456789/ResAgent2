@@ -17,6 +17,10 @@
 
 这些是明确时间点的记录；后续变化形成新记录，不覆盖原失败现场或结论。
 
+## 待服务器验收
+
+`fix/json-output-feedback`：将模型正文 JSON 解析失败接入已有有界反馈，三个 Agent 在同 Session/Attempt 纠正，Compiler 复用原有一次重编；不增加预算或迁移工具协议。见 [修复与历史证据](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#2026-09-11共享格式反馈修复) 和 [验收要求](reviews/JSON_OUTPUT_ACCEPTANCE.md)。本地测试通过不等于真实模型必然遵循纠正提示。
+
 ## 历史材料怎么用
 
 | 材料 | 保存什么 | 入口 |

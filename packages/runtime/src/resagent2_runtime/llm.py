@@ -75,7 +75,11 @@ class LLMClient(Protocol):
         context: ComposedContext,
         action_type: type[BaseModel],
     ) -> BaseModel | dict:
-        """Return one structured candidate; the caller validates its own schema."""
+        """Return a candidate, or raise JSONDecodeError for malformed output.
+
+        The caller owns schema validation and bounded correction feedback;
+        transport failures remain separate from invalid model output.
+        """
 
 
 class PromptLLMClient:
@@ -404,8 +408,6 @@ class OpenAICompatibleClient:
                     if content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
-                    parsed_action = json.loads(content)
-                    break
                 except HTTPError as error:
                     detail = error.read(2000).decode("utf-8", errors="replace")
                     last_error = error
@@ -418,6 +420,17 @@ class OpenAICompatibleClient:
                     KeyError, IndexError, TypeError,
                 ) as error:
                     last_error = error
+                else:
+                    # The provider envelope was valid. Malformed model output
+                    # needs caller feedback, not an identical HTTP retry. Parse
+                    # outside the transport handlers so the error reaches the
+                    # caller, while both finally blocks still preserve trace.
+                    try:
+                        parsed_action = json.loads(content)
+                    except json.JSONDecodeError as error:
+                        last_error = error
+                        raise
+                    break
                 finally:
                     attempts.append({
                         "retry_number": attempt,

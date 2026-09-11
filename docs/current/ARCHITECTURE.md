@@ -154,6 +154,8 @@ Agent 选择 ContextSection，Runtime 统一加入工具契约、反馈和历史
 
 LLM client 必需方法为 next_action，计量、预算和 trace hooks 可选；内部有重试的客户端应提供真实计量。细节见 [Runtime 参考](CONTRACTS.md#tools)；部署参数集中在 [CLI README](../../apps/cli/README.md#6-模型与上下文预算)。
 
+模型正文不是合法 JSON 时，客户端抛出标准 `JSONDecodeError`，不原样重发同一请求。AgentLoop 把解析原因送入已有的 required `runtime_feedback`，在同一 Session/Attempt 内允许有限纠正；Compiler 使用已有的两版 draft 上限处理同类错误，不引入 AgentLoop。网络及响应封装故障仍走客户端原有有界重试。原始坏正文仅留在 full trace，不提取第一个 JSON 执行，也不把 reasoning 当动作。
+
 <a id="principles"></a>
 
 ## 7. 开发时保持的边界

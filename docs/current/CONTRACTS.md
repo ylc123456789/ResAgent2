@@ -571,7 +571,7 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 | AgentLoop.run(definition, request, *, session_id, initial_memory=None) | 循环、观测、反馈、Session，不调度 Workflow |
 | ContextBuilder(request, state) | 返回领域 sections，Runtime 统一补工具契约/反馈/历史 |
 | ContextComposer.compose(...) | 组合最终文本、估算预算，required 装不下明确失败 |
-| LLMClient.next_action(context, action_type) | 必需方法；返回候选 dict/模型，不代表动作有效 |
+| LLMClient.next_action(context, action_type) | 必需方法；返回候选 dict/模型，不代表动作有效；模型正文 JSON 解析失败抛标准 JSONDecodeError |
 | PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
 | PermissionPolicy.check(action, state, request) | 派发前确定性允许/拒绝，不是 OS 沙箱或人工审批 UI |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
@@ -579,6 +579,10 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域 inputs 和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、WorkspaceSnapshot 留在 capabilities，不变成 wire 消息。
 
 参数错误、ok=False 和执行时 PermissionError 等可恢复错误进反馈；PermissionPolicy 明确拒绝则立即 permission_denied。未知工具走既有拒绝策略，不放宽 schema。Action 校验前只移除旧 reasoning_summary 字段，不忽略其它未知字段。
+
+**格式纠错**：OpenAICompatibleClient 区分响应封装/传输失败与模型正文解析失败。前者保持现有至多三次尝试（受剩余额度限制）；后者完成本次 trace 后直接抛 `json.JSONDecodeError`，不在客户端原样重试。AgentLoop 记录已发生的全部 HTTP 尝试，把解析原因和“只返回一个规范动作、未执行工具”的说明放入现有 required `runtime_feedback`，同 Session/Attempt 继续；不执行非法正文的任何前缀，不转存坏正文或 reasoning 到反馈。JSON 与 schema 错误共用连续失败上限 5、LLM 调用预算和超时；成功非 finish 工具清除该反馈并重置失败计数，完成时也清除反馈。耗尽后沿用已有失败出口，不保证模型一定纠正成功。
+
+Compiler 的 draft 或 review 抛出 JSONDecodeError 时，在已有“最多两版 draft”内携带解析原因重编，所有消耗保留；没有新一层重试，也不依赖 runtime 包。PromptLLMClient 只透传异常并记录 last_attempts，不自行纠错。JSON 能解析但字段不符仍走原有 schema 校验。响应封装缺失/非字符串 content 等协议错误不伪装成模型正文解析错误。
 
 读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用行切片，Artifact 先核对整份 hash。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配。
 
@@ -591,6 +595,8 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 最小客户端只有 next_action；context_budget、set_attempt_limit、last_attempts、set_trace_context、record_validation 等 hooks 按存在与否使用。内部有重试应提供计量与限制；无 hook 按每请求一次计数，不宣称获知隐藏重试。
 
 OpenAICompatibleClient 的 trace 按 call_id 关联逻辑调用和后续校验记录。attempts 保留各次 finish_reason/usage/错误，顶层响应对应最后一次；retry_number+1 是 HTTP 尝试数，不能再加 attempts 长度。request_max_tokens 是实际输出上限，null 表示未指定。
+
+收到格式反馈后的请求是新逻辑调用、新 call_id，不是上一调用内的 HTTP retry。正文解析失败写在主记录/attempts 的 validation_error；schema_validation_error 补充行仅用于已解析候选的外层 schema 错误。统计解析失败、schema 拒绝、HTTP retry、Task Attempt retry 时分开计数。
 
 off 不记录；metadata 不保存请求/响应/源码正文；full 保存原始 request/response 和 provider 提供时的 reasoning_content，包括可取得的失败响应。reasoning 仅用于调试，不进 Session/下一轮上下文。目录/文件按 0700/0600 管理，但 full 仍可能含源码和用户输入，不是可公开上传的日志。
 

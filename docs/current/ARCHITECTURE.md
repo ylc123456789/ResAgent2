@@ -105,6 +105,8 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
 
+保存答案和让模型看见答案是两个步骤：Controller 保存 UserAnswer，Scheduler 只传递本 Task 的回答；Coding/Experiment 的 context builder 经共享 `user_answers_section` 放入 required `answers` 段，由原有 ContextComposer 计量，每一步都可见。它不另存状态，也不主动删除本 Task 的早期回答；Scientific 保持自己的既有答案投影。成功发出 ask_user 不等于前提已满足，资源仍按恢复后的实际目录视图判断。
+
 Scientific Session 属于 Run，跨工作回合复用；Coding/Experiment Session 属于 Run + Task + Attempt。上层保存 SessionRef，不读 Agent 私有 memory 驱动调度。
 
 Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定状态，不只是插入记录；answer_question 保存答案再续跑；run_until_stable 不制造答案，也不绕过 paused。
@@ -124,6 +126,8 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 ## 5. 结果、证据与完成
 
 ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源、冻结内容并计算 hash 后，才产生 ArtifactRef。授权可以读不等于已经读，已经读过也不保证正文一直留在模型上下文。
+
+执行 Agent 负责生成候选证据，Scheduler 接收 ModuleResult 后调用 Registry 完成登记冻结。单独调用 NativeExperimentAgent 并看到 metrics.json，不等于已走完这条登记链路。
 
 Experiment metrics 从完整的真实 JSON 证据集派生，summary 只是模块提供的解释。指标是便于机器使用的证据投影，**不是比原始工件更高一级的真相**。矛盾需回查工件；执行成功也不证明假设成立。
 

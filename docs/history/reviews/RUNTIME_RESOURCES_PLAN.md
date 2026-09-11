@@ -1,6 +1,6 @@
 # 运行期资源管理（schema 6.0）
 
-状态：阶段 1–4 本地完成；`577b8489` 的服务器基线已执行并复核，资源提示与 CLI 展示的小收尾补验待执行，未合并/推送。基于 `95f965f`，分支 `fix/runtime-resources`。
+状态（2026-09-11）：阶段 1–4 及两轮小修复已完成；最终产品提交 `f3179e5` 的 §9 补验已独立复核，未发现产品代码合并阻断。用户已授权合并收尾，本次仅同步文档；JSON 专项仍开放。基于 `95f965f`，开发分支 `fix/runtime-resources`，各阶段与证据范围见下文。
 
 目标：调用方只提交研究意图；系统提供数据集目录，Agent 在运行中发现需求。
 复用现有 DatasetCatalog、环境安装/审计和 ask_user，不引入统一 Resource 框架。
@@ -58,6 +58,24 @@ JSON 协议失败另见 [专项记录](LLM_JSON_OUTPUT_FOLLOWUP.md)：八场景 
 定向 **73 passed**；全量 **805 passed, 1 skipped**；mock_e2e completed；git diff --check 干净，使用隔离 cwd `/tmp/resagent2-answer-context.0bWfVV`。新增三项 helper 测试，覆盖顺序、无缓存/无修改与必需段预算；扩展四种模式的三进程测试，验证恢复首步及实际读取文件后的下一步仍含准确答案且只注入一次。脚本驱动不证明真实模型一定遵循资源提示；新补验要求见 [§9](RUNTIME_RESOURCES_ACCEPTANCE.md#9-用户回答上下文补验)。
 
 §8 三个子 Agent trace 文件共 **24 个逻辑调用、25 行记录**，多出一行是 schema 校验补充记录；JSON 解析错误 0、schema 错误 1。JSON 专项保持未解决，不因本轮未复现而关闭。
+
+## 2026-09-11 最终复核与收尾
+
+最终产品提交：`f3179e5e6e32cb4cd6176da967829674c716ebf9`。服务器干净 worktree 为 `/root/autodl-tmp/projects/ResAgent2-runtime-resources-f3179e5`；editable 由 d03abee 指向该提交。证据根 `/root/autodl-tmp/acceptance-answers/` 内含原始 `ACCEPTANCE_REPORT_9.md`、MANIFEST、trace、Session、命令日志与实际文件。原始报告保留，以下复核说明修正其口径，不改写失败现场。
+
+- 本地/服务器基线均为 **805 passed, 1 skipped**，mock_e2e completed；服务器报告后本地合并前再次全量回归，使用隔离 cwd `/tmp/resagent2-resource-merge.jFE9qy`。
+- Coding/Experiment 各三阶段：未登记询问 → 仅登记并回答后再次询问 → 目录补齐后同 Session/Attempt 完成。Experiment 未在缺目录时运行依赖数据的命令，最后真实执行得到 `{"value":42.0}`。
+- 每个恢复请求只含一个 answers 段，后续工具步骤仍可见实际回答；选择用例中 Coding 读取 helper_b.py、未读取 helper_a.py，Experiment 执行 `python calc.py mul` 得 `{"value":6}`。
+- 选择用例同时携带 unrelated_missing，不因无关缺失目录阻塞。Scientific CLI 仍记录 accuracy 并完成，错误字段被拒绝。
+- 五份 trace 均为 Flash，权限 0700/0600。共 **32 个逻辑调用、32 次 HTTP 尝试、34 行记录**；2 行是 schema 校验补充记录。JSON 解析错误、客户端重试、Task Attempt 重试均为 0；有限样本不构成永久稳定保证。
+
+三处证据边界：
+
+1. 两次 extra_forbidden 是合法 JSON 的字段层级错误。`choice-coding` 的 result、`sci-smoke` 的 opinion/summary 被放在动作顶层，均由 **AgentLoop 的 runtime_feedback → 新逻辑调用** 纠正，不是客户端 HTTP 重试。原始失败 call_id 分别为 `1d20c9ad926346898fc91531644a108b`、`6fb3e144f4ba42f5ba3f8a04bb490fe7`。
+2. 驱动每阶段只传当前回答，故 answers 段不混入上一阶段值；这证明投影只使用调用方输入，不表示系统删除历史。生产 Scheduler 按 Task 过滤已保存回答，可以同时传该 Task 的较早回答。
+3. 这轮探针直接调用 Native Agent，验证了实际指标文件和成功命令，没有经过 Scheduler 的 Registry 注册冻结。原验收单和报告的“冻结指标”表述过宽；本轮不据此宣称新增了完整注册冻结的真实验收。该路径未改，原有完整流程证据仍归属于 `577b8489` 那轮。
+
+结论：用户回答上下文修复验收通过，无需追加产品修改或 GPU 重跑。收尾同步当前架构/契约、教程及历史状态；合并身份以 Git 记录为准。JSON 问题继续按 [专项](LLM_JSON_OUTPUT_FOLLOWUP.md) 独立调查，保留 `577b8489`、`d03abee`、`f3179e5` 各轮服务器产物与环境，不顺带清理或重指服务器部署。
 
 ## 分阶段验证说明
 

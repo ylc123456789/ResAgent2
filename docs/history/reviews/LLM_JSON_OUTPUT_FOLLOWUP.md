@@ -43,6 +43,12 @@
 
 `/root/autodl-tmp/acceptance-closeout/` 的三个子 Agent trace 共 24 个逻辑调用、25 行记录；一行是 schema 校验补充记录（不是新调用）。本轮 JSON 解析错误为 0，另有一次 `extra_forbidden` schema 错误并恢复。未复现不等于 577b8489 的 31 次失败已修复；后续用户回答上下文补齐也不修改 provider、JSON 解析、重试或额度。
 
+## f3179e5 用户回答上下文补验观察
+
+`/root/autodl-tmp/acceptance-answers/` 中五份 trace 为 **32 个逻辑调用、32 次 HTTP 尝试、34 行记录**。JSON 解析失败 0，schema 校验补充行 2，客户端重试和 Task Attempt 重试 0。两次错误是动作顶层多出 result 或 opinion/summary；AgentLoop 将拒绝详情放入 runtime_feedback，下一次逻辑调用改成 arguments 下的正确结构后恢复，不能称为“客户端重试修好了 JSON”。
+
+可定位的原始失败：choice-coding `1d20c9ad926346898fc91531644a108b`、sci-smoke `6fb3e144f4ba42f5ba3f8a04bb490fe7`。这轮只修改回答上下文，未修改解析、协议或重试；上述 schema 错误与此前 31 次解析错误分开跟踪。资源主线收尾不关闭本专项。
+
 ## 后续调查（未执行）
 
 1. 保留上述现场。用其中一个失败请求做独立、有界复现；核对真实模型/endpoint、消息包装和 json_object 配置，不执行返回的工具、不覆盖历史 Run。

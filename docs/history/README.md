@@ -4,7 +4,9 @@
 
 ## 最近已完成的主线
 
-后续分支 `fix/runtime-resources` 的 schema 6.0 资源与等待预算调整，见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收要求](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。`577b8489` 基线与 `d03abee` 小收尾已复核；后者仍有 Experiment 未先询问便执行缺数据命令的行为失败。复核发现执行 Agent 未把已传入的用户回答放进上下文，现补齐共享答案投影；本轮真实模型补验按 [§9](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md#9-用户回答上下文补验) 执行，不沿用前一轮通过结论。另有 [JSON 输出专项记录](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md)，已复现但未在资源分支修复。
+运行期资源主线已完成分阶段验收，公共 schema 为 6.0：调用方不预填数据集，缺少所需资源沿用问答恢复，显式人工等待不消耗 Run 超时。见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收单](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。最终产品提交 `f3179e5` 的 §9 原始 trace、Session 与实际指标已于 2026-09-11 复核；用户回答现经共享上下文进入执行 Agent 并影响动作，805 passed、1 skipped。收尾仅同步文档，不改变该产品提交。
+
+历史范围必须分开：`577b8489` 跑完整回归；`d03abee` 补验仍有缺数据先运行的失败；`f3179e5` 做针对性回答上下文补验，不能称为最终提交重跑了完整 GPU 矩阵。两次 schema 错误由 AgentLoop 反馈纠正；[JSON 输出专项](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md) 仍开放，不能因本轮零解析错误而关闭。详见 [最终复核记录](reviews/RUNTIME_RESOURCES_PLAN.md#2026-09-11-最终复核与收尾)。
 
 截至文档整理基线 `808e8f1`：接口契约优化 P0–P5 与后续收尾已合入 main，公共 schema 为 5.0。最后一轮模型输出配置验收对应产品代码 `ab5066f`，随后是文档收尾；不要把分阶段验收误写成最终每个提交都重新跑过完整矩阵。
 

@@ -363,7 +363,7 @@ class WorkflowTask:
 |---|---|---|
 | code_understand | Coding | 授权范围内只读理解代码 |
 | code_modify | Coding | 授权范围内修改并验证代码 |
-| experiment_run | Experiment | 准备环境、执行实验、冻结结果证据 |
+| experiment_run | Experiment | 准备环境、执行实验、派生指标并提交候选证据；由 Scheduler 调 Registry 登记冻结 |
 
 Literature Search 是 Scientific Agent 的 Tool；ask-user 是 control signal；实验准备属于 `experiment_run` 内部流程。这些都不是顶层 task capability。
 

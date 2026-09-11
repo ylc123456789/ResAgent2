@@ -20,7 +20,7 @@ ResAgent2 是整个项目的名字；Orchestrator 是其中的研究编排模块
 | Scientific Agent | 科学判断、证据需求、最终观点与局限 | 生成执行图、直接调用其他 Agent |
 | Orchestrator | 工作请求转任务图、调度、状态、预算、暂停恢复和最终验收 | 自己改代码、跑实验或形成科学观点 |
 | Coding Agent | 阅读、修改、准备环境并验证代码 | 形成最终科学结论 |
-| Experiment Agent | 准备环境、运行实验、采集指标和冻结证据 | 修改产品代码或形成最终科学结论 |
+| Experiment Agent | 准备环境、运行实验、派生指标并提交候选证据 | 修改产品代码或形成最终科学结论 |
 
 Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻译当前工作请求，Scheduler 执行任务。Scientific 的 `interpreter.py` 只是整理返回结果的内部纯函数，不是新 Agent 或调度层。
 

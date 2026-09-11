@@ -74,3 +74,19 @@
 参考（借鉴边界，不引入依赖）：[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[PI 参数校验与错误反馈](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/agent-loop.ts)、[PydanticAI 有界校验反馈](https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/)。
 
 本地结果：2026-09-11 在隔离目录完成全量 **825 passed, 1 skipped**（新增 20 个用例）、mock E2E completed、diff 检查干净。真实模型的纠正效果仍待服务器验收，历史 31 次错误不因确定性测试通过而关闭归因调查。
+
+## 8cfd373 服务器复核与评审提示收尾
+
+证据根：`/root/autodl-tmp/acceptance-json-output/`。已读原始 request/response、注入备份、Session 事件和统计脚本，不只采信报告结论。原报告/日志保留；本节是更正，不把失败改写成通过。
+
+- JSON 机制生效：Coding、Experiment、Scientific 的明确注入调用和下一调用之间只有 `observation(tool=llm)`，没有 action/工具执行事件；下一请求含一个 required runtime_feedback，同 Session/step、新 call_id。Compiler 使用已有 rejection feedback。不能把下一返回能解析等同于字段有效或任务完成。
+- Coding 最终失败是五次混合失败：验证失败 → JSON 错误 → 验证命令被拒 → 缺少 torch 的验证失败 → JSON 错误。不是五次连续 JSON 错误。既有通用失败上限正确触发，不提高上限。
+- Experiment 注入后恢复并调用训练，因缺少 torch 转入安装，安装超时后任务失败。JSON 恢复与整个任务完成必须分别报告；补验改用新建、明确标注的标准库小任务，不把它冒充原训练场景通过。
+- 原脚本只统计 Extra data/Expecting value，漏计三条 Expecting ',' delimiter。218 个唯一调用实际有 **36 次解析错误**（22 Extra data、11 Expecting value、3 缺分隔符），schema 补充行 8、HTTP retry 0。未注入回归的 Flash 是 116 调用/17 解析错误，Pro 是 25 调用/0 解析错误；只描述本轮样本。
+- 明确尾随文字注入至少五次：`inject-coding`、`inject-coding-final`、`inject-compiler`、`inject-experiment`、`inject-scientific`，另有早期空白注入混淆。不能按四个模块推算四次注入，更不能据此得出“29 次自然错误全部恢复”。`inject-coding` 中还混有多轮调用，须按实际运行与注入身份拆分。
+
+Pro 首轮 code-experiment 的评审拒绝原文位于 call_id `7f7255f76faf4948a096a41a842f51f9`、`60321234640947229e38280bfa37dd9c`：它要求填 expected_metrics/expected_artifacts（以及代码路径），而代码会清空这些猜测字段，评审提示未解释该语义。属于生成/评审规则传达不一致的既有缺口，不能只归为随机漂移。
+
+修复仅复用已有 `_capability_context`：把原先只给生成端的任务语义/证据字段说明移到共用提示，补充“有意留空、按任务语义评审、仍拒绝真实遗漏”。不新增函数/组件，不改规范化、schema、JSON 恢复、重试上限或预算。新增确定性测试验证两端提示一致、空/猜测字段投影仍正确、真实拒绝仍走原有上限；模型是否遵循需按 [补验单 §5–§6](JSON_OUTPUT_ACCEPTANCE.md#compiler-closeout) 验证。
+
+该小收尾本地结果：编译器专项 **59 passed**，隔离目录全量 **828 passed, 1 skipped**、mock E2E completed、diff 检查干净。真实模型补验待执行，不把首版 8cfd373 的服务器结果移作新提交结果。

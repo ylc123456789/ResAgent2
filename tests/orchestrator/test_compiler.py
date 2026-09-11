@@ -807,10 +807,65 @@ def test_compiler_prompt_places_evidence_intent_in_instructions() -> None:
     LLMWorkflowCompiler(llm).compile(
         work_request(), current=None, registry=registry(), budget=budget()
     )
-    assert "put evidence requirements in inputs.instructions" in llm.prompts[0]
-    assert "inputs.expected_metrics=[] and inputs.expected_artifacts=[]" in llm.prompts[0]
-    assert "error logs only if execution fails" in llm.prompts[0]
-    assert "Empty arrays do not waive the need to produce evidence" in llm.prompts[0]
+    for prompt in llm.prompts:  # Both generation and review use the same meaning.
+        assert "put evidence requirements in inputs.instructions" in prompt
+        assert "inputs.expected_metrics=[] and inputs.expected_artifacts=[]" in prompt
+        assert "error logs only if execution fails" in prompt
+        assert "Empty arrays do not waive the need to produce evidence" in prompt
+
+
+@pytest.mark.parametrize("guessed_fields", [False, True])
+def test_draft_and_review_share_rules_for_intentionally_empty_fields(guessed_fields) -> None:
+    """Prompt delivery is deterministic; actual model judgment needs real tests."""
+    from resagent2_orchestrator.compiler import _capability_context
+
+    raw = raw_repair()
+    raw["tasks"][1]["inputs"]["instructions"] = (
+        "Measure baseline and candidate accuracy; deliver a metrics artifact. "
+        "Deliver an error log only if execution fails."
+    )
+    if guessed_fields:
+        raw["tasks"][0]["inputs"]["suggested_paths"] = ["guessed.py"]
+        raw["tasks"][1]["inputs"].update(
+            expected_metrics=["guessed_accuracy"], expected_artifacts=["guessed.json"],
+        )
+    before = json.dumps(raw)
+    llm = _FakeCompilerLLM(raw)
+    result = LLMWorkflowCompiler(llm).compile(
+        work_request(), current=None, registry=registry(), budget=budget(),
+    )
+    common = _capability_context(registry())
+    for prompt in llm.prompts:
+        assert prompt.count(common) == 1
+        assert "leave inputs.suggested_paths=[]" in prompt
+        assert "deliberately empty" in prompt
+        assert "Do not reject a draft solely because" in prompt
+        assert "Still reject missing evidence requirements" in prompt
+    review = llm.prompts[1]
+    projected = [json.loads(line.removeprefix("  inputs="))
+                 for line in review.splitlines() if line.startswith("  inputs=")]
+    assert projected == [t.inputs.model_dump(mode="json") for t in result.output.tasks]
+    assert projected[0]["suggested_paths"] == []
+    assert projected[1]["expected_metrics"] == projected[1]["expected_artifacts"] == []
+    assert "baseline and candidate accuracy" in projected[1]["instructions"]
+    assert "only if execution fails" in projected[1]["instructions"]
+    assert result.llm_calls == 2
+    assert json.dumps(raw) == before
+
+
+def test_empty_fields_do_not_bypass_genuine_semantic_rejection() -> None:
+    issue = "The task omits the requested baseline/candidate comparison."
+    llm = _ScriptedCompilerLLM(
+        drafts=[raw_experiment(), raw_experiment()],
+        reviews=[{"accepted": False, "issues": [issue]}] * 2,
+    )
+    with pytest.raises(CompilationError, match="rejected after review") as caught:
+        LLMWorkflowCompiler(llm).compile(
+            work_request(), current=None, registry=registry(), budget=budget(),
+        )
+    assert caught.value.llm_calls == 4  # Same two-draft limit; no forced acceptance.
+    assert issue in llm.prompts[2]
+    assert all("Do not reject a draft solely because" in p for p in llm.prompts)
 
 
 def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:

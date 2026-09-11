@@ -17,9 +17,9 @@
 
 这些是明确时间点的记录；后续变化形成新记录，不覆盖原失败现场或结论。
 
-## 待服务器验收
+## 待补验收
 
-`fix/json-output-feedback`：将模型正文 JSON 解析失败接入已有有界反馈，三个 Agent 在同 Session/Attempt 纠正，Compiler 复用原有一次重编；不增加预算或迁移工具协议。见 [修复与历史证据](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#2026-09-11共享格式反馈修复) 和 [验收要求](reviews/JSON_OUTPUT_ACCEPTANCE.md)。本地测试通过不等于真实模型必然遵循纠正提示。
+`fix/json-output-feedback @ 8cfd373` 的服务器记录已复核：JSON 反馈机制有效，但有混合失败、安装超时和原报告统计偏差，不能称全部任务完成。后续仅在 Compiler 既有共用提示中对齐生成/评审的字段语义，不新增组件或提高预算。见 [复核更正](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#8cfd373-服务器复核与评审提示收尾) 和 [小收尾补验 §5–§6](reviews/JSON_OUTPUT_ACCEPTANCE.md#compiler-closeout)；真实模型效果待补验。
 
 ## 历史材料怎么用
 

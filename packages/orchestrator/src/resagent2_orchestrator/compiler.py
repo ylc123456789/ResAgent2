@@ -216,7 +216,7 @@ class DeterministicWorkflowCompiler:
 
 
 def _capability_context(registry: CapabilityRegistry) -> str:
-    """Use the same capability meanings and scope rules in draft and review."""
+    """Share capability scope and input-field meanings between draft and review."""
     lines = ["Available capabilities:"]
     for item in registry.definitions:
         suffix = f" — {item.description}" if item.description else ""
@@ -227,7 +227,26 @@ def _capability_context(registry: CapabilityRegistry) -> str:
         "the research experiment and delivers measured metrics and artifacts. "
         "Code-level verification does not replace formal experiment delivery. "
         "A small task budget does not expand a capability: never pack another "
-        "capability's work into one task merely to fit the budget."
+        "capability's work into one task merely to fit the budget.\n"
+        "Describe each task's goal and inputs as a semantic objective (what to "
+        "implement, fix or run), not as specific file paths, function "
+        "locations, CLI flags or verification commands: the Coding/Experiment "
+        "Agent inspects the workspace and decides those details itself. "
+        "For code_modify, leave inputs.suggested_paths=[]; locating the code "
+        "is part of the Coding Agent's work.\n"
+        "For experiment_run, put evidence requirements in inputs.instructions, "
+        "preserving their conditions (for example, error logs only if execution "
+        "fails). Set inputs.expected_metrics=[] and inputs.expected_artifacts=[]: "
+        "those fields are exact metric keys and file paths for callers that "
+        "already know them, not places for semantic descriptions or guessed "
+        "output names. Empty arrays do not waive the need to produce evidence.\n"
+        "In this LLM compilation path, these fields are deliberately empty "
+        "in the normalized inputs shown to the reviewer and sent to execution. "
+        "Do not reject a draft solely because expected_metrics, expected_artifacts "
+        "or suggested_paths are empty, or require invented keys or paths to fill "
+        "them. Judge evidence coverage from the goal, inputs.instructions and "
+        "constraints together. Still reject missing evidence requirements, "
+        "wrong capability scope or missing prerequisite tasks."
     )
     return "\n".join(lines)
 
@@ -289,16 +308,6 @@ def _compile_prompt(
             "Do NOT emit a global task id, a work request id, a workflow revision, a "
             "status, an attempt, or any reference to a task from a previous work "
             "request. The system assigns those.",
-            "Describe each task's goal and inputs as a semantic objective (what to "
-            "implement, fix or run), not as specific file paths, function "
-            "locations, CLI flags or verification commands: the Coding/Experiment "
-            "Agent inspects the workspace and decides those details itself.",
-            "For experiment_run, put evidence requirements in inputs.instructions, "
-            "preserving their conditions (for example, error logs only if execution "
-            "fails). Set inputs.expected_metrics=[] and inputs.expected_artifacts=[]: "
-            "those fields are exact metric keys and file paths for callers that "
-            "already know them, not places for semantic descriptions or guessed "
-            "output names. Empty arrays do not waive the need to produce evidence.",
             "Assign each task the constraints that are relevant to THAT task, "
             "drawn from the request's constraints and objective. Do not include "
             "control constraints that were already satisfied before this request "

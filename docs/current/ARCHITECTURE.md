@@ -90,6 +90,8 @@ interpreter 属于 Scientific，因为它负责“Scientific 应怎样理解执�
 
 Compiler 不是第四个 AgentLoop：它调用 LLM，但没有 Session 或工具循环；经 PromptLLMClient 复用上下文预算即可。
 
+Compiler 的生成与评审共用一份能力职责和字段语义说明。此 LLM 编译路径故意不填具体指标键、产物路径和代码路径；执行 Agent 负责发现细节，证据要求仍须在任务的目标、instructions 和约束中明确。评审不能仅因这些字段为空就拒绝，也不能因此放过真正缺少的要求。
+
 depends_on 要求上游成功，不能表示“失败时修复”。真实失败先返回 Scientific；需要修复时新发 WorkRequest，追加 fix → rerun 的任务。
 
 <a id="state"></a>

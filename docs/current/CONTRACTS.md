@@ -297,6 +297,8 @@ output 是 WorkflowProposal（新图）或 WorkflowPatch（只追加），llm_ca
 
 **职责**：Compiler 不扫描代码或执行。LLMCompiler 清空猜测的 suggested_paths、expected_metrics/expected_artifacts，将实验语义留在本 Task.instructions；公开精确字段服务可信调用方。不能为任务名额让 code_modify 承担正式训练。成功依赖不是失败分支，条件修复等真实失败后由 Scientific 发新工作请求。
 
+生成与评审通过同一 `_capability_context` 获取上述字段语义：这些数组在本 LLM 编译路径的规范化输入中有意留空，不能仅以空数组为拒绝理由，也不能要求模型编造名称补齐。评审从 goal、inputs.instructions、constraints 合起来判断证据覆盖；真正缺少证据要求、能力分工错误或遗漏前置任务仍须拒绝。该说明不改变 `_sanitize_inputs`、公开字段或可信直接调用方的精确标准，也不覆盖模型返回的拒绝结果。
+
 **副作用与恢复**：不修改 Run/Workflow，不保存 Session，但会调用外部 LLM、写 trace 并计数，不是纯函数或保证并发的实例。COMPILING 未接受图可重编，已接受则继续，不保证重复生成相同语义图。
 
 **源码与测试**：[Compiler](../../packages/orchestrator/src/resagent2_orchestrator/compiler.py)、[Scheduler](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py)、[Compiler 测试](../../tests/orchestrator/test_compiler.py)、[repair 图](../../tests/orchestrator/test_repair_flow.py)。

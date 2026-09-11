@@ -4,9 +4,11 @@
 
 ## 最近已完成的主线
 
+JSON 格式反馈与编译字段语义修复已验收：产品提交 `8cfd373` 接入既有有界反馈，`dd770f8` 让生成和评审共用字段解释；不新增组件、不改变 schema 6.0 或预算。服务器 828 passed、1 skipped；三次仅编译与两个标准库注入均完成，原始消息和 Session 已复核。见 [最终结果、报告勘误与边界](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#verified-closeout) 和 [可复跑验收单](reviews/JSON_OUTPUT_ACCEPTANCE.md)。非法输出仍可能发生，完成的是安全有界恢复，不是上游可靠性保证；未重跑完整 GPU 矩阵。
+
 运行期资源主线已完成分阶段验收，公共 schema 为 6.0：调用方不预填数据集，缺少所需资源沿用问答恢复，显式人工等待不消耗 Run 超时。见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收单](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。最终产品提交 `f3179e5` 的 §9 原始 trace、Session 与实际指标已于 2026-09-11 复核；用户回答现经共享上下文进入执行 Agent 并影响动作，805 passed、1 skipped。收尾仅同步文档，不改变该产品提交。
 
-历史范围必须分开：`577b8489` 跑完整回归；`d03abee` 补验仍有缺数据先运行的失败；`f3179e5` 做针对性回答上下文补验，不能称为最终提交重跑了完整 GPU 矩阵。两次 schema 错误由 AgentLoop 反馈纠正；[JSON 输出专项](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md) 仍开放，不能因本轮零解析错误而关闭。详见 [最终复核记录](reviews/RUNTIME_RESOURCES_PLAN.md#2026-09-11-最终复核与收尾)。
+历史范围必须分开：`577b8489` 跑完整回归；`d03abee` 补验仍有缺数据先运行的失败；`f3179e5` 做针对性回答上下文补验，不能称为最终提交重跑了完整 GPU 矩阵。两次 schema 错误由 AgentLoop 反馈纠正；资源主线当时未关闭 [JSON 输出专项](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md)，后续独立修复结果见上段，不能以资源补验零解析错误替代其验收。详见 [最终复核记录](reviews/RUNTIME_RESOURCES_PLAN.md#2026-09-11-最终复核与收尾)。
 
 截至文档整理基线 `808e8f1`：接口契约优化 P0–P5 与后续收尾已合入 main，公共 schema 为 5.0。最后一轮模型输出配置验收对应产品代码 `ab5066f`，随后是文档收尾；不要把分阶段验收误写成最终每个提交都重新跑过完整矩阵。
 
@@ -16,10 +18,6 @@
 - [模型输出默认配置与验收](reviews/MODEL_OUTPUT_DEFAULTS.md)：依据、取舍和结果；该轮确定性基线为 775 passed、1 skipped，不是无限输出或永久稳定保证。
 
 这些是明确时间点的记录；后续变化形成新记录，不覆盖原失败现场或结论。
-
-## 待补验收
-
-`fix/json-output-feedback @ 8cfd373` 的服务器记录已复核：JSON 反馈机制有效，但有混合失败、安装超时和原报告统计偏差，不能称全部任务完成。后续仅在 Compiler 既有共用提示中对齐生成/评审的字段语义，不新增组件或提高预算。见 [复核更正](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#8cfd373-服务器复核与评审提示收尾) 和 [小收尾补验 §5–§6](reviews/JSON_OUTPUT_ACCEPTANCE.md#compiler-closeout)；真实模型效果待补验。
 
 ## 历史材料怎么用
 

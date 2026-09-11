@@ -1,6 +1,8 @@
 # JSON 格式反馈验收
 
-目标：验证坏 JSON 不执行、错误原因确实回到模型、在同 Session/Attempt 内有限恢复，预算与 trace 不失真。此轮不迁移原生 tools、不提高额度、不改业务 prompt。
+目标：验证坏 JSON 不执行、错误原因确实回到模型、在同 Session/Attempt 内有限恢复，预算与 trace 不失真。首版格式反馈不改业务 prompt；后续 §5 仅对齐 Compiler 生成/评审的字段说明。不迁移原生 tools、不提高额度。
+
+**验收状态（2026-09-11）：已完成并复核。** 产品提交 `dd770f8` 的 §5 三次编译、§6.1 两个标准库注入均通过；服务器确定性基线 828 passed、1 skipped。旧报告尚有三处表述残留，已在仓库的 [最终复核与勘误](LLM_JSON_OUTPUT_FOLLOWUP.md#verified-closeout) 归档。下列操作约束是留供复现的验收纪律，不代表测试仍待执行。
 
 首版 8cfd373 本地基线（2026-09-11）：独立 cwd、PYTHONPATH 指向仓库，**825 passed, 1 skipped**；mock_e2e completed，git diff --check 干净。相对 main 的 805/1 新增 20 个确定性用例。该版服务器验收已执行，存在实际失败及报告计数偏差；见 [复核更正](LLM_JSON_OUTPUT_FOLLOWUP.md#8cfd373-服务器复核与评审提示收尾)。以下 §1–§4 保留原验收要求；本次提示收尾按 §5–§6 补验，不重复安装大型依赖。
 
@@ -52,9 +54,9 @@ fresh workdir + full trace，沿用现有模型、目标、预算、数据集和
 
 ## 5. 生成/评审共用字段语义补验
 
-本次本地基线：**828 passed, 1 skipped**（相对 8cfd373 新增 3 个用例），编译器专项 59 passed，隔离 cwd 的 mock_e2e completed、git diff --check 干净。以下真实补验尚未执行。
+本次本地及服务器基线：**828 passed, 1 skipped**（相对 8cfd373 新增 3 个用例），编译器专项 59 passed，隔离 cwd 的 mock_e2e completed、git diff --check 干净。以下真实补验已在 `dd770f8` 完成；结果、证据索引与未覆盖范围见 [最终复核](LLM_JSON_OUTPUT_FOLLOWUP.md#verified-closeout)。
 
-新提交仍在 fix/json-output-feedback；同步实际 HEAD、干净 worktree，记录 editable 指针，先重跑 §1 确定性检查。生产变更只有 compiler.py 的共用提示，不改模型、预算、规范化或真实实验脚本。
+本轮待验收产品提交为 `fix/json-output-feedback @ dd770f8`。复跑时同步选定提交、使用干净 worktree，记录 editable 指针，先重跑 §1 确定性检查。相对 8cfd373 的生产变更只有 compiler.py 的共用提示，不改模型、预算、规范化或真实实验脚本。
 
 使用旧 `code-exp-pro-1` 的 WorkRequest（保持目标、证据要求、约束）调用**新代码的 LLMWorkflowCompiler 入口**，Pro 两次、Flash 一次，各独立目录；只生成/校验 WorkflowProposal，不执行任务，不安装 torch。不能直接重发旧 request_text，否则测不到新提示。
 

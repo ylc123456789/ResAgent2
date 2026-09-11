@@ -55,7 +55,7 @@
 2. 区分纯空白、多个 JSON、夹带文本与 schema 不匹配；同时记录 finish_reason、usage 和每次尝试。不能把所有失败统称为网络波动或输出截断。
 3. 根据复现与 provider 的实际协议决定最小修复，再评估是否需要把解析错误变成结构化反馈。当前不预选新框架、原生工具协议迁移或容错抽取方案。
 
-本项从“潜在风险”升级为“已复现、待调查”；资源提示与 CLI 展示收尾不声称修复了它。
+当时本项从“潜在风险”升级为“已复现、待调查”；资源提示与 CLI 展示收尾不声称修复了它。后续格式反馈实现及其验收见下文，不能倒推上游输出异常的归因已解决。
 
 ## 2026-09-11：共享格式反馈修复
 
@@ -73,7 +73,7 @@
 
 参考（借鉴边界，不引入依赖）：[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[PI 参数校验与错误反馈](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/agent-loop.ts)、[PydanticAI 有界校验反馈](https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/)。
 
-本地结果：2026-09-11 在隔离目录完成全量 **825 passed, 1 skipped**（新增 20 个用例）、mock E2E completed、diff 检查干净。真实模型的纠正效果仍待服务器验收，历史 31 次错误不因确定性测试通过而关闭归因调查。
+首版本地结果：2026-09-11 在隔离目录完成全量 **825 passed, 1 skipped**（新增 20 个用例）、mock E2E completed、diff 检查干净。当时真实模型的纠正效果待服务器验收；后续结果见下文，历史 31 次错误不因测试通过而关闭归因调查。
 
 ## 8cfd373 服务器复核与评审提示收尾
 
@@ -89,4 +89,37 @@ Pro 首轮 code-experiment 的评审拒绝原文位于 call_id `7f7255f76faf4948
 
 修复仅复用已有 `_capability_context`：把原先只给生成端的任务语义/证据字段说明移到共用提示，补充“有意留空、按任务语义评审、仍拒绝真实遗漏”。不新增函数/组件，不改规范化、schema、JSON 恢复、重试上限或预算。新增确定性测试验证两端提示一致、空/猜测字段投影仍正确、真实拒绝仍走原有上限；模型是否遵循需按 [补验单 §5–§6](JSON_OUTPUT_ACCEPTANCE.md#compiler-closeout) 验证。
 
-该小收尾本地结果：编译器专项 **59 passed**，隔离目录全量 **828 passed, 1 skipped**、mock E2E completed、diff 检查干净。真实模型补验待执行，不把首版 8cfd373 的服务器结果移作新提交结果。
+该小收尾本地结果：编译器专项 **59 passed**，隔离目录全量 **828 passed, 1 skipped**、mock E2E completed、diff 检查干净。对应产品提交 `dd770f8` 的真实补验已执行并复核，见下节；不把首版 8cfd373 的服务器结果移作新提交结果。
+
+<a id="verified-closeout"></a>
+
+## 2026-09-11：dd770f8 补验复核与收尾
+
+**结论：共享格式反馈与编译字段语义修复验收完成；上游偶发非法输出仍是已知限制。** 本节依据原始 request/response、Session 事件、执行日志及注入驱动复核，不只采信验收摘要。收尾仅更新文档，不修改产品代码、schema 6.0、预算或失败上限。
+
+证据根：`/root/autodl-tmp/e2e-output-dd770f8-N3zmuh/`；服务器干净 worktree：`/root/autodl-tmp/projects/ResAgent2-dd770f8`。8 包 editable 指针已由验收方核对。服务器确定性基线 **828 passed, 1 skipped**，mock E2E completed、diff 检查干净。
+
+| 补验 | 原始证据与结果 |
+|---|---|
+| 仅编译，Pro 两次、Flash 一次 | 三份 WorkflowProposal 均为 code_modify → experiment_run 并带依赖；draft/review 各含一份共用字段说明，评审均接受。三个精确字段仍为空，语义指标要求与失败时才提供日志的条件保留；每次 2 次调用、2 次 HTTP 尝试，estimated_tokens 1223–1942，结束原因 stop。 |
+| Coding 标准库注入 | `01fdc9fe900d4711a74fbfc1e0a9efe8` 的尾随文字被拒；下一调用 `974959ef7f244ba496126b3010f0a1b4` 同 Session/step、恰一个 runtime_feedback。坏输出只有 llm 失败观测，无 action/工具执行；Attempt 保持 1。最终 add.py 改为加法，unittest 三项及 py_compile 通过；Session 用量 = 11 次调用 = 11 次 HTTP 尝试。 |
+| Experiment 标准库注入 | `1e3cda746b19407c8e2acc5c856a4c3b` 被拒后，`a8d0fccdccb441268c150d4a1e73ddd2` 在同 Session/step 收到一个反馈段，无非法执行，Attempt 保持 1。随后真实执行 python run.py，冻结并交付 metrics.json，metrics.value=42；Session 用量 = 9 次调用 = 9 次 HTTP 尝试。 |
+
+Coding 另有一次自然缺分隔符错误 `9953f6d0551c425da44a775a84fd59a1`，原文缺少动作对象末尾大括号；下一调用经同一路径纠正。不能把本次完成写成模型不再产生坏 JSON。五个 trace 目录/文件权限经复核为 0700/0600；验收方秘密扫描为零命中。
+
+### 旧报告的最终勘误
+
+旧证据根 `/root/autodl-tmp/acceptance-json-output/` 的 `CORRECTION_REPORT_JSON.md` 已更正总数为 **36 次解析错误**，但表格与文字仍有以下三处矛盾；以本节复核为准，原始 trace、Session、报告和注入备份不覆盖：
+
+1. `inject-coding-final` 的结束原因不是“连续七次坏 JSON”。其 Session 事件 43/44/46/48/49 是验证失败、JSON 错误、验证命令被拒、验证失败、JSON 错误，五次混合失败触发既有上限。
+2. `inject-experiment` 不是“未执行训练命令”。事件记录显示已调用 `python train.py`，因缺少 torch 在导入阶段失败；随后安装依赖超时。命令被尝试、训练未实际开展、任务最终失败应分开陈述。
+3. 早期空白调用 `64481b95d54a4151b165dfc4c5c2482e`（01:53:33 UTC）的来源仍未确认。现存注入脚本修改于 02:00:48，现存 Coding 原响应备份也更晚，不能据后来的“仅对合法 JSON 注入”代码证明早期未注入。因此不能把 11 条空白响应全部认定为自然响应；该调用单列未知，36 次解析错误总数不变。
+
+收尾时服务器 SSH 拒绝连接，未重写服务器更正报告或 MANIFEST；本节将最终勘误随代码版本归档，后续读取服务器旧报告须同时参考本节。这不影响此前已完成的原始证据复核。
+
+### 验收边界与剩余风险
+
+- `8cfd373` 的回归、混合失败和安装超时原样保留；`dd770f8` 只做三次编译与两个轻量注入补验，没有重跑完整 GPU 矩阵。
+- Agent 探针直接核对 Session.llm_calls_used，不冒称这些独立探针创建了 ResearchRun；Run 总账由首版回归及确定性测试覆盖。
+- 三次评审接受只证明本轮遵循提示，不保证未来永不误判。JSON/schema/工具失败仍共用有界恢复；耗尽时明确失败，不自动修 JSON、不提高上限。
+- 本实现项可以收尾；若后续仍频繁出现非法正文，应保留原始请求/响应再调查 provider 协议，不据此新增模型专用补丁或无限重试。

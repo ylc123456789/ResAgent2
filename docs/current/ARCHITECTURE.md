@@ -10,7 +10,9 @@
 
 ResAgent2 是整个项目的名字，**Orchestrator 只是其中的研究编排模块**。Scientific 负责科学判断，Orchestrator 负责把判断转成受控执行，Coding 和 Experiment 完成专业工作。
 
+<!-- 两张图共用深浅主题通用配色：中等明度蓝色连线/箭头/边框，深色文字配固定浅底；不依赖预览插件切换主题。 -->
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e8eef8", "primaryTextColor": "#172b4d", "primaryBorderColor": "#597fa6", "lineColor": "#597fa6", "textColor": "#172b4d", "edgeLabelBackground": "#e8eef8"}, "flowchart": {"nodeSpacing": 50, "rankSpacing": 60}}}%%
 flowchart TB
     User[用户] --> Entry[CLI：入口与装配]
     Entry --> Controller[Orchestrator：ResearchController]
@@ -24,6 +26,7 @@ flowchart TB
     Experiment -->|任务结果| Scheduler
     Scheduler -->|WorkOutcome| Controller
     Controller --> Report[最终验收与报告]
+    linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
 Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime 与 capabilities。
@@ -48,6 +51,7 @@ Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头�
 两支核心依赖是 `contracts ← runtime ← capabilities ← agents` 和 `contracts ← orchestrator`；Agent 也可直接依赖 contracts/runtime。箭头指向被依赖者。
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e8eef8", "primaryTextColor": "#172b4d", "primaryBorderColor": "#597fa6", "lineColor": "#597fa6", "textColor": "#172b4d", "edgeLabelBackground": "#e8eef8"}, "flowchart": {"nodeSpacing": 50, "rankSpacing": 60}}}%%
 flowchart TB
     Runtime[runtime] --> Contracts[contracts]
     Caps[capabilities] --> Runtime
@@ -60,6 +64,7 @@ flowchart TB
     Root --> Agents
     Root --> Caps
     Root --> Runtime
+    linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
 Orchestrator 通过 ScientificPort / ModulePort 调用注入的实现，不 import 具体 Agent；外层组合根负责接线。Port 是进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。

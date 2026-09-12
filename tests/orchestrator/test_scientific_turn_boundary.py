@@ -9,7 +9,7 @@ from resagent2_contracts import (
     QuestionDraft, ResearchRequest, RunBudget, RunStatus, ScientificAssessment,
     ScientificCompletedResult, ScientificFailedResult, ScientificOpinion,
     ScientificQuestionResult, ScientificWorkRequestResult, SessionRef,
-    SessionStatus, UserAnswer, WorkOutcome, WorkRequest, WorkRequestDraft, WorkRequestStatus,
+    SessionStatus, RecordedAnswer, WorkOutcome, WorkRequest, WorkRequestDraft, WorkRequestStatus,
     WorkTaskOutcome,
 )
 from resagent2_orchestrator import (
@@ -36,7 +36,7 @@ def prepared(tmp_path):
             max_tasks=4, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60,
         )),
         scientific_session=session, llm_calls_used=2,
-        answers=[UserAnswer(question_id="question_previous", values={"metric": "accuracy"}, answered_at=now)],
+        answers=[RecordedAnswer(question_id="question_previous", question_text="Which metric should be used?", values={"metric": "accuracy"}, answered_at=now)],
         work_requests=[WorkRequest(
             id="work_1", run_id="run_boundary", scientific_session_id=session.id,
             request=WorkRequestDraft(objective="Run experiment", expected_evidence=["result"]),

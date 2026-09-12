@@ -34,7 +34,7 @@ from resagent2_contracts import (
     WorkRequestStatus,
     WorkTaskOutcome,
     QuestionDraft,
-    UserAnswer,
+    RecordedAnswer,
 )
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
@@ -258,8 +258,9 @@ def test_scientific_turn_request_resume_rejects_outcome_and_answers() -> None:
                 ],
             ),
             answers=[
-                UserAnswer(
+                RecordedAnswer(
                     question_id="question_x",
+                    question_text="Which dataset should be used?",
                     values={"dataset": "demo"},
                     answered_at=NOW,
                 )

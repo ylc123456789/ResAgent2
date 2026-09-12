@@ -14,13 +14,13 @@ from resagent2_contracts import (
     ModuleError,
     PendingQuestion,
     QuestionId,
+    RecordedAnswer,
     ResearchRequest,
     RunId,
     RunStatus,
     ScientificAssessment,
     ScientificOpinion,
     SessionRef,
-    UserAnswer,
     Workflow,
     WorkRequest,
     WorkRequestStatus,
@@ -68,7 +68,7 @@ class ResearchRun(OrchestratorModel):
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
-    answers: list[UserAnswer] = Field(default_factory=list)
+    answers: list[RecordedAnswer] = Field(default_factory=list)
     answer_task_ids: dict[QuestionId, TaskId | None] = Field(default_factory=dict)
     workflow_history: list[Workflow] = Field(default_factory=list)
     scientific_session: SessionRef | None = None

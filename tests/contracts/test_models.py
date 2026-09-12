@@ -16,6 +16,7 @@ from resagent2_contracts import (
     ModuleStatus,
     PendingQuestion,
     QuestionDraft,
+    RecordedAnswer,
     RunBudget,
     TaskBudget,
     TaskProposal,
@@ -96,10 +97,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "6.0"
+    assert restored.schema_version == "7.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -329,6 +330,21 @@ def test_question_and_answer_have_distinct_owners() -> None:
     )
 
     assert pending.id == answer.question_id
+
+
+def test_recorded_answer_requires_question_but_user_input_does_not() -> None:
+    answer = UserAnswer(
+        question_id="question_choice", values={"answer": "second"}, answered_at=NOW,
+    )
+    assert "question_text" not in UserAnswer.model_fields
+    with pytest.raises(ValidationError, match="question_text"):
+        RecordedAnswer.model_validate(answer.model_dump())
+    with pytest.raises(ValidationError, match="question_text"):
+        RecordedAnswer(**answer.model_dump(), question_text="   ")
+    recorded = RecordedAnswer(
+        **answer.model_dump(), question_text="First: train. Second: evaluate.",
+    )
+    assert RecordedAnswer.model_validate_json(recorded.model_dump_json()) == recorded
 
 
 def test_workspace_grant_rejects_paths_outside_root() -> None:

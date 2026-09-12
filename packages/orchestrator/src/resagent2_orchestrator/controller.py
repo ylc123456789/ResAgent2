@@ -21,6 +21,7 @@ from resagent2_contracts import (
     ErrorCode,
     ModuleError,
     PendingQuestion,
+    RecordedAnswer,
     ResearchRequest,
     RunStatus,
     ScientificCompletedResult,
@@ -142,7 +143,14 @@ class ResearchController:
         run.user_wait_seconds += max(
             0.0, (datetime.now(UTC) - question.created_at).total_seconds()
         )
-        run.answers.append(answer)
+        # Pair at the authoritative boundary before clearing the pending question.
+        # User input never supplies or overrides the question shown on resume.
+        run.answers.append(RecordedAnswer(
+            question_id=question.id,
+            question_text=question.text,
+            values=dict(answer.values),
+            answered_at=answer.answered_at,
+        ))
         run.pending_question = None
         run.status = RunStatus.RUNNING
         task_id = question.task_id
@@ -538,7 +546,7 @@ class ResearchController:
                 current.add(artifact_id)
         run.scientific_observed_artifact_ids = sorted(current)
 
-    def _pending_answers(self, run: ResearchRun) -> list[UserAnswer]:
+    def _pending_answers(self, run: ResearchRun) -> list[RecordedAnswer]:
         delivered = set(run.delivered_answer_ids)
         # Task-level answers are delivered to their task via answer_task_ids,
         # never to the Scientific turn (ADR-0011 §1).

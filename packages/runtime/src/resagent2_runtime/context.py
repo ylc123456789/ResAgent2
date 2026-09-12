@@ -6,7 +6,7 @@ import json
 from collections.abc import Sequence
 from math import ceil
 
-from resagent2_contracts import UserAnswer
+from resagent2_contracts import RecordedAnswer
 
 from .models import AgentState, ComposedContext, ContextSection
 
@@ -15,8 +15,8 @@ class ContextBudgetExceeded(ValueError):
     """Raised when required context alone cannot fit the configured budget."""
 
 
-def user_answers_section(answers: Sequence[UserAnswer]) -> ContextSection | None:
-    """Project caller-scoped replies without caching or silently truncating them.
+def user_answers_section(answers: Sequence[RecordedAnswer]) -> ContextSection | None:
+    """Project caller-scoped question/reply pairs without caching or truncation.
 
     The caller selects the answers for this invocation, which may include
     earlier replies to the same task. The composer owns their total budget.
@@ -26,7 +26,7 @@ def user_answers_section(answers: Sequence[UserAnswer]) -> ContextSection | None
     return ContextSection(
         name="answers",
         content=(
-            "User replies supplied for this invocation, in recorded order. "
+            "User replies paired with their original question_text, in recorded order. "
             "These are answers, not tool results. An earlier ask_user [ok] only "
             "means a question was issued, not that its prerequisite was met. "
             "Use these replies with the current checked context; older tool "

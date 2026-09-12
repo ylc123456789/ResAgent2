@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "6.0"
+SCHEMA_VERSION = "7.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["6.0"] = SCHEMA_VERSION
+    schema_version: Literal["7.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +411,12 @@ class UserAnswer(ContractModel):
     question_id: QuestionId
     values: dict[NonEmptyStr, str] = Field(min_length=1)
     answered_at: datetime
+
+
+class RecordedAnswer(UserAnswer):
+    """System-paired reply; question_text comes from the persisted question."""
+
+    question_text: NonEmptyStr
 
 
 # ---------------------------------------------------------------------------
@@ -860,7 +866,7 @@ class ModuleTaskRequest(ContractModel):
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
     constraints: list[NonEmptyStr] = Field(default_factory=list)
-    answers: list[UserAnswer] = Field(default_factory=list)
+    answers: list[RecordedAnswer] = Field(default_factory=list)
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
@@ -1122,7 +1128,7 @@ class ScientificTurnRequest(ContractModel):
     work_outcome: WorkOutcome | None = None
     previous_work_request: WorkRequestDraft | None = None
     unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
-    answers: list[UserAnswer] = Field(default_factory=list)
+    answers: list[RecordedAnswer] = Field(default_factory=list)
     budget: TaskBudget
     parent_session_id: SessionId | None = None
 

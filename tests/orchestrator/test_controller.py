@@ -1,6 +1,7 @@
 """Tests for the Phase 7.5 ResearchController (DEVELOPMENT_PLAN §7.5)."""
 
 from datetime import UTC, datetime
+import json
 
 import pytest
 
@@ -17,6 +18,7 @@ from resagent2_contracts import (
     ModuleResult,
     ModuleStatus,
     QuestionDraft,
+    RecordedAnswer,
     ResearchRequest,
     RunBudget,
     RunStatus,
@@ -720,6 +722,13 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
     assert [attempt.number for attempt in task.attempts] == [1]
     assert task.attempts[0].status.value == "completed"
     assert run.work_requests[0].status.value == "consumed"
+    resumed_request = scheduler.bindings[Capability.EXPERIMENT_RUN].port.requests[-1]
+    assert resumed_request.answers == run.answers
+    assert resumed_request.answers[0].question_text == paused.pending_question.text
+    assert resumed_request.answers[0].values == answer.values
+    final_context = scientific.llm_client.contexts[-1]
+    scientific_answers = final_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
+    assert json.loads(scientific_answers) == []  # A child task's reply is not broadcast.
 
 
 def test_task_question_resume_does_not_consume_attempt_budget() -> None:
@@ -1205,6 +1214,95 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
 
     assert run.status == RunStatus.COMPLETED
     assert run.final_opinion is not None
+    restored = JsonRunStore(tmp_path / "runs").load(run.run_id)
+    assert restored.answers[0].question_text == ask_action["arguments"]["text"]
+    assert restored.answers[0].values == answer.values
+    assert restored.scientific_session.id == paused.scientific_session.id
+    context = rebuilt.scientific_port.llm_client.contexts[0]
+    assert context.included_sections.count("answers") == 1
+    assert json.dumps(restored.answers[0].model_dump(mode="json"), ensure_ascii=False) in context.text
+
+
+def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path):
+    from resagent2_orchestrator import OrchestrationError
+
+    def ask(text):
+        return {"tool": "ask_user", "arguments": {
+            "assessment": {"statement": "A user choice is needed"},
+            "text": text, "requested_fields": ["answer"], "reason": "User preference",
+        }}
+
+    def rebuild(actions):
+        return _build_recoverable_controller(
+            JsonRunStore(tmp_path / "runs"), JsonSessionStore(tmp_path / "sessions"), actions,
+        )
+
+    first_text = "第一个选择 helper_a.py，第二个选择 helper_b.py。你选哪个？"
+    second_text = "第一个模式是 add，第二个模式是 mul。你选哪个？"
+    first = rebuild([ask(first_text)])
+    paused = first.create_run("run_paired_answers", research_request())
+    first_session = JsonSessionStore(tmp_path / "sessions").load(paused.scientific_session.id)
+    # Even an in-process caller passing a subclass cannot supply the authoritative question.
+    forged = RecordedAnswer(
+        question_id=paused.pending_question.id, question_text="Forged question: choose helper_a.py",
+        values={"answer": "第二个"}, answered_at=NOW,
+    )
+    second = rebuild([ask(second_text)])
+    again = second.answer_question(paused.run_id, forged)
+    assert again.status == RunStatus.PAUSED
+    assert again.answers[0].question_text == first_text
+    assert again.pending_question.text == second_text
+    assert again.pending_question.id != forged.question_id
+    first_context = second.scientific_port.llm_client.contexts[0]
+    assert first_context.included_sections.count("answers") == 1
+    first_payload = first_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
+    assert json.loads(first_payload) == [again.answers[0].model_dump(mode="json")]
+    assert "Forged question" not in first_context.text
+
+    before = JsonRunStore(tmp_path / "runs").load(paused.run_id).model_dump_json()
+    with pytest.raises(OrchestrationError, match="does not match"):
+        second.answer_question(paused.run_id, forged)
+    assert JsonRunStore(tmp_path / "runs").load(paused.run_id).model_dump_json() == before
+
+    third = rebuild([finish_action()])
+    completed = third.answer_question(paused.run_id, UserAnswer(
+        question_id=again.pending_question.id, values={"answer": "第二个"}, answered_at=NOW,
+    ))
+    assert completed.status == RunStatus.COMPLETED
+    restored = JsonRunStore(tmp_path / "runs").load(paused.run_id)
+    assert [answer.question_text for answer in restored.answers] == [first_text, second_text]
+    assert [answer.values for answer in restored.answers] == [{"answer": "第二个"}] * 2
+    last_context = third.scientific_port.llm_client.contexts[0]
+    assert last_context.included_sections.count("answers") == 1
+    last_payload = last_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
+    # The first answer was already delivered: only the new pair is supplied this turn.
+    assert json.loads(last_payload) == [restored.answers[1].model_dump(mode="json")]
+    final_session = JsonSessionStore(tmp_path / "sessions").load(restored.scientific_session.id)
+    assert final_session.session_id == first_session.session_id
+    assert final_session.created_at == first_session.created_at
+    assert len(final_session.events) > len(first_session.events)
+
+
+def test_paired_answers_keep_task_and_scientific_scopes():
+    controller = build_controller(actions=[request_work_action(), finish_action()])
+    completed = controller.create_run("run_answer_scopes", research_request())
+    task = completed.workflow.tasks[0]
+    answers = [RecordedAnswer(
+        question_id=f"question_{name}", question_text=f"Question for {name}?",
+        values={"answer": "second"}, answered_at=NOW,
+    ) for name in ("scientific", "experiment", "other")]
+    completed.answers = answers
+    completed.answer_task_ids = {
+        answers[1].question_id: task.id,
+        answers[2].question_id: "task_other",
+    }
+    request = controller.scheduler._module_request(completed, task, 1, parent_session_id=None)
+    assert request.answers == [answers[1]]
+    assert controller._pending_answers(completed) == [answers[0]]
+    controller._mark_answers_delivered(completed)
+    assert controller._pending_answers(completed) == []
+    assert controller.scheduler._module_request(completed, task, 1, parent_session_id=None).answers == [answers[1]]
+    assert "Question for other" not in request.model_dump_json()
 
 
 def test_budget_overrun_does_not_complete(tmp_path) -> None:

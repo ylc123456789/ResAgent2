@@ -14,7 +14,7 @@ from resagent2_capabilities import (
 from resagent2_contracts import (
     Capability, CodeModifyInput, CodeUnderstandInput, ExperimentRunInput,
     ModuleTaskRequest, ResearchRequest, RunBudget, ScientificTurnRequest,
-    TaskBudget, UserAnswer, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
+    TaskBudget, RecordedAnswer, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
     scientific_session_id, task_session_id,
 )
 from resagent2_coding import NativeCodingAgent
@@ -55,8 +55,9 @@ def _probe(root, kind, phase):
         # Recompose after a real tool observation as well as on the resume step.
         actions.insert(0, {"tool": "read_file", "arguments": {"path": "util.py"}})
     client = ScriptedLLMClient(actions)
-    answers = [] if phase == 0 else [UserAnswer(
+    answers = [] if phase == 0 else [RecordedAnswer(
         question_id=f"question_ready_{phase}",
+        question_text=_ask(scientific)["arguments"]["text"],
         values={"dataset_ready": f"yes, reply_phase_{phase}"},
         answered_at=datetime.now(UTC),
     )]

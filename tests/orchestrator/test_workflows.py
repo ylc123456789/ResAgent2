@@ -15,6 +15,7 @@ from resagent2_contracts import (
     ModuleResult,
     ModuleStatus,
     QuestionDraft,
+    RecordedAnswer,
     RunBudget,
     RunStatus,
     SessionRef,
@@ -320,8 +321,9 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     assert attempt.status.value == "needs_user_input"
     assert attempt.finished_at is None
 
-    answer = UserAnswer(
+    answer = RecordedAnswer(
         question_id=paused.pending_question.id,
+        question_text=paused.pending_question.text,
         values={"dataset": "demo"},
         answered_at=NOW,
     )
@@ -377,8 +379,9 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
     )
     _create_run(engine, "run_two_questions", research_request(), proposal)
     first = engine.run_until_stable("run_two_questions")
-    answer = UserAnswer(
+    answer = RecordedAnswer(
         question_id=first.pending_question.id, values={"x": "first"},
+        question_text=first.pending_question.text,
         answered_at=NOW,
     )
     run = engine.store.load(first.run_id)

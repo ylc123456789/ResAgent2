@@ -18,6 +18,7 @@ from resagent2_capabilities import (
     GitBaseline,
     GitWorkspace,
     WorkspaceBoundary,
+    build_module_report,
     media_type_for,
 )
 from resagent2_runtime import (
@@ -81,6 +82,11 @@ class CodeUnderstandCompletionCheck:
             complete=True,
             summary="Code understanding completed with observed file evidence",
             payload=payload.model_dump(mode="json"),
+            artifacts=[build_module_report({
+                "answer": payload.answer,
+                "uncertainty": payload.uncertainty,
+                "evidence_files": list(payload.evidence_files),
+            })],
         )
 
 
@@ -181,6 +187,11 @@ class CodeModifyCompletionCheck:
                 for path in existing
             ],
         ]
+        if finish.residual_risks:
+            artifacts.append(build_module_report({
+                "summary": finish.summary,
+                "residual_risks": list(finish.residual_risks),
+            }))
         return CompletionDecision(
             complete=True,
             summary=finish.summary,

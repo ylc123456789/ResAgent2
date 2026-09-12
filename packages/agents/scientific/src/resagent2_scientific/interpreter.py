@@ -81,7 +81,11 @@ def render_work_brief(
                         {
                             "artifact_id": artifact_id,
                             "kind": artifact.kind,
-                            "use": "read_artifact_before_content_based_claims",
+                            "use": (
+                                "read_for_module_explanation_not_measured_evidence"
+                                if artifact.kind == "module_report"
+                                else "read_artifact_before_content_based_claims"
+                            ),
                         }
                     )
             entry: dict[str, JsonValue] = {

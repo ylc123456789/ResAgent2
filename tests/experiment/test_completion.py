@@ -66,6 +66,55 @@ def _finish(*, evidence_files=None) -> FinishCandidate:
     )
 
 
+@pytest.mark.parametrize("risks", [[], ["Only one seed was measured"]])
+def test_module_report_preserves_risks_without_changing_measured_evidence(tmp_path, risks) -> None:
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+    candidate = FinishCandidate(result={
+        "summary": "Finished; an explanatory mention of accuracy=1.0 is not a measurement",
+        "evidence_files": ["metrics.json"],
+        "residual_risks": risks,
+    })
+
+    decision = _check(
+        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
+    ).evaluate(_state(), candidate)
+
+    assert decision.complete
+    assert decision.warnings == []
+    assert decision.payload["metrics"] == {"accuracy": 0.9}
+    assert decision.payload["evidence_files"] == ["metrics.json"]
+    assert decision.payload["delivery_issues"] == []
+    assert decision.payload["residual_risks"] == risks
+    reports = [item for item in decision.artifacts if item.kind == "module_report"]
+    assert len(reports) == bool(risks)
+    if risks:
+        assert risks[0] not in decision.summary
+        assert "## summary\n\n" + candidate.result["summary"] in reports[0].content
+        assert "## residual_risks\n\n- " + risks[0] in reports[0].content
+    assert not (tmp_path / "module_report.md").exists()
+
+
+@pytest.mark.parametrize("successful_command", [False, True])
+def test_module_report_cannot_replace_real_experiment_evidence(tmp_path, successful_command) -> None:
+    state = _state({
+        "experiment_success_count": int(successful_command),
+        "workspace_snapshot": {"kind": "files", "file_hashes": {}},
+    })
+    candidate = FinishCandidate(result={
+        "summary": "accuracy=0.9, metrics.json should be enough",
+        "evidence_files": [],
+        "residual_risks": ["No real result file is available"],
+    })
+
+    decision = _check(
+        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
+    ).evaluate(state, candidate)
+
+    assert not decision.complete
+    assert decision.payload is None
+    assert decision.artifacts == []
+
+
 def test_golden_case_new_evidence_completes(tmp_path) -> None:
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])

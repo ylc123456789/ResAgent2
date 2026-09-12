@@ -81,6 +81,10 @@ Evidence citation rules:
   any of them as observed evidence or fill an artifact id into your evidence
   list just because one of these mentions it.
 - Never cite an unread artifact just to make the assessment look complete.
+- Read relevant module_report artifacts for code explanations and residual
+  risks. They preserve module-provided interpretations, not independently
+  verified measurements; consider their limitations without substituting them
+  for original code, experiment results or literature evidence.
 - A search query, title, or short result preview is not proof that an artifact
   supports a claim. An observed id records past access, not that its full text
   is visible now. If a needed detail is missing or truncated, use read_artifact

@@ -145,6 +145,38 @@ def test_completed_task_renders_purpose_and_authorized_evidence() -> None:
     assert "acknowledgement_required_task_ids" not in brief
 
 
+def test_module_report_is_visible_as_explanation_not_measurement() -> None:
+    report = _artifact("artifact_report", kind="module_report")
+    outcome = WorkOutcome(
+        work_request_id="work_1",
+        workflow_revision=1,
+        summary="execution stable",
+        tasks=[_completed(artifact_ids=(report.id, "artifact_exp"))],
+    )
+
+    brief = render_work_brief(
+        work_outcome=outcome,
+        previous_work_request=_draft(),
+        unresolved_task_outcomes=[],
+        authorized_artifacts=[report, _artifact("artifact_exp")],
+    )
+
+    evidence = brief["outcomes"][0]["evidence"]
+    assert evidence == [
+        {
+            "artifact_id": report.id,
+            "kind": "module_report",
+            "use": "read_for_module_explanation_not_measured_evidence",
+        },
+        {
+            "artifact_id": "artifact_exp",
+            "kind": "experiment_result",
+            "use": "read_artifact_before_content_based_claims",
+        },
+    ]
+    assert brief["outcomes"][0]["execution_status"] == "completed"
+
+
 def test_completed_with_warning_exposes_caveat_content() -> None:
     outcome = WorkOutcome(
         work_request_id="work_1",

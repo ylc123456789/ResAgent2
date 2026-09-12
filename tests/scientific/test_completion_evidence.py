@@ -83,6 +83,19 @@ def test_required_kind_comes_from_registry_not_search_memory() -> None:
     assert not check.evaluate(state, _finish([artifact.id])).complete
 
 
+def test_module_report_cannot_satisfy_required_literature() -> None:
+    artifact = _registered_artifact(kind="module_report")
+    check = ScientificCompletionCheck(
+        [], ["literature_search"], resolve_artifact=lambda _: artifact,
+    )
+    state = _state({"read_artifact_ids": [artifact.id]})
+
+    decision = check.evaluate(state, _finish([artifact.id]))
+
+    assert not decision.complete
+    assert "literature_search" in decision.summary
+
+
 @pytest.mark.parametrize(
     "registered,observed,cited,kind,run_id,missing",
     [

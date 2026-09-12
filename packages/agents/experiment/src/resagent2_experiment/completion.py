@@ -16,6 +16,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     WorkspaceObserver,
     WorkspaceSnapshot,
+    build_module_report,
     media_type_for,
 )
 from resagent2_runtime import (
@@ -217,6 +218,11 @@ class ExperimentCompletionCheck:
             )
             for path in evidence
         ]
+        if finish.residual_risks:
+            artifacts.append(build_module_report({
+                "summary": finish.summary,
+                "residual_risks": list(finish.residual_risks),
+            }))
         if issues:
             return CompletionDecision(
                 complete=True,

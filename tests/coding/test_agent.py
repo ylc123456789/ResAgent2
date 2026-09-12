@@ -4,6 +4,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from resagent2_contracts import (
     AgentOwner,
     Capability,
@@ -139,6 +141,7 @@ def test_read_only_profile_answers_with_observed_evidence_without_writes(tmp_pat
                         "result": {
                             "answer": "add is implemented in util.py",
                             "evidence_files": ["util.py"],
+                            "uncertainty": "Only static inspection was performed",
                         }
                     },
                 },
@@ -150,6 +153,13 @@ def test_read_only_profile_answers_with_observed_evidence_without_writes(tmp_pat
 
     assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
     assert result.payload["evidence_files"] == ["util.py"]
+    assert len(result.artifacts) == 1
+    report = result.artifacts[0]
+    assert report.kind == "module_report"
+    assert "## answer\n\nadd is implemented in util.py" in report.content
+    assert "## uncertainty\n\nOnly static inspection was performed" in report.content
+    assert "## evidence_files\n\n- util.py" in report.content
+    assert not (tmp_path / report.path).exists()
     assert not (tmp_path / ".resagent2").exists()
     assert subprocess.run(
         ["git", "status", "--porcelain"],
@@ -187,7 +197,8 @@ def test_read_only_profile_normalizes_evidence_paths(tmp_path) -> None:
     assert result.payload["evidence_files"] == ["util.py"]
 
 
-def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("risks", [[], ["Boundary cases have not been tested"]])
+def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatch, risks) -> None:
     init_repo(tmp_path)
     _setup_env(tmp_path, monkeypatch)
     verify = "python -m py_compile util.py"
@@ -212,7 +223,10 @@ def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatc
                 {
                     "tool": "finish",
                     "arguments": {
-                        "result": {"summary": "Added and verified the docstring"}
+                        "result": {
+                            "summary": "Added and verified the docstring",
+                            "residual_risks": risks,
+                        }
                     },
                 },
             ]
@@ -224,10 +238,18 @@ def test_modify_profile_passes_legacy_docstring_golden_case(tmp_path, monkeypatc
     assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
     assert result.payload["changed_files"] == ["util.py"]
     assert result.payload["verification_passed"] is True
-    assert {artifact.kind for artifact in result.artifacts} == {
-        "code_patch",
-        "code_change",
-    }
+    assert {artifact.kind for artifact in result.artifacts} == (
+        {"code_patch", "code_change", "module_report"}
+        if risks else {"code_patch", "code_change"}
+    )
+    assert result.payload["residual_risks"] == risks
+    assert result.warnings == []
+    if risks:
+        report = next(item for item in result.artifacts if item.kind == "module_report")
+        assert "## summary\n\nAdded and verified the docstring" in report.content
+        assert "## residual_risks\n\n- " + risks[0] in report.content
+        assert risks[0] not in result.summary
+        assert not (tmp_path / report.path).exists()
     assert "Return the sum" in (tmp_path / "util.py").read_text(encoding="utf-8")
 
 

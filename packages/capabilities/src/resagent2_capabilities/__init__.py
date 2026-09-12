@@ -43,6 +43,7 @@ from .literature import (
     LiteratureSearchTool,
     LiteratureSearchToolInput,
 )
+from .module_report import build_module_report
 from .process import (
     CommandPermissionDecision,
     ProcessRunner,
@@ -130,6 +131,7 @@ __all__ = [
     "WorkspaceObserver",
     "WorkspacePermissionError",
     "WorkspaceSnapshot",
+    "build_module_report",
     "dataset_context",
     "dataset_env_overrides",
     "find_conda",

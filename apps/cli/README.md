@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 6.0。旧 5.0 及更早 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同的资源组件，而非合并成一个总入口。
+当前 contracts schema 为 7.0。旧 6.0 及更早 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同的资源组件，而非合并成一个总入口。
 
 ## 1. 安装与基本配置
 
@@ -98,6 +98,8 @@ resagent2 resume run_20260901_120000_ab12cd34
 ```
 
 `answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。若 Run 在 workspace 持久化前就暂停，回答或恢复时需要再次提供相同的 `--workspace` 或 `--git`。
+
+按 `show` 显示的实际 Fields 填写回答即可，不需要重写原题，也没有新增 `--question-text` 参数。Controller 会从当前已保存的问题取得原文，与答案一起记录；恢复时对应 Agent 同时看见原题和答案，避免把“是”或“第二个”误配到另一问题。问题身份和字段校验仍沿用原规则。
 
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 

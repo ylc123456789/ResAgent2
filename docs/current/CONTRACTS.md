@@ -26,7 +26,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="6.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="7.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -102,9 +102,14 @@ class UserAnswer:
     question_id: QuestionId
     values: dict[NonEmptyStr, str] = Field(min_length=1)
     answered_at: datetime
+
+class RecordedAnswer(UserAnswer):
+    question_text: NonEmptyStr
 ```
 
 子 Agent 只生成 QuestionDraft；Orchestrator 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。同一 Attempt 的连续两个新问题使用不同 ID；重复提交已处理问题的答案不能满足下一问题。`reason` 是必填字段。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
+
+调用方仍只提交 UserAnswer。Controller 校验当前问题后，从已持久化的 PendingQuestion.text 取原题，构造 RecordedAnswer；question_text 不是用户/模型补写的字段。Run.answers、ModuleTaskRequest.answers 和 ScientificTurnRequest.answers 保存或传递 RecordedAnswer，原题与值一起进模型上下文。原有 QuestionId 校验、Task/Scientific 作用域、同 Session/Attempt 恢复和回答去重规则不变，不从模糊的历史工具摘要猜原题。外部业务字段不变不代表旧 wire 对象兼容：显式 schema 6.0 请求仍按统一版本边界拒绝。
 
 <a id="scientific"></a>
 
@@ -221,7 +226,7 @@ class ScientificTurnRequest:
     work_outcome: WorkOutcome | None = None
     previous_work_request: WorkRequestDraft | None = None
     unresolved_task_outcomes: list[WorkTaskOutcome] = []
-    answers: list[UserAnswer] = []
+    answers: list[RecordedAnswer] = []
     budget: TaskBudget
     parent_session_id: SessionId | None = None
 
@@ -421,7 +426,7 @@ class ModuleTaskRequest:
     input_artifacts: list[ArtifactRef] = []
     dataset_refs: list[DatasetRef] = []
     constraints: list[NonEmptyStr] = []
-    answers: list[UserAnswer] = []
+    answers: list[RecordedAnswer] = []
     budget: TaskBudget
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
@@ -437,7 +442,7 @@ class ModuleTaskRequest:
 | capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
 | dataset_refs | Scheduler 从 ResearchRun 提供的已知目录引用，非用户要求、非 LLM 生成，也不表示都要用；Agent 检查哪些目录实际可用 |
-| answers | 只包含属于本 Task 的已持久化回答，可含该 Task 的较早回答；Coding/Experiment 每一步经共享 user_answers_section 按传入顺序呈现为 required answers 段，不从 Session 另取一份 |
+| answers | 只包含属于本 Task 的 RecordedAnswer，可含该 Task 的较早回答；每项同时含系统配对的 question_text 与用户 values。Coding/Experiment 每一步经共享 user_answers_section 按传入顺序呈现为 required answers 段，不从 Session 另取一份 |
 | workspace / workspace_id / workspace_spec | 此 Attempt 的物理授权范围、逻辑工作区 id、来源声明（Agent 在 loop 前确定性 materialize） |
 | environment_spec | 上游声明的环境硬约束（`EnvironmentSpec.python_version`） |
 | output_dir | code_modify / experiment_run 的输出目录 |
@@ -520,6 +525,19 @@ class ExperimentResult:
 - **实验输入的两种语义**：`instructions` 表达实验及证据要求，也包括失败时才需交付的诊断；`expected_metrics` 只放已知精确 JSON 指标键（规范化后完整匹配），`expected_artifacts` 只放已知实际 workspace 相对路径。"metrics output file" 这类描述不是精确路径。LLMCompiler 无 typed 精确名称上游，确定性物化时清空草图中的两个数组，把错放的非空描述降为当前任务 instructions 中的语义说明；公开字段仍供可信直接/确定性调用方使用。
 - **最低交付门槛不因空数组而消失**：原生 Experiment finish 必须有成功实验命令、有效 Attempt 基线，以及至少一个本次新增/变化的真实 evidence 文件。没有精确名称不是可以只给 summary 的豁免。机器门槛不自动证明自然语言目标完整达成；Scientific 根据已读证据形成判断。
 - 原始执行日志是 `run_command` 实际记录的 stdout/stderr。Agent 根据 metrics 写的报告是派生说明，不能作为一份独立的原始日志佐证；此用法在 prompt 中明确，不宣称可确定性判别任意文件的全部来源。
+
+### 模块解释的交接
+
+payload 保留原有领域结果，同时通过既有 Artifact 通道交付下游需要读取的解释：
+
+- 原生 code_understand 通过完成检查后，总是追加一个 `kind=module_report` 工件，正文以 `## answer`、`## uncertainty`、`## evidence_files` 标题呈现选定内容。来源路径是模块引用的路径，不把源码全文复制进报告。
+- 原生 code_modify / experiment_run 只在 residual_risks 非空时追加同种报告，以 `## summary`、`## residual_risks` 呈现 finish.summary 与风险；空风险不生成额外报告。原 payload 字段不删、不改义。
+- 三处共用 capabilities 的 `build_module_report(details)` 纯函数，生成 `path=module_report.md`、`media_type=text/markdown` 的 ArtifactCandidate；不做 IO、不再调用模型、不打包完整 payload。开头的用途说明和导航 summary 明示：模块解释，不是独立验证或测量证据。
+- 报告是可读投影，长物理行按 1000 字符分行，不删解释内容；因此可用既有 read_artifact 的 start_line/end_line 取到长答案后部，不必放大上下文额度。展示换行不承诺与原 payload 字节相同；原 payload 中的精确原文不改，冻结 hash 对应实际 Markdown 字节。报告里的行号不是源码行号。
+- Scheduler 仍按原有工件登记/来源/授权规则处理，依赖 Task 通过 input_artifacts 获得引用；Scientific 用 read_artifact 读取。interpreter 对该 kind 标记 `read_for_module_explanation_not_measured_evidence`，报告中的结论不能替代原始代码、验证或实验工件。
+- 报告在原生完成门槛和实验 metrics 推导之后追加，不计入 ExperimentResult.evidence_files，不替代成功命令、真实变更或缺失的预期实验文件。未通过完成检查时不能靠一份报告变成成功。
+
+这只补齐解释的交接，不新增报告 Agent、自由查询接口或第二套证据注册协议；summary、reason、hypothesis 等既有字段保持不变。选择与验收见 [ADR-0014](../history/decisions/0014-semantic-handoffs.md)。
 
 ```python
 class ModuleError:
@@ -613,7 +631,7 @@ off 不记录；metadata 不保存请求/响应/源码正文；full 保存原始
 `ToolObservation.ok` 是机器可读的成功标志：成功读取/命令为 True，失败命令（非零退出）、参数拒绝、路径缺失等可恢复失败为 False。下游不得靠解析 `summary` 文本判断失败。AgentLoop 的反馈语义：
 
 - 可恢复失败落为持久 `runtime_feedback`（`ok=False`），并在后续每轮作为最高优先级 required 上下文注入；普通 observation 不覆盖它；
-- 用户答案由调用方限定作用域，经 Agent 的 context builder 进入同一 ContextComposer。Coding/Experiment 共用 `user_answers_section`，Scientific 保留已有 `answers` 段；不重复注入、不缓存或静默裁掉答案，必需段装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
+- 已配对的 RecordedAnswer 由调用方限定作用域，经 Agent 的 context builder 进入同一 ContextComposer。Coding/Experiment 共用 `user_answers_section`，Scientific 保留已有 `answers` 段；原题 question_text 与回答 values 一起呈现，不重复注入、不缓存或静默裁掉答案，必需段装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - `recent_observations` 是有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 明确是最多 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整，预览省略不等于工具返回值自身不完整；需要精确正文时使用下面的专门工作集，完整观察仍留在 Session；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现）或 `recent_tool_listing`（保留最近有界目录清单，按条目数与字符数上限、不截断单个路径）作为 required context；不得给每个文件分别套上限后生成可能被整体省略的超大 section；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。capabilities 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
@@ -893,9 +911,9 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-schema 6.0 删除 ResearchRequest.dataset_refs，将内部引用移到 ResearchRun/ScientificTurnRequest，并明确问答等待不计入 Run 超时（[ADR-0013](../history/decisions/0013-runtime-resources.md)）。不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 5.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 7.0 将内部答案改为必带原题的 RecordedAnswer；公共 answer_question 仍接收 UserAnswer，原题由 Controller 从 PendingQuestion 配对（[ADR-0014](../history/decisions/0014-semantic-handoffs.md)）。保留上一版的运行期资源与人工等待规则（[ADR-0013](../history/decisions/0013-runtime-resources.md)），不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 6.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
-`AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径。schema 6.0 没有改变 Session 顶层结构，也不重写或清理任何既有 state/session/trace。
+`AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径。schema 7.0 没有改变 Session 顶层结构，也不重写或清理任何既有 state/session/trace。
 
 <a id="exports"></a>
 
@@ -909,7 +927,7 @@ schema 6.0 删除 ResearchRequest.dataset_refs，将内部引用移到 ResearchR
 | 科学枚举 | ScientificVerdict、RequiredEvidenceKind |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest、ArtifactImport |
-| 人机交互 | QuestionDraft、PendingQuestion、UserAnswer |
+| 人机交互 | QuestionDraft、PendingQuestion、UserAnswer、RecordedAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput |
 | 数据集/环境 | DatasetRef、EnvironmentSpec |

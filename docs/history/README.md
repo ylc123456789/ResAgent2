@@ -4,6 +4,8 @@
 
 ## 最近已完成的主线
 
+新增语义交接修复（schema 7.0）已通过本地验证，服务器仍待验收，尚未合并 main：模块解释通过既有工件读取链交付，Controller 把原题与用户回答配对后传给对应 Agent。见 [ADR-0014](decisions/0014-semantic-handoffs.md) 与 [本地结果和服务器验收单](reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md)。旧 schema 和历史报告原样保留。
+
 JSON 格式反馈与编译字段语义修复已验收：产品提交 `8cfd373` 接入既有有界反馈，`dd770f8` 让生成和评审共用字段解释；不新增组件、不改变 schema 6.0 或预算。服务器 828 passed、1 skipped；三次仅编译与两个标准库注入均完成，原始消息和 Session 已复核。见 [最终结果、报告勘误与边界](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#verified-closeout) 和 [可复跑验收单](reviews/JSON_OUTPUT_ACCEPTANCE.md)。非法输出仍可能发生，完成的是安全有界恢复，不是上游可靠性保证；未重跑完整 GPU 矩阵。
 
 运行期资源主线已完成分阶段验收，公共 schema 为 6.0：调用方不预填数据集，缺少所需资源沿用问答恢复，显式人工等待不消耗 Run 超时。见 [实施记录](reviews/RUNTIME_RESOURCES_PLAN.md)、[ADR-0013](decisions/0013-runtime-resources.md) 和 [服务器验收单](reviews/RUNTIME_RESOURCES_ACCEPTANCE.md)。最终产品提交 `f3179e5` 的 §9 原始 trace、Session 与实际指标已于 2026-09-11 复核；用户回答现经共享上下文进入执行 Agent 并影响动作，805 passed、1 skipped。收尾仅同步文档，不改变该产品提交。

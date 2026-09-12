@@ -36,11 +36,13 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `6.0`（`SCHEMA_VERSION="6.0"`），不保留旧 schema 的第二条运行路径；旧 5.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `7.0`（`SCHEMA_VERSION="7.0"`），不保留旧 schema 的第二条运行路径；旧 6.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
 
 调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
 
 接口契约优化已完成并合入 main。分阶段提交、真实服务器验收及已知边界见 [决策与历史](docs/history/README.md)；当前文档不再维护一份重复的轮次清单。
+
+代码理解答案及模块残余风险通过可分页读取的 `module_report` 交接；它是带用途说明的模块解释，不是测量证据。用户仍只提交答案，Controller 从已保存的问题配对原题，再把完整问答交回对应 Agent。设计见 [ADR-0014](docs/history/decisions/0014-semantic-handoffs.md)，验证要求与结果集中在 [验收单](docs/history/reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md)。
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 

@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **6.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **7.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -85,6 +85,8 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 
 interpreter 属于 Scientific，因为它负责“Scientific 应怎样理解执行结果”，不改变执行事实。它无 LLM、无 IO、无状态，不是新服务。stderr 摘录只作执行诊断，summary 是解释性文字，科学证据仍须通过授权工件读取。
 
+代码理解的答案、不确定性和来源路径，以及修改/实验结果中非空的残余风险，通过 `kind=module_report` 的冻结 Markdown 工件交接。三个完成检查复用 capabilities 的 `build_module_report` 纯函数生成带字段标题的可读投影；长物理行按 1000 字符分行，便于既有 read_artifact 按行读取后部内容，不删解释内容。展示换行不承诺与原 payload 字节相同，原 payload 的精确原文保持不变；不另调 LLM、不把整个 payload 倒给 Scientific。报告经既有 Registry、依赖工件授权和读取机制交接；interpreter 标明其用途是模块解释，不能当成独立测量证据。
+
 ### 三个循环，不要混在一起
 
 | 层次 | 工作 | 何时交回控制 |
@@ -112,7 +114,7 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
 
-保存答案和让模型看见答案是两个步骤：Controller 保存 UserAnswer，Scheduler 只传递本 Task 的回答；Coding/Experiment 的 context builder 经共享 `user_answers_section` 放入 required `answers` 段，由原有 ContextComposer 计量，每一步都可见。它不另存状态，也不主动删除本 Task 的早期回答；Scientific 保持自己的既有答案投影。成功发出 ask_user 不等于前提已满足，资源仍按恢复后的实际目录视图判断。
+保存答案和让模型看见答案是两个步骤：用户提交 UserAnswer，Controller 从当前 PendingQuestion 取原题、生成 RecordedAnswer 保存，调用方不能提供或替换原题。Scheduler 只传递本 Task 的已配对回答；Coding/Experiment 的 context builder 经共享 `user_answers_section` 放入 required `answers` 段，由原有 ContextComposer 计量，每一步都可见。它不另存状态，也不主动删除本 Task 的早期回答；Scientific 保持自己的既有答案投影，同样收到 question_text 与 values。成功发出 ask_user 不等于前提已满足，资源仍按恢复后的实际目录视图判断。
 
 Scientific Session 属于 Run，跨工作回合复用；Coding/Experiment Session 属于 Run + Task + Attempt。上层保存 SessionRef，不读 Agent 私有 memory 驱动调度。
 
@@ -137,6 +139,8 @@ ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源�
 执行 Agent 负责生成候选证据，Scheduler 接收 ModuleResult 后调用 Registry 完成登记冻结。单独调用 NativeExperimentAgent 并看到 metrics.json，不等于已走完这条登记链路。
 
 Experiment metrics 从完整的真实 JSON 证据集派生，summary 只是模块提供的解释。指标是便于机器使用的证据投影，**不是比原始工件更高一级的真相**。矛盾需回查工件；执行成功也不证明假设成立。
+
+`module_report` 不改变原完成门槛：code_understand 仍须引用实际观察过的代码文件；code_modify 仍须真实改动与有效验证；experiment_run 仍须成功命令及本 Attempt 的真实证据。报告在这些检查之后追加，不加入 metrics 推导，也不能用它补齐缺少的实验文件。代码理解成功总有报告；修改/实验只在 residual_risks 非空时增加报告，没有风险时不增加一份空说明。
 
 两级完成检查职责不同：
 

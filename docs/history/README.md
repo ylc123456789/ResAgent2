@@ -1,10 +1,14 @@
 # 决策与历史
 
-这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md)。
+这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
+
+## 当前开发，待真实验收
+
+[2026-09-13上下文审查](reviews/CONTEXT_REVIEW_2026-09-13.md)保留f2d4421基线问题。用户随后批准最小修正：状态/历史语义、共享失败诊断、相关风险提示、三个Agent默认128K及按比例分配、文献条目排版。当前实现见[CONTEXT](../current/CONTEXT.md)，服务器要求见[验收单](reviews/CONTEXT_128K_ACCEPTANCE.md)。未新增记忆系统或JSON专项；真实验收尚未完成，不能把本地测试当成模型行为证明。
 
 ## 最近已完成的主线
 
-新增语义交接修复（schema 7.0）已通过本地验证，服务器仍待验收，尚未合并 main：模块解释通过既有工件读取链交付，Controller 把原题与用户回答配对后传给对应 Agent。见 [ADR-0014](decisions/0014-semantic-handoffs.md) 与 [本地结果和服务器验收单](reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md)。旧 schema 和历史报告原样保留。
+新增语义交接修复（schema 7.0）已通过本地验证，并收到服务器验收报告，尚未合并 main：模块解释通过既有工件读取链交付，Controller 把原题与用户回答配对后传给对应 Agent。复核确认代码理解答案和原题配对的消费链，但风险报告未读、文献翻页和 Coding 上下文仍有待讨论项，不能将报告原样视为无条件验收通过。见 [ADR-0014](decisions/0014-semantic-handoffs.md)、[验收单](reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md) 与 [本次复核及证据](reviews/CONTEXT_REVIEW_2026-09-13.md)。旧 schema 和历史报告原样保留。
 
 JSON 格式反馈与编译字段语义修复已验收：产品提交 `8cfd373` 接入既有有界反馈，`dd770f8` 让生成和评审共用字段解释；不新增组件、不改变 schema 6.0 或预算。服务器 828 passed、1 skipped；三次仅编译与两个标准库注入均完成，原始消息和 Session 已复核。见 [最终结果、报告勘误与边界](reviews/LLM_JSON_OUTPUT_FOLLOWUP.md#verified-closeout) 和 [可复跑验收单](reviews/JSON_OUTPUT_ACCEPTANCE.md)。非法输出仍可能发生，完成的是安全有界恢复，不是上游可靠性保证；未重跑完整 GPU 矩阵。
 

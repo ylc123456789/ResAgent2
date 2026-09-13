@@ -1,6 +1,6 @@
 # 当前架构
 
-这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
+这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
 只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **7.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
@@ -151,6 +151,8 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 ## 6. 共享能力与上下文
 
+各 Agent 与 Compiler 的逐段构成、刷新时机、必需/可选选择及多层预算，统一查 [模型上下文](CONTEXT.md#modules)。本节只说明架构归属，不重复维护完整段表。
+
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用 → Agent 的实际可用性检查。缺所需资源复用 ask_user，不增资源状态机。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 
 能力组件是普通 Python 对象或 Tool，不要求每项能力配一个 Agent、Session 或管理器。
@@ -159,7 +161,7 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
-- Runtime 负责片段选择与预算，workspace_context 从真实记录投影。Coding/Experiment 的文件与工件正文各 6000 字符；Scientific 只用工件组。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。
+- Runtime先确定模块/模型有效输入额度，再交给builder和Composer。三个Agent默认128K，Compiler仍4096；workspace_context用固定比例保留文件、工件和失败命令诊断，不另建缓存。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记或LLM调用。详见[材料与预算](CONTEXT.md#budgets)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具契约、反馈和历史，再由 Composer 计量最终文本。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
 

@@ -14,10 +14,13 @@
 2. 想操作系统，看 [CLI 使用说明](../apps/cli/README.md)；想动代码，看 [开发与验证](guides/DEVELOPMENT.md)。
 3. 遇到具体模块或字段，再查参考，不必从头读完所有文档。
 
-## 当前参考只有两个主入口
+## 当前参考的三个入口
 
 - [架构](current/ARCHITECTURE.md)：模块职责、调用方向、状态所有权和能力边界。
 - [模块接口与契约](current/CONTRACTS.md)：按调用边界把方法、输入输出、字段、失败和恢复约定放在一起。原 CONTRACTS 与 INTERFACES 已合并，不再维护独立接口卡。
+- [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment 和 Compiler 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。
+
+正在讨论的 [上下文审查与候选清单](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 属于历史审查材料，候选尚未实施，不代替当前行为。
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
@@ -29,6 +32,7 @@ CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 
 |---|---|
 | 模块职责、依赖方向、状态归属 | 架构；对应接口边界也有变化时再改契约 |
 | 方法签名、字段、返回分支、接收或恢复规则 | 模块接口与契约 + 对应边界测试 |
+| 模型可见内容、上下文段、刷新/裁剪/预算策略 | 模型上下文 + 对应构造测试；公开字段同时改变时再同步契约 |
 | 用户命令、配置、安装方式 | CLI README；受影响的入门示例 |
 | 重要设计取舍 | history/decisions 追加 ADR，并更新当前文档；普通实现细节不用写 ADR |
 | 一轮审查、开发计划、服务器验收 | history/reviews 留记录；当前文档只吸收已落地的规则 |

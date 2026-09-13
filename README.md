@@ -83,7 +83,7 @@ python -m pytest tests apps/cli/tests
 
 统一从 [文档导航](docs/README.md) 进入：
 
-- [当前实现与规范](docs/current/ARCHITECTURE.md)：架构，以及已合并的 [模块接口与契约](docs/current/CONTRACTS.md)。
+- [当前实现与规范](docs/current/ARCHITECTURE.md)：架构、[模块接口与契约](docs/current/CONTRACTS.md)，以及 [模型实际看到的上下文](docs/current/CONTEXT.md)。
 - [决策与历史](docs/history/README.md)：为什么这样设计、各轮计划和验收，不代替现行规则。
 - [入门与实践](docs/guides/README.md)：从一次任务理解系统，再学习使用和开发。
 

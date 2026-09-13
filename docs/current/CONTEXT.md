@@ -4,7 +4,7 @@
 
 - 系统分工看 [ARCHITECTURE](ARCHITECTURE.md)；公开方法和字段看 [CONTRACTS](CONTRACTS.md)。
 - 本文解释字段如何进入模型输入，不重复定义接口类型。
-- 原始问题与方案演变见 [上下文审查](../history/reviews/CONTEXT_REVIEW_2026-09-13.md)；本页已同步随后获批的语义、预算及文献呈现修正。真实验收要求见 [验收单](../history/reviews/CONTEXT_128K_ACCEPTANCE.md)。
+- 原始问题与方案演变见 [上下文审查](../history/reviews/CONTEXT_REVIEW_2026-09-13.md)；本页描述已实现的语义、预算及文献呈现。测试要求和分阶段结果见 [验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)。
 
 建议第一次先读 [基本区别](#basics)、自己关心的 [模块](#modules)，再看 [文献流程](#literature) 和 [预算](#budgets)。后面的源码、测试链接用于查证，不要求按顺序读代码。
 
@@ -301,4 +301,4 @@ Composer 按最终渲染文本（含标题、分隔符）计算 `ceil(字符数 
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-实现保持原状态机、公开业务schema、完成门禁和JSON恢复机制；本页记录获批的上下文语义/预算/排版变化。后续真实行为以[验收单](../history/reviews/CONTEXT_128K_ACCEPTANCE.md)检查，不能用确定性测试代替模型行为证据。
+实现保持原状态机、公开业务schema、完成门禁和JSON恢复机制；本页只描述上下文语义、预算和排版。分阶段测试结果、外部依赖和回放边界集中在[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，不能用确定性测试代替模型行为证据。

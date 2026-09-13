@@ -1,6 +1,6 @@
 # 语义交接验收：模块解释与原题配对
 
-状态：本地验证通过，服务器验收待执行。分支 `fix/semantic-handoffs`，产品提交 `704dbd9`（说明工件）和 `0065088`（原题配对），公共 schema 7.0。同步时应包含后续文档提交，并记录实际 HEAD。设计依据见 [ADR-0014](../decisions/0014-semantic-handoffs.md)。
+状态：服务器实测 `f2d4421` 已复核；交接链已验证，暴露的上下文消费缺口由后续阶段处理，见[分阶段结果](#verified-closeout)。以下保留原验收要求。分支 `fix/semantic-handoffs`，产品提交 `704dbd9`（说明工件）和 `0065088`（原题配对），公共 schema 7.0。设计依据见 [ADR-0014](../decisions/0014-semantic-handoffs.md)。
 
 只验证三处交接：代码理解答案、修改/实验残余风险经 module_report 到达消费者；用户原问题与回答经 RecordedAnswer 到达恢复 Agent。不要顺带调整其它字段、模型、prompt 或预算。
 
@@ -10,7 +10,7 @@
 - `e2e.mock_e2e` completed，`git diff --check` 干净。
 - 完整交接测试使用 ScriptedLLMClient 与真实 Controller、Scheduler、原生 Coding/Scientific、JsonRunStore/JsonSessionStore：已注册报告经依赖授权读取后，完整答案和不确定性进入实际上下文；无依赖任务不收到报告。
 - 问答测试覆盖 Controller 原题来源、伪造原题不被采用、连续两个“第二个”的题答配对、持久化后重建 Controller/Agent 恢复及 Task/Scientific 作用域。长报告测试经真实 Registry 和 RegisteredArtifactReader 读到默认窗口之外的尾部。
-- 这些结果证明确定性数据交接，不证明真实模型一定读取或遵循；下面的服务器真实 LLM 场景尚未执行。
+- 这些是当时的本地结果，只证明确定性数据交接，不证明真实模型一定读取或遵循；随后服务器结果另见文末，不改写本地验证的证据范围。
 
 ## 1. 同步、隔离与确定性基线
 
@@ -92,3 +92,16 @@ GPU 核心回归可按原验收方式复用已有训练环境，务必记录绑�
 - 失败现场保留；诊断重跑使用新目录、与原失败并列。说明层和状态层分别判断，不把模型未遵循称为已证明框架回归，也不凭另一个模型通过断言原失败必属随机性。
 - 交付 MANIFEST 与逐项结论、确切 HEAD/模型/环境指针、报告工件/原题/原始 LLM prompt/实际结果的路径及 call_id。本轮没有执行的场景标“未执行”，不沿用旧报告凑绿。
 - 未经授权不合并、不 push、不恢复或清理旧 checkout、缓存、数据、环境或历史报告。
+
+<a id="verified-closeout"></a>
+
+## 7. 分阶段复核与收尾（2026-09-13）
+
+语义交接实测 HEAD 为 `f2d4421`，证据根 `/root/autodl-tmp/e2e-output-f2d4421-lqdEcp/`；原始报告与失败现场保留。
+
+- 确定性基线 844 passed、1 skipped，mock E2E completed。长单行 answer 的尾部可经正式行读取进入上下文，payload 原文未改。
+- 代码理解通过 Controller/Scheduler/Agent 链交付 module_report，Scientific 实际读取，回答对应函数行为。修改/实验的非空风险能进入报告；报告被登记不等于模型已消费，当时的未读问题在[上下文审查 C4](CONTEXT_REVIEW_2026-09-13.md#c4)保留。
+- Scientific 跨进程、Coding、Experiment 均能把“第二个”与原题配对，分别选对 F1、helper_b.py、mul（结果 6）；CLI 未新增原题参数。
+- 当轮 direct、repair、跨进程问答完成；code-experiment 三次中两次完成，一次 Flash 失败保留；文献有外部服务中断。复核另发现状态命名、诊断预览、旧目录语义和文献上下文等问题，不能把首轮概括为无条件全绿。
+
+后续产品 `3efce21` 在 `ba84547` 上完成上下文回归及文献回放补验：相关模块报告被真实读取并纳入局限、共享诊断和预算生效，原题配对仍通过。确切矩阵、统计和 live/replay 区别见[最终验收](CONTEXT_128K_ACCEPTANCE.md#verified-closeout)。两个阶段一起收尾，但不混用测试次数或把后轮结果归给旧提交；未删除任何旧 schema、Run、报告、环境或缓存。

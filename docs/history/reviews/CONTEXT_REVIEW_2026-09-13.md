@@ -2,7 +2,7 @@
 
 日期：2026-09-13。产品基线：`fix/semantic-handoffs @ f2d4421b3a1cf94812b1da36aaf43488c225096c`。
 
-**状态：仅完成文档与分析，等待用户阅读后决定。本文不是已批准的开发计划，不代表以下候选都要实施。** 本轮不改产品代码、prompt、schema、预算、CLI/E2E 装配，不提交合并或推送，不发起真实模型测试。
+**归档说明：第 1–11 节保留最初仅分析、等待用户决定时的事实和候选，不代表当前实现。** 随后获批范围见第 12 节，最终验收与收尾见第 13 节；不把后来的结果改写到原始分析中。
 
 当前机制的完整参考见 [CONTEXT](../../current/CONTEXT.md)。接口字段仍由 [CONTRACTS](../../current/CONTRACTS.md) 定义。
 
@@ -198,3 +198,9 @@
 公共业务schema仍7.0；ContextBuilder显式接收有效预算参数，仓库内装配和测试同步更新，不加双签名兼容。JSON协议、Controller/Scheduler状态机、验证权限和证据门禁未更改；CLI只调整默认值来源，没有组合根重构。
 
 本地全量859 passed、1 skipped，mock E2E completed，diff-check通过。测试含128K下文件/工件各128000字符共存、Scientific两工件共256000字符、模型缩小额度先影响材料、超小额度明确失败、失败在批次中部及历史目录时序。真实模型行为尚待[本轮验收](CONTEXT_128K_ACCEPTANCE.md)，不借用旧服务器结果。
+
+## 13. 最终复核与收尾（2026-09-13）
+
+产品提交 `3efce21`、服务器实测 `ba84547` 的回归与文献补验已复核，详见[最终验收记录](CONTEXT_128K_ACCEPTANCE.md#verified-closeout)。C1/C2/C3 的状态、历史与诊断投影实际进入请求；C4 的相关风险报告被读取并影响局限说明；C6 的有效额度与实际装配已核对。C5 用历史真实记录回放加真实 Flash 模型验证 Markdown 工件、读取和摘要级结论，实时 arXiv timeout/429 仍作为外部依赖限制保留。
+
+收尾只更新文档和验收状态，不增加产品代码、schema、预算、JSON 修复或记忆机制。最初语义交接中的三个 Agent 原题配对和代码理解消费结果见[前阶段记录](SEMANTIC_HANDOFFS_ACCEPTANCE.md#verified-closeout)，不把一次后续补验说成全部旧场景都已重跑。源码规则集中在 CONTEXT/CONTRACTS，轮次和证据集中在历史验收文档。

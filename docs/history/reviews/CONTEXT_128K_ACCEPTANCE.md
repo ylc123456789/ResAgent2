@@ -1,8 +1,8 @@
 # 上下文语义、128K预算与文献呈现验收
 
-状态：2026-09-13本地 **859 passed, 1 skipped**，mock E2E completed，diff-check通过；真实模型验收待执行。同步最终提交并记录HEAD，不把旧f2d4421服务器结果算成本轮通过。
+状态：2026-09-13 阶段验收完成；服务器实测 `ba84547`，本地与服务器 **859 passed, 1 skipped**，mock E2E completed。原始请求/回答、Session 与工件已复核，文献回放补验已完成；实时 arXiv 仍有外部依赖限制。结果、勘误与未证明事项见[最终复核](#verified-closeout)。以下第 1–4 节保留可复跑要求，不把旧 f2d4421 的结果算成本轮通过。
 
-分支 `fix/context-budget-presentation`，产品提交 `3efce21`，基于既有 `fix/semantic-handoffs` 的f2d4421。同步时包含随后文档提交；本轮未合并或推送main。
+验收分支 `fix/context-budget-presentation`，产品提交 `3efce21`，基于既有 `fix/semantic-handoffs` 的 `f2d4421`；实测包含随后文档提交 `ba84547`。验收方未合并或推送；后续收尾仅同步文档，不改变已验收产品代码。
 
 范围及当前约定见[CONTEXT](../../current/CONTEXT.md)，原始问题见[审查](CONTEXT_REVIEW_2026-09-13.md)。不修改公开业务schema 7.0、状态机、完成门禁、JSON恢复协议、训练目标或模型默认名。
 
@@ -98,3 +98,63 @@ git -C "$repo_dir" diff --check
 - 不因为某模型通过就断言另一模型失败是随机；不因为一次全绿就宣称“永久稳定”。
 - 凭据扫描只报告命中与否；报告包含源码或用户内容时按私有证据保存。不得清理历史文件、环境、缓存和旧worktree。
 - 完成后仅交报告和产物根，未经授权不合并、不push、不恢复旧editable指针。
+
+<a id="verified-closeout"></a>
+
+## 5. 最终复核与收尾（2026-09-13）
+
+**结论：本轮获批的语义、预算和呈现改动可以收尾；实时 arXiv 可用性不在通过结论内。** 复核读取了原始 request/response、provider 返回的 reasoning、Session 和冻结工件，不只采信摘要或退出码。收尾不再改产品代码、schema 7.0、预算、JSON 恢复、执行权限或状态机。
+
+### 5.1 提交与证据位置
+
+- 产品 `3efce21`，服务器实测 `ba845472a5e2c161fcaf267a900ab9a886dd6ba6`；干净 worktree `/root/autodl-tmp/projects/ResAgent2-ba84547`。
+- 统一证据根 `/root/autodl-tmp/e2e-output-ba84547-E5ierm/`：原 `MANIFEST.md`、新增 `ERRATUM.md`、`REPLAY_SUPPLEMENT.md`，以及 logs/traces/workdirs/ops。原报告未覆盖。
+- 8 包 editable 指针由验收方核对指向该 worktree，之前的 `f2d4421` checkout 与现场保留；收尾不恢复指针、不清理服务器。
+- 服务器全量 859 passed、1 skipped，焦点 11 文件 131 passed；本次文档收尾在本地隔离 cwd 再跑全量，同为 859 passed、1 skipped，mock E2E completed。唯一 skip 为 opt-in 文献网络 smoke，不计作已通过。
+
+### 5.2 原始矩阵与语义验证
+
+| 范围 | 实际结果与证据边界 |
+|---|---|
+| code-experiment，Flash 两次、Pro 一次 | 三次完成；冻结 baseline/candidate 指标分别为 0.4252/0.5512、0.4386/0.5406、0.4392/0.5382；编码、验证、正式实验顺序正常。 |
+| repair、direct、ask-start → ask-resume | 修复保留真实 totla traceback 并重跑；direct 无图完成；跨进程同 Session 记录并消费 accuracy，原题配对不回归。 |
+| literature，Flash 两次实时检索 | arXiv read timeout / HTTP 429 后暂停，均无文献工件；不是正常文献完成，也不能据此断言框架回归。 |
+| CLI 独立组合根冒烟 | run → show → answer 完成，采用三 Agent 128K 默认，产物位置正常。字段名本轮含选项描述，按实际 requested_fields 回答；这是操作体验观察，未顺带改接口。 |
+| experiment-risk 标准库探针 | Experiment 产出 value=42 与非空风险报告，Scientific 实际读取并纳入局限，区分模块说明与独立测量。 |
+
+关键原始证据：
+
+- `reg-codeexp-flash1` 的 `79eeae0512b545b8a0113880ea1602e5`：control_state 中 edited_since_verification=false、required_next_action=finish，真实 patch 仍存在。状态名不再被定义为“任务没有修改”。
+- `reg-repair` 的 `aa000f1b48e74f799daedee7d12714d8`：command_results 由原事件 10 投影，包含 python train.py、exit_code=1 和 totla 的真实 stderr。批次中间失败形态本轮未自然触发，仅由确定性测试覆盖。
+- `experiment-risk-deepseek-v4-flash` 的 `34fb01add1244979becb7f6f21820a0e` 读取 module_report；`f26121a720d04c75908573fdb8d18b2f` 的原始请求包含报告正文，最终意见承认固定输入、非统计性能及覆盖写入等局限。提示到达与本次模型遵循分别有证据，不保证以后每次都遵循。
+
+### 5.3 额度与装配的实际边界
+
+三个 Agent 加载 128000 输入上限，Compiler 4096。E2E 的 OpenAICompatibleClient **有 context_budget hook**；没有 ModelProfile 时它返回模块上限。CLI 注入 Profile 后经同一 hook 取模块上限与模型可用输入的较小值，本轮仍为 128000。
+
+E2E 的 request_max_tokens=None 只表示未显式发送该输出限制，不表示没有输入预算 hook；CLI 的 request_max_tokens=256000。两个组合根不能说成配置完全相同。
+
+本轮真实输入没有自然用满 128K，未观察到上下文片段裁剪或整段省略。峰值 estimated_tokens=8496，对应实际 prompt_tokens=9127；字符估算不是精确 tokenizer，不承诺硬精确 token 边界。大材料共存、模型额度先收缩与过小必需额度失败由确定性容量测试覆盖，不能用小输入回归宣称已做 128K 全长压力测试，或把行为改善完全归因于提额。
+
+### 5.4 文献回放补验：真实记录，真实模型，非实时检索
+
+来源为此前成功检索的冻结 JSON：`/root/autodl-tmp/e2e-output-f2d4421-lqdEcp/workdirs/reg-literature-v3/artifacts/run_literature/artifact_sci_1060cd91f3520b53/literature_search.json`。测试驱动只替换组合根的检索 backend，返回其中 10 篇规范化记录；保留原 SENet 问题，真实 Flash 执行正常 Scientific → literature_search → Registry → read_artifact → finish。新目录独立，单次运行，未修改产品代码、目标或预算。
+
+| 验证 | 复核证据 |
+|---|---|
+| 按论文条目冻结 | 新工件 artifact_sci_35f95b8a7b8b741c 为 text/markdown、literature_search.md，共 120 行、10 个 Paper 条目。metadata.papers 与历史来源完全一致；标题、来源、摘要仅新增排版换行，hash 与冻结字节匹配。 |
+| 真正读取并进入输入 | `a5ae143c5b604cb0a20fdd22239cfbb8` 搜索；`63dba5d263894d16849216d827b3cda7` 读取该工件；后续 workspace_reads 含完整 SENet 摘要，truncated=false，Run 已观察集合含该工件。 |
+| 结论与材料层级一致 | 最终 `fea85633e76948c386139a87fb8c9c39` 返回 supports，明确摘要级、未读全文和对照消融、主要为作者自报，未声称独立复现。 |
+| 原机制恢复与计量 | 5 个逻辑调用、5 次请求尝试，Run.llm_calls_used=5；一次 Extra data、一次 schema 拒绝后恢复，非法动作没有执行。实际工具仅 search/read/finish，没有新摘要调用、阅读笔记或记忆机制。 |
+
+本补验验证的是**已有真实检索结果的呈现与消费**，没有验证实时搜索质量或 arXiv 恢复。来源和注入方式在 ops/replay_literature_ctx128k.py 中留档，不把回放当真实联网成功。
+
+### 5.5 勘误、计量和保留事项
+
+原 11 个 trace 目录：155 个唯一 call_id、155 次请求尝试，与各 Run.llm_calls_used 之和一致。解析错误为 **16**，不是原报告的 15：Extra data 9、Expecting value 5、缺分隔符 1、Invalid control character 1（漏计调用 `13af4e3131e6465a93a70664e9b0988d`）。schema 校验补充行 8，不另算模型调用。
+
+回放另增加 5 次调用、1 次解析错误、1 条 schema 补充行。12 目录合计 **160 次逻辑调用 / 160 次请求尝试、17 次解析错误、9 条 schema 补充记录**；没有 HTTP retry。JSON 仍是已有机制下的已知限制，不因本轮完成就宣称上游已可靠，也不追加新修复。
+
+experiment-risk 最终意见中“日志未保留”是模型措辞不准确：系统保有 Session 的命令结果及命令 stdout/stderr 文件，只是未作为独立工件交给 Scientific。应区分“消费者未得到独立日志证据”和“系统没有保存日志”；不以模型意见代替存储事实，本轮只记录，不新增日志交付机制。
+
+原 11 目录与回放 trace 权限均为目录 0700、文件 0600；原矩阵验收方定值凭据扫描零命中，私有原始消息不复制进仓库文档。旧报告、失败 Run、schema 旧记录、服务器 checkout、环境、依赖缓存和数据集全部保留。代码理解与三个 Agent 原题配对的前阶段结果另见[语义交接记录](SEMANTIC_HANDOFFS_ACCEPTANCE.md#verified-closeout)，不混用不同提交的通过数。

@@ -20,7 +20,7 @@
 - [模块接口与契约](current/CONTRACTS.md)：按调用边界把方法、输入输出、字段、失败和恢复约定放在一起。原 CONTRACTS 与 INTERFACES 已合并，不再维护独立接口卡。
 - [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment 和 Compiler 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。
 
-正在讨论的 [上下文审查与候选清单](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 属于历史审查材料，候选尚未实施，不代替当前行为。
+[上下文审查与方案演变](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 保留最初问题与随后获批的实现；[最终验收与边界](history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout) 记录真实回归、文献回放补验和报告勘误。历史候选不代替当前行为。
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 

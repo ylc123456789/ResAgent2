@@ -115,7 +115,7 @@ def test_snippets_keep_two_ranges_of_the_same_file() -> None:
         state,
         tool="read_file",
         identity_keys=("path", "start_line", "end_line"),
-        text_key="content",
+        text_key="content", max_total_chars=6000,
     )
     assert [(s["path"], s["start_line"], s["end_line"]) for s in snippets] == [
         ("a.py", 100, 140),
@@ -185,6 +185,7 @@ def test_snippets_deduplicate_ranges_but_keep_original_event_ids() -> None:
     before = state.model_dump(mode="json")
     snippets = recent_tool_snippets(
         state, tool="read_file", identity_keys=("path",), text_key="content",
+        max_total_chars=6000,
     )
     assert [(s["content"], s["observed_at"]) for s in snippets] == [
         ("other file", 20), ("latest read", 30),
@@ -200,6 +201,7 @@ def test_snippet_limit_still_selects_most_recent_observations() -> None:
     ])
     snippets = recent_tool_snippets(
         state, tool="read_file", identity_keys=("path",), text_key="content", limit=2,
+        max_total_chars=6000,
     )
     assert [s["observed_at"] for s in snippets] == [4, 5]
 
@@ -208,6 +210,7 @@ def test_tool_truncation_does_not_claim_extra_context_truncation() -> None:
     state = _snippet_state({"path": "a.py", "content": "short prefix", "truncated": True})
     snippet = recent_tool_snippets(
         state, tool="read_file", identity_keys=("path",), text_key="content",
+        max_total_chars=6000,
     )[0]
     assert snippet["truncated"] is True
     assert "context_truncated" not in snippet

@@ -9,6 +9,7 @@ from resagent2_capabilities import (
 )
 from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
     AgentState,
     ContextSection,
     user_answers_section,
@@ -86,6 +87,7 @@ def build_context(
     request: ModuleTaskRequest, state: AgentState,
     *, binding: EnvironmentBinding,
     datasets: DatasetAvailability | None = None,
+    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
 ) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
@@ -130,5 +132,5 @@ def build_context(
     answers = user_answers_section(request.answers)
     if answers is not None:
         sections.append(answers)
-    sections.extend(workspace_context(state, binding=binding))
+    sections.extend(workspace_context(state, binding=binding, max_context_tokens=max_context_tokens))
     return sections

@@ -24,7 +24,7 @@ from resagent2_runtime import (
 
 def _body(label: str) -> str:
     prefix, suffix = f"{label}_BEGIN\n", f"\n{label}_END"
-    return prefix + "x" * (6000 - len(prefix) - len(suffix)) + suffix
+    return prefix + "x" * (128_000 - len(prefix) - len(suffix)) + suffix
 
 
 FILE_BODY = _body("FILE")
@@ -146,14 +146,14 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
     agent, client, request = _native_with_full_read_history(
         tmp_path, monkeypatch, capability, artifact_first=artifact_first,
     )
-    assert agent.max_context_tokens == 8192
+    assert agent.max_context_tokens == 128_000
     result = agent.invoke(request)
     assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
     assert len(client.contexts) == 1
     context = client.contexts[0]
     assert {"workspace_reads", "environment", "tool_contracts", "recent_observations", "runtime_feedback"} <= set(context.included_sections)
-    assert context.estimated_tokens <= 8192
-    assert ContextComposer.estimate_tokens(context.text) <= 8192
+    assert context.estimated_tokens <= 128_000
+    assert ContextComposer.estimate_tokens(context.text) <= 128_000
     assert "read_file: path" in context.text
     assert "read_artifact: artifact_id" in context.text
     assert "RECOVERABLE_FEEDBACK" in context.text
@@ -161,8 +161,8 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
     # sections: runtime contracts/history/feedback and budgeting ran already.
     section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
     reads = json.loads(section.split("\n", 1)[1])
-    assert sum(len(item["content"]) for item in reads["file_snippets"]) == 6000
-    assert sum(len(item["content"]) for item in reads["artifact_snippets"]) == 6000
+    assert sum(len(item["content"]) for item in reads["file_snippets"]) == 128_000
+    assert sum(len(item["content"]) for item in reads["artifact_snippets"]) == 128_000
     assert reads["file_snippets"][0]["content"] == FILE_BODY
     assert reads["artifact_snippets"][0]["content"] == ARTIFACT_BODY
     assert not reads["file_snippets"][0]["truncated"]
@@ -170,7 +170,7 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("capability", [Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN])
-@pytest.mark.parametrize("explicit_limit", [1024, 4096])
+@pytest.mark.parametrize("explicit_limit", [1024, 2048])
 def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
     agent, client, request = _native_with_full_read_history(
         tmp_path, monkeypatch, capability, max_tokens=explicit_limit,
@@ -182,3 +182,23 @@ def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, 
     assert result.error.retryable is False
     assert result.llm_calls == 0
     assert client.contexts == []
+
+
+@pytest.mark.parametrize("capability", [Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN])
+def test_model_capacity_reduces_read_pools_before_they_are_built(tmp_path, monkeypatch, capability):
+    agent, client, request = _native_with_full_read_history(tmp_path, monkeypatch, capability)
+    budgets = []
+    def context_budget(action_type, limit):
+        budgets.append(limit)
+        return 32_000
+    client.context_budget = context_budget
+    result = agent.invoke(request)
+    assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
+    assert budgets == [128_000]
+    context = client.contexts[0]
+    assert context.estimated_tokens <= 32_000
+    section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
+    reads = json.loads(section.split("\n", 1)[1])
+    for name in ("file_snippets", "artifact_snippets"):
+        assert sum(len(s["content"]) for s in reads[name]) == 32_000
+        assert reads[name][0]["context_truncated"]

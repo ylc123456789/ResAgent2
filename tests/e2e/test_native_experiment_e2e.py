@@ -162,7 +162,7 @@ class _NativeExperimentPort:
                     },
                 ]
             ),
-            context_builder=lambda request, state: build_context(request, state, binding=binding),
+            context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
                 WorkspaceObserver(boundary),

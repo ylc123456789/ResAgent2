@@ -79,7 +79,7 @@ def _run_dispatch(stage, elapsed, *, should_execute):
 
     definition = AgentDefinition(
         name="writer", owner=AgentOwner.CODING, system_prompt="Use write.",
-        tools=(tool,), llm_client=Client(), context_builder=lambda request, state: [],
+        tools=(tool,), llm_client=Client(), context_builder=lambda request, state, limit: [],
         permission_policy=Policy(), completion_check=AcceptCompletion(),
     )
     request = ModuleTaskRequest(

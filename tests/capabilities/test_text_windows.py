@@ -69,11 +69,11 @@ def test_workspace_and_artifact_share_line_range_semantics(tmp_path, start, end,
 
 def test_artifact_range_can_recover_text_after_default_character_limit(tmp_path):
     path = tmp_path / "large.txt"
-    path.write_text("first " + "x" * 8100 + "\nsecond\nrequired evidence\n", encoding="utf-8")
+    path.write_text("first " + "x" * 128100 + "\nsecond\nrequired evidence\n", encoding="utf-8")
     ref = _artifact(path)
     reader = RegisteredArtifactReader([ref], run_id=ref.run_id)
     default = reader.read_text(ref.id)
-    assert len(default["content"]) == 8000
+    assert len(default["content"]) == 128_000
     assert default["truncated"] is True
     assert default["start_line"] is default["end_line"] is None
     ranged = reader.read_text(ref.id, start_line=2, end_line=3)

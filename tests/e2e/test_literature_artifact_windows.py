@@ -135,6 +135,10 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
 
     ref = registration.ref
     path = _path(ref)
+    assert ref.media_type == "text/markdown"
+    assert path.name == "literature_search.md"
+    assert "## Paper 6: Controlled comparison 5" in path.read_text()
+    assert "not paper full text" in path.read_text()
     frozen = path.read_bytes()
     assert hashlib.sha256(frozen).hexdigest() == ref.sha256
     repeated = registration.registry.register_scientific(
@@ -175,5 +179,5 @@ def test_multiline_registration_does_not_rewrite_a_legacy_frozen_file(tmp_path):
     assert len(_path(new_ref).read_text().splitlines()) > 1
     # Existing refs remain integrity-valid, without silently rewriting their bytes.
     old_read = RegisteredArtifactReader([old_ref], run_id=RUN_ID).read_text(old_ref.id)
-    assert old_read["content"] == old_bytes.decode("utf-8")[:8000]
-    assert old_read["truncated"] is True
+    assert old_read["content"] == old_bytes.decode("utf-8")
+    assert old_read["truncated"] is False

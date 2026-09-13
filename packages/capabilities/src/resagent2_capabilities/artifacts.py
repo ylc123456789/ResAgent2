@@ -10,7 +10,7 @@ from urllib.request import url2pathname
 
 from resagent2_contracts import ArtifactRef, RunId
 
-from .text import slice_text_lines
+from .text import MAX_READ_CHARS, slice_text_lines
 
 
 class ArtifactReadError(ValueError):
@@ -49,7 +49,7 @@ class RegisteredArtifactReader:
         self,
         artifact_id: str,
         *,
-        max_chars: int = 8_000,
+        max_chars: int = MAX_READ_CHARS,
         start_line: int | None = None,
         end_line: int | None = None,
     ) -> dict:

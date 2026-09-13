@@ -270,7 +270,8 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
                 return {"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}
             assert "workspace_reads" in context.included_sections
             assert self.artifact_id in context.text
-            assert '\\"papers\\": []' in context.text
+            assert "# Literature search results" in context.text
+            assert "No papers returned" in context.text
             return {"tool": "finish", "arguments": {
                 "summary": "No papers found",
                 "opinion": {"verdict": "inconclusive", "statement": "No papers found",
@@ -287,5 +288,5 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     state = agent.store.load(result.session.id)
     assert client.artifact_id in state.memory["read_artifact_ids"]
     reads = [e for e in state.events if e.type == "observation" and e.tool == "read_artifact"]
-    assert json.loads(reads[-1].data["value"]["content"]) == {"papers": []}
+    assert "No papers returned" in reads[-1].data["value"]["content"]
     assert "read_artifact_summaries" not in state.memory

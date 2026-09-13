@@ -28,6 +28,7 @@ from resagent2_contracts import (
 )
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from .text import wrap_text_lines
 
 
 class LiteratureSearchError(RuntimeError):
@@ -227,6 +228,28 @@ class LiteratureSearchToolInput(RuntimeModel):
     end_year: int | None = Field(default=None, ge=1900, le=2100)
 
 
+def render_literature(papers: list[LiteraturePaper]) -> str:
+    """Present retrieved records by paper, without LLM summaries or new facts."""
+    sections = [
+        "# Literature search results",
+        "Retrieved bibliographic records and abstracts, not paper full text or "
+        "independently verified findings. Read each relevant entry before using "
+        "its contents; an abstract supports only abstract-level claims.",
+    ]
+    if not papers:
+        sections.append("No papers returned.")
+    for index, paper in enumerate(papers, start=1):
+        sections.append(wrap_text_lines(
+            f"## Paper {index}: {paper.title}\n\n"
+            f"Paper ID: {paper.paper_id}\n"
+            f"Source: {paper.source_url}\n"
+            f"Published: {paper.published_at or '(not supplied)'}\n"
+            f"Authors: {', '.join(paper.authors) or '(not supplied)'}\n\n"
+            f"### Retrieved abstract\n\n{paper.abstract or '(not supplied)'}"
+        ))
+    return "\n\n".join(sections) + "\n"
+
+
 class LiteratureSearchTool:
     """Search literature, then freeze the normalized result with provenance."""
 
@@ -251,10 +274,11 @@ class LiteratureSearchTool:
         )
         candidate = ArtifactCandidate(
             kind="literature_search",
-            path="literature_search.json",
-            media_type="application/json",
+            path="literature_search.md",
+            media_type="text/markdown",
             summary=f"Literature search: {args.query}",
             metadata={"papers": [paper.model_dump(mode="json") for paper in papers]},
+            content=render_literature(papers),
         )
         artifact = self.register.register_scientific(
             candidate,

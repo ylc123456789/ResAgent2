@@ -20,7 +20,7 @@ from .artifacts import RegisteredArtifactReader
 from .environment import EnvironmentBinding
 from .git import GitBaseline, GitWorkspace
 from .process import ProcessRunner, VerificationCommandPolicy
-from .text import slice_text_lines
+from .text import MAX_READ_CHARS, slice_text_lines
 from .workspace import WorkspaceBoundary
 
 
@@ -84,7 +84,7 @@ class ReadFileTool:
         self,
         boundary: WorkspaceBoundary,
         *,
-        max_chars: int = 8_000,
+        max_chars: int = MAX_READ_CHARS,
         max_bytes: int = 1_000_000,
     ) -> None:
         self.boundary = boundary

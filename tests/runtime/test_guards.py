@@ -31,7 +31,7 @@ class NeverFinish:
         return CompletionDecision(complete=False)
 
 
-def context_builder(request, state) -> list[ContextSection]:
+def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
     return [ContextSection(name="goal", content=request.goal, required=True)]
 
 

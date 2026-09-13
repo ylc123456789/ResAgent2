@@ -8,7 +8,7 @@ from resagent2_capabilities import (
     DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
 )
 from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import AgentState, ContextSection, user_answers_section
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextSection, user_answers_section
 
 
 UNDERSTAND_PROMPT = """You are the read-only Coding Agent.
@@ -41,8 +41,9 @@ Change existing files with replace_text: old_text must match exactly once in
 the current file per call. You may make multiple replace_text calls as needed;
 create_file is only for new files. Use git_diff to review the actual change.
 After the latest edit, run shell-free verification commands inside the bound
-environment (python -m pytest / unittest / py_compile, or a small import smoke
-check), then fix any failures before finishing. Finish with
+environment (python -m pytest / unittest / py_compile / compileall). For an
+import smoke check, write a unittest and run it; python -c and arbitrary scripts
+are not allowed verification commands. Fix failures before finishing. Finish with
 result={summary, residual_risks}. Do not report changed files or verification
 status yourself: the deterministic finalizer derives them.
 
@@ -67,6 +68,7 @@ def build_context(
     control_state: dict | None = None,
     binding: EnvironmentBinding | None = None,
     datasets: DatasetAvailability | None = None,
+    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
 ) -> list[ContextSection]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
@@ -108,7 +110,7 @@ def build_context(
     answers = user_answers_section(request.answers)
     if answers is not None:
         sections.append(answers)
-    sections.extend(workspace_context(state, binding=binding))
+    sections.extend(workspace_context(state, binding=binding, max_context_tokens=max_context_tokens))
     if control_state is not None:
         sections.insert(
             0,
@@ -117,6 +119,9 @@ def build_context(
                 content=(
                     "Current coding control state (deterministic — do not "
                     "invent your own):\n"
+                    "edited_since_verification only compares recorded edit and "
+                    "verification revisions; false does not mean no patch exists. "
+                    "Follow required_next_action; completion still checks the Git diff.\n"
                     + json.dumps(control_state, ensure_ascii=False)
                 ),
                 priority=1000,

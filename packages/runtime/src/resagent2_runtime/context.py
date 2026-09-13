@@ -11,6 +11,20 @@ from resagent2_contracts import RecordedAnswer
 from .models import AgentState, ComposedContext, ContextSection
 
 
+DEFAULT_AGENT_CONTEXT_TOKENS = 128_000
+
+
+def context_char_budget(max_tokens: int, *, share: float) -> int:
+    """Allocate a material envelope using the composer's four-char estimate.
+
+    This is a packing allowance, not a tokenizer or an independent hard limit.
+    The composer still measures the entire rendered prompt, including metadata.
+    """
+    if max_tokens < 1 or not 0 < share <= 1:
+        raise ValueError("positive context budget and share in (0, 1] required")
+    return max(1, int(max_tokens * 4 * share))
+
+
 class ContextBudgetExceeded(ValueError):
     """Raised when required context alone cannot fit the configured budget."""
 
@@ -113,8 +127,8 @@ def recent_tool_snippets(
     tool: str | tuple[str, ...],
     identity_keys: tuple[str, ...],
     text_key: str,
-    limit: int = 6,
-    max_total_chars: int = 6000,
+    limit: int | None = None,
+    max_total_chars: int,
 ) -> list[dict]:
     """Select recent unique snippets, then present them in observation order.
 
@@ -128,12 +142,13 @@ def recent_tool_snippets(
     ``truncated`` describes the presented content; ``context_truncated`` marks
     extra clipping by this projection. The original events are never changed.
     """
-    if limit < 1 or max_total_chars < 1:
+    if (limit is not None and limit < 1) or max_total_chars < 1:
         raise ValueError("limit and max_total_chars must be positive")
     if not identity_keys:
         raise ValueError("identity_keys must not be empty")
 
     recent: list[dict] = []
+    content_chars = 0
     seen: set[tuple] = set()
     tools = (tool,) if isinstance(tool, str) else tool
     for event in reversed(state.events):
@@ -153,7 +168,8 @@ def recent_tool_snippets(
             continue
         seen.add(identity)
         recent.append({**value, "observed_at": event.sequence})
-        if len(recent) >= limit:
+        content_chars += max(1, len(content))
+        if content_chars >= max_total_chars or (limit is not None and len(recent) >= limit):
             break
 
     selected: list[dict] = []
@@ -215,6 +231,7 @@ def recent_tool_listing(
             selected.append(entry)
             used += cost
         bounded = dict(value)
+        bounded["observed_at"] = event.sequence
         bounded[list_key] = selected
         bounded["truncated"] = bool(value.get("truncated")) or len(selected) < len(entries)
         return bounded

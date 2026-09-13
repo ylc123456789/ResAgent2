@@ -168,7 +168,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         system_prompt=EXPERIMENT_PROMPT,
         tools=tools,
         llm_client=ScriptedLLMClient(actions),
-        context_builder=lambda request, state: build_context(request, state, binding=binding),
+        context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(
             WorkspaceObserver(boundary),

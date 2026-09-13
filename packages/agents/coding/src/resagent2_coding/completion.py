@@ -137,7 +137,7 @@ class CodeModifyCompletionCheck:
         for path in changed:
             self.boundary.resolve_write_file(path)
 
-        results, verification_issue = _verification_status(state, self.env_binding)
+        results, verification_issue, _ = _verification_status(state, self.env_binding)
         if verification_issue is not None:
             return CompletionDecision(
                 complete=False,
@@ -202,7 +202,7 @@ class CodeModifyCompletionCheck:
 
 def _verification_status(
     state: AgentState, binding: EnvironmentBinding
-) -> tuple[list[VerificationResult], str | None]:
+) -> tuple[list[VerificationResult], str | None, str]:
     """One validity rule for the model's guidance and the completion hard gate."""
     try:
         results = [
@@ -210,20 +210,20 @@ def _verification_status(
             for item in state.memory.get("verification_results", [])
         ]
     except (ValidationError, TypeError):
-        return [], "Stored verification results are invalid; rerun verification"
+        return [], "Stored verification results are invalid; rerun verification", "run_verification"
     if not results:
-        return results, "Run verification before finishing"
+        return results, "Run verification before finishing", "run_verification"
     if state.memory.get("verification_revision") != int(state.memory.get("edit_revision", 0)):
-        return results, "Run verification after the latest file edit"
+        return results, "Run verification after the latest file edit", "run_verification"
     if not binding.certified:
-        return results, "Audit the environment, then rerun verification if its generation changed"
+        return results, "Audit the environment, then rerun verification if its generation changed", "audit_env"
     if state.memory.get("verification_environment_generation") != binding.generation:
-        return results, "Environment changed or was restored; rerun verification after audit"
+        return results, "Environment changed or was restored; rerun verification after audit", "run_verification"
     if any(item.exit_code != 0 or item.timed_out for item in results):
-        return results, "Verification failed; inspect the latest command observation"
+        return results, "Verification failed; inspect the latest command observation", "inspect_and_fix_verification"
     if not state.memory.get("verification_workspace_unchanged", False):
-        return results, "Workspace changed during verification; review and rerun verification"
-    return results, None
+        return results, "Workspace changed during verification; review and rerun verification", "run_verification"
+    return results, None, "finish"
 
 
 def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict:
@@ -236,15 +236,13 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict
     obligation stays visible until verification actually covers the latest edit.
     """
     edit_revision = int(state.memory.get("edit_revision", 0))
-    results, issue = _verification_status(state, binding)
+    _, issue, next_action = _verification_status(state, binding)
     verification_required = edit_revision > 0 and issue is not None
     environment_certified = bool(binding.certified)
     if verification_required:
         required_next_action = (
-            "audit_env" if not environment_certified else "run_verification"
+            "audit_env" if not environment_certified else next_action
         )
-        if environment_certified and any(item.exit_code != 0 or item.timed_out for item in results):
-            required_next_action = "inspect_and_fix_verification"
     elif edit_revision > 0:
         # The latest edit is already verified: there is no outstanding
         # obligation, so the Agent must finish rather than re-apply an edit
@@ -253,7 +251,7 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding) -> dict
     else:
         required_next_action = "make_the_required_change"
     return {
-        "workspace_changed": edit_revision > int(state.memory.get("verification_revision") or 0),
+        "edited_since_verification": edit_revision > int(state.memory.get("verification_revision") or 0),
         "verification_required": verification_required,
         "verification_issue": issue if verification_required else None,
         "environment_certified": environment_certified,

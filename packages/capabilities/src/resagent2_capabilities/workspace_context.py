@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
+    context_char_budget,
     AgentState,
     ContextSection,
     recent_tool_listing,
@@ -12,10 +14,10 @@ from resagent2_runtime import (
 )
 
 from .environment import EnvironmentBinding
+from .command_context import command_context
 from .workspace import WorkspacePermissionError, _normalize_relative
 
 
-READ_CONTEXT_CHARS_PER_KIND = 6_000
 _READ_FIELDS = (
     "path", "artifact_id", "start_line", "end_line", "content", "truncated",
     "observed_at", "context_truncated",
@@ -66,11 +68,14 @@ def _source_index(values: object) -> list[str]:
 
 def workspace_context(
     state: AgentState, *, binding: EnvironmentBinding | None = None,
+    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
+    include_files: bool = True,
 ) -> list[ContextSection]:
     """Render bounded read results and the same binding used by execution tools.
 
-    File and artifact ranges each have a fixed content budget, so reading one
-    kind cannot evict the other. Both still count toward the Agent's total input
+    Half the effective input budget is available for reading: split equally
+    between files and artifacts, or all for artifacts when files are disabled.
+    One kind cannot evict the other. Both count toward the Agent's total input
     budget. Reads retain their event order, with later successful file edits
     marked rather than deleting earlier snippets. Neither these markers nor
     the source index prove that disk content is current (e.g. external writes).
@@ -95,6 +100,7 @@ def workspace_context(
         ))
 
     reads = {}
+    read_chars = context_char_budget(max_context_tokens, share=0.25 if include_files else 0.5)
     latest_edits = _recorded_file_edits(state)
     for name, tool, source_key in (
         ("file_snippets", "read_file", "path"),
@@ -103,8 +109,8 @@ def workspace_context(
         snippets = recent_tool_snippets(
             state, tool=tool,
             identity_keys=(source_key, "start_line", "end_line"),
-            text_key="content", max_total_chars=READ_CONTEXT_CHARS_PER_KIND,
-        )
+            text_key="content", max_total_chars=read_chars,
+        ) if include_files or tool != "read_file" else []
         # Artifact summaries already appear in task input. Do not duplicate
         # unbounded metadata here, or silently let it bypass the read budget.
         reads[name] = [
@@ -141,10 +147,21 @@ def workspace_context(
             ),
             priority=80, required=True,
         ))
-    listing = recent_tool_listing(state, tool="list_files", list_key="paths")
+    commands = command_context(state, max_chars=context_char_budget(max_context_tokens, share=1 / 16))
+    if commands is not None:
+        sections.append(commands)
+    listing = recent_tool_listing(
+        state, tool="list_files", list_key="paths", max_entries=2000,
+        max_chars=context_char_budget(max_context_tokens, share=1 / 64),
+    ) if include_files else None
     if listing:
         sections.append(ContextSection(
-            name="directory", content=json.dumps(listing, ensure_ascii=False),
+            name="directory", content=(
+                "Historical directory listing at observed_at, not a live filesystem "
+                "snapshot. Files created later may be absent; absence here does not "
+                "prove nonexistence. Use later tool observations before re-listing.\n"
+                + json.dumps(listing, ensure_ascii=False)
+            ),
             priority=62,
         ))
     return sections

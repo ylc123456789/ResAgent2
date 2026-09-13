@@ -34,3 +34,16 @@ def test_coding_prompt_allows_multiple_uniquely_matching_edits() -> None:
     assert "current file per call" in MODIFY_PROMPT
     assert "multiple replace_text calls as needed" in MODIFY_PROMPT
     assert "exactly-once replace_text action" not in MODIFY_PROMPT
+
+
+def test_relevant_risks_are_not_dismissed_as_non_measurements():
+    assert "Explanatory does not mean irrelevant" in SCIENTIFIC_PROMPT
+    assert "carry applicable residual risks" in SCIENTIFIC_PROMPT
+    assert "historical report indiscriminately" in SCIENTIFIC_PROMPT
+    assert "if one is available" in SCIENTIFIC_PROMPT
+
+
+def test_verification_prompt_does_not_offer_forbidden_inline_python():
+    assert "write a unittest" in MODIFY_PROMPT
+    assert "python -c and arbitrary scripts" in MODIFY_PROMPT
+    assert "are not allowed verification commands" in MODIFY_PROMPT

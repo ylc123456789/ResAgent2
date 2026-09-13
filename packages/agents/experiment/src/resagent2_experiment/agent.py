@@ -43,6 +43,7 @@ from resagent2_capabilities import (
     WorkspacePermissionError,
 )
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
     AgentDefinition,
     AgentLoop,
     AllowListPermissionPolicy,
@@ -78,7 +79,7 @@ class NativeExperimentAgent:
         *,
         store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
-        max_context_tokens: int = 8192,
+        max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -200,8 +201,8 @@ class NativeExperimentAgent:
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
             llm_client=self.llm_client,
-            context_builder=lambda request, state: build_context(
-                request, state, binding=binding, datasets=datasets
+            context_builder=lambda request, state, limit: build_context(
+                request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
             ),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(

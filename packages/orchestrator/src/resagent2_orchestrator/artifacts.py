@@ -219,8 +219,8 @@ class ArtifactRegistry:
         """Freeze one session-bound Scientific artifact (e.g. literature search).
 
         Unlike task artifacts, the content is not a workspace file: the
-        Scientific Tool already produced a normalized result and carries it in
-        ``candidate.metadata``. The content is serialized, hashed and written
+        Scientific Tool already produced a normalized result and optionally
+        its readable presentation. The content is hashed and written
         atomically. The id is content-derived, so registering the same content
         again is idempotent.
         """
@@ -230,9 +230,10 @@ class ArtifactRegistry:
             )
         # read_artifact pages by line before applying its character limit.
         # Keep generated records multiline so later papers remain reachable.
-        encoded = json.dumps(
+        text = candidate.content if candidate.content is not None else json.dumps(
             candidate.metadata, sort_keys=True, ensure_ascii=False, indent=2
-        ).encode("utf-8")
+        )
+        encoded = text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
         artifact_id = f"artifact_sci_{digest[:16]}"
 

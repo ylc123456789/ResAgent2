@@ -91,8 +91,8 @@ def test_composition_reads_explicit_model_and_component_context_limits(monkeypat
 
 def test_agents_get_read_context_budget_and_compiler_keeps_its_default(monkeypatch):
     for component, default in (
-        ("coding", 8192), ("experiment", 8192),
-        ("scientific", 8192), ("compiler", 4096),
+        ("coding", 128_000), ("experiment", 128_000),
+        ("scientific", 128_000), ("compiler", 4096),
     ):
         name = f"RESAGENT2_{component.upper()}_CONTEXT_TOKENS"
         monkeypatch.delenv(name, raising=False)

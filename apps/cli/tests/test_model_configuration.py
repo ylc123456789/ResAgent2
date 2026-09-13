@@ -30,9 +30,9 @@ def defaults(monkeypatch):
 
 
 @pytest.mark.parametrize("component,action_type,limit", [
-    ("scientific", ScientificAction, 8192),
-    ("coding", CodeModifyAction, 8192),
-    ("experiment", ExperimentAction, 8192),
+    ("scientific", ScientificAction, 128_000),
+    ("coding", CodeModifyAction, 128_000),
+    ("experiment", ExperimentAction, 128_000),
     ("compiler", CompilationDraft, 4096),
     ("compiler", CompilationReview, 4096),
 ])

@@ -63,7 +63,7 @@ class _AcceptFinish:
         return CompletionDecision(complete=True, summary="done", payload=candidate.result)
 
 
-def _context(request, state) -> list[ContextSection]:
+def _context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
         ContextSection(name="task", content=request.goal, priority=100, required=True)
     ]

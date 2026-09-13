@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from resagent2_contracts import ArtifactCandidate
+from .text import wrap_text_lines
 
 
 REPORT_LINE_CHARS = 1_000
@@ -10,13 +11,7 @@ REPORT_LINE_CHARS = 1_000
 
 def _wrap_lines(text: str) -> str:
     """Insert line breaks without dropping existing content or whitespace."""
-    return "\n".join(
-        "\n".join(
-            line[start:start + REPORT_LINE_CHARS]
-            for start in range(0, len(line), REPORT_LINE_CHARS)
-        )
-        for line in text.split("\n")
-    )
+    return wrap_text_lines(text, max_chars=REPORT_LINE_CHARS)
 
 
 def build_module_report(details: dict[str, str | list[str]]) -> ArtifactCandidate:

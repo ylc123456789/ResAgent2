@@ -83,7 +83,7 @@ def _reads(context):
     return json.loads(section.split("\n", 1)[1])
 
 
-def _assert_composed(context, limit=8192):
+def _assert_composed(context, limit=128_000):
     assert {"workspace_reads", "tool_contracts", "evidence_control_state"} <= set(context.included_sections)
     assert "read_artifact_summaries" not in context.included_sections
     contracts = context.text.split("## tool_contracts\n", 1)[1].split("\n\n## ", 1)[0]
@@ -94,22 +94,22 @@ def _assert_composed(context, limit=8192):
 
 
 def test_scientific_range_read_exposes_middle_evidence_in_next_real_prompt(tmp_path):
-    artifact, body = _artifact(tmp_path, "middle", lines=120, key_line=96)
-    client = ScriptedLLMClient([_read(artifact), _read(artifact, 71, 120), _pause()])
+    artifact, body = _artifact(tmp_path, "middle", lines=1500, key_line=1396)
+    client = ScriptedLLMClient([_read(artifact), _read(artifact, 1371, 1420), _pause()])
     store = InMemorySessionStore()
     agent = _agent(client, store)
 
     result = agent.run(_turn([artifact]))
 
-    assert agent.max_context_tokens == 8192
+    assert agent.max_context_tokens == 128_000
     assert result.status == "needs_user_input", result.model_dump(mode="json")
     assert len(client.contexts) == 3
     assert "middle_KEY_EVIDENCE" not in client.contexts[1].text
     context = client.contexts[2]
     _assert_composed(context)
     snippets = _reads(context)["artifact_snippets"]
-    window = next(item for item in snippets if item["start_line"] == 71)
-    expected = "".join(body.splitlines(keepends=True)[70:120])
+    window = next(item for item in snippets if item["start_line"] == 1371)
+    expected = "".join(body.splitlines(keepends=True)[1370:1420])
     assert window["content"] == expected
     assert len(expected) == 5000
     assert not window["truncated"]
@@ -120,7 +120,7 @@ def test_scientific_range_read_exposes_middle_evidence_in_next_real_prompt(tmp_p
     state = store.load(scientific_session_id("run_scientific_capacity"))
     observations = [event for event in state.events if event.type == "observation" and event.tool == "read_artifact"]
     assert len(observations) == 2
-    assert observations[0].data["value"]["content"] == body[:8000]
+    assert observations[0].data["value"]["content"] == body[:128_000]
     assert observations[0].data["value"]["truncated"] is True
     assert observations[1].data["value"]["content"] == expected
     for event in observations:
@@ -146,22 +146,23 @@ def _run_full_pool(tmp_path):
 
 def test_scientific_full_pool_keeps_multiple_artifacts_as_history_grows(tmp_path):
     agent, client, store, turn, bodies = _run_full_pool(tmp_path)
-    assert agent.max_context_tokens == 8192
+    assert agent.max_context_tokens == 128_000
     assert len(client.contexts) == 5
-    # Reading more ranges evicts old projections, not the entire evidence
-    # section. At every full-pool request both artifact identities coexist.
-    for context in client.contexts[2:]:
+    # Multiple ranges coexist while they fit; chronological order is preserved.
+    for count, context in enumerate(client.contexts[2:], start=2):
         _assert_composed(context)
         reads = _reads(context)
         snippets = reads["artifact_snippets"]
         assert reads["file_snippets"] == []
         assert {item["artifact_id"] for item in snippets} == {"artifact_a", "artifact_b"}
-        assert sum(len(item["content"]) for item in snippets) == 6000
+        assert sum(len(item["content"]) for item in snippets) == count * 3000
         assert all(not item["truncated"] for item in snippets)
     final_snippets = _reads(client.contexts[-1])["artifact_snippets"]
-    assert [item["observed_at"] for item in final_snippets] == [6, 8]
-    assert [item["start_line"] for item in final_snippets] == [31, 31]
-    assert [item["content"] for item in final_snippets] == [body[3000:] for body in bodies]
+    assert [item["observed_at"] for item in final_snippets] == [2, 4, 6, 8]
+    assert [item["start_line"] for item in final_snippets] == [1, 1, 31, 31]
+    assert [item["content"] for item in final_snippets] == [
+        bodies[0][:3000], bodies[1][:3000], bodies[0][3000:], bodies[1][3000:],
+    ]
 
     state = store.load(scientific_session_id(turn.run_id))
     observations = [event for event in state.events if event.type == "observation" and event.tool == "read_artifact"]
@@ -171,7 +172,7 @@ def test_scientific_full_pool_keeps_multiple_artifacts_as_history_grows(tmp_path
     assert "read_artifact_summaries" not in state.memory
 
 
-@pytest.mark.parametrize("explicit_limit", [1024, 5000])
+@pytest.mark.parametrize("explicit_limit", [1024, 8000])
 def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limit):
     _, _, store, turn, _ = _run_full_pool(tmp_path)
     client = ScriptedLLMClient([_pause()])
@@ -189,11 +190,25 @@ def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limi
         assert result.llm_calls == 0
         assert client.contexts == []
     else:
-        # This minimal turn fits within 5000. An explicit limit is a ceiling,
+        # This minimal turn fits within 8000. An explicit limit is a ceiling,
         # not a reason to reject a context that actually fits, nor to expand it.
         assert result.status == "needs_user_input", result.model_dump(mode="json")
         assert result.llm_calls == 1
         assert len(client.contexts) == 1
         _assert_composed(client.contexts[0], limit=explicit_limit)
         snippets = _reads(client.contexts[0])["artifact_snippets"]
-        assert sum(len(item["content"]) for item in snippets) == 6000
+        assert sum(len(item["content"]) for item in snippets) == 12000
+
+
+def test_scientific_default_keeps_two_large_artifacts_without_extra_llm_calls(tmp_path):
+    first, first_body = _artifact(tmp_path, "large_a", lines=1280)
+    second, second_body = _artifact(tmp_path, "large_b", lines=1280)
+    client = ScriptedLLMClient([_read(first), _read(second), _pause()])
+    result = _agent(client, InMemorySessionStore()).run(_turn([first, second]))
+    assert result.status == "needs_user_input", result.model_dump(mode="json")
+    assert len(client.contexts) == 3  # No separate summarizer/reading-note call.
+    _assert_composed(client.contexts[-1])
+    snippets = _reads(client.contexts[-1])["artifact_snippets"]
+    assert [item["content"] for item in snippets] == [first_body, second_body]
+    assert sum(len(item["content"]) for item in snippets) == 256_000
+    assert all(not item["truncated"] for item in snippets)

@@ -25,7 +25,7 @@ from resagent2_contracts import (
     TaskId,
 )
 
-from .context import ContextBudgetExceeded, ContextComposer
+from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer
 from .llm import LLMClient, LLMExhaustedError
 from .models import (
     AgentAction,
@@ -47,8 +47,8 @@ _RECENT_OBSERVATION_LIMIT = 6
 def _trim_json(value, limit: int) -> str:
     """Serialize ``value`` to a bounded string for context injection.
 
-    Keeps the head and tail when truncating, so a trailing error field (e.g. a
-    command's ``stderr_tail``) is not dropped from a long value.
+    Keeps the head and tail when truncating, but cannot preserve every field.
+    Capabilities provide a separate projection for actionable command errors.
     """
     if value is None:
         return ""
@@ -66,8 +66,9 @@ class ContextBuilder(Protocol):
         self,
         request: Any,
         state: AgentState,
+        max_context_tokens: int,
     ) -> list[ContextSection]:
-        """Return named sections without composing the final prompt."""
+        """Pack sections against the effective module/model input limit."""
 
 
 class LoopRequest(Protocol):
@@ -143,7 +144,7 @@ class AgentDefinition:
     completion_check: CompletionCheck
     action_type: type[AgentAction] = AgentAction
     result_type: type[BaseModel] | None = None
-    max_context_tokens: int = 4096
+    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS
 
 
 class AgentLoop:
@@ -261,7 +262,15 @@ class AgentLoop:
                 )
 
             try:
-                sections = list(definition.context_builder(request, state))
+                context_limit = definition.max_context_tokens
+                budgeter = getattr(definition.llm_client, "context_budget", None)
+                if budgeter is not None:
+                    context_limit = min(context_limit, budgeter(
+                        definition.action_type, context_limit,
+                    ))
+                if context_limit < 1:
+                    raise ContextBudgetExceeded("effective context limit must be positive")
+                sections = list(definition.context_builder(request, state, context_limit))
                 recent = self._recent_observations_section(state)
                 if recent is not None:
                     sections.insert(0, recent)
@@ -293,13 +302,6 @@ class AgentLoop:
                         required=True,
                     )
                 )
-                context_limit = definition.max_context_tokens
-                budgeter = getattr(definition.llm_client, "context_budget", None)
-                if budgeter is not None:
-                    context_limit = budgeter(
-                        definition.action_type,
-                        definition.max_context_tokens,
-                    )
                 context = self.context_composer.compose(
                     definition.system_prompt,
                     sections,

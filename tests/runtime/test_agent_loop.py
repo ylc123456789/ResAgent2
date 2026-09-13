@@ -59,7 +59,7 @@ class BudgetedScriptedLLM(ScriptedLLMClient):
         return 1
 
 
-def build_context(request, state) -> list[ContextSection]:
+def build_context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
         ContextSection(
             name="task",

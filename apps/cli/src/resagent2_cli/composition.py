@@ -34,6 +34,7 @@ from resagent2_orchestrator import (
     WorkflowScheduler,
 )
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
     JsonSessionStore,
     ModelProfile,
     OpenAICompatibleClient,
@@ -67,7 +68,7 @@ def _positive_int_env(name: str, default: int) -> int:
 
 
 def _model_profile() -> ModelProfile:
-    """Deployment defaults match V4 capacity; module input policies stay small."""
+    """Declare model capacity separately from module input allowances."""
 
     return ModelProfile(
         context_window=_positive_int_env("RESAGENT2_CONTEXT_WINDOW", 1_000_000),
@@ -82,7 +83,7 @@ def _model_profile() -> ModelProfile:
 
 def _component_context_limit(component: str) -> int:
     # Agents retain evidence snippets plus tool contracts; Compiler has no reads.
-    default = 8192 if component in {"scientific", "coding", "experiment"} else 4096
+    default = DEFAULT_AGENT_CONTEXT_TOKENS if component in {"scientific", "coding", "experiment"} else 4096
     return _positive_int_env(
         f"RESAGENT2_{component.upper()}_CONTEXT_TOKENS",
         default,

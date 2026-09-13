@@ -47,6 +47,7 @@ from resagent2_capabilities import (
     resolve_dataset_refs,
 )
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
     AgentDefinition,
     AgentEvent,
     AgentState,
@@ -88,7 +89,7 @@ class ScientificAgent:
         literature_backend: LiteratureSearchBackend | None = None,
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
-        max_context_tokens: int = 8192,
+        max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
         resource_layout: ResourceLayout | None = None,
     ) -> None:
         if max_context_tokens < 1:
@@ -139,8 +140,8 @@ class ScientificAgent:
             system_prompt=SCIENTIFIC_PROMPT,
             tools=tools,
             llm_client=self.llm_client,
-            context_builder=lambda _loop_request, state: build_context(
-                request, state, datasets=datasets
+            context_builder=lambda _loop_request, state, limit: build_context(
+                request, state, datasets=datasets, max_context_tokens=limit,
             ),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(

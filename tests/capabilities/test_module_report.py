@@ -52,7 +52,7 @@ def test_module_report_keeps_blank_lines_and_whitespace() -> None:
 def test_long_report_tail_is_reachable_through_registered_line_read(tmp_path) -> None:
     sentinel = "TAIL_SENTINEL_9c26"
     candidate = build_module_report({
-        "answer": "x" * (REPORT_LINE_CHARS * 20) + sentinel,
+        "answer": "x" * (REPORT_LINE_CHARS * 140) + sentinel,
         "uncertainty": "Only inspected source",
     })
     registry = ArtifactRegistry(tmp_path / "artifacts")

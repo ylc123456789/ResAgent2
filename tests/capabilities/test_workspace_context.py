@@ -10,7 +10,7 @@ from resagent2_capabilities import (
     AuditEnvInput, AuditEnvTool, EnvironmentBinding, PreparedEnvironment,
     RunSetupInput, RunSetupTool, workspace_context,
 )
-from resagent2_capabilities.workspace_context import READ_CONTEXT_CHARS_PER_KIND
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS
 from resagent2_contracts import (
     AgentOwner, Capability, CodeModifyInput, ExperimentRunInput, ModuleTaskRequest, TaskBudget,
 )
@@ -46,8 +46,8 @@ def _environment(state, binding):
     section = next(s for s in workspace_context(state, binding=binding) if s.name == "environment")
     return json.loads(section.content)
 
-def _reads(state):
-    section = next(s for s in workspace_context(state) if s.name == "workspace_reads")
+def _reads(state, *, max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS):
+    section = next(s for s in workspace_context(state, max_context_tokens=max_context_tokens) if s.name == "workspace_reads")
     return json.loads(section.content.split("\n", 1)[1])
 
 def test_restored_environment_is_visible_but_not_certified(tmp_path):
@@ -112,7 +112,7 @@ def test_artifact_does_not_evict_file_ranges_or_dependencies():
     assert files[0]["content"] == "torch"
     assert reads["artifact_snippets"][0]["content"] == "A" * 6000
     for name in ("file_snippets", "artifact_snippets"):
-        assert sum(len(s["content"]) for s in reads[name]) <= READ_CONTEXT_CHARS_PER_KIND
+        assert sum(len(s["content"]) for s in reads[name]) <= DEFAULT_AGENT_CONTEXT_TOKENS
     # Forgotten content does not imply that the dependency file was never read.
     assert "requirements.txt" in reads["previously_read_files"]
 
@@ -131,7 +131,7 @@ def test_many_reads_of_one_kind_do_not_evict_the_other(newest_tool, newest_key):
     expected = "artifact context" if newest_tool == "read_file" else "file context"
     assert reads[other][0]["content"] == expected
     for name in ("file_snippets", "artifact_snippets"):
-        assert sum(len(s["content"]) for s in reads[name]) <= READ_CONTEXT_CHARS_PER_KIND
+        assert sum(len(s["content"]) for s in reads[name]) <= DEFAULT_AGENT_CONTEXT_TOKENS
 
 
 def test_each_kind_is_truncated_at_its_own_content_limit():
@@ -141,10 +141,10 @@ def test_each_kind_is_truncated_at_its_own_content_limit():
             key: "source", "start_line": 10, "end_line": 80,
             "content": "X" * 8000, "truncated": False,
         })
-    reads = _reads(state)
+    reads = _reads(state, max_context_tokens=6000)
     for name in ("file_snippets", "artifact_snippets"):
         snippet = reads[name][0]
-        assert len(snippet["content"]) == READ_CONTEXT_CHARS_PER_KIND
+        assert len(snippet["content"]) == 6000
         assert snippet["truncated"] is True
         assert snippet["context_truncated"] is True
         assert (snippet["start_line"], snippet["end_line"]) == (10, 80)
@@ -164,7 +164,7 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
         capability=capability, inputs=inputs, goal="Bounded task",
         budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=30),
     )
-    sections = builder(request, state, binding=binding)
+    sections = builder(request, state, binding=binding, max_context_tokens=8192)
     assert {s.name for s in sections} >= {"environment", "workspace_reads"}
     context = ContextComposer().compose(prompt, sections, max_tokens=8192)
     assert context.estimated_tokens <= 8192
@@ -256,3 +256,84 @@ def test_context_explains_chronology_and_does_not_claim_disk_freshness():
     assert "oldest first" in content
     assert "not proof of freshness" in content
     assert "context_truncated" in content
+
+
+@pytest.mark.parametrize("tokens", [4096, 32_000, 128_000])
+def test_read_allocations_scale_with_effective_module_budget(tokens):
+    state = _state()
+    for tool, key in (("read_file", "path"), ("read_artifact", "artifact_id")):
+        _observe(state, tool, {key: "source", "content": "x" * 300_000})
+    reads = _reads(state, max_context_tokens=tokens)
+    assert len(reads["file_snippets"][0]["content"]) == tokens
+    assert len(reads["artifact_snippets"][0]["content"]) == tokens
+    sections = workspace_context(state, max_context_tokens=tokens, include_files=False)
+    scientific = json.loads(next(s.content for s in sections if s.name == "workspace_reads").split("\n", 1)[1])
+    assert scientific["file_snippets"] == []
+    assert len(scientific["artifact_snippets"][0]["content"]) == 2 * tokens
+
+
+def test_directory_has_original_event_number_without_claiming_new_files_absent():
+    state = _state()
+    _observe(state, "list_files", {"paths": ["old.py"]})
+    _observe(state, "create_file", {"path": "new.py"})
+    before = state.model_dump_json()
+    directory = next(s for s in workspace_context(state) if s.name == "directory")
+    assert "not a live filesystem" in directory.content
+    listing = json.loads(directory.content.split("\n", 1)[1])
+    assert listing["observed_at"] == 1
+    assert listing["paths"] == ["old.py"]
+    assert state.model_dump_json() == before
+
+
+def _command_result(*, failed=False, stdout="", stderr=""):
+    return {"command": "python -m unittest" if failed else "python -m py_compile app.py",
+            "exit_code": 1 if failed else 0, "timed_out": False,
+            "stdout_tail": stdout, "stderr_tail": stderr, "stdout_path": "x" * 10000}
+
+
+def test_batch_failure_survives_successful_paths_and_later_read_previews():
+    state = _state()
+    _observe(state, "run_verification", {"results": [
+        _command_result(stdout="success " * 5000),
+        _command_result(failed=True, stdout="assertion failed: expected 6 got 5"),
+        _command_result(stdout="success " * 5000),
+    ]}, ok=False)
+    for _ in range(10):
+        _observe(state, "read_file", {"path": "app.py", "content": "source"})
+    before = state.model_dump_json()
+    section = next(s for s in workspace_context(state) if s.name == "command_results")
+    assert section.required
+    assert "expected 6 got 5" in section.content
+    assert "observed_at=1 run_verification result=2 failed" in section.content
+    assert "stdout_path" not in section.content
+    assert "(no output captured)" in section.content
+    assert state.model_dump_json() == before
+
+
+@pytest.mark.parametrize("limit", [100, 1200, 4000])
+def test_command_projection_is_bounded_and_keeps_failure_before_success(limit):
+    from resagent2_capabilities.command_context import command_context
+    state = _state()
+    _observe(state, "run_verification", {"results": [
+        _command_result(), _command_result(failed=True, stderr="x" * 20000 + "ROOT_CAUSE"),
+        _command_result(),
+    ]}, ok=False)
+    section = command_context(state, max_chars=limit)
+    assert len(section.content) <= limit
+    if limit >= 1200:
+        assert "ROOT_CAUSE" in section.content
+        assert "[truncated]" in section.content
+    else:
+        assert "omitted" in section.content
+
+
+def test_new_command_pass_replaces_failure_projection_not_original_events():
+    state = _state()
+    _observe(state, "run_verification", {"results": [_command_result(failed=True, stderr="OLD_FAILURE")]}, ok=False)
+    _observe(state, "run_command", _command_result(failed=True, stderr="EXPERIMENT_FAILURE"), ok=False)
+    _observe(state, "run_verification", {"results": [_command_result()]})
+    content = next(s.content for s in workspace_context(state) if s.name == "command_results")
+    assert "OLD_FAILURE" not in content
+    assert "EXPERIMENT_FAILURE" in content
+    assert "observed_at=3 run_verification" in content
+    assert state.events[0].data["value"]["results"][0]["stderr_tail"] == "OLD_FAILURE"

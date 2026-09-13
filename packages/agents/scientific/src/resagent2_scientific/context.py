@@ -6,7 +6,7 @@ import json
 
 from resagent2_capabilities import DatasetAvailability, dataset_context, workspace_context
 from resagent2_contracts import ScientificTurnRequest
-from resagent2_runtime import AgentState, ContextSection
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextSection
 
 from .completion import _observed_artifact_ids
 from .interpreter import render_work_brief
@@ -83,8 +83,12 @@ Evidence citation rules:
 - Never cite an unread artifact just to make the assessment look complete.
 - Read relevant module_report artifacts for code explanations and residual
   risks. They preserve module-provided interpretations, not independently
-  verified measurements; consider their limitations without substituting them
-  for original code, experiment results or literature evidence.
+  verified measurements. Before relying on a module's result for a conclusion,
+  read its relevant explanation/limitations report if one is available.
+  Explanatory does not mean irrelevant: carry applicable residual risks into
+  your judgment, without treating them as measurements. Do not read every
+  historical report indiscriminately, or substitute reports for original code,
+  experiment results or literature evidence.
 - A search query, title, or short result preview is not proof that an artifact
   supports a claim. An observed id records past access, not that its full text
   is visible now. If a needed detail is missing or truncated, use read_artifact
@@ -137,6 +141,7 @@ def build_context(
     state: AgentState,
     *,
     datasets: DatasetAvailability | None = None,
+    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
 ) -> list[ContextSection]:
     """Compose fixed scientific partitions from one turn and generic state."""
 
@@ -210,5 +215,5 @@ def build_context(
     ]
     # The same bounded event projection used by execution Agents; Scientific
     # has artifact reads but no workspace tools or environment binding.
-    sections.extend(workspace_context(state))
+    sections.extend(workspace_context(state, max_context_tokens=max_context_tokens, include_files=False))
     return sections

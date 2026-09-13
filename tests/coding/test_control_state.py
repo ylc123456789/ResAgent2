@@ -30,14 +30,14 @@ def _binding(certified: bool):
 
 def test_no_edit_yet_is_not_unverified() -> None:
     control = derive_control_state(_state({"edit_revision": 0}), _binding(False))
-    assert control["workspace_changed"] is False
+    assert control["edited_since_verification"] is False
     assert control["verification_required"] is False
     assert control["required_next_action"] == "make_the_required_change"
 
 
 def test_after_edit_verification_is_required() -> None:
     control = derive_control_state(_state({"edit_revision": 1}), _binding(False))
-    assert control["workspace_changed"] is True
+    assert control["edited_since_verification"] is True
     assert control["verification_required"] is True
     assert control["environment_certified"] is False
     assert control["required_next_action"] == "audit_env"
@@ -65,7 +65,7 @@ def test_after_verification_obligation_clears() -> None:
             }],
         }), _binding(True)
     )
-    assert control["workspace_changed"] is False
+    assert control["edited_since_verification"] is False
     assert control["verification_required"] is False
     assert control["required_next_action"] == "finish"
 
@@ -77,3 +77,20 @@ def test_newer_edit_reopens_verification() -> None:
     )
     assert control["verification_required"] is True
     assert control["required_next_action"] == "run_verification"
+
+
+def test_old_failure_does_not_override_a_new_revision_or_environment():
+    memory = {
+        "edit_revision": 1, "verification_revision": 1,
+        "verification_environment_generation": "generation_test",
+        "verification_workspace_unchanged": True,
+        "verification_results": [{
+            "command": "python -m unittest", "exit_code": 1, "timed_out": False,
+            "stdout_path": "old.stdout", "stderr_path": "old.stderr", "duration_seconds": 1,
+        }],
+    }
+    assert derive_control_state(_state(memory), _binding(True))["required_next_action"] == "inspect_and_fix_verification"
+    for change in ({"edit_revision": 2}, {"verification_environment_generation": "old_generation"}):
+        result = derive_control_state(_state({**memory, **change}), _binding(True))
+        assert result["required_next_action"] == "run_verification"
+    assert "workspace_changed" not in derive_control_state(_state(memory), _binding(True))

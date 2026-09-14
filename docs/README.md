@@ -24,6 +24,8 @@
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
+想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。当前只有规程，尚未执行 L3 验收。
+
 <a id="maintenance"></a>
 
 ## 修改代码时，文档怎么跟着改

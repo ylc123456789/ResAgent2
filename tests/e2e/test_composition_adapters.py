@@ -7,7 +7,13 @@ import pytest
 from e2e import real_e2e
 from resagent2_contracts import RunBudget, WorkRequest, WorkRequestDraft
 from resagent2_orchestrator import CompilationError
-from resagent2_runtime import AgentAction, ContextBudgetExceeded, PromptLLMClient, ScriptedLLMClient
+from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
+    AgentAction,
+    ContextBudgetExceeded,
+    PromptLLMClient,
+    ScriptedLLMClient,
+)
 
 
 def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
@@ -25,9 +31,9 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
 
     adapter.next_action("Compile this objective", AgentAction)
     assert client.contexts[0].included_sections == ["system", "compiler_request"]
-    assert 0 < client.contexts[0].estimated_tokens <= 4096
+    assert 0 < client.contexts[0].estimated_tokens <= DEFAULT_AGENT_CONTEXT_TOKENS
     with pytest.raises(ContextBudgetExceeded):
-        adapter.next_action("x" * 20000, AgentAction)
+        adapter.next_action("x" * (DEFAULT_AGENT_CONTEXT_TOKENS * 4), AgentAction)
     assert len(client.contexts) == 1
     assert adapter.last_attempts == 0
 
@@ -35,7 +41,8 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
 @pytest.mark.parametrize("oversized", [False, True])
 def test_full_review_semantics_use_the_existing_context_budget(monkeypatch, tmp_path, oversized):
     """Actual compiler + composition adapter; no network or scripted judgment claim."""
-    instructions = "Measure accuracy without changing code." + (" detail" * 4000 if oversized else "")
+    repeats = DEFAULT_AGENT_CONTEXT_TOKENS if oversized else 4000
+    instructions = "Measure accuracy without changing code." + " detail" * repeats
     draft = {
         "summary": "Measure", "rationale": "Obtain evidence",
         "tasks": [{
@@ -69,7 +76,7 @@ def test_full_review_semantics_use_the_existing_context_budget(monkeypatch, tmp_
         assert len(client.contexts) == 2
         review = client.contexts[1]
         assert review.included_sections == ["system", "compiler_request"]
-        assert 0 < review.estimated_tokens <= 4096
+        assert 4096 < review.estimated_tokens <= DEFAULT_AGENT_CONTEXT_TOKENS
         assert "  inputs=" in review.text and instructions in review.text
         assert "  constraints=" in review.text and "Use registered data only" in review.text
         assert "Code-level verification does not replace formal experiment delivery" in review.text

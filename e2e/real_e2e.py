@@ -58,6 +58,7 @@ from resagent2_orchestrator import (
     WorkflowScheduler,
 )
 from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS,
     JsonSessionStore,
     OpenAICompatibleClient,
     PromptLLMClient,
@@ -449,7 +450,7 @@ def _build_controller(workdir: Path, repo: Path | None):
             PromptLLMClient(
                 _new_llm_client(),
                 system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
-                max_context_tokens=4096,
+                max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS,
                 section_name="compiler_request",
             )
         ),

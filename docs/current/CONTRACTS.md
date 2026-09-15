@@ -618,7 +618,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：draft/review 仍经 `P
 
 读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用行切片，Artifact 先核对整份 hash。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配。
 
-**容量**：ModelProfile 声明窗口、输出预留、安全余量，模块声明输入上限；有效额度取模块与剩余模型容量之小值。正文 JSON 路径计量渲染后的 Context，Action schema 另在有Profile时从模型容量预留，不计入Context的estimated_tokens；原生路径计量 `messages + tools` 完整 JSON 序列化，包括历史、schema 与转义开销。均使用字符/4近似；三个Agent默认128K，Compiler仍4096。不另加隐藏调用额度；压缩、动作和重试共用 Run 剩余 calls，step 仅记录时序。required 保持顺序，optional 按优先级稳定选入；大可选段放不下不阻挡后续小段。不查询或按模型名猜容量，不新增长期记忆系统；只对旧协议历史做共享的有损检查点。
+**容量**：ModelProfile 声明窗口、输出预留、安全余量，模块声明输入上限；有效额度取模块与剩余模型容量之小值。正文 JSON 路径计量渲染后的 Context，Action schema 另在有Profile时从模型容量预留，不计入Context的estimated_tokens；原生路径计量 `messages + tools` 完整 JSON 序列化，包括历史、schema 与转义开销。均使用字符/4近似；三个Agent及Compiler默认均为128000。不另加隐藏调用额度；压缩、动作和重试共用 Run 剩余 calls，step 仅记录时序。required 保持顺序，optional 按优先级稳定选入；大可选段放不下不阻挡后续小段。不查询或按模型名猜容量，不新增长期记忆系统；只对旧协议历史做共享的有损检查点。
 
 <a id="trace"></a>
 
@@ -649,7 +649,7 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - 正文 JSON 客户端使用 `recent_observations` 有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 是约 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整。原生客户端改为重放 `tool_turns` 中检查点之后已配对的 assistant/tool 消息，并在末尾加入最新业务 Context；两者都不把历史 prompt 当第二套记忆；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。capabilities 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
-- 三个Agent默认输入上限同源为128000 tokens，模块分别可配置；Compiler保持4096。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按文件/工件/诊断/目录16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
+- 三个Agent及Compiler默认输入上限同源为128000 tokens，模块分别可配置；CLI与real E2E的Compiler复用同一默认常量，Compiler仍无Session或历史压缩。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按文件/工件/诊断/目录16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
 - 共享command_results从原事件中选择run_verification/run_setup/run_command各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
 - directory附observed_at并明确是历史目录观察，创建文件不会自动重写旧清单。Coding控制投影用edited_since_verification表达编辑/验证版本差，不再把它叫workspace_changed；这些是模型可见投影，不增加业务schema字段；
 - 工件正文只从 Session 工具观测投影，不再生产或消费 read_artifact_summaries 正文前缀副本。已读 ID、工件说明和检索短预览不是完整正文，也不是当前论断的支持证明；需要精确内容时按工件行范围读取。冻结工件、原始观测与 full trace 不因工作集淘汰而删除；

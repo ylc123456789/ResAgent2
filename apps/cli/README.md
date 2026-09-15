@@ -203,7 +203,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 - `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `128000`；
 - `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `128000`；
 - `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `128000`；
-- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `4096`。
+- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `128000`，仍可单独覆盖；CLI与real E2E的Compiler默认值共用runtime常量。
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
 
@@ -211,7 +211,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不扩到256K、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent默认128K，Compiler默认4096。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent与Compiler默认均为128000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 

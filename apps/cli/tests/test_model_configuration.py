@@ -12,7 +12,7 @@ from resagent2_contracts import RunBudget, WorkRequest, WorkRequestDraft
 from resagent2_experiment.models import ExperimentAction
 from resagent2_orchestrator import LLMWorkflowCompiler
 from resagent2_orchestrator.compiler import CompilationDraft, CompilationReview
-from resagent2_runtime import ComposedContext
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, ComposedContext, ScriptedLLMClient
 from resagent2_scientific.models import ScientificAction
 
 
@@ -33,8 +33,8 @@ def defaults(monkeypatch):
     ("scientific", ScientificAction, 128_000),
     ("coding", CodeModifyAction, 128_000),
     ("experiment", ExperimentAction, 128_000),
-    ("compiler", CompilationDraft, 4096),
-    ("compiler", CompilationReview, 4096),
+    ("compiler", CompilationDraft, 128_000),
+    ("compiler", CompilationReview, 128_000),
 ])
 def test_output_headroom_preserves_every_module_input_limit(defaults, component, action_type, limit):
     client = composition._client()
@@ -44,6 +44,16 @@ def test_output_headroom_preserves_every_module_input_limit(defaults, component,
     assert client.timeout_seconds == 600
     assert composition._component_context_limit(component) == limit
     assert client.context_budget(action_type, limit) == limit
+
+
+def test_real_e2e_compiler_uses_the_shared_cli_default(defaults, monkeypatch, tmp_path):
+    from e2e import real_e2e
+
+    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: ScriptedLLMClient([]))
+    controller, _ = real_e2e._build_controller(tmp_path, None)
+
+    assert controller.compiler._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
+    assert composition._component_context_limit("compiler") == DEFAULT_AGENT_CONTEXT_TOKENS
 
 
 @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
@@ -115,7 +125,8 @@ def test_full_cli_compilation_uses_new_defaults_for_draft_and_review(defaults, m
         }).encode())
 
     monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
-    compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=4096))
+    compiler_limit = composition._component_context_limit("compiler")
+    compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=compiler_limit))
     now = datetime.now(UTC)
     result = compiler.compile(WorkRequest(
         id="work_config", run_id="run_config", scientific_session_id="session_config",
@@ -131,6 +142,6 @@ def test_full_cli_compilation_uses_new_defaults_for_draft_and_review(defaults, m
     for row in rows:
         assert row["request_max_tokens"] == 256_000
         assert row["included_sections"] == ["system", "compiler_request"]
-        assert 0 < row["estimated_tokens"] <= 4096
+        assert 0 < row["estimated_tokens"] <= compiler_limit
         assert len(row["attempts"]) == row["retry_number"] + 1 == 1
     assert rows[1]["step"] == "review"

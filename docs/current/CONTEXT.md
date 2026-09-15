@@ -178,7 +178,7 @@ hardware/repo 在首次 Session 的 initial_memory 中初始化，恢复时从�
 
 ### 3.4 Compiler：同一预算机制，但不是第四个 AgentLoop
 
-输入边界见 [WorkflowCompiler](CONTRACTS.md#compiler)。CLI / real E2E 仍用 `PromptLLMClient.next_action` 把编译 prompt 包成两个必需段：`system` 和 `compiler_request`，要求 JSON-only 输出；默认额度仍为4096。它复用客户端的旧分段注入路径，不使用 Agent 的原生工具历史或 `tools` 数组。
+输入边界见 [WorkflowCompiler](CONTRACTS.md#compiler)。CLI / real E2E 仍用 `PromptLLMClient.next_action` 把编译 prompt 包成两个必需段：`system` 和 `compiler_request`，要求 JSON-only 输出；两入口的默认额度同源为128000，CLI仍可用 `RESAGENT2_COMPILER_CONTEXT_TOKENS` 单独覆盖。它复用客户端的旧分段注入路径，不使用 Agent 的原生工具历史或 `tools` 数组。
 
 | 调用 | compiler_request 包含什么 |
 |---|---|
@@ -275,7 +275,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | 层次 | 当前默认或规则 | 由谁负责 |
 |---|---|---|
 | 模型可用输入容量 | 注入的 ModelProfile：窗口减预留输出和安全余量；Compiler 还扣 JSON action schema 说明 | 原生 LLM client 的预算 hook |
-| 模块输入上限 | Scientific / Coding / Experiment 各128000 tokens，覆盖完整序列化 `{messages, tools}`；Compiler保持4096 tokens | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模块参数可覆盖 |
+| 模块输入上限 | Scientific / Coding / Experiment / Compiler 各128000 tokens；前三者覆盖完整序列化 `{messages, tools}`，Compiler保留JSON-only计量路径 | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模块参数可覆盖 |
 | 材料软水位 | 固定正文与最小导航框先入场；可伸缩材料扩展到整包80%，与压缩触发阈值同源 | ContextComposer + CONTEXT_TARGET_SHARE |
 | 材料起始份额 | 文件/工件/诊断/目录的相对权重16/16/4/1，只分配给已选入项；空余按96/80/62优先级借用 | ContextMaterial + ContextComposer |
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
@@ -291,7 +291,7 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 
 例如128K模块的材料填充目标是整包102.4K，留下空间容纳后续工具返回；这不是对下次返回一定放得下的承诺。不能把所有空余都填到128K，否则材料扩展自身就可能反复触发压缩。输入参数可覆盖模块上限，但系统不会自动扩大它。协议历史与材料投影的重复内容仍会重复计量，不做隐式去重或删原始回执。
 
-**真正不足就报错，不新增恢复状态机。** 沿用至多一次旧历史压缩后，schema、单个巨大近期完整回合或最小必需输入仍装不下，返回现有 `budget_exhausted` 并保留现场；不自动ask_user、不加二次摘要纠错、不反复扩容。空/截断摘要仍拒绝。当前业务信息不由历史摘要替代，Compiler没有材料或Session，仍走原4096输入路径。
+**真正不足就报错，不新增恢复状态机。** 沿用至多一次旧历史压缩后，schema、单个巨大近期完整回合或最小必需输入仍装不下，返回现有 `budget_exhausted` 并保留现场；不自动ask_user、不加二次摘要纠错、不反复扩容。空/截断摘要仍拒绝。当前业务信息不由历史摘要替代，Compiler没有材料或Session；其默认输入额度同为128000，但仍走原JSON-only路径，不新增压缩。
 
 输出额度是另一项配置：思考与最终正文可能共享 Provider 的输出额度。它不能用来解释所有输入裁剪，也不因为输入还有空间就自动增大。环境变量及部署默认值统一查 [CLI 配置](../../apps/cli/README.md#6-模型与上下文预算)，本文不另设一套值。
 

@@ -70,11 +70,15 @@ class ToolRegistry:
     ) -> ToolObservation:
         """Validate raw arguments and execute the selected Tool."""
 
+        parsed = self.validate(name, arguments)
+        return self._tools[name].execute(state, parsed)
+
+    def validate(self, name: str, arguments: dict[str, JsonValue]) -> BaseModel:
+        """Preflight arguments without executing a tool or changing state."""
         tool = self._tools.get(name)
         if tool is None:
             raise ToolNotFoundError(name)
-        parsed = tool.input_model.model_validate(arguments)
-        return tool.execute(state, parsed)
+        return tool.input_model.model_validate(arguments)
 
 
 class ReadValueInput(RuntimeModel):

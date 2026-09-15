@@ -53,9 +53,11 @@ ContextComposer 对包含标题和分隔符的最终文本统一估算预算，�
 
 `AgentAction.arguments` 保持通用对象，以便同一 Loop 复用不同 Tool 集。`OpenAICompatibleClient` 的 AgentLoop 走 `next_tool_call`，把每个 Tool 既有 `input_model` 的完整 JSON Schema 放进原生 `tools` 参数；Compiler 仍经 `PromptLLMClient.next_action` 从正文读取 JSON。没有 `next_tool_call` 的测试或注入客户端继续使用 `next_action`，Loop 为它们从同一 `input_model` 渲染简短必填参数契约。两条路径最终都由 ToolRegistry 做完整输入模型校验，不改变 Tool、AgentAction 或 Compiler 的业务接口。
 
-原生回复每轮必须恰有一个 tool call；零个或多个会整批拒绝，不执行其中任何调用，assistant `content` 也不会被解析成执行指令。Session 创建时固定 `tool_protocol_key`：正文 JSON 为 `None`；OpenAICompatibleClient 使用不含 API key 的协议、endpoint、model 身份 hash；其他原生客户端必须提供非空、稳定且能标识协议配置的 `tool_session_key`。恢复时不允许 JSON↔原生切换，也不允许更换原生 endpoint/model，没有隐式迁移。
+原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work` 必须单独调用；零个、超量或混入控制工具的批次整体拒绝，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
 
-`tool_turns` 保存 assistant 的 `content`、`reasoning_content`、原始 `tool_calls` 和配对 `tool_results`：Loop 先持久化 call 再派发，观察事件保存时附上模型可见 receipt。进程重启发现未配对 call 时补记 unknown-outcome receipt，要求模型先检查现状，绝不自动重放；这是进程重启 checkpoint，不保证掉电持久化，也不是跨外部副作用的 exactly-once 事务。
+Session 创建时固定 `tool_protocol_key`：正文 JSON 为 `None`；OpenAICompatibleClient 使用不含 API key 的协议、endpoint、model 身份 hash；当前串行检查点协议为 `openai-compatible-tools/v2`。其他原生客户端必须提供非空、稳定且能标识协议配置的 `tool_session_key`。恢复不允许协议/endpoint/model 切换，没有隐式迁移。
+
+`tool_turns` 保存 assistant 的 `content`、`reasoning_content`、原始 `tool_calls` 和按调用 ID 配对的 `tool_results`。整批先保存，每个工具派发前记录 `executing_call_id`，结果和执行标记的清除一起保存。进程重启时已完成回执不变；当时正在执行但无回执的调用记为 unknown outcome；其余缺回执调用记为未执行。绝不自动重放；这是进程重启 checkpoint，不保证掉电持久化，也不是跨外部副作用的 exactly-once 事务。
 
 下一轮原生请求重放已配对的 assistant/tool 协议消息，并追加这一次重新构建的业务 Context；不会保存或重放每轮旧的完整业务 prompt，也没有新增压缩记忆系统。Session 文件始终按目录 `0700`、文件 `0600` 保存，和 trace 档位无关。`reasoning_content` 只为同一 Session 的供应商协议续传，不进入 memory、事件证据或业务完成判据。
 

@@ -41,8 +41,9 @@ from .models import (
 from .store import InMemorySessionStore, SessionStore
 from .tools import Tool, ToolRegistry, tool_contracts_text
 from .tool_calling import (
-    NativeToolCallError, complete_pending_turn, native_action,
+    NativeToolCallError, complete_pending_turn, native_actions,
     native_context_budget, native_input_text, native_tool_schemas, tool_receipt,
+    record_tool_result, recover_pending_turn,
 )
 
 _CONSECUTIVE_FAILURE_LIMIT = 5
@@ -166,6 +167,7 @@ class AgentLoop:
         self.context_composer = context_composer or ContextComposer()
         self.clock = clock
         self._run_llm_calls = 0
+        self._active_call_id: str | None = None
 
     def run(
         self,
@@ -178,6 +180,7 @@ class AgentLoop:
         """Run one new Agent session until completion, pause, or structured failure."""
 
         self._run_llm_calls = 0
+        self._active_call_id = None
         now = datetime.now(UTC)
         native_call = getattr(definition.llm_client, "next_tool_call", None)
         protocol_key = (
@@ -283,18 +286,11 @@ class AgentLoop:
         interrupted = False
         for turn in state.tool_turns:
             if len(turn.tool_results) < len(turn.tool_calls):
-                complete_pending_turn(turn, tool_receipt(ToolObservation(
-                    ok=False,
-                    summary=(
-                        "Interrupted before a durable tool result was recorded. "
-                        "Execution outcome is unknown; inspect current state before retrying. "
-                        "The runtime has not replayed this call."
-                    ),
-                )))
+                recover_pending_turn(turn)
                 interrupted = True
         if interrupted:
             self._feedback(
-                state, "An interrupted tool call has unknown outcome. Inspect current state before retrying.",
+                state, "An interrupted tool batch was not replayed. Inspect its receipts and current state before retrying.",
                 tool="runtime",
             )
 
@@ -414,7 +410,7 @@ class AgentLoop:
                     turn = ToolCallTurn.model_validate(reply)
                     used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
                     rejection = None
-                    if turn.tool_results:
+                    if turn.tool_results or turn.executing_call_id is not None:
                         rejection = "A model reply cannot provide tool execution receipts"
                     if any(call.id in used_ids for call in turn.tool_calls):
                         rejection = "Provider reused a historical tool call ID; no tool was executed"
@@ -428,14 +424,24 @@ class AgentLoop:
                         # Checkpoint before any dispatch. Missing receipts on
                         # resume are unknown outcomes, never replay instructions.
                         self._save(state)
-                    raw_action = native_action(turn)
+                    raw_actions = native_actions(turn)
                 else:
-                    raw_action = reply
+                    raw_actions = [reply]
                 # Tolerate the single historical dead field; every other unknown
                 # field still fails ``extra="forbid"`` validation.
-                if isinstance(raw_action, dict):
-                    raw_action.pop("reasoning_summary", None)
-                action = definition.action_type.model_validate(raw_action)
+                actions = []
+                for raw_action in raw_actions:
+                    if isinstance(raw_action, dict):
+                        raw_action.pop("reasoning_summary", None)
+                    actions.append(definition.action_type.model_validate(raw_action))
+                if len(actions) > 1:
+                    if len(actions) > request.budget.max_steps - attempt_steps:
+                        return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
+                                             "Batch exceeds remaining step budget; no tool was executed",
+                                             retryable=False)
+                    failure = self._preflight_batch(definition, registry, request, state, actions)
+                    if failure is not None:
+                        return failure
             except (json.JSONDecodeError, ValidationError, NativeToolCallError) as error:
                 if not charged:
                     attempts = getattr(definition.llm_client, "last_attempts", 1)
@@ -446,7 +452,7 @@ class AgentLoop:
                     # Count any preceding transport retries as well.
                     summary = (
                         f"Native tool arguments were not valid JSON: {error}. "
-                        "Return exactly one native tool call with a JSON object of arguments. "
+                        "Return native tool calls with JSON objects of arguments. "
                         "No tool was executed."
                     ) if native_call is not None else (
                         f"LLM output was not valid JSON: {error}. "
@@ -459,7 +465,7 @@ class AgentLoop:
                     # clients keep the raw response exclusively in full trace.
                     details = None
                 elif isinstance(error, NativeToolCallError):
-                    summary = str(error) + " Return exactly one native tool call. No tool was executed."
+                    summary = str(error) + " Correct the native tool batch. No tool was executed."
                     details = None
                 else:
                     details = self._validation_details(error)
@@ -508,219 +514,236 @@ class AgentLoop:
                     details={"component": "llm"},
                 )
 
-            state.step += 1
-            attempt_steps += 1
-            self._append_event(
-                state,
-                event_type="action",
-                tool=action.tool,
-                data=action.model_dump(mode="json"),
-            )
-            self._save(state)
-
-            if not registry.contains(action.tool):
-                return self._failure(
+            for index, action in enumerate(actions):
+                if attempt_steps >= request.budget.max_steps:
+                    return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
+                                         "Agent session exhausted step budget", retryable=False)
+                self._active_call_id = turn.tool_calls[index].id if native_call is not None else None
+                state.step += 1
+                attempt_steps += 1
+                self._append_event(
                     state,
-                    ErrorCode.INVALID_INPUT,
-                    f"unknown tool: {action.tool}",
-                    retryable=True,
-                )
-
-            try:
-                permission = definition.permission_policy.check(action, state, request)
-            except Exception as error:
-                return self._failure(
-                    state,
-                    ErrorCode.CONTRACT_ERROR,
-                    f"permission policy failed: {error}",
-                    retryable=False,
-                )
-            if not permission.allowed:
-                return self._failure(
-                    state,
-                    ErrorCode.PERMISSION_DENIED,
-                    permission.reason or "Tool execution denied",
-                    retryable=False,
-                )
-
-            # Model calls and permission checks can consume the remaining
-            # deadline. Their completed work is already accounted for, but an
-            # expired action must not start a new tool or its side effects.
-            if self.clock() - started >= request.budget.timeout_seconds:
-                return self._failure(
-                    state,
-                    ErrorCode.TIMEOUT,
-                    "Agent session exceeded timeout before tool dispatch",
-                    retryable=True,
-                )
-
-            try:
-                observation = registry.dispatch(
-                    action.tool,
-                    action.arguments,
-                    state,
-                )
-            except ValidationError as error:
-                self._feedback(
-                    state,
-                    "Tool arguments did not match the input schema: "
-                    + str(self._validation_details(error)),
+                    event_type="action",
                     tool=action.tool,
+                    data=action.model_dump(mode="json"),
                 )
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
-                continue
-            except PermissionError as error:
-                self._feedback(
+                self._save(state)
+
+                if not registry.contains(action.tool):
+                    return self._failure(
+                        state,
+                        ErrorCode.INVALID_INPUT,
+                        f"unknown tool: {action.tool}",
+                        retryable=True,
+                    )
+
+                try:
+                    permission = definition.permission_policy.check(action, state, request)
+                except Exception as error:
+                    return self._failure(
+                        state,
+                        ErrorCode.CONTRACT_ERROR,
+                        f"permission policy failed: {error}",
+                        retryable=False,
+                    )
+                if not permission.allowed:
+                    return self._failure(
+                        state,
+                        ErrorCode.PERMISSION_DENIED,
+                        permission.reason or "Tool execution denied",
+                        retryable=False,
+                    )
+
+                # Model calls and permission checks can consume the remaining
+                # deadline. Their completed work is already accounted for, but an
+                # expired action must not start a new tool or its side effects.
+                if self.clock() - started >= request.budget.timeout_seconds:
+                    return self._failure(
+                        state,
+                        ErrorCode.TIMEOUT,
+                        "Agent session exceeded timeout before tool dispatch",
+                        retryable=True,
+                    )
+
+                if native_call is not None:
+                    state.tool_turns[-1].executing_call_id = self._active_call_id
+                    self._save(state)
+                try:
+                    observation = registry.dispatch(
+                        action.tool,
+                        action.arguments,
+                        state,
+                    )
+                except ValidationError as error:
+                    self._feedback(
+                        state,
+                        "Tool arguments did not match the input schema: "
+                        + str(self._validation_details(error)),
+                        tool=action.tool,
+                    )
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
+                except PermissionError as error:
+                    self._feedback(
+                        state,
+                        f"Tool execution denied: {error}",
+                        tool=action.tool,
+                    )
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
+                except Exception as error:
+                    self._feedback(
+                        state,
+                        f"Tool execution failed: {error}",
+                        tool=action.tool,
+                    )
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
+
+                state.memory.update(observation.memory_updates)
+                state.last_observation = observation
+                if state.runtime_feedback_source == "tool_error":
+                    state.runtime_feedback = None
+                    state.runtime_feedback_source = None
+                self._append_event(
                     state,
-                    f"Tool execution denied: {error}",
+                    event_type="observation",
                     tool=action.tool,
+                    data=observation.model_dump(mode="json"),
                 )
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
-                continue
-            except Exception as error:
-                self._feedback(
-                    state,
-                    f"Tool execution failed: {error}",
-                    tool=action.tool,
-                )
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
-                continue
-
-            state.memory.update(observation.memory_updates)
-            state.last_observation = observation
-            if state.runtime_feedback_source == "tool_error":
-                state.runtime_feedback = None
-                state.runtime_feedback_source = None
-            self._append_event(
-                state,
-                event_type="observation",
-                tool=action.tool,
-                data=observation.model_dump(mode="json"),
-            )
-            self._save(state)
-
-            # A successful non-finish tool (read_file, list_files, ...) resets
-            # the failure streak. A finish tool's ``ok`` only means "finish was
-            # proposed", not "the task is done"; that is decided by the
-            # completion check below, so do not reset here.
-            is_finish = observation.finish_candidate is not None
-            if observation.ok and not is_finish:
-                consecutive_failures = 0
-            elif not observation.ok:
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
-
-            if self.clock() - started >= request.budget.timeout_seconds:
-                return self._failure(
-                    state,
-                    ErrorCode.TIMEOUT,
-                    "Agent session exceeded timeout",
-                    retryable=True,
-                )
-
-            if observation.question is not None:
-                state.status = SessionStatus.PAUSED
                 self._save(state)
-                return ModuleResult(
-                    status=ModuleStatus.NEEDS_USER_INPUT,
-                    summary=observation.summary,
-                    question=observation.question,
-                    session=self._session_ref(state),
-                    llm_calls=self._run_llm_calls,
-                )
 
-            if observation.request_work is not None:
-                state.status = SessionStatus.PAUSED
-                self._save(state)
-                return ModuleResult(
-                    status=ModuleStatus.REQUEST_WORK,
-                    summary=observation.summary,
-                    request_work=observation.request_work,
-                    session=self._session_ref(state),
-                    llm_calls=self._run_llm_calls,
-                )
+                # A successful non-finish tool (read_file, list_files, ...) resets
+                # the failure streak. A finish tool's ``ok`` only means "finish was
+                # proposed", not "the task is done"; that is decided by the
+                # completion check below, so do not reset here.
+                is_finish = observation.finish_candidate is not None
+                if observation.ok and not is_finish:
+                    consecutive_failures = 0
+                elif not observation.ok:
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
 
-            try:
-                decision = definition.completion_check.evaluate(
-                    state,
-                    observation.finish_candidate,
-                )
-            except Exception as error:
-                return self._failure(
-                    state,
-                    ErrorCode.CONTRACT_ERROR,
-                    f"completion check failed: {error}",
-                    retryable=False,
-                )
+                if self.clock() - started >= request.budget.timeout_seconds:
+                    return self._failure(
+                        state,
+                        ErrorCode.TIMEOUT,
+                        "Agent session exceeded timeout",
+                        retryable=True,
+                    )
 
-            if decision.failure is not None:
-                return self._failure(
-                    state,
-                    decision.failure.code,
-                    decision.failure.message,
-                    retryable=decision.failure.retryable,
-                    details=decision.failure.details,
-                )
+                if observation.question is not None:
+                    self._cancel_pending_calls(state)
+                    state.status = SessionStatus.PAUSED
+                    self._save(state)
+                    return ModuleResult(
+                        status=ModuleStatus.NEEDS_USER_INPUT,
+                        summary=observation.summary,
+                        question=observation.question,
+                        session=self._session_ref(state),
+                        llm_calls=self._run_llm_calls,
+                    )
 
-            if decision.complete:
-                payload = decision.payload
-                if definition.result_type is not None:
-                    try:
-                        payload = definition.result_type.model_validate(payload).model_dump(
-                            mode="json"
-                        )
-                    except ValidationError as error:
-                        return self._failure(
-                            state,
-                            ErrorCode.CONTRACT_ERROR,
-                            "completion payload did not match result schema",
-                            retryable=False,
-                            details=self._validation_details(error),
-                        )
-                state.status = SessionStatus.COMPLETED
-                state.runtime_feedback = None
-                state.runtime_feedback_source = None
-                self._save(state)
-                status = (
-                    ModuleStatus.COMPLETED_WITH_WARNINGS
-                    if decision.warnings
-                    else ModuleStatus.COMPLETED
-                )
-                return ModuleResult(
-                    status=status,
-                    summary=decision.summary or "Completion check passed",
-                    payload=payload,
-                    artifacts=decision.artifacts,
-                    warnings=decision.warnings,
-                    session=self._session_ref(state),
-                    llm_calls=self._run_llm_calls,
-                )
-            if decision.summary:
-                self._feedback(
-                    state,
-                    decision.summary,
-                    tool="completion_check",
-                    value={"completion_check": "rejected"},
-                    source="completion_check",
-                )
-            if observation.finish_candidate is not None:
-                # A proposed finish was rejected: count it so a model that keeps
-                # proposing the same finish is eventually stopped.
-                failure = self._note_failure(state, consecutive_failures)
-                if failure is not None:
-                    return failure
-                consecutive_failures += 1
+                if observation.request_work is not None:
+                    self._cancel_pending_calls(state)
+                    state.status = SessionStatus.PAUSED
+                    self._save(state)
+                    return ModuleResult(
+                        status=ModuleStatus.REQUEST_WORK,
+                        summary=observation.summary,
+                        request_work=observation.request_work,
+                        session=self._session_ref(state),
+                        llm_calls=self._run_llm_calls,
+                    )
+
+                try:
+                    decision = definition.completion_check.evaluate(
+                        state,
+                        observation.finish_candidate,
+                    )
+                except Exception as error:
+                    return self._failure(
+                        state,
+                        ErrorCode.CONTRACT_ERROR,
+                        f"completion check failed: {error}",
+                        retryable=False,
+                    )
+
+                if decision.failure is not None:
+                    return self._failure(
+                        state,
+                        decision.failure.code,
+                        decision.failure.message,
+                        retryable=decision.failure.retryable,
+                        details=decision.failure.details,
+                    )
+
+                if decision.complete:
+                    payload = decision.payload
+                    if definition.result_type is not None:
+                        try:
+                            payload = definition.result_type.model_validate(payload).model_dump(
+                                mode="json"
+                            )
+                        except ValidationError as error:
+                            return self._failure(
+                                state,
+                                ErrorCode.CONTRACT_ERROR,
+                                "completion payload did not match result schema",
+                                retryable=False,
+                                details=self._validation_details(error),
+                            )
+                    self._cancel_pending_calls(state)
+                    state.status = SessionStatus.COMPLETED
+                    state.runtime_feedback = None
+                    state.runtime_feedback_source = None
+                    self._save(state)
+                    status = (
+                        ModuleStatus.COMPLETED_WITH_WARNINGS
+                        if decision.warnings
+                        else ModuleStatus.COMPLETED
+                    )
+                    return ModuleResult(
+                        status=status,
+                        summary=decision.summary or "Completion check passed",
+                        payload=payload,
+                        artifacts=decision.artifacts,
+                        warnings=decision.warnings,
+                        session=self._session_ref(state),
+                        llm_calls=self._run_llm_calls,
+                    )
+                if decision.summary:
+                    self._feedback(
+                        state,
+                        decision.summary,
+                        tool="completion_check",
+                        value={"completion_check": "rejected"},
+                        source="completion_check",
+                    )
+                if observation.finish_candidate is not None:
+                    # A proposed finish was rejected: count it so a model that keeps
+                    # proposing the same finish is eventually stopped.
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+
+                if not observation.ok:
+                    break
+
+            self._cancel_pending_calls(state)
+            self._active_call_id = None
 
         return self._failure(
             state,
@@ -739,10 +762,13 @@ class AgentLoop:
         data,
     ) -> None:
         if event_type == "observation" and state.tool_turns:
-            complete_pending_turn(
-                state.tool_turns[-1],
-                tool_receipt(ToolObservation.model_validate(data), len(state.events) + 1),
-            )
+            turn = state.tool_turns[-1]
+            receipt = tool_receipt(ToolObservation.model_validate(data), len(state.events) + 1)
+            if self._active_call_id is None:
+                # Batch preflight/protocol rejection: nothing was dispatched.
+                complete_pending_turn(turn, receipt)
+            elif self._active_call_id not in turn.tool_results:
+                record_tool_result(turn, self._active_call_id, receipt)
         state.events.append(
             AgentEvent(
                 sequence=len(state.events) + 1,
@@ -753,6 +779,30 @@ class AgentLoop:
                 created_at=datetime.now(UTC),
             )
         )
+
+    def _preflight_batch(self, definition, registry, request, state, actions) -> ModuleResult | None:
+        """Validate the whole batch before its first side effect; recheck at dispatch."""
+        for action in actions:
+            if not registry.contains(action.tool):
+                return self._failure(state, ErrorCode.INVALID_INPUT,
+                                     f"unknown tool: {action.tool}", retryable=True)
+            registry.validate(action.tool, action.arguments)
+            try:
+                permission = definition.permission_policy.check(action, state, request)
+            except Exception as error:
+                return self._failure(state, ErrorCode.CONTRACT_ERROR,
+                                     f"permission policy failed: {error}", retryable=False)
+            if not permission.allowed:
+                return self._failure(state, ErrorCode.PERMISSION_DENIED,
+                                     permission.reason or "Tool execution denied", retryable=False)
+        return None
+
+    def _cancel_pending_calls(self, state: AgentState, reason: str = "an earlier call stopped the batch") -> None:
+        if state.tool_turns and len(state.tool_turns[-1].tool_results) < len(state.tool_turns[-1].tool_calls):
+            complete_pending_turn(state.tool_turns[-1], tool_receipt(ToolObservation(
+                ok=False, summary=f"Not executed: {reason}.",
+            )))
+            self._save(state)
 
     def _save(self, state: AgentState) -> None:
         state.updated_at = datetime.now(UTC)
@@ -870,10 +920,7 @@ class AgentLoop:
             retryable=retryable,
             details=details or {},
         )
-        if state.tool_turns:
-            complete_pending_turn(state.tool_turns[-1], tool_receipt(ToolObservation(
-                ok=False, summary=message,
-            )))
+        self._cancel_pending_calls(state, message)
         self._append_event(
             state,
             event_type="error",

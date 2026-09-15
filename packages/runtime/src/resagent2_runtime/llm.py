@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
 from .tool_calling import (
-    NativeToolCallError, native_action, native_input, native_input_text, parse_tool_turn,
+    NativeToolCallError, native_actions, native_input, native_input_text, parse_tool_turn,
 )
 
 
@@ -245,7 +245,7 @@ class OpenAICompatibleClient:
     @property
     def tool_session_key(self) -> str:
         """Bind private continuation to the same wire protocol, endpoint and model."""
-        identity = json.dumps(["openai-compatible-tools/v1", self.endpoint, self.model])
+        identity = json.dumps(["openai-compatible-tools/v2", self.endpoint, self.model])
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def next_tool_call(
@@ -328,7 +328,8 @@ class OpenAICompatibleClient:
         """Project one response with the same content boundary at every attempt."""
         if isinstance(parsed_action, ToolCallTurn):
             try:
-                parsed_action = native_action(parsed_action)
+                actions = native_actions(parsed_action)
+                parsed_action = actions[0] if len(actions) == 1 else actions
             except (json.JSONDecodeError, NativeToolCallError) as error:
                 parsed_action = None
                 validation_error = str(error)
@@ -340,6 +341,8 @@ class OpenAICompatibleClient:
             "usage": usage,
             "finish_reason": finish_reason,
         }
+        if isinstance(parsed_action, list):
+            record["tools"] = [action["tool"] for action in parsed_action]
         if self.trace_level == "full":
             record["raw_response_text"] = raw_response_text
             record["parsed_action"] = parsed_action

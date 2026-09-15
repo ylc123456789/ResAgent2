@@ -258,7 +258,7 @@ def test_interrupted_call_is_not_replayed_and_gets_unknown_outcome_receipt(setup
     state.status = SessionStatus.ACTIVE
     state.tool_turns.append(ToolCallTurn(tool_calls=[NativeToolCall(
         id="call_interrupted", name="write_value", arguments='{"key":"unsafe","value":99}',
-    )], reasoning_content="pending reasoning"))
+        )], reasoning_content="pending reasoning", executing_call_id="call_interrupted"))
     store.save(state)
     result = AgentLoop(store=store).run(
         definition, _request(parent="session_native"), session_id="session_native",
@@ -490,3 +490,173 @@ def test_native_reply_cannot_forge_an_execution_receipt(setup):
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
     assert "unsafe" not in state.memory and state.tool_turns == []
     assert "cannot provide tool execution receipts" in state.runtime_feedback.summary
+
+
+def _writes(*values):
+    return [_call("write_value", {"key": f"k{i}", "value": value}, call_id=f"call_{i}")
+            for i, value in enumerate(values)]
+
+
+def test_serial_batch_updates_state_and_pairs_distinct_receipts(setup):
+    definition, store, requests, install = setup
+    from resagent2_runtime import ReadValueTool
+    definition = replace(
+        definition, tools=(*definition.tools, ReadValueTool()),
+        permission_policy=AllowListPermissionPolicy({"write_value", "read_value", "finish"}),
+    )
+    calls = [
+        _call("write_value", {"key": "x", "value": 7}, call_id="call_write"),
+        _call("read_value", {"key": "x"}, call_id="call_read"),
+        _call("write_value", {"key": "y", "value": 9}, call_id="call_write_y"),
+    ]
+    install([_reply(calls), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == state.llm_calls_used == 2
+    assert state.step == 4
+    receipts = [m for m in requests[1]["messages"] if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in receipts] == [c["id"] for c in calls]
+    assert [json.loads(m["content"])["value"] for m in receipts] == [7, 7, 9]
+    assert [json.loads(m["content"])["observed_at"] for m in receipts] == [2, 4, 6]
+    assert state.tool_turns[0].executing_call_id is None
+    trace = _rows(definition)[0]
+    assert trace["action_valid"] and trace["validation_error"] is None
+    assert trace["tools"] == ["write_value", "read_value", "write_value"]
+    assert len(trace["parsed_action"]) == 3
+
+
+def test_later_invalid_parameters_prevent_all_batch_side_effects(setup):
+    definition, store, requests, install = setup
+    calls = _writes(1, 2)
+    calls[1]["function"]["arguments"] = '{"key":"k1","unexpected":2}'
+    install([_reply(calls), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    assert state.memory == {}
+    assert not any(e.tool == "write_value" and e.type == "action" for e in state.events)
+    assert all(not json.loads(r)["ok"] for r in state.tool_turns[0].tool_results.values())
+    assert requests[1]["messages"][-1]["content"].count("## runtime_feedback") == 1
+
+
+@pytest.mark.parametrize("deny_after_first", [False, True])
+def test_batch_permissions_are_preflighted_and_rechecked(setup, deny_after_first):
+    definition, store, _, install = setup
+    from resagent2_runtime import PermissionDecision
+
+    class Policy:
+        def check(self, action, state, request):
+            denied = action.arguments.get("key") == "k1" and (
+                not deny_after_first or "k0" in state.memory
+            )
+            return PermissionDecision(allowed=not denied, reason="denied")
+
+    definition = replace(definition, permission_policy=Policy())
+    install([_reply(_writes(1, 2))])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.error.code == ErrorCode.PERMISSION_DENIED
+    assert state.memory == ({"k0": 1} if deny_after_first else {})
+    assert not json.loads(state.tool_turns[0].tool_results["call_1"])["ok"]
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_failed_call_cancels_rest_of_batch_without_undoing_success(setup, raises):
+    definition, store, requests, install = setup
+
+    class FailSecond(WriteValueTool):
+        def execute(self, state, arguments):
+            if arguments.key == "k1":
+                if raises:
+                    raise RuntimeError("second call failed")
+                return ToolObservation(ok=False, summary="second call failed")
+            return super().execute(state, arguments)
+
+    definition = replace(definition, tools=(FailSecond(), FinishTool()))
+    install([_reply(_writes(1, 2, 3)), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == 2 and state.memory == {"k0": 1}
+    receipts = [json.loads(m["content"]) for m in requests[1]["messages"] if m["role"] == "tool"]
+    assert [r["ok"] for r in receipts] == [True, False, False]
+    assert "second call failed" in receipts[1]["summary"]
+    assert "Not executed" in receipts[2]["summary"]
+
+
+def test_batch_deadline_preserves_completed_receipt_and_skips_remaining(setup):
+    definition, store, _, install = setup
+    clock = [0]
+
+    class SlowWrite(WriteValueTool):
+        def execute(self, state, arguments):
+            clock[0] = 61
+            return super().execute(state, arguments)
+
+    definition = replace(definition, tools=(SlowWrite(),))
+    install([_reply(_writes(1, 2))])
+    result = AgentLoop(store=store, clock=lambda: clock[0]).run(
+        definition, _request(), session_id="session_native",
+    )
+    state = store.load("session_native")
+    assert result.error.code == ErrorCode.TIMEOUT
+    assert state.memory == {"k0": 1} and result.llm_calls == 1
+    assert json.loads(state.tool_turns[0].tool_results["call_0"])["ok"]
+    assert "Not executed" in state.tool_turns[0].tool_results["call_1"]
+
+
+def test_batch_crash_distinguishes_completed_unknown_and_unstarted(setup, tmp_path):
+    definition, _, requests, install = setup
+    effects = []
+
+    class Interrupted(BaseException):
+        pass
+
+    class CrashSecond(WriteValueTool):
+        def execute(self, state, arguments):
+            effects.append(arguments.key)
+            if arguments.key == "k1":
+                raise Interrupted()
+            return super().execute(state, arguments)
+
+    definition = replace(definition, tools=(CrashSecond(), FinishTool()))
+    disk = JsonSessionStore(tmp_path / "sessions")
+    install([_reply(_writes(1, 2, 3)), _reply()])
+    with pytest.raises(Interrupted):
+        AgentLoop(store=disk).run(definition, _request(), session_id="session_native")
+    before = disk.load("session_native")
+    assert before.tool_turns[0].executing_call_id == "call_1"
+    assert set(before.tool_turns[0].tool_results) == {"call_0"}
+    completed_receipt = before.tool_turns[0].tool_results["call_0"]
+    result = AgentLoop(store=JsonSessionStore(disk.root)).run(
+        definition, _request(parent="session_native"), session_id="session_native",
+    )
+    state = disk.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    assert effects == ["k0", "k1"] and state.memory == {"k0": 1}
+    assert state.tool_turns[0].tool_results["call_0"] == completed_receipt
+    assert "unknown" in state.tool_turns[0].tool_results["call_1"]
+    assert "before this call started" in state.tool_turns[0].tool_results["call_2"]
+    assert state.tool_turns[0].executing_call_id is None
+    assert len([m for m in requests[1]["messages"] if m["role"] == "tool"]) == 3
+
+
+def test_overlarge_batch_is_rejected_before_execution(setup):
+    definition, store, _, install = setup
+    from resagent2_runtime.tool_calling import MAX_TOOL_CALLS_PER_TURN
+    install([_reply(_writes(*range(MAX_TOOL_CALLS_PER_TURN + 1))), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED and state.memory == {}
+    assert len(state.tool_turns[0].tool_results) == MAX_TOOL_CALLS_PER_TURN + 1
+
+
+def test_batch_step_budget_is_checked_before_any_side_effect(setup):
+    definition, store, _, install = setup
+    install([_reply(_writes(1, 2, 3))])
+    result = AgentLoop(store=store).run(definition, _request(steps=2), session_id="session_native")
+    state = store.load("session_native")
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert state.memory == {} and state.step == 0
+    assert len(state.tool_turns[0].tool_results) == 3

@@ -159,6 +159,9 @@ class ToolCallTurn(RuntimeModel):
     reasoning_content: str | None = None
     tool_calls: list[NativeToolCall] = Field(default_factory=list)
     tool_results: dict[str, str] = Field(default_factory=dict)
+    # Checkpointed immediately before dispatch. Only this missing receipt has
+    # an unknown outcome; other unreceipted calls have not started.
+    executing_call_id: str | None = None
 
     @model_validator(mode="after")
     def validate_call_ids(self) -> "ToolCallTurn":
@@ -167,6 +170,10 @@ class ToolCallTurn(RuntimeModel):
             raise ValueError("native tool call IDs must be unique within a reply")
         if not self.tool_results.keys() <= set(ids):
             raise ValueError("tool receipt must refer to a call in this reply")
+        if self.executing_call_id is not None and (
+            self.executing_call_id not in ids or self.executing_call_id in self.tool_results
+        ):
+            raise ValueError("executing call must be an unreceipted call in this reply")
         return self
 
 

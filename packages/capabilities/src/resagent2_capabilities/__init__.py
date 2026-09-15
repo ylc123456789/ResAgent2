@@ -37,12 +37,15 @@ from .hardware import HardwareAudit
 from .literature import (
     ArtifactRegistrationPort,
     ArxivLiteratureBackend,
+    FallbackLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchBackend,
     LiteratureSearchError,
+    LiteratureUnavailableError,
     LiteratureSearchTool,
     LiteratureSearchToolInput,
 )
+from .openalex import OpenAlexLiteratureBackend
 from .module_report import build_module_report
 from .process import (
     CommandPermissionDecision,
@@ -81,6 +84,8 @@ __all__ = [
     "ArtifactReadError",
     "ArtifactRegistrationPort",
     "ArxivLiteratureBackend",
+    "FallbackLiteratureBackend",
+    "OpenAlexLiteratureBackend",
     "AuditEnvInput",
     "AuditEnvTool",
     "CommandPermissionDecision",
@@ -102,6 +107,7 @@ __all__ = [
     "LiteraturePaper",
     "LiteratureSearchBackend",
     "LiteratureSearchError",
+    "LiteratureUnavailableError",
     "LiteratureSearchTool",
     "LiteratureSearchToolInput",
     "MaterializedRepo",

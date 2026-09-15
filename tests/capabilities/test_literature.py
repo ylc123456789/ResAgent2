@@ -25,6 +25,24 @@ from resagent2_runtime import AgentState, ToolObservation
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def isolated_http(monkeypatch, request):
+    if request.node.name == "test_arxiv_backend_live_smoke":
+        return
+    from resagent2_capabilities import _literature_http, literature
+
+    clock = [0.0]
+    monkeypatch.setattr(_literature_http.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        _literature_http.time, "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    monkeypatch.setattr(
+        literature, "_ARXIV_HTTP",
+        _literature_http.LiteratureHTTP("arXiv", interval_seconds=3),
+    )
+
+
 def state(*, memory: dict | None = None) -> AgentState:
     return AgentState(
         session_id="session_sci",
@@ -254,7 +272,7 @@ def test_arxiv_backend_raises_clear_error_instead_of_empty_result() -> None:
             raise TimeoutError("connection timed out")
 
     backend = Failing(max_retries=2)
-    with pytest.raises(LiteratureSearchError, match="failed after 2 retries"):
+    with pytest.raises(LiteratureSearchError, match="failed after 2 attempts"):
         backend.search("electron", max_results=5)
 
 
@@ -262,6 +280,31 @@ def test_arxiv_backend_rejects_invalid_xml() -> None:
     backend = _FakeArxivBackend(b"not xml")
     with pytest.raises(LiteratureSearchError, match="invalid XML"):
         backend.search("electron", max_results=5)
+
+
+@pytest.mark.parametrize("body", [
+    b"<html>service error</html>",
+    b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>http://arxiv.org/api/errors</id></entry></feed>',
+    b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>http://arxiv.org/abs/2301.00001</id></entry></feed>',
+])
+def test_arxiv_invalid_feed_is_not_an_empty_search(body):
+    with pytest.raises(LiteratureSearchError):
+        _FakeArxivBackend(body).search("x", max_results=1)
+
+
+def test_arxiv_request_identifies_application(monkeypatch):
+    import io
+    from resagent2_capabilities import literature
+
+    requests = []
+    def open_request(request, *, timeout):
+        requests.append((request, timeout))
+        return io.BytesIO(ARXIV_ATOM.encode())
+    monkeypatch.setattr(literature, "urlopen", open_request)
+    ArxivLiteratureBackend(timeout_seconds=7).search("x", max_results=1)
+    request, timeout = requests[0]
+    assert request.get_header("User-agent").startswith("ResAgent2/")
+    assert timeout == 7
 
 
 @pytest.mark.skipif(

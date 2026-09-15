@@ -40,7 +40,13 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_capabilities import ArxivLiteratureBackend, DatasetCatalog, ResourceLayout
+from resagent2_capabilities import (
+    ArxivLiteratureBackend,
+    DatasetCatalog,
+    FallbackLiteratureBackend,
+    OpenAlexLiteratureBackend,
+    ResourceLayout,
+)
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
@@ -347,7 +353,10 @@ def _scientific_agent(
 ) -> ScientificAgent:
     return ScientificAgent(
         _new_llm_client(),
-        literature_backend=ArxivLiteratureBackend(),
+        literature_backend=FallbackLiteratureBackend(
+            ArxivLiteratureBackend(),
+            OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
+        ),
         registration_port=registration_port,
         store=session_store,
         resource_layout=resource_layout,

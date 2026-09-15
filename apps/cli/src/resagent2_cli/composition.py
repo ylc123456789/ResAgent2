@@ -14,6 +14,8 @@ from pathlib import Path
 from resagent2_capabilities import (
     ArxivLiteratureBackend,
     DatasetCatalog,
+    FallbackLiteratureBackend,
+    OpenAlexLiteratureBackend,
     ResourceLayout,
 )
 from resagent2_coding import NativeCodingAgent
@@ -210,7 +212,10 @@ def build_application(
     )
     scientific = ScientificAgent(
         _client(),
-        literature_backend=ArxivLiteratureBackend(),
+        literature_backend=FallbackLiteratureBackend(
+            ArxivLiteratureBackend(),
+            OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
+        ),
         registration_port=registration,
         store=scientific_store,
         max_context_tokens=scientific_context_tokens,

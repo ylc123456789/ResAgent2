@@ -1,7 +1,7 @@
-"""Literature search capability: a backend Protocol, an arXiv backend, and a Tool.
+"""Literature search capability: normalized papers, backends, and a Tool.
 
 The backend is injected by the composition root, so the Scientific Agent never
-imports an arXiv SDK. A successful search is normalized, deduplicated and
+imports a provider SDK. A successful search is normalized, deduplicated and
 truncated here, then handed to an injected ``ArtifactRegistrationPort`` that
 freezes it with the current run/session provenance. The Tool never assigns an
 ArtifactId or hash.
@@ -9,16 +9,15 @@ ArtifactId or hash.
 
 from __future__ import annotations
 
-import time
+import logging
 from datetime import date
 from typing import Protocol, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from defusedxml import ElementTree
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from resagent2_contracts import (
     ArtifactCandidate,
@@ -28,11 +27,13 @@ from resagent2_contracts import (
 )
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from ._literature_http import (
+    USER_AGENT,
+    LiteratureHTTP,
+    LiteratureSearchError,
+    LiteratureUnavailableError,
+)
 from .text import wrap_text_lines
-
-
-class LiteratureSearchError(RuntimeError):
-    """Raised when a backend cannot return a normalized result."""
 
 
 class LiteraturePaper(RuntimeModel):
@@ -86,14 +87,15 @@ class ArtifactRegistrationPort(Protocol):
 
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
+_ARXIV_HTTP = LiteratureHTTP("arXiv", interval_seconds=3.0)
 
 
 class ArxivLiteratureBackend:
     """Query the arXiv API and normalize Atom entries into LiteraturePaper.
 
-    Network errors, rate limits and timeouts are retried with exponential
-    backoff and then raised as ``LiteratureSearchError``; they are never
-    silently converted into an empty result.
+    Requests are serialized and spaced by at least three seconds in-process.
+    Rate limits trigger cooldown immediately; transient errors have bounded
+    retries. Failures never become empty search results.
     """
 
     _endpoint = "https://export.arxiv.org/api/query"
@@ -106,7 +108,7 @@ class ArxivLiteratureBackend:
         max_abstract_chars: int = 2_000,
     ) -> None:
         self.timeout_seconds = timeout_seconds
-        self.max_retries = max_retries
+        self.max_retries = max_retries  # Historical name: total HTTP attempts.
         self.max_abstract_chars = max_abstract_chars
 
     def search(
@@ -144,34 +146,32 @@ class ArxivLiteratureBackend:
 
     def _request(self, url: str) -> bytes:
         """One raw HTTP request; overridable in tests to avoid the network."""
-        with urlopen(url, timeout=self.timeout_seconds) as response:
+        request = Request(url, headers={"User-Agent": USER_AGENT})
+        with urlopen(request, timeout=self.timeout_seconds) as response:
             return response.read()
 
     def _fetch(self, url: str) -> bytes:
-        delay = 1.0
-        last_error: Exception | None = None
-        for attempt in range(self.max_retries):
-            try:
-                return self._request(url)
-            except (HTTPError, URLError, TimeoutError) as error:
-                last_error = error
-                if attempt < self.max_retries - 1:
-                    time.sleep(delay)
-                    delay *= 2
-        raise LiteratureSearchError(
-            f"arXiv request failed after {self.max_retries} retries: {last_error}"
-        ) from last_error
+        return _ARXIV_HTTP.fetch(
+            lambda: self._request(url), max_attempts=self.max_retries
+        )
 
     def _parse(self, body: bytes) -> list[LiteraturePaper]:
         try:
             root = ElementTree.fromstring(body)
         except ElementTree.ParseError as error:
             raise LiteratureSearchError(f"arXiv returned invalid XML: {error}") from error
+        if root.tag != f"{_ATOM}feed":
+            raise LiteratureSearchError("arXiv returned a non-Atom response")
 
         papers: list[LiteraturePaper] = []
         seen: set[str] = set()
         for entry in root.findall(f"{_ATOM}entry"):
-            paper = self._paper(entry)
+            if "/abs/" not in self._text(entry, "id"):
+                raise LiteratureSearchError("arXiv returned an error or invalid entry")
+            try:
+                paper = self._paper(entry)
+            except ValidationError as error:
+                raise LiteratureSearchError("arXiv returned an invalid paper") from error
             if paper.paper_id in seen:
                 continue
             seen.add(paper.paper_id)
@@ -217,6 +217,39 @@ class ArxivLiteratureBackend:
         """Turn an arXiv id URL like ``.../abs/2301.12345v2`` into ``2301.12345``."""
         fragment = id_url.rsplit("/", 1)[-1]
         return fragment.split("v", 1)[0] if "v" in fragment else fragment
+
+
+class FallbackLiteratureBackend:
+    """Use one backup only on availability failure, not on empty/invalid results."""
+
+    def __init__(
+        self, primary: LiteratureSearchBackend, fallback: LiteratureSearchBackend
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int,
+        start_year: int | None = None,
+        end_year: int | None = None,
+    ) -> list[LiteraturePaper]:
+        bounds = dict(max_results=max_results, start_year=start_year, end_year=end_year)
+        try:
+            return self.primary.search(query, **bounds)
+        except LiteratureUnavailableError as primary_error:
+            logging.getLogger(__name__).warning(
+                "Literature primary unavailable (%s); trying %s",
+                primary_error, type(self.fallback).__name__,
+            )
+            try:
+                return self.fallback.search(query, **bounds)
+            except LiteratureSearchError as fallback_error:
+                raise LiteratureSearchError(
+                    f"Primary unavailable: {primary_error}; backup failed: {fallback_error}"
+                ) from fallback_error
 
 
 class LiteratureSearchToolInput(RuntimeModel):

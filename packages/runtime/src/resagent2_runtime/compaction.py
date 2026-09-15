@@ -31,7 +31,6 @@ class CompactionPlan:
     history_start: int
     prompt: str
     estimated_tokens: int
-    max_summary_chars: int
 
 
 def compaction_input(prompt: str) -> dict:
@@ -62,13 +61,14 @@ def _summary_prompt(
     previous_summary: str | None,
     turns: Sequence[ToolCallTurn],
     *,
-    max_summary_chars: int,
+    target_summary_chars: int,
 ) -> str:
     """Keep the source lossless; only the model-produced checkpoint is lossy."""
 
     payload = {
         "output_requirement": (
-            f"Return a non-empty handoff of at most {max_summary_chars} characters."
+            "Return a non-empty, concise handoff. "
+            f"Aim for {target_summary_chars} characters or fewer."
         ),
         "previous_handoff": previous_summary,
         "completed_tool_messages": tool_messages(turns),
@@ -139,11 +139,12 @@ def plan_compaction(
         return None
 
     source = active_turns[:first_kept]
-    max_summary_chars = min(4096, max(1, max_input_tokens // 20)) * 4
+    # Writing target only; the composer checks the complete continuation request.
+    target_summary_chars = min(4096, max(1, max_input_tokens // 20)) * 4
     prompt = _summary_prompt(
         previous_summary,
         source,
-        max_summary_chars=max_summary_chars,
+        target_summary_chars=target_summary_chars,
     )
     summary_tokens = ContextComposer.estimate_tokens(compaction_input_text(prompt))
     if summary_tokens > summary_input_limit:
@@ -155,5 +156,4 @@ def plan_compaction(
         history_start=history_start + first_kept,
         prompt=prompt,
         estimated_tokens=summary_tokens,
-        max_summary_chars=max_summary_chars,
     )

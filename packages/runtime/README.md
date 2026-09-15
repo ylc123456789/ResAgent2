@@ -73,7 +73,7 @@ schema 8.0 的 TaskBudget 只含 max_llm_calls 和 timeout_seconds；Controller/
 
 共用 [compaction.py](src/resagent2_runtime/compaction.py)：完整原生输入超过有效上限 80%，或必需上下文实际装不下时，尝试总结较早完整 turn；保留至少最新完整 turn，近期历史以 20% 额度为目标。仅支持压缩的客户端调用 summarize_history，OpenAICompatibleClient 复用原 HTTP/trace/计量实现；没有单独摘要 Agent。
 
-摘要字符上限由输入额度的 5% 派生，最多按 4096 估算 tokens 换算；此值只限制交接文字，**不缩小 Provider 的总输出额度**。摘要与边界 history_checkpoint 验证后一起保存，并留下 compaction 审计事件；失败不推进边界。当前请求和领域状态仍由原 builder 构造，摘要不是证据，精确代码必须重读。
+摘要生成目标由输入额度的 5% 派生，目标最多按 4096 估算 tokens 换算；这是写短的提示，不是第二个硬预算，**不缩小 Provider 的总输出额度**。原 Composer 检查完整摘要、近期回合、当前领域上下文及工具 schema；略超目标但整包能装下即可完整接受，不截断摘要。摘要与边界 history_checkpoint 验证后一起保存，并留下 compaction 审计事件；空摘要、截断响应或整包真正超限时不推进边界。当前请求和领域状态仍由原 builder 构造，摘要不是证据，精确代码必须重读。
 
 摘要仍有损、消耗调用和时间；剩余调用不足以摘要后继续、单个巨大 turn 无法容纳、摘要失败或重建后仍超限时明确失败。不自动扩容、不改写原事件，也不保证 Session 磁盘文件永久不增长。详见 [上下文与压缩](../../docs/current/CONTEXT.md#compaction)。
 

@@ -24,8 +24,22 @@
 - 阶段 2：全量确定性测试 964 passed / 1 skipped；mock E2E completed；schema 8.0，移除 max_steps 和 Scheduler 的 50 次隐藏上限，异常客户端用量不伪造入账。
 - 阶段 3：共享 Loop/Session 检查点已集成；原历史保留、近期成对续传、失败不推进边界、摘要和 HTTP 重试共用计量、跨暂停/磁盘重建恢复均有测试。CLI 仅补活动显示，组合根不变。
 - 最终本地：`python -m pytest tests apps/cli/tests -q` → **997 passed / 1 skipped**；mock E2E completed；git diff --check 干净。包括超过 50 次调用的确定性回归，不用付费请求凑调用次数。
-- 服务器：尚未运行本轮真实 LLM；交付[专门验收单](RUNTIME_CONTINUATION_ACCEPTANCE.md)。只需小型标准库任务与独立小输入压力探针，不运行 GPU 全流程来代替边界测试；旧 L3 保持不动。
+- 阶段 3 初交付时服务器待验，后续 b4868ec 验收和小修正见下节；[专门验收单](RUNTIME_CONTINUATION_ACCEPTANCE.md)保留原矩阵并增加本轮精简补验。旧 L3 保持不动。
 
 实现保持三层清晰分工：Tool 定义及权限/完成检查不换；Runtime 负责串行协议、计量和检查点；领域 builder 继续组织最新业务事实。原生完整 history 与当前工作集可能包含重复内容，仍按完整请求计量，不另加通用去重或检索框架。
 
 阶段提交：`1058847`（串行回执）、`373a20f`（schema 8.0 / 唯一调用预算）；检查点集成与文档在其后独立提交。工作分支未自动推送/合并。
+
+## b4868ec 服务器复核与摘要软目标小修正
+
+服务器旧现场：`/root/autodl-tmp/e2e-rtc-b4868ec-Q3wR7s/`，原报告和失败产物保留。主开发只读核对了原始请求/响应、Session工具观测及测试驱动：
+
+- 原生批次、调用计量和检查点有真实通过证据；8192探针的最后摘要1697字符被旧1636字符硬上限拒绝，12000探针完成。
+- Pro首读已经为a+b，而Flash首读为a-b，两者初始快照不同；Pro实际有21次模型调用、读取/审计/两次成功测试，最后finish因耗时已超限而未派发。不能把该探针直接归因为“Pro600s没派发工具/只是慢”。
+- 8192摘要依次1056、1007、1089、1697字符，不是逐次增长；压缩后暂停/跨进程恢复尚缺真实组合补验。
+
+获批小修正只改共享Runtime的两处生产代码：生成提示保留5%的短摘要目标，删除局部长度硬拒绝，由现有Composer验证完整后续请求；移除已无生产消费者的CompactionPlan.max_summary_chars，不增加替代契约字段。摘要不裁剪，空白/截断响应仍拒绝，整包超限仍budget_exhausted，旧边界和原始记录不变。触发比例、近期保留比例、模型输出预留、128K默认、调用预算和schema8.0均不变。
+
+本地结果：全量 **1002 passed / 1 skipped**；压缩两文件专项 **35 passed**；mock E2E completed；git diff --check干净。新增5个参数化用例覆盖ASCII/中文摘要略超目标但整体可容纳，以及空白/length响应保留旧边界；原超大摘要用例改为验证整包预算拒绝。
+
+本次未运行新服务器请求，未改服务器现场、未推送或合并；测试方按[验收单§7](RUNTIME_CONTINUATION_ACCEPTANCE.md#soft-target-followup)只补三个小探针并追加旧报告勘误。

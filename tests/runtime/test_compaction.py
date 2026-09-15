@@ -55,8 +55,8 @@ def test_plan_keeps_recent_complete_turns_and_does_not_mutate_history():
     assert isinstance(plan, CompactionPlan)
     assert 0 < plan.history_start < len(turns)
     payload = json.loads(plan.prompt)
-    assert plan.max_summary_chars == min(4096, max(1, limit // 20)) * 4
-    assert str(plan.max_summary_chars) in payload["output_requirement"]
+    target_chars = min(4096, max(1, limit // 20)) * 4
+    assert f"Aim for {target_chars} characters or fewer" in payload["output_requirement"]
     assert "non-empty" in payload["output_requirement"]
     compacted = payload["completed_tool_messages"]
     assert [message["role"] for message in compacted] == [

@@ -814,13 +814,15 @@ class AgentLoop:
         if self._run_llm_calls >= request.budget.max_llm_calls:
             return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
                                  "Compaction consumed the remaining call budget", retryable=False)
-        if not isinstance(summary, str) or not summary.strip() or len(summary) > plan.max_summary_chars:
+        if not isinstance(summary, str) or not summary.strip():
             return self._failure(state, ErrorCode.CONTRACT_ERROR,
-                                 "Compaction handoff must be nonempty text within its declared size limit",
+                                 "Compaction handoff must be nonempty text",
                                  retryable=False, details={"component": "compaction"})
         checkpoint = HistoryCheckpoint(history_start=plan.history_start, summary=summary)
         # Compose against the proposed checkpoint before publishing it. A failed
         # summary or still-oversized request never advances the durable boundary.
+        # The writing target is not a second hard budget: retain the complete
+        # summary when it fits with current required context and recent turns.
         proposed = state.model_copy(update={"history_checkpoint": checkpoint})
         self._compose_context(definition, request, proposed, schemas, context_limit, native=True)
         state.history_checkpoint = checkpoint

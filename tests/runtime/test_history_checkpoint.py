@@ -65,10 +65,10 @@ def _seed_state(definition, store, turns, *, checkpoint=None) -> AgentState:
     return state
 
 
-def _summary(text="checkpoint summary"):
+def _summary(text="checkpoint summary", *, finish="stop"):
     return {
         "choices": [{
-            "finish_reason": "stop",
+            "finish_reason": finish,
             "message": {
                 "content": text,
                 "reasoning_content": "summary-only reasoning",
@@ -145,6 +145,37 @@ def test_success_keeps_raw_turns_and_sends_checkpoint_with_complete_suffix(setup
     )
     assert rows[0]["request_max_tokens"] == 4096
     assert rows[1]["action_valid"] is True
+
+
+@pytest.mark.parametrize("character", ["x", "文"])
+def test_summary_above_writing_target_fits_complete_request_without_truncation(setup, character):
+    definition, store, requests, install = setup
+    turns = [_paired_turn(i, receipt_size=4500) for i in range(7)]
+    previous = HistoryCheckpoint(history_start=1, summary="earlier checkpoint")
+    _seed_state(definition, store, turns, checkpoint=previous)
+    definition = replace(definition, max_context_tokens=8192)
+    target_chars = min(4096, 8192 // 20) * 4
+    sentinel = "END_OF_HANDOFF"
+    summary = character * (target_chars + 61 - len(sentinel)) + sentinel
+    goal = "Current user decision: use mul; verification is still required."
+    install([_summary(summary), _reply()])
+
+    result = AgentLoop(store=store).run(
+        definition, _request(parent="session_native", calls=3, goal=goal), session_id="ignored",
+    )
+
+    assert result.status == ModuleStatus.COMPLETED
+    saved = store.load("session_native")
+    assert saved.history_checkpoint.history_start > previous.history_start
+    assert saved.history_checkpoint.summary == summary
+    assert saved.tool_turns[:len(turns)] == turns
+    assert result.llm_calls == saved.llm_calls_used == len(requests) == 2
+    current = requests[-1]["messages"][-1]["content"]
+    assert summary in current and goal in current
+    assert current.count("## history_checkpoint") == 1
+    row = _rows(definition)[-1]
+    assert row["estimated_tokens"] == ContextComposer.estimate_tokens(row["request_text"])
+    assert row["estimated_tokens"] <= 8192
 
 
 def test_summary_http_retry_shares_action_call_ledger(setup):
@@ -240,10 +271,13 @@ def test_checkpoint_survives_pause_and_disk_resume(setup, tmp_path):
     ("response", "error_code"),
     [
         (URLError("offline"), ErrorCode.TOOL_FAILED),
-        (_summary("x" * 20_000), ErrorCode.CONTRACT_ERROR),
+        (_summary("x" * 20_000), ErrorCode.BUDGET_EXHAUSTED),
+        (_summary(""), ErrorCode.TOOL_FAILED),
+        (_summary("   "), ErrorCode.TOOL_FAILED),
+        (_summary("partial handoff", finish="length"), ErrorCode.TOOL_FAILED),
     ],
 )
-def test_failed_or_oversized_summary_does_not_advance_existing_boundary(
+def test_invalid_summary_or_total_context_overflow_does_not_advance_existing_boundary(
     setup, response, error_code,
 ):
     definition, store, requests, install = setup
@@ -262,7 +296,8 @@ def test_failed_or_oversized_summary_does_not_advance_existing_boundary(
     saved = store.load("session_native")
     assert saved.history_checkpoint == original
     assert saved.llm_calls_used == result.llm_calls == len(requests) == 1
-    assert len(saved.tool_turns) == len(turns)
+    assert saved.tool_turns == turns
+    assert not any(event.type == "compaction" for event in saved.events)
 
 
 def test_one_remaining_call_never_starts_compaction(setup):

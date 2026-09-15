@@ -7,12 +7,11 @@ from urllib.error import HTTPError
 import pytest
 
 from resagent2_runtime.compaction import (
-    COMPACTION_TRIGGER_SHARE,
     CompactionPlan,
     compaction_input_text,
     plan_compaction,
 )
-from resagent2_runtime.context import ContextBudgetExceeded, ContextComposer
+from resagent2_runtime.context import CONTEXT_TARGET_SHARE, ContextBudgetExceeded, ContextComposer
 from resagent2_runtime.llm import LLMTextResponseError, ModelProfile, OpenAICompatibleClient
 from resagent2_runtime.models import NativeToolCall, ToolCallTurn
 from resagent2_runtime.tool_calling import NativeToolCallError, native_input_text
@@ -97,7 +96,7 @@ def test_previous_checkpoint_and_absolute_boundary_are_compacted_once():
 def test_below_trigger_and_single_oversized_turn_have_no_safe_prefix():
     turns = [_turn(0)]
     request_tokens = _request_tokens(turns)
-    no_trigger_limit = int(request_tokens / COMPACTION_TRIGGER_SHARE) + 1
+    no_trigger_limit = int(request_tokens / CONTEXT_TARGET_SHARE) + 1
     assert plan_compaction(
         current_context="current", schemas=[], turns=turns,
         max_input_tokens=no_trigger_limit,

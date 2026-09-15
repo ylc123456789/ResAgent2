@@ -1,4 +1,4 @@
-"""Context projects tool state and keeps file/artifact reading budgets separate."""
+"""Shared material allocation preserves source semantics and separate read shares."""
 
 from datetime import UTC, datetime
 import json
@@ -8,13 +8,13 @@ import pytest
 
 from resagent2_capabilities import (
     AuditEnvInput, AuditEnvTool, EnvironmentBinding, PreparedEnvironment,
-    RunSetupInput, RunSetupTool, workspace_context,
+    RunSetupInput, RunSetupTool, workspace_context as _workspace_context,
 )
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS
 from resagent2_contracts import (
     AgentOwner, Capability, CodeModifyInput, ExperimentRunInput, ModuleTaskRequest, TaskBudget,
 )
-from resagent2_runtime import AgentEvent, AgentState, ContextComposer
+from resagent2_runtime import AgentEvent, AgentState, ContextComposer, ContextSection
 from resagent2_coding.context import build_context as coding_context, MODIFY_PROMPT
 from resagent2_experiment.context import build_context as experiment_context, EXPERIMENT_PROMPT
 
@@ -46,9 +46,24 @@ def _environment(state, binding):
     section = next(s for s in workspace_context(state, binding=binding) if s.name == "environment")
     return json.loads(section.content)
 
-def _reads(state, *, max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS):
-    section = next(s for s in workspace_context(state, max_context_tokens=max_context_tokens) if s.name == "workspace_reads")
-    return json.loads(section.content.split("\n", 1)[1])
+def workspace_context(state, *, max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS, **kwargs):
+    """Inspect the final composed sections, not a pre-budget material proposal."""
+    context = ContextComposer().compose("", _workspace_context(
+        state, max_context_tokens=max_context_tokens, **kwargs,
+    ), max_tokens=max_context_tokens)
+    return [ContextSection(name=name, content=context.text.split(f"## {name}\n", 1)[1].split("\n\n## ", 1)[0],
+                           required=name != "directory") for name in context.included_sections]
+
+
+def _reads(state, *, max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS, **kwargs):
+    data = {"file_snippets": [], "artifact_snippets": []}
+    for section in workspace_context(state, max_context_tokens=max_context_tokens, **kwargs):
+        if section.name in ("file_reads", "artifact_reads"):
+            group = "file" if section.name == "file_reads" else "artifact"
+            payload = json.loads(section.content.split("\n", 1)[1])
+            data[f"{group}_snippets"] = payload["snippets"]
+            data[f"previously_read_{group}s"] = payload["previously_read"]
+    return data
 
 def test_restored_environment_is_visible_but_not_certified(tmp_path):
     state = _state()
@@ -134,21 +149,21 @@ def test_many_reads_of_one_kind_do_not_evict_the_other(newest_tool, newest_key):
         assert sum(len(s["content"]) for s in reads[name]) <= DEFAULT_AGENT_CONTEXT_TOKENS
 
 
-def test_each_kind_is_truncated_at_its_own_content_limit():
+def test_each_kind_retains_a_share_when_both_exceed_the_total_allowance():
     state = _state()
     for tool, key in (("read_file", "path"), ("read_artifact", "artifact_id")):
         _observe(state, tool, {
             key: "source", "start_line": 10, "end_line": 80,
-            "content": "X" * 8000, "truncated": False,
+            "content": "X" * 100000, "truncated": False,
         })
     reads = _reads(state, max_context_tokens=6000)
     for name in ("file_snippets", "artifact_snippets"):
         snippet = reads[name][0]
-        assert len(snippet["content"]) == 6000
+        assert 6000 < len(snippet["content"]) < 10000
         assert snippet["truncated"] is True
         assert snippet["context_truncated"] is True
         assert (snippet["start_line"], snippet["end_line"]) == (10, 80)
-    assert sum(len(s["content"]) for name in ("file_snippets", "artifact_snippets") for s in reads[name]) == 12000
+    assert abs(len(reads["file_snippets"][0]["content"]) - len(reads["artifact_snippets"][0]["content"])) < 20
 
 @pytest.mark.parametrize("builder,capability,inputs,prompt", [
     (coding_context, Capability.CODE_MODIFY, CodeModifyInput(instructions="Make a bounded change"), MODIFY_PROMPT),
@@ -165,10 +180,10 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     sections = builder(request, state, binding=binding, max_context_tokens=8192)
-    assert {s.name for s in sections} >= {"environment", "workspace_reads"}
+    assert {s.name for s in sections} >= {"environment", "file_reads", "artifact_reads"}
     context = ContextComposer().compose(prompt, sections, max_tokens=8192)
     assert context.estimated_tokens <= 8192
-    assert "workspace_reads" in context.included_sections
+    assert {"file_reads", "artifact_reads"} <= set(context.included_sections)
 
 
 def test_read_metadata_cannot_bypass_working_set_budget():
@@ -252,7 +267,7 @@ def test_marker_uses_latest_successful_write_without_invalidating_new_reads():
 def test_context_explains_chronology_and_does_not_claim_disk_freshness():
     state = _state()
     _observe(state, "read_file", {"path": "train.py", "content": "observed once"})
-    content = next(s.content for s in workspace_context(state) if s.name == "workspace_reads")
+    content = next(s.content for s in workspace_context(state) if s.name == "file_reads")
     assert "oldest first" in content
     assert "not proof of freshness" in content
     assert "context_truncated" in content
@@ -264,12 +279,11 @@ def test_read_allocations_scale_with_effective_module_budget(tokens):
     for tool, key in (("read_file", "path"), ("read_artifact", "artifact_id")):
         _observe(state, tool, {key: "source", "content": "x" * 300_000})
     reads = _reads(state, max_context_tokens=tokens)
-    assert len(reads["file_snippets"][0]["content"]) == tokens
-    assert len(reads["artifact_snippets"][0]["content"]) == tokens
-    sections = workspace_context(state, max_context_tokens=tokens, include_files=False)
-    scientific = json.loads(next(s.content for s in sections if s.name == "workspace_reads").split("\n", 1)[1])
+    assert 0 < len(reads["file_snippets"][0]["content"]) < 2 * tokens
+    assert 0 < len(reads["artifact_snippets"][0]["content"]) < 2 * tokens
+    scientific = _reads(state, max_context_tokens=tokens, include_files=False)
     assert scientific["file_snippets"] == []
-    assert len(scientific["artifact_snippets"][0]["content"]) == 2 * tokens
+    assert len(scientific["artifact_snippets"][0]["content"]) > len(reads["artifact_snippets"][0]["content"])
 
 
 def test_directory_has_original_event_number_without_claiming_new_files_absent():

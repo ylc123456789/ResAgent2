@@ -133,7 +133,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     for context in [clients["task_followup"].contexts[1], scientific_client.contexts[-1]]:
         assert answer in context.text
         assert uncertainty in context.text
-        assert "workspace_reads" in context.included_sections
+        assert "artifact_reads" in context.included_sections
     assert report_id in scientific_client.contexts[1].text
     assert "module_explanation" in scientific_client.contexts[1].text
     assert run.final_opinion.statement == answer

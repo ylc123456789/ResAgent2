@@ -11,6 +11,7 @@ from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
     AgentState,
+    ContextMaterial,
     ContextSection,
     user_answers_section,
 )
@@ -88,7 +89,7 @@ def build_context(
     *, binding: EnvironmentBinding,
     datasets: DatasetAvailability | None = None,
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
-) -> list[ContextSection]:
+) -> list[ContextSection | ContextMaterial]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
         {"id": artifact.id, "kind": artifact.kind, "summary": artifact.summary}

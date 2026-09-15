@@ -78,13 +78,13 @@ def _agent(client, store, **options):
 
 
 def _reads(context):
-    assert "workspace_reads" in context.included_sections
-    section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
-    return json.loads(section.split("\n", 1)[1])
+    assert "artifact_reads" in context.included_sections
+    section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
+    return {"artifact_snippets": json.loads(section.split("\n", 1)[1])["snippets"], "file_snippets": []}
 
 
 def _assert_composed(context, limit=128_000):
-    assert {"workspace_reads", "tool_contracts", "evidence_control_state"} <= set(context.included_sections)
+    assert {"artifact_reads", "tool_contracts", "evidence_control_state"} <= set(context.included_sections)
     assert "read_artifact_summaries" not in context.included_sections
     contracts = context.text.split("## tool_contracts\n", 1)[1].split("\n\n## ", 1)[0]
     for tool in ("read_artifact", "literature_search", "request_work", "ask_user", "finish"):

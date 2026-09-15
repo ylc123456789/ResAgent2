@@ -6,12 +6,11 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .context import ContextBudgetExceeded, ContextComposer
+from .context import CONTEXT_TARGET_SHARE, ContextBudgetExceeded, ContextComposer
 from .models import ToolCallTurn
 from .tool_calling import native_input_text, tool_messages
 
 
-COMPACTION_TRIGGER_SHARE = 0.80
 COMPACTION_RETAIN_SHARE = 0.20
 
 COMPACTION_SYSTEM_INSTRUCTION = (
@@ -118,7 +117,7 @@ def plan_compaction(
     request_tokens = ContextComposer.estimate_tokens(
         native_input_text(current_context, list(schemas), active_turns)
     )
-    if not force and request_tokens <= max_input_tokens * COMPACTION_TRIGGER_SHARE:
+    if not force and request_tokens <= max_input_tokens * CONTEXT_TARGET_SHARE:
         return None
     if len(active_turns) < 2:
         # There is no older prefix to summarize without discarding the newest

@@ -163,7 +163,7 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
-- Runtime先确定模块/模型有效输入额度，再交给builder和Composer。三个Agent默认128K，Compiler仍4096；workspace_context用固定比例保留文件、工件和失败命令诊断，不另建缓存。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记或LLM调用。详见[材料与预算](CONTEXT.md#budgets)。
+- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent默认128K，Compiler仍4096；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
 - 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[能力实现](../../packages/capabilities/README.md)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**

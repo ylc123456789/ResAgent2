@@ -268,7 +268,7 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             if self.step == 2:
                 self.artifact_id = next(iter(registration._store.load("run_a").artifacts))
                 return {"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}
-            assert "workspace_reads" in context.included_sections
+            assert "artifact_reads" in context.included_sections
             assert self.artifact_id in context.text
             assert "# Literature search results" in context.text
             assert "No papers returned" in context.text

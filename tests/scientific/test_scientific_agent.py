@@ -565,10 +565,10 @@ def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
     assert result.status == "completed"
     state = agent.store.load(result.session.id)
     context = agent.llm_client.contexts[-1]
-    assert "workspace_reads" in context.included_sections
-    section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
+    assert "artifact_reads" in context.included_sections
+    section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
     reads = json.loads(section.split("\n", 1)[1])
-    assert {s["artifact_id"]: s["content"] for s in reads["artifact_snippets"]} == {
+    assert {s["artifact_id"]: s["content"] for s in reads["snippets"]} == {
         "artifact_a": '{"value": 1}', "artifact_b": '{"value": 1}',
     }
     assert set(state.memory["read_artifact_ids"]) == {"artifact_a", "artifact_b"}

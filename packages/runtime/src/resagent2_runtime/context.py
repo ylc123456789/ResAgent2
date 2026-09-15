@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from math import ceil
+from dataclasses import dataclass
+from math import ceil, isfinite
 
 from resagent2_contracts import RecordedAnswer
 
@@ -12,17 +13,28 @@ from .models import AgentState, ComposedContext, ContextSection
 
 
 DEFAULT_AGENT_CONTEXT_TOKENS = 128_000
+CONTEXT_TARGET_SHARE = 0.80
 
 
-def context_char_budget(max_tokens: int, *, share: float) -> int:
-    """Allocate a material envelope using the composer's four-char estimate.
+@dataclass(frozen=True, slots=True)
+class ContextMaterial:
+    """A render-on-demand section, never persisted in Run or Session.
 
-    This is a packing allowance, not a tokenizer or an independent hard limit.
-    The composer still measures the entire rendered prompt, including metadata.
+    ``render(chars)`` must be pure and return bounded source material plus its
+    provenance/omission markers. At zero it returns only the small navigation
+    frame. ``weight`` is a relative starting share, not a local hard limit.
+    The composer measures the complete request after every proposed expansion.
     """
-    if max_tokens < 1 or not 0 < share <= 1:
-        raise ValueError("positive context budget and share in (0, 1] required")
-    return max(1, int(max_tokens * 4 * share))
+
+    name: str
+    render: Callable[[int], str]
+    weight: float = 1
+    priority: int = 0
+    required: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.name.strip() or not isfinite(self.weight) or self.weight <= 0:
+            raise ValueError("material name and a finite positive weight are required")
 
 
 class ContextBudgetExceeded(ValueError):
@@ -53,18 +65,18 @@ def user_answers_section(answers: Sequence[RecordedAnswer]) -> ContextSection | 
 
 
 class ContextComposer:
-    """Includes required sections first, then optional sections by priority."""
+    """Reserve fixed context, then share one measured material allowance."""
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
-        """Return a deterministic conservative approximation for prompt budgeting."""
+        """Return a deterministic character estimate, not a model tokenizer."""
 
         return 0 if not text else max(1, ceil(len(text) / 4))
 
     def compose(
         self,
         system_prompt: str,
-        sections: list[ContextSection],
+        sections: list[ContextSection | ContextMaterial],
         *,
         max_tokens: int,
         measure: Callable[[str], int] | None = None,
@@ -88,9 +100,16 @@ class ContextComposer:
         )
 
         included: list[ContextSection] = []
+        materials: list[tuple[int, ContextMaterial]] = []
         omitted: list[str] = []
         text = ""
         for section in [*required, *optional]:
+            material = section if isinstance(section, ContextMaterial) else None
+            if material is not None:
+                section = ContextSection(
+                    name=material.name, content=material.render(0),
+                    priority=material.priority, required=material.required,
+                )
             rendered = f"## {section.name}\n{section.content}"
             candidate = f"{text}\n\n{rendered}" if included else rendered
             if cost(candidate) > max_tokens:
@@ -101,7 +120,50 @@ class ContextComposer:
                 omitted.append(section.name)
                 continue
             included.append(section)
+            if material is not None:
+                materials.append((len(included) - 1, material))
             text = candidate
+
+        # Share only the space below the same soft waterline that triggers
+        # history compaction. Otherwise filling spare space could itself cause
+        # an unnecessary summary on every turn. Required frames may exceed the
+        # waterline, but never the caller's hard input limit.
+        fill_limit = int(max_tokens * CONTEXT_TARGET_SHARE)
+        spare = max(0, fill_limit - cost(text))
+        weight = sum(material.weight for _, material in materials)
+        char_limits: dict[int, int] = {}
+
+        def grow(index: int, material: ContextMaterial, token_limit: int) -> None:
+            nonlocal text
+            used = cost(text)
+            if token_limit <= used:
+                return
+            low = char_limits.get(index, 0)
+            high = low + (token_limit - used) * 4
+            best = included[index]
+            best_limit = low
+            while low <= high:
+                trial = (low + high + 1) // 2
+                section = included[index].model_copy(update={"content": material.render(trial)})
+                candidate = "\n\n".join(
+                    f"## {part.name}\n{part.content}"
+                    for part in [*included[:index], section, *included[index + 1:]]
+                )
+                if cost(candidate) <= token_limit:
+                    best, best_limit = section, trial
+                    low = trial + 1
+                else:
+                    high = trial - 1
+            included[index] = best
+            char_limits[index] = best_limit
+            text = "\n\n".join(f"## {part.name}\n{part.content}" for part in included)
+
+        # First give every present material its starting share. Then let higher
+        # priority materials borrow unused space, without evicting those shares.
+        for index, material in materials:
+            grow(index, material, min(fill_limit, cost(text) + int(spare * material.weight / weight)))
+        for index, material in sorted(materials, key=lambda item: -item[1].priority):
+            grow(index, material, fill_limit)
         return ComposedContext(
             text=text,
             included_sections=[section.name for section in included],

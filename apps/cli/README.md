@@ -207,9 +207,9 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `workspace_reads`、`control_state`、`command_results` 等领域投影的重复内容都会计量。
+三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`control_state`、`command_results` 等领域投影的重复内容都会计量。
 
-Loop先从有效额度中预留 tools schema 与当前续传历史，再按剩余材料额度组织领域内容：Coding/Experiment文件、工件各25%；Scientific工件50%；执行诊断1/16。完整请求超过80%或实际装不下时，尝试总结旧完整回合、保留近期完整配对；原始记录不删，摘要与边界成功验证后才保存。摘要也消耗同一 Run 调用预算，输出额度仍用原模型配置。无安全前缀、摘要失败、schema/单回合/required领域段仍超限时明确失败，不扩到256K。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
+Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不扩到256K、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
 实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent默认128K，Compiler默认4096。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 

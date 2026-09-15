@@ -5,6 +5,7 @@
 - 系统分工看 [ARCHITECTURE](ARCHITECTURE.md)；公开方法和字段看 [CONTRACTS](CONTRACTS.md)。
 - 本文解释字段如何进入模型输入，不重复定义接口类型。
 - 原始问题与方案演变见 [上下文审查](../history/reviews/CONTEXT_REVIEW_2026-09-13.md)；本页描述已实现的语义、预算及文献呈现。测试要求和分阶段结果见 [验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)。
+- 当前共享材料分配的依据、改动与服务器补验见[统一分配记录](../history/reviews/CONTEXT_ALLOCATION_REVIEW.md)。
 
 建议第一次先读 [基本区别](#basics)、自己关心的 [模块](#modules)，再看 [文献流程](#literature) 和 [预算](#budgets)。后面的源码、测试链接用于查证，不要求按顺序读代码。
 
@@ -36,9 +37,9 @@
 
 1. **调用方交付请求。** Controller 或 Scheduler 决定这一回合/任务可见的输入、工件和回答作用域。
 2. **先为原生开销预留额度。** Loop 取模块上限与模型可用输入容量的较小值，先扣除完整工具 schema 和当前续传历史的估算，再把剩余材料额度传给 `ContextBuilder(request, state, max_context_tokens)`。
-3. **构造本轮领域段。** Agent 的 builder 从当前请求、Session 与实际绑定中选择信息；`workspace_context` 按剩余额度的固定比例选择读取材料、命令诊断和目录观察，数据集与回答继续使用已有共享投影。
+3. **构造本轮领域段。** Agent 的 builder 从当前请求、Session 与实际绑定中构造固定 `ContextSection`；`workspace_context` 为读取、诊断和目录提供可按额度渲染的 `ContextMaterial`。材料尚未占死份额，数据集与回答继续使用已有共享投影。
 4. **AgentLoop 补运行反馈。** 尚待处理的动作、参数或完成检查拒绝作为 required 领域段加入；原生路径不再加入 `tool_contracts` 文本或 `recent_observations` 的 400 字符预览。
-5. **ContextComposer 选择并计量。** 先保留必需段，再尝试装入可选段；原生路径按最终 `{messages, tools}` 序列化请求计量并生成 included/omitted 清单。
+5. **ContextComposer 选择并计量。** 先保留必需固定段与材料的最小导航框，再按优先级选入可选段。剩余空间先按材料权重分配，未用完的空间再按优先级借用；扩展仅到完整输入的80%软水位。原生路径每次候选都按最终 `{messages, tools}` 序列化请求计量，并生成 included/omitted 清单。
 6. **客户端发请求并保存配对回合。** 原生每轮可返回 1–8 个工具调用，整体参数/权限预检后串行执行并逐项保存回执；失败取消后续。finish/ask_user/request_work 必须独占一轮。输入压力达到阈值时可先做一次有界摘要，再发送当前领域上下文。
 
 | 所在位置 | 负责什么 | 不负责什么 |
@@ -52,10 +53,12 @@
 
 ### 2.1 required、priority 与顺序不是一回事
 
-- `required=True`：该段必须放入；必需段累计超限时明确失败，不静默丢弃。
-- `priority`：决定**可选段**的尝试顺序，数值大的先尝试；装不下的可选段整段省略。
+- `ContextSection(required=True)`：固定正文必须原样放入；必需段累计超限时明确失败，不静默丢弃目标、约束或用户回答。
+- `ContextMaterial(required=True)`：保留说明、来源/省略提示的最小导航框，正文可按剩余空间缩减。它是纯渲染描述，不写入 Run/Session，不是新业务契约。
+- `priority`：决定**可选段**的尝试顺序，以及材料第二轮借用空余空间的顺序；数值大的先尝试。它不决定必需段显示顺序。
+- `weight`：已选入材料的相对起始权重。第一轮给各材料一份，第二轮才分空余；不是独立拒绝上限，也不强制填满。
 - 必需段按传入顺序排列，不按 priority 排序；所有必需段之后才是选中的可选段。
-- Composer 不自动压缩正文。进入 Composer 前，某个段内部可能已经按自己的局部额度裁剪。
+- Composer 不自行剪 JSON、代码或问答；调用材料的纯 `render(chars)` 投影，再按整包计量。具体如何保留片段、尾部或完整路径仍由共享能力决定。
 
 所以“priority=1000”不自动意味着放在全文最前面。当前 Loop 主动把反馈插到前面、Coding 主动把 control_state 插到领域段前面；这是领域段插入顺序的效果。原生工具 schema 与历史不属于这些领域段，而在 Composer 的完整请求计量中单独呈现。
 
@@ -72,7 +75,7 @@
 
 原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
 
-Tool 返回 `ok=False` 的普通观察与 Loop 生成的持久拒绝反馈仍不是同一机制；不能假定每个失败工具的完整 stderr 都会自动进入 required 反馈段。receipt 历史和 `workspace_reads`、`control_state`、`command_results` 等领域投影可能呈现同一事实，两份内容都会计入总预算。
+Tool 返回 `ok=False` 的普通观察与 Loop 生成的持久拒绝反馈仍不是同一机制；不能假定每个失败工具的完整 stderr 都会自动进入 required 反馈段。receipt 历史和 `file_reads`、`artifact_reads`、`control_state`、`command_results` 等领域投影可能呈现同一事实，两份内容都会计入总预算。
 
 Coding/Experiment 的命令结果仍由共享 `command_results` 段保留，见 [命令诊断](#commands)。领域投影负责当前语义与有界工作集，原生历史负责协议连续性；两者都不把已被工具截断的原始结果恢复成全文。
 
@@ -106,7 +109,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | `authorized_artifacts` | 当前请求的工件 id、kind、summary | 必需；是入口清单，不是工件正文 |
 | `work_brief` | interpreter 将上轮需求、当前交付结果、仍未解决的执行问题整理成简报 | 必需；不转存一份新状态 |
 | `answers` | 当前回合交付的 RecordedAnswer，含原题 question_text 和回答 values | 必需；即便为空列表仍有此段 |
-| `workspace_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取片段才出现，必需；正文受局部额度限制 |
+| `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
 
@@ -135,7 +138,7 @@ Scientific 不注入 execution environment，不提供代码编辑/实验执行�
 | `answers` | 调用方限定在本 Task 的已配对原题与回答 | 非空才出现，必需；共享 user_answers_section，不借别的 Task 的回答 |
 | `control_state` | 修改、验证及环境相关的下一步指引 | 仅 code_modify，必需；每步调用 derive_control_state |
 | `environment` | 实际 EnvironmentBinding 的 prepared/certified、Python 要求及已有环境身份 | 仅 code_modify，必需；与工具使用同一绑定 |
-| `workspace_reads` | 文件片段与工件片段，分别保留 | 有片段才出现，必需 |
+| `file_reads` / `artifact_reads` | 文件片段与工件片段，分别保留 | 各自导航框必需，正文共享空余额度 |
 | `command_results` | 每个执行工具最近一次有记录的命令结果；优先保留失败诊断 | 有命令结果才出现，必需；共享投影，不新增缓存 |
 | `directory` | 最近一次 list_files 观察的有界路径清单 | 有结果才出现，可选，priority=62；不是每轮重新扫磁盘 |
 
@@ -159,7 +162,7 @@ Scientific 不注入 execution environment，不提供代码编辑/实验执行�
 | `datasets` | 与另两个 Agent 同源的 dataset_context，只是段名不同 | 必需 |
 | `answers` | 本 Task 的 RecordedAnswer | 非空才出现，必需；与 Coding 共用函数 |
 | `environment` | 实际环境绑定与认证状态 | 必需；每次构造读取同一绑定 |
-| `workspace_reads` | 文件与工件两组正文 | 有片段才出现，必需 |
+| `file_reads` / `artifact_reads` | 文件与工件两组正文 | 各自导航框必需，正文共享空余额度 |
 | `command_results` | run_command/run_setup 最近的命令结果与有界失败诊断 | 有结果才出现，必需；与 Coding 共用机制 |
 | `directory` | 最近一次有界目录观察 | 可选，priority=62 |
 | `hardware` | Session memory 中的硬件审计文本 | 可选，priority=80 |
@@ -207,10 +210,10 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 `workspace_context` 调用 `recent_tool_snippets`，文件和工件各自选择：
 
 1. 从新到旧寻找不同片段，直到内容额度用完，不再固定最多6个；身份为工具名 + 来源 + 请求行范围，同一来源的不同范围可以共存。
-2. Coding/Experiment 的文件、工件各用传给builder的材料额度的25%；Scientific 只读工件，使用50%。原生路径已先从总额度扣除schema和协议历史。按4字符/token换算正文额度。先装最新片段；装箱的最后一个片段放不下时保留头尾并标记，其后的旧片段不再选入。
+2. 文件和工件以相同起始权重进入 Composer；每次从实际剩余空间计算，而非各自占死25%。Scientific 不提供文件材料，所以工件可使用其空余。先装最新片段；装箱的最后一个片段放不下时保留头尾并标记，其后的旧片段不再选入。
 3. 选中后按原始事件顺序从旧到新呈现，不修改原始 Session 事件或工件。
 
-假设传给builder的材料额度恰为128000 tokens，Coding/Experiment 每组可放128000字符正文，Scientific 工件组256000字符正文（可包含多次读取）；原生总额度为128K时，扣除schema和历史后的实际材料额度会更小。上述比例只限制 content；段说明、编号、行号等仍计入 Composer 总预算。两组不相互借用，不自动扩容，也不强制填满。
+例如，扣除固定上下文后，若本轮材料可用空间为60K、只存在文件和工件材料，起始各得30K；工件只用了5K，文件可借用余下25K。两类都很大时先各保留一份，不让较新工件直接挤掉所有文件。这里的K指估算tokens，不是字符；每次扩展连同元数据与JSON转义一起重新计量，不追求字节级最优装箱，也不强制填满。
 
 | 提示字段 | 当前含义 | 不能据此推出什么 |
 |---|---|---|
@@ -218,13 +221,14 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | `modified_after_read_at` | 记录中有同路径、较晚的成功内置编辑 | 无标记不证明外部没改文件；不用于冻结工件 |
 | `truncated` | 当前显示正文是否遭到工具或工作集裁剪 | 不代表整个原文件都读完了 |
 | `context_truncated` | 工作集又裁剪了工具返回的正文 | 不会覆盖或修改原事件的截断标志 |
-| `previously_read_files/artifacts` | 每组最多 20 个、合计 600 字符的来源提示，不切断单个标识 | 不是完整读史，没有已发现结论或语义定位目录 |
+| `previously_read` | 所在文件/工件段中最多20个、合计600字符的来源提示，不切断单个标识 | 不是完整读史，没有已发现结论或语义定位目录 |
+| `content_omitted` | 本次该段没有放入任何正文片段 | false不保证全部历史已放入；具体片段另看truncated |
 
-当前工作集再裁剪时会同时置 `truncated=True` 和 `context_truncated=True`。来源提示位于有 workspace_reads 时的段内，并不是一个独立、永久可见的全文索引。
+当前工作集再裁剪时会同时置 `truncated=True` 和 `context_truncated=True`。`file_reads` / `artifact_reads` 都使用 `{snippets, previously_read, content_omitted}`；来源提示不是一个独立、永久可见的全文索引。旧 trace 中的 `workspace_reads` 保持原样，不迁移历史数据。
 
 ### 4.3 目录、环境、数据集的刷新频率不同
 
-- **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；路径正文额度按有效输入的1/64换算字符，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
+- **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
 - **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified 等当前绑定状态；环境恢复不自动沿用旧认证，不代表每轮扫描所有依赖。
 - **数据集视图**：Agent 的 run/invoke 开始时从调用方引用解析，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
 - **answers**：由 Controller 配对原题、调用方限定作用域；builder 展示收到的回答。当前不额外创建答案缓存或偷偷删除早期回答，必需段过大时仍明确超限。
@@ -241,7 +245,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 - 先按 exit_code/timed_out 选择失败项，再尝试放入成功项；不把整批JSON剪成首尾。
 - 失败项展示命令、退出/超时状态和已捕获的 stdout_tail/stderr_tail；没有捕获到输出就明确说明，不编造根因。
-- 正文额度为有效输入的1/16（128K时32000字符）。一个日志尾部最多2000字符；裁剪和未放入的结果数量明确标记。选中后按原始事件顺序呈现。
+- 正文参与统一材料分配，空余空间优先借给诊断（priority=96），然后读取材料（80）、目录（62）。一个日志尾部仍最多2000字符；裁剪和未放入的结果数量明确标记。选中后按原始事件顺序呈现。额度很小时保留省略提示，不宣称全部根因始终可见。
 - 同一工具较新的命令结果取代投影中的旧结果，但不删除Session事件；后续普通读文件不会把最近的验证失败挤出这个段。
 - 这些是历史执行诊断，不是当前状态或科学测量。验证是否仍有效，由现有control_state/完成门禁决定。
 
@@ -254,7 +258,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 1. **Scientific 发起检索。** CLI/E2E 将 arXiv、OpenAlex 作为平级来源装配，成功后继续用该源，限流/临时网络故障时再试其他源，每次最多遍历一轮。正常空结果、坏请求和损坏响应不触发切换。两个后端都输出原有 LiteraturePaper：编号、标题、作者、日期、真实来源链接和摘要；每篇摘要最多 2000 字符，缺摘要留空。不是下载、解析 PDF，也不是另一次 LLM 总结。切换原因在应用日志，工件里的 OpenAlex ID/链接不会伪装成 arXiv。
 2. **按论文条目保存这一批结果。** LiteratureSearchTool 用确定性排版生成 `literature_search.md`，每篇一个标题，包含论文ID、来源、作者、日期和检索所得摘要；Registry 冻结并校验hash，metadata仍保留规范化记录。明确标为检索摘要而非全文或模型阅读结论。长物理行折到最多1000字符，未丢弃原字符。旧冻结JSON不改写。
 3. **返回检索预览。** 每篇摘要在 ToolObservation 的 brief 中最多 200 字符；该已受限结果进入原生 tool receipt 后不再附加约 400 字符的历史裁剪。完整协议历史仍受总输入预算，模型也不一定在一次检索预览里得到论文全文。
-4. **按需读本地工件。** Scientific 调用现有read_artifact；通常一读可看完这批条目，较大材料仍可按标题附近的行范围继续。工具默认返回最多128000字符，工件工作集按Scientific有效输入的50%派生。不需要再次访问论文检索服务。
+4. **按需读本地工件。** Scientific 调用现有read_artifact；通常一读可看完这批条目，较大材料仍可按标题附近的行范围继续。工具默认返回最多128000字符，工件工作集由共享Composer按剩余空间分配。不需要再次访问论文检索服务。
 5. **判断和继续。** Scientific 可继续读取、搜索、询问用户或提出结论；没有自动为每篇论文保存一份 LLM 阅读笔记的步骤。
 6. **检查引用。** 工件身份、访问历史及要求的证据种类会被检查；这些不等于全文理解、结论正确或相关风险全部被考虑。
 
@@ -272,9 +276,9 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 |---|---|---|
 | 模型可用输入容量 | 注入的 ModelProfile：窗口减预留输出和安全余量；Compiler 还扣 JSON action schema 说明 | 原生 LLM client 的预算 hook |
 | 模块输入上限 | Scientific / Coding / Experiment 各128000 tokens，覆盖完整序列化 `{messages, tools}`；Compiler保持4096 tokens | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模块参数可覆盖 |
-| 阅读正文 | 预留后的材料额度的50%；Coding/Experiment文件和工件各25%，Scientific工件50% | workspace_context + recent_tool_snippets |
-| 命令诊断 | 材料额度的1/16换算字符；优先失败、再成功 | command_context |
-| 目录路径 | 材料额度的1/64换算字符；最多2000条完整路径 | workspace_context + recent_tool_listing |
+| 材料软水位 | 固定正文与最小导航框先入场；可伸缩材料扩展到整包80%，与压缩触发阈值同源 | ContextComposer + CONTEXT_TARGET_SHARE |
+| 材料起始份额 | 文件/工件/诊断/目录的相对权重16/16/4/1，只分配给已选入项；空余按96/80/62优先级借用 | ContextMaterial + ContextComposer |
+| 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
 | 一次工具读取 | 默认所选行范围最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
 | 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
 | 调用次数/时间 | Run 下发当前剩余 max_llm_calls 和 timeout；动作 step 只记录、不再限制 | Controller / Scheduler / AgentLoop 同一调用账本 |
@@ -283,11 +287,15 @@ Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块
 
 Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列化后的 messages、tools 和 JSON 转义，而不只是领域渲染文本；客户端发送前还会以同一完整请求边界复核。这个算法是确定性粗估，不是模型 tokenizer 的精确计数，也不保证对中文等所有内容都高估；不能把 `estimated_tokens` 当实际 usage。Compiler 的 JSON action schema 说明仍在其旧路径中计量；无 Profile 时不提供同等模型容量保证。
 
-**required装不下仍明确失败。** 三个Agent各自可配置128K、256K或更小额度，局部材料比例随预留后的材料额度变化；不会因一次超限自动加到256K。剩余空间用于职责、任务、问答、元数据和运行反馈。原生历史与 `workspace_reads`、`command_results` 等领域投影的重复内容不会去重，都会计量；系统不自适应借材料额度；旧协议历史可在统一边界做 LLM 压缩，当前领域必需段不由摘要替代。比例是装箱上限，不要求每段填满，来源索引仍仅用于定位。
+**只有整包输入上限是容量硬门槛。** 先原样放入职责、任务、问答、反馈、已有摘要等固定必需段，再保留材料的最小导航框；可选段仍按原优先级选入。材料在80%水位内先按相对权重分配，再按优先级使用剩余空间，不能借走其他材料已分到的一份。80%不是必需输入的拒绝线：必需内容超过它但未超过100%仍可容纳，并沿用历史压缩判断。
+
+例如128K模块的材料填充目标是整包102.4K，留下空间容纳后续工具返回；这不是对下次返回一定放得下的承诺。不能把所有空余都填到128K，否则材料扩展自身就可能反复触发压缩。输入参数可覆盖模块上限，但系统不会自动扩大它。协议历史与材料投影的重复内容仍会重复计量，不做隐式去重或删原始回执。
+
+**真正不足就报错，不新增恢复状态机。** 沿用至多一次旧历史压缩后，schema、单个巨大近期完整回合或最小必需输入仍装不下，返回现有 `budget_exhausted` 并保留现场；不自动ask_user、不加二次摘要纠错、不反复扩容。空/截断摘要仍拒绝。当前业务信息不由历史摘要替代，Compiler没有材料或Session，仍走原4096输入路径。
 
 输出额度是另一项配置：思考与最终正文可能共享 Provider 的输出额度。它不能用来解释所有输入裁剪，也不因为输入还有空间就自动增大。环境变量及部署默认值统一查 [CLI 配置](../../apps/cli/README.md#6-模型与上下文预算)，本文不另设一套值。
 
-**源码与测试**：[Composer / 额度换算 / 选择器](../../packages/runtime/src/resagent2_runtime/context.py)、[ModelProfile / 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[执行Agent容量](../../tests/e2e/test_native_context_capacity.py)、[Scientific容量](../../tests/e2e/test_scientific_context_capacity.py)。128K是当前工程选择，不承诺所有任务都足够或成本/延迟不变。
+**源码与测试**：[Composer / 材料分配 / 选择器](../../packages/runtime/src/resagent2_runtime/context.py)、[弹性分配测试](../../tests/runtime/test_context_materials.py)、[ModelProfile / 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[执行Agent容量](../../tests/e2e/test_native_context_capacity.py)、[Scientific容量](../../tests/e2e/test_scientific_context_capacity.py)。128K是当前工程选择，不承诺所有任务都足够或成本/延迟不变。
 
 <a id="compaction"></a>
 

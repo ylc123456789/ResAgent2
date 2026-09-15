@@ -103,9 +103,9 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
                     "artifact_id": ref.id,
                     "start_line": self.tail_line, "end_line": self.tail_line,
                 }}
-            assert "workspace_reads" in context.included_sections
-            section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
-            snippets = json.loads(section.split("\n", 1)[1])["artifact_snippets"]
+            assert "artifact_reads" in context.included_sections
+            section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
+            snippets = json.loads(section.split("\n", 1)[1])["snippets"]
             assert len(snippets) == 1
             assert snippets[0]["artifact_id"] == ref.id
             assert snippets[0]["truncated"] is False

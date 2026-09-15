@@ -25,7 +25,9 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 计算实际预算，并把正文 JSON 的 Action schema，或原生请求的 `messages + tools` 完整序列化结果计入模型容量。模型能力来自组合根配置，runtime
 不查询供应商，也不维护模型名称表。
 
-ContextComposer 对包含标题和分隔符的最终文本统一估算预算，必需段装不下就拒绝，不先调用 LLM。这个值仍是字符估算，不是供应商的精确 token 数。
+ContextComposer 对包含标题、分隔符及原生协议开销的完整请求统一估算预算。固定 `ContextSection` 原样保留；可伸缩的 `ContextMaterial(name, render, weight, priority, required)` 仅是本轮纯渲染描述，不持久化。先放固定段和材料最小导航框，再给材料相对起始份额，空余按优先级借用。材料扩展到整包80%软水位，与历史压缩触发点同源；固定必需输入仍可使用到100%硬上限。过大的材料因此缩减，而不是因为局部比例直接报错。
+
+`render(chars)` 负责来源、截断/省略语义；Composer 不自行切开代码、JSON或工具调用/回执。文件、工件、诊断、目录通过 capabilities 共用此机制，不给三个Agent分别写分配器。最终仍放不下就走现有超限失败，不增加自动暂停或摘要重试。字符估算不是供应商的精确token数。规则与例子见[上下文预算](../../docs/current/CONTEXT.md#budgets)。
 
 `user_answers_section(answers)` 将调用方已选定作用域的 RecordedAnswer 按传入顺序投影为 required `answers` 段，包含由 Controller 配对的 question_text 与用户 values；没有回答时不生成段。Coding/Experiment 的 context builder 共用它，Scientific 保留原有答案段。它不读取 Session、不缓存答案、不改变问题路由；答案与其他上下文一起计入 Composer 预算，超限明确失败而非静默遗漏。历史 `ask_user [ok]` 只表示问题已发出，不能代替原题、真实回答或前提已满足的证据。
 

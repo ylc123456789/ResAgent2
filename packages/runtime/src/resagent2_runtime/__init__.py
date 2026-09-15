@@ -9,7 +9,7 @@ process, repository, environment, dataset, hardware) live in
 
 from .context import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
-    context_char_budget,
+    ContextMaterial,
     ContextBudgetExceeded,
     ContextComposer,
     recent_tool_listing,
@@ -62,7 +62,7 @@ from .tools import (
 
 __all__ = [
     "DEFAULT_AGENT_CONTEXT_TOKENS",
-    "context_char_budget",
+    "ContextMaterial",
     "AgentAction",
     "AgentDefinition",
     "AgentEvent",

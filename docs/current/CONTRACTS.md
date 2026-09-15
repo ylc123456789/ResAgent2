@@ -593,8 +593,8 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | 可注入入口 | 约定 |
 |---|---|
 | AgentLoop.run(definition, request, *, session_id, initial_memory=None) | 循环、观测、反馈、Session，不调度 Workflow |
-| ContextBuilder(request, state, max_context_tokens) | Loop先计算模块/模型有效输入额度，再传给builder按比例选择材料；Runtime补工具契约/反馈/历史 |
-| ContextComposer.compose(...) | 组合最终文本、估算预算，required 装不下明确失败 |
+| ContextBuilder(request, state, max_context_tokens) | 返回固定ContextSection及按需渲染的ContextMaterial；Runtime补工具契约/反馈/历史，builder不预占独立硬额度 |
+| ContextComposer.compose(...) | 先保留固定段与材料导航框，再按权重分配、按优先级借用；完整请求统一计量，最小required仍装不下明确失败 |
 | LLMClient.next_action(context, action_type) | 最小客户端必需方法；供测试/注入客户端及正文 JSON 调用方返回候选 dict/模型 |
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
@@ -647,9 +647,9 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - Loop 生成的动作拒绝、工具异常或完成检查拒绝可形成持久 `runtime_feedback`（`ok=False`），存在时插在其他领域段之前，作为 required 上下文注入。普通 Tool 返回的 `ok=False` 观察不自动全部转成此反馈；`tool_error` 来源的旧反馈在工具正常返回 observation 后清除，完成检查来源的反馈按完成检查流程更新/清除。不能据此假定所有失败命令的完整诊断都常驻；
 - 已配对的 RecordedAnswer 由调用方限定作用域，经 Agent 的 context builder 进入同一 ContextComposer。Coding/Experiment 共用 `user_answers_section`，Scientific 保留已有 `answers` 段；原题 question_text 与回答 values 一起呈现，不重复注入、不缓存或静默裁掉答案，必需段装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - 正文 JSON 客户端使用 `recent_observations` 有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 是约 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整。原生客户端改为重放 `tool_turns` 中检查点之后已配对的 assistant/tool 消息，并在末尾加入最新业务 Context；两者都不把历史 prompt 当第二套记忆；
-- Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），放入 required `workspace_reads`。`recent_tool_listing` 保留最近有界目录清单，按条目数与字符数上限、不截断单个路径；当前 `directory` 段为可选（priority=62），不是 required。不得给每个文件分别套上限后生成可能被整体省略的超大 section；
+- Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。capabilities 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
-- 三个Agent默认输入上限同源为128000 tokens，模块分别可配置；Compiler保持4096。Loop先计算有效额度再传给builder：Coding/Experiment文件、工件正文各分配25%，Scientific仅工件50%，按4字符/token换算；两类材料不相互挤占。正文 JSON 请求计完整 section，原生请求计完整 `messages + tools` 序列化与转义；required超限明确失败，不自动扩容。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
+- 三个Agent默认输入上限同源为128000 tokens，模块分别可配置；Compiler保持4096。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按文件/工件/诊断/目录16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
 - 共享command_results从原事件中选择run_verification/run_setup/run_command各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
 - directory附observed_at并明确是历史目录观察，创建文件不会自动重写旧清单。Coding控制投影用edited_since_verification表达编辑/验证版本差，不再把它叫workspace_changed；这些是模型可见投影，不增加业务schema字段；
 - 工件正文只从 Session 工具观测投影，不再生产或消费 read_artifact_summaries 正文前缀副本。已读 ID、工件说明和检索短预览不是完整正文，也不是当前论断的支持证明；需要精确内容时按工件行范围读取。冻结工件、原始观测与 full trace 不因工作集淘汰而删除；

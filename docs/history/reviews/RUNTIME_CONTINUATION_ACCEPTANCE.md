@@ -94,6 +94,8 @@ Run/Session/Provider 调用不具跨文件事务；异常断电可能在已花�
 
 ## 7. 摘要软目标与独立工作区补验（b4868ec 之后）
 
+后续统一材料分配已接入同一Composer；测试最新提交时以[上下文分配补验](CONTEXT_ALLOCATION_REVIEW.md#4-服务器补验要求)为本轮入口，沿用本节的fixture隔离、压力与跨进程要求。旧baseline数字和旧workspace_reads段名不作为新提交的断言。
+
 ### 7.1 先冻结产品身份和正确的测试输入
 
 用新提交、干净 worktree 和独立验收根；记录实际 SHA、8 包 import 指针、schema 8.0（本次未改公共 schema）。原现场 `/root/autodl-tmp/e2e-rtc-b4868ec-Q3wR7s/` 和旧 L3 不动。不得原地覆盖失败 trace 或清理旧工作区。

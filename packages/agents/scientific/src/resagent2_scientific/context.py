@@ -6,7 +6,7 @@ import json
 
 from resagent2_capabilities import DatasetAvailability, dataset_context, workspace_context
 from resagent2_contracts import ScientificTurnRequest
-from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextSection
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 
 from .completion import _observed_artifact_ids
 from .interpreter import render_work_brief
@@ -142,7 +142,7 @@ def build_context(
     *,
     datasets: DatasetAvailability | None = None,
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
-) -> list[ContextSection]:
+) -> list[ContextSection | ContextMaterial]:
     """Compose fixed scientific partitions from one turn and generic state."""
 
     research = {

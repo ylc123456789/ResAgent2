@@ -26,8 +26,8 @@ class _ActionClient:
 
 
 def _workspace_reads(context):
-    section = context.text.split("## workspace_reads\n", 1)[1].split("\n\n## ", 1)[0]
-    return json.loads(section.split("\n", 1)[1])
+    section = context.text.split("## file_reads\n", 1)[1].split("\n\n## ", 1)[0]
+    return {"file_snippets": json.loads(section.split("\n", 1)[1])["snippets"]}
 
 
 @pytest.mark.parametrize("edit_succeeds", [True, False])

@@ -8,7 +8,7 @@ from resagent2_capabilities import (
     DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
 )
 from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextSection, user_answers_section
+from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection, user_answers_section
 
 
 UNDERSTAND_PROMPT = """You are the read-only Coding Agent.
@@ -69,7 +69,7 @@ def build_context(
     binding: EnvironmentBinding | None = None,
     datasets: DatasetAvailability | None = None,
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
-) -> list[ContextSection]:
+) -> list[ContextSection | ContextMaterial]:
     inputs = request.inputs.model_dump(mode="json")
     artifacts = [
         {

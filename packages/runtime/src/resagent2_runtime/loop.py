@@ -25,7 +25,7 @@ from resagent2_contracts import (
     TaskId,
 )
 
-from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer
+from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer, ContextMaterial
 from .compaction import plan_compaction
 from .llm import LLMClient, LLMExhaustedError
 from .models import (
@@ -75,7 +75,7 @@ class ContextBuilder(Protocol):
         request: Any,
         state: AgentState,
         max_context_tokens: int,
-    ) -> list[ContextSection]:
+    ) -> list[ContextSection | ContextMaterial]:
         """Pack sections against the effective module/model input limit."""
 
 

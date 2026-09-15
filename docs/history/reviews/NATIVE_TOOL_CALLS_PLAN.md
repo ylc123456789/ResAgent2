@@ -3,6 +3,8 @@
 基线 `fa711a0`；分支 `feat/native-tool-calls`；公共 schema 7.0 不变。
 本地实现、文档及确定性回归已完成，真实模型效果待按[小型验收单](NATIVE_TOOL_CALLS_ACCEPTANCE.md)核验，不宣称旧 L3 问题已消失。
 
+以上为 f7d78e8 初交付状态。后续串行批次、schema8.0调用预算与压缩已经完成；最新 f98b6fd 的真实原生调用、执行和跨进程恢复结果见[最终复核](CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)。下文保留首版范围，不作为当前“仅单调用/无压缩”的规范。
+
 ## 实现范围
 
 1. **同一套 Tool，两种明确用途。** 三个 Agent 的生产客户端通过原生 `tools` 发送既有 `Tool.input_model` 完整 schema；模型的调用经现有 AgentAction、权限、参数校验和完成检查执行。Compiler 仍通过 `next_action` 生成/评审任务图 JSON。没有为三个 Agent 分别打补丁，也没有正文 JSON/DSML 兜底执行器。

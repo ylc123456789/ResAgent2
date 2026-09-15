@@ -2,7 +2,7 @@
 
 对应 [开发记录](RUNTIME_CONTINUATION_PLAN.md)；实现边界见 [CONTEXT](../../current/CONTEXT.md#compaction) 和 [CONTRACTS](../../current/CONTRACTS.md#tools)。
 
-**当前补验入口：[§7 摘要软目标与独立工作区补验](#soft-target-followup)。** b4868ec 的旧验收现场原样保留；新提交只跑 §7 指定范围，不重复整套付费矩阵。
+**本阶段已完成 f98b6fd 服务器补验与主开发复核：[最终结果、计量勘误与边界](CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)。** 以下保留原验收要求，§7为当时的补验入口，不表示仍需重复付费运行。b4868ec 的旧验收现场原样保留。
 
 ## 0. 范围与纪律
 

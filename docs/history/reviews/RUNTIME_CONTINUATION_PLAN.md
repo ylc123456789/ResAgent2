@@ -43,3 +43,7 @@
 本地结果：全量 **1002 passed / 1 skipped**；压缩两文件专项 **35 passed**；mock E2E completed；git diff --check干净。新增5个参数化用例覆盖ASCII/中文摘要略超目标但整体可容纳，以及空白/length响应保留旧边界；原超大摘要用例改为验证整包预算拒绝。
 
 本次未运行新服务器请求，未改服务器现场、未推送或合并；测试方按[验收单§7](RUNTIME_CONTINUATION_ACCEPTANCE.md#soft-target-followup)只补三个小探针并追加旧报告勘误。
+
+## 2026-09-15 最终状态
+
+后续 `827d1b5` 将摘要长度改为生成软目标，`f98b6fd` 统一材料份额与空余借用；schema仍8.0，不新增业务预算字段。本地/服务器全量1014 passed、1 skipped，六个小探针均完成，主开发已核对原始消息与Session。补跑计量、暂停检查点和超目标摘要的报告勘误统一记在[最终复核](CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)，不把旧失败改写为成功。旧L3不恢复，服务器安装指针不随Git收尾自动变更。

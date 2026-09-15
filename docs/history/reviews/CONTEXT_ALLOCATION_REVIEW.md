@@ -25,7 +25,7 @@
 
 ## 3. 本地验收重点
 
-本地全量：**1014 passed, 1 skipped**（相对827d1b5新增12个分配用例）；`python -m e2e.mock_e2e` completed，`git diff --check`干净。服务器尚未运行本提交。
+本地全量：**1014 passed, 1 skipped**（相对827d1b5新增12个分配用例）；`python -m e2e.mock_e2e` completed，`git diff --check`干净。初交付时服务器待验，最终结果与复核勘误见[§5](#verified-closeout)。
 
 - 起始份额、另一类材料很短/缺失时借用；先保留各类基本份额，再按优先级借用。
 - 固定目标/约束/回答/控制信息原样保留；它们变大时缩减材料，而不是按原比例填材料后错误失败。
@@ -56,4 +56,36 @@ python -m pytest tests/runtime/test_context_materials.py tests/runtime/test_cont
 
 空余额度借用和优先级由上面的确定性测试验证，不要求付费模型刻意产生某个长度或重复跑到绿。最终上下文确实不足、超时或模型任务失败应保留并分类报告，不能扩大额度掩盖。
 
-本轮不启动服务器付费调用、不恢复旧L3。服务器行为结果待测试方交回，不能由本地单测代替。
+以上为测试方执行前的要求；开发侧不自行启动服务器付费调用、不恢复旧L3。服务器行为不能由本地单测代替。
+
+<a id="verified-closeout"></a>
+
+## 5. 2026-09-15 最终复核与收尾
+
+服务器实测产品提交为 `f98b6fd`（`feat/runtime-continuation`，schema 8.0），证据根为 `/root/autodl-tmp/e2e-ca-f98b6fd-K9mP2x/`。测试方报告全量 **1014 passed / 1 skipped**、聚焦 **107 passed**、mock E2E completed；主开发经 WSL SSH 只读复核 MANIFEST、驱动、原始模型请求/返回、Session 事件和实际结果。原报告、旧 b4868ec 现场与旧 L3 不改写。
+
+收尾时主开发本地重新执行全量：**1014 passed / 1 skipped**；mock E2E completed，独立临时输出已自动清理；6份修改文档的57处相对文件链接及 `git diff --check` 通过。此次收尾不改产品代码，服务器不需为文档提交重复付费补验。
+
+### 通过内容
+
+- 六个探针均完成：独立 Coding Flash / Pro、Experiment、8192 压力、自然问答恢复、先压缩后暂停的注入补跑。暂停阶段本身为 needs_user_input，只有恢复后的模块结果为 completed，不把暂停当失败或独立完成。
+- Pro 的首次读确为 `return a - b`，原生 replace_text 改为 `a + b`，运行 unittest 后 finish；6 次调用、约24秒。不用此结果反推旧非独立夹具超时的原因。
+- Experiment 的 `file_reads` 与 `artifact_reads` 正文均到达模型，真实执行 `python run.py` 后 value=60，与输入一致。
+- 8192 压力探针压缩3次并生成正确 result.txt；问答补跑在6次压缩后，将一次 finish 响应替换为合法 ask_user（明确标注注入），跨进程恢复读取真实答案，最终 needle_files.txt 为 data_2.txt / data_5.txt / data_7.txt。它验证暂停恢复机制，不证明模型自然选择该提问。
+- 所有完整原生/压缩请求按 `ceil(len(request_text)/4)` 重算无失配；主开发复核 trace 目录0700、文件0600。Session权限与密钥定值扫描无命中由测试方报告，收尾不重复读取或记录密钥。
+
+### 对服务器 MANIFEST 的勘误（原件保留，以本节为准）
+
+| 项目 | 原始证据与正确口径 |
+|---|---|
+| 调用计量 | coding-flash 7、coding-pro 6、exp 6、stress8192 11、resume 两阶段合计12、resume2 17、resume2-cont 4，共 **63个逻辑调用 / 63次HTTP尝试**。每条主记录 retry_number=0、attempts长度=1。补跑暂停前 result.llm_calls=17，恢复后=4，最终 Session.llm_calls_used=21；不是“phase1花21次、其中4次HTTP重试，再加phase2的4次”。摘要调用已包含，不能重复加账。 |
+| 暂停检查点 | 补跑第6次压缩为 Session event 53，history_start=8；ask_user 回执为event 59。暂停时累计11个原生turn。history_start=10、tool_turns=14是恢复结束后的状态，不是暂停快照。 |
+| 恢复首个请求 | call_id `8aca377416ae42adb6efe46173c211aa` 保留turn索引8–10的 **3个完整工具回合**（run_verification；read_file+git_diff；ask_user），调用ID与原Session逐一匹配，未重发索引0–7。不是“仅1个回合”；首请求同时含原题与 needle_files.txt 答案。 |
+| 摘要略超目标 | 单独压力探针的1177/1440/1550确实低于1636，但同为8192输入的补跑真实产生 **1642、1789、1873** 字符摘要（call_id依次 `5aeef57d25574673a0a86d6007142efe`、`0e4f01e6c811470583f90eddd22d2ec4`、`f358fa6348814e18bfa2d97f59aba60b`），提示目标均为1636，finish_reason均stop，检查点保存且继续执行。故“局部超目标、整包仍可容纳”的接受分支已有真实证据，不仅确定性测试覆盖。 |
+
+### 验收边界与后续
+
+- 恢复补跑直接调用子Agent，不经Controller；两阶段各传入40次调用额度。因此已验证Session累计计量和检查点恢复，**没有在此付费探针验证Run剩余额度下发的完整链路**。实际两阶段合计21次，未超原40次；Controller/Scheduler剩余额度规则仍由相应确定性测试覆盖，直接模块调用的每次授额归调用方负责。
+- 材料权重/优先级借用、真正整包超限时失败、不推进检查点等硬边界由确定性测试证明。小探针不证明长科研任务永不循环、摘要永不丢信息，也不证明 arXiv 已恢复。
+- 本阶段不再改产品代码、不追加付费回归；收尾只同步文档并在用户授权后合并推送。此次分支包含文献平级来源、原生调用、串行回执、预算去重和压缩的前置提交；各阶段历史结果分别保留，不声称 f98b6fd 重跑了全部旧矩阵。
+- 服务器 editable 仍指向待测 f98b6fd checkout，不在收尾时切换安装、清理环境或旧工作区。旧 schema 7.0 L3 保持暂停且不迁移；未来科研级验收需另行确认预算，使用当前版本新 Run。

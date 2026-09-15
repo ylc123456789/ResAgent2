@@ -1,8 +1,10 @@
 # L3 风格测试：在真实仓库里完成一次小型研究
 
-状态：**测试规程已编写，尚未执行，不能写成验收通过。** 对照产品基线 `47f6231`；命令和预算规则见 [CLI README](../../apps/cli/README.md)。
+状态：**原基线 47f6231 的预检已完成，正式 Run 尚未启动，不能写成验收通过。** 文献后端更新后，先按 [文献补验要求](../history/reviews/LITERATURE_FALLBACK_ACCEPTANCE.md) 重新确认产品身份和检索；保留已准备的实验仓库、数据与冒烟。命令和预算规则见 [CLI README](../../apps/cli/README.md)。
 
 2026-09-15 修订：改为“短任务 + 明确预算 + 有限问答 + 外部验收”。取代上一版固定 50 epochs、三个指定 seeds、六条训练及强制终期 test 的规程；这些旧要求不再作为隐藏评分条件。本文供测试人员阅读，**不要整篇放入 Agent 的输入或工作区**。
+
+同日收紧启动预算：`12 / 2 / 200 / 14400`（任务/尝试/LLM 调用/Run 执行秒数），替代原预检的 400 次、8 小时。模型配置与短任务不变；新额度仍需在正式启动前确认成本，不从已批准旧额度推断本次已获启动许可。
 
 这里的 L3 沿用旧 ResAgent 的“半开放真实任务”叫法，不是通用评测标准，也不是 RSI 论文里的 L3 自治等级。第一版只做一个任务，不新增测试平台、Agent、Provider 或产品接口。
 
@@ -45,8 +47,8 @@
 3. **实验仓库**：建议候选 [kuangliu/pytorch-cifar](https://github.com/kuangliu/pytorch-cifar)，但已核对的 `main.py` 默认是 SimpleDLA、200 epochs、逐 epoch 测试，**不能原样当作 ResNet18 基线**。启动前必须锁 SHA，核对许可与源码，不依赖浮动 master 的行为。
 4. **独立准备 diff**：优先使用已有可运行基线；必要时只做中性准备：选 ResNet18，支持资源路径/禁止下载、seed/epochs 参数及独立输出目录。若提供 train/validation 切分，要固定索引并在 README 如实说明；不能把官方 test 冒充 validation。保留 upstream SHA、准备 commit/diff 和文件 hash。不得预实现候选、预写实验结论或修改 ResAgent2。系统仍负责实验设计、候选实现和正式比较；测试方不得在 Run 启动后继续替它修实验代码。
 5. **小冒烟**：只跑既有 cosine 的 1–2 epochs，检查数据、GPU、loss/accuracy、输出落点并估计耗时。冒烟独立目录，不作为系统自主完成的正式结果。可以在仓库 README 提供机器与实测耗时等事实，不建议候选、轮数或具体研究方案。若连小规模对照都明显无法在资源内执行，预检后报告阻断，不反复启动正式 Run。
-6. **成本确认**：第一轮只用一个 Flash 配置，不同时启动 Pro 矩阵。记录模型、上下文/输出限制、设备、依赖版本与费用上限。下节示例给 8 小时 Run 预算；它不是费用上限。若用户未确认可接受成本，预检后等待确认再运行。
-7. **外部服务**：单独检查文献检索可用性；测试人员不提前给系统候选答案。若 arXiv 不可用，记录外部阻断；不能静默换为回放后宣称真实检索通过。
+6. **成本确认**：第一轮只用一个 Flash 配置，不同时启动 Pro 矩阵。记录模型、上下文/输出限制、设备、依赖版本与费用估算。下节给 4 小时 Run 执行预算、200 次 LLM 调用；二者都不是货币硬上限，也不会自动关闭计费中的服务器。若用户未确认可接受成本，预检后等待确认再运行。
+7. **外部服务**：先按文献补验要求单独检查当前组合后端，不提前给系统候选答案。arXiv 失败而 OpenAlex 真实成功，应分别报告“arXiv 不可用、备用可用”；不是 arXiv 恢复。两源都不可用则停在预检并交用户决定，不默认降级取消查资料要求。回放可以验证消费机制，但不能冒充实时可用性。
 
 预检允许的工程准备本身也算人工投入，计入报告，不能包装成系统自主完成。测试方更换初始仓库或配方时要记录新案例版本，不与旧输入混算；系统在预算内设计共同训练轮数等属于本次被测能力，不要求测试方预先代定。没有可运行且协议一致的基线时，本测试仍是“准备未完成”，不是开箱即跑的 benchmark。
 
@@ -91,17 +93,17 @@ resagent2 run \
   --goal-file "$ROOT/goal.txt" \
   --constraint '只修改当前实验工作区，不修改 ResAgent2 或外部验收文件。' \
   --constraint '使用已有数据资源；缺少数据或需要额外权限、费用时询问用户，不自行下载大型数据集。' \
-  --max-tasks 12 --max-attempts 2 --max-llm-calls 400 \
-  --timeout-seconds 28800
+  --max-tasks 12 --max-attempts 2 --max-llm-calls 200 \
+  --timeout-seconds 14400
 
 resagent2 show "$RUN_ID" --data-root "$ROOT/data"
 ```
 
 已有资源环境变量按服务器实际配置保留并记录，不能在缺 catalog 时编造路径。不要为了本轮评分改模型、上下文、工具权限、任务预算或产品 prompt。
 
-`12 / 2 / 400 / 28800` 是本案例运行前显式冻结的预算，不是产品默认值；当前 CLI 默认是 `8 / 2 / 200 / 7200`。正式运行中不临时提高这些额度。
+`12 / 2 / 200 / 14400` 是本案例运行前显式冻结的预算，不是产品默认值；当前 CLI 默认是 `8 / 2 / 200 / 7200`。正式运行中不临时提高这些额度。
 
-这里 `--timeout-seconds` 是整个 Run 的预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。LLM socket timeout 与 Run timeout 也不是一回事。依赖安装可能耗掉很大部分时间；暂停等待用户的时间单独计量。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/capabilities/src/resagent2_capabilities/process.py)。
+这里 `--timeout-seconds` 是整个 Run 的执行时间预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。LLM socket timeout 与 Run timeout 也不是一回事。依赖安装可能耗掉很大部分时间；显式暂停等待用户的时间单独计量、不计入此执行预算，所以 4 小时不是总墙钟硬截止。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/capabilities/src/resagent2_capabilities/process.py)。
 
 若 paused：按下一节规则判断是否允许代答。先用 show 读取原题及实际 `requested_fields`；`ACTUAL_FIELD` 是占位符，不是固定字段名。多字段问题逐项用 `--field` 提交，不能猜字段名或改 Run JSON 绕过校验。
 

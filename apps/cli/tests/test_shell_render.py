@@ -63,6 +63,20 @@ def test_render_live_shows_last_tool_activity():
     assert "→ coding/read_file (step 3)" in lines
 
 
+def test_render_live_shows_serial_tools_and_compaction():
+    run = _run()
+    serial = {"agent": "coding", "tool": None, "tools": ["read_file", "write_file"], "step": 3}
+    compacted = {
+        "agent": "coding",
+        "tool": None,
+        "action_valid": None,
+        "included_sections": ["goal", "compaction"],
+    }
+
+    assert "→ coding/read_file → write_file (step 3)" in render_live(run, [serial])
+    assert "→ coding/compaction" in render_live(run, [compacted])
+
+
 def test_render_live_task_attempts_and_error():
     task = SimpleNamespace(
         id="task_1",
@@ -194,6 +208,30 @@ def test_render_trace_native_calls_with_null_content():
     assert "[tool_calls]" in joined and "call_read" in joined and "train.py" in joined
     assert "[response]" not in joined
     assert record == before
+
+
+def test_render_trace_labels_serial_tools_and_compaction():
+    records = [
+        {
+            "sequence": 1,
+            "agent": "coding",
+            "tool": None,
+            "tools": ["read_file", "write_file"],
+            "step": 4,
+        },
+        {
+            "sequence": 2,
+            "agent": "coding",
+            "tool": None,
+            "action_valid": None,
+            "included_sections": ["compaction"],
+            "step": None,
+        },
+    ]
+
+    joined = "\n".join(render_trace(records))
+    assert "tool=read_file → write_file step=4" in joined
+    assert "tool=compaction step=None" in joined
 
 
 def test_render_trace_metadata_does_not_invent_raw_calls():

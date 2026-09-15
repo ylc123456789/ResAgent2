@@ -15,16 +15,16 @@
 | 东西 | 保存什么 | 是否每轮完整交给模型 |
 |---|---|---|
 | 模块请求 | 本次目标、输入、约束、授权工件、已配对回答等 | 否；由各模块选取、组织 |
-| Session 与冻结工件 | 工具事件、内部记忆、已获取的文件内容和结果，以及原生 assistant/tool 配对历史 | 否；领域材料仍由各模块选择，但完整的原生协议历史会续传；工具结果自身也可能已截断 |
+| Session 与冻结工件 | 工具事件、内部记忆、已获取的文件内容和结果，以及原生 assistant/tool 配对历史 | 否；领域材料仍由各模块选择，原生协议发送近期完整历史及可用检查点摘要，原始历史仍留在 Session；工具结果自身也可能已截断 |
 | 本轮领域上下文 | 本次调用重新选中的职责、状态、材料片段和反馈 | 是；作为原生请求最后一条 `user` 消息的正文 |
 
 例如：Experiment 已生成风险报告，Scientific 收到报告编号，Scientific 实际打开报告，Scientific 在结论中考虑风险，是四件不同的事。
 
 `ResearchRequest.context` 只是用户提供的一段研究背景，不是本文所说的完整模型上下文。完整上下文还包含工具说明、控制状态、答案和读取结果。
 
-当前三个 Agent 共用原生工具调用协议。每次请求包含一条 API `system` 协议说明、Session 中已经配对的 assistant/tool 消息、最后一条本轮重新组装的 `user` 领域上下文，以及独立的 `tools` 数组。领域上下文里的 `system` 仍是旧的职责文本段名，位于最后这条 `user` 消息内；旧轮次的完整领域 prompt 不会累积进历史。
+当前三个 Agent 共用原生工具调用协议。每次请求包含一条 API `system` 协议说明、Session 中检查点之后已经配对的 assistant/tool 消息、最后一条本轮重新组装的 `user` 领域上下文，以及独立的 `tools` 数组。领域上下文里的 `system` 仍是旧的职责文本段名，位于最后这条 `user` 消息内；旧轮次的完整领域 prompt 不会累积进历史。
 
-原生响应的 `reasoning_content` 会与该 assistant 回合、工具调用及 receipt 一起保存在 Session，并在后续原生请求中原样续传。它只是 Provider 协议连续性数据，不是科学证据，也不是新增的研究记忆组件；Session 的 `memory` 仍是代码维护的状态字典。
+原生响应的 `reasoning_content` 会与该 assistant 回合、工具调用及 receipt 一起保存在 Session，近期回合在后续原生请求中原样续传；较早回合可以按下述边界进入有损摘要。它只是 Provider 协议连续性数据，不是科学证据，也不是新增的研究记忆组件；Session 的 `memory` 仍是代码维护的状态字典。
 
 **对应接口与源码**：[研究输入](CONTRACTS.md#research-request)、[Session](CONTRACTS.md#attempt-session)、[LLM 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[AgentState / ContextSection](../../packages/runtime/src/resagent2_runtime/models.py)。
 
@@ -35,17 +35,17 @@
 三个原生 Agent 使用同一条主线：
 
 1. **调用方交付请求。** Controller 或 Scheduler 决定这一回合/任务可见的输入、工件和回答作用域。
-2. **先为原生开销预留额度。** Loop 取模块上限与模型可用输入容量的较小值，先扣除完整工具 schema 和已配对历史的估算，再把剩余材料额度传给 `ContextBuilder(request, state, max_context_tokens)`。
+2. **先为原生开销预留额度。** Loop 取模块上限与模型可用输入容量的较小值，先扣除完整工具 schema 和当前续传历史的估算，再把剩余材料额度传给 `ContextBuilder(request, state, max_context_tokens)`。
 3. **构造本轮领域段。** Agent 的 builder 从当前请求、Session 与实际绑定中选择信息；`workspace_context` 按剩余额度的固定比例选择读取材料、命令诊断和目录观察，数据集与回答继续使用已有共享投影。
 4. **AgentLoop 补运行反馈。** 尚待处理的动作、参数或完成检查拒绝作为 required 领域段加入；原生路径不再加入 `tool_contracts` 文本或 `recent_observations` 的 400 字符预览。
 5. **ContextComposer 选择并计量。** 先保留必需段，再尝试装入可选段；原生路径按最终 `{messages, tools}` 序列化请求计量并生成 included/omitted 清单。
-6. **客户端发请求并保存配对回合。** 模型必须返回恰好一个原生工具调用；本地参数校验、权限检查和执行规则不变。assistant 回合与相应 tool receipt 配对持久化，下一轮再连同重新构造的领域上下文发送。
+6. **客户端发请求并保存配对回合。** 原生每轮可返回 1–8 个工具调用，整体参数/权限预检后串行执行并逐项保存回执；失败取消后续。finish/ask_user/request_work 必须独占一轮。输入压力达到阈值时可先做一次有界摘要，再发送当前领域上下文。
 
 | 所在位置 | 负责什么 | 不负责什么 |
 |---|---|---|
 | Agent 的 context builder / Scientific interpreter | 领域信息的选择、组织和用途说明 | 不替代上层调度，不变更执行事实 |
 | capabilities 的共享投影 | 环境、数据集、读取材料等可复用内容 | 不决定科学结论，不保管第二份 Run |
-| runtime 的 Loop / Composer | 运行反馈、原生协议历史、工具 schema 与完整请求预算 | 不理解哪篇论文更重要，不自动总结或压缩研究发现 |
+| runtime 的 Loop / Composer | 运行反馈、原生协议历史/检查点、工具 schema 与完整请求预算 | 不理解哪篇论文更重要，不自动总结或压缩研究发现 |
 | 外层组合根 | 注入模型、容量及模块配置 | 不负责每步阅读内容的选择 |
 
 **源码**：[Scientific context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[workspace_context](../../packages/capabilities/src/resagent2_capabilities/workspace_context.py)、[AgentLoop](../../packages/runtime/src/resagent2_runtime/loop.py)、[ContextComposer](../../packages/runtime/src/resagent2_runtime/context.py)。
@@ -63,10 +63,11 @@
 
 | 输入部分 | 来源和用途 | 保留与刷新方式 |
 |---|---|---|
-| API `system` 消息 | 原生工具使用、单次一个调用、权限/完成门禁及新旧状态优先级说明 | 每次请求固定重建，不是 Agent 的领域职责段 |
+| API `system` 消息 | 原生工具使用、串行批次及控制工具独占、权限/完成门禁及新旧状态优先级说明 | 每次请求固定重建，不是 Agent 的领域职责段 |
 | `tools` | 三个 Agent 各自实际注入的 Tool；名称、说明和完整 `input_model` JSON Schema | 每次从工具集合生成；`model_guidance` 合并进 description，不再复制成 `tool_contracts` 文本 |
-| assistant/tool 历史 | Provider 原始 assistant 内容、reasoning、tool call，以及本地生成的配对 receipt | 按 Session 顺序持久化并完整续传；不附加旧轮完整领域 prompt |
+| assistant/tool 历史 | Provider 原始 assistant 内容、reasoning、tool call，以及本地生成的配对 receipt | 按 Session 顺序完整保存；续传检查点后的完整回合，不切开调用/回执；不附加旧轮完整领域 prompt |
 | 领域 `system` 段 | 当前 Agent/profile 的职责与用法提示 | 始终必需，是最后一条 `user` 消息内的首段，不是 API `system` 消息 |
+| `history_checkpoint` 段 | 压力下生成的旧交互交接摘要 | 有检查点才出现，必需；仅用于定位/续做，当前状态与回答优先，不是证据 |
 | `runtime_feedback` 段 | 尚待处理的动作/参数/完成检查等拒绝信息 | 有反馈才出现，必需；每轮随当前领域上下文重建，解除规则由 Loop 管理 |
 
 原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
@@ -83,7 +84,7 @@ CLI 在 data root 的 `sessions/coding`、`sessions/experiment`、`sessions/scie
 
 新 Session 固定记录协议身份。JSON-only 路径以 `tool_protocol_key=null` 标识；原生客户端的 key 由协议版本、API endpoint 和模型名哈希得到，不包含 API key。恢复时必须与创建时一致，因此 JSON-only Session、缺少该身份的旧记录，或换了模型/API endpoint 的 Session 都不会静默接到原生历史上；当前不迁移这类记录，需要新建 Run。
 
-Loop 在工具派发前保存 assistant/tool-call checkpoint，执行结果形成后再保存 receipt。进程重启若看到未配对调用，会记录“结果未知”、要求先检查状态且不会自动重放。这只是进程重启的 checkpoint 防护，不承诺掉电持久性，也不提供有副作用工具的 exactly-once 保证。
+Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executing_call_id，完成后保存对应 receipt 并清除执行标记。重启保留已完成回执；当时正在执行但缺回执的项记为结果未知，后续项记为未开始，不自动重放。这只是进程重启的 checkpoint 防护，不承诺掉电持久性，也不提供有副作用工具的 exactly-once 保证。
 
 <a id="modules"></a>
 
@@ -275,17 +276,36 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | 命令诊断 | 材料额度的1/16换算字符；优先失败、再成功 | command_context |
 | 目录路径 | 材料额度的1/64换算字符；最多2000条完整路径 | workspace_context + recent_tool_listing |
 | 一次工具读取 | 默认所选行范围最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
-| 原生工具历史 | Session 中全部已配对 assistant/tool 回合；不做额外400字符裁剪 | AgentLoop + SessionStore |
+| 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
+| 调用次数/时间 | Run 下发当前剩余 max_llm_calls 和 timeout；动作 step 只记录、不再限制 | Controller / Scheduler / AgentLoop 同一调用账本 |
 
-Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块上限”和“模型可用输入容量”的较小值；没有hook时使用模块上限，不猜Provider容量。原生路径先为完整 tools schema 和 Session 历史预留空间，再把剩余材料额度交给builder；Composer 随后仍按完整请求复核。历史或 schema 本身放不下、或 required 领域段装不下，都明确返回 `budget_exhausted`，不删除半个 assistant/tool pair，也不自动压缩旧历史。CLI注入Profile；real E2E有自己的装配，但原生Agent默认值同源，不能假定它继承CLI的环境变量覆盖。
+Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块上限”和“模型可用输入容量”的较小值；没有hook时使用模块上限，不猜Provider容量。原生路径先为完整 tools schema 和当前续传历史预留空间，再把剩余材料额度交给builder；Composer 随后仍按完整请求复核。输入压力先尝试下述最小压缩；没有可用前缀、schema/单个巨大回合/required 领域段仍装不下时，明确返回 `budget_exhausted`。不删除半个 assistant/tool pair，也不暗改上限。CLI注入Profile；real E2E有自己的装配，但原生Agent默认值同源，不能假定它继承CLI的环境变量覆盖。
 
 Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列化后的 messages、tools 和 JSON 转义，而不只是领域渲染文本；客户端发送前还会以同一完整请求边界复核。这个算法是确定性粗估，不是模型 tokenizer 的精确计数，也不保证对中文等所有内容都高估；不能把 `estimated_tokens` 当实际 usage。Compiler 的 JSON action schema 说明仍在其旧路径中计量；无 Profile 时不提供同等模型容量保证。
 
-**required装不下仍明确失败。** 三个Agent各自可配置128K、256K或更小额度，局部材料比例随预留后的材料额度变化；不会因一次超限自动加到256K。剩余空间用于职责、任务、问答、元数据和运行反馈。原生历史与 `workspace_reads`、`command_results` 等领域投影的重复内容不会去重，都会计量；系统不自适应借额度、不调用 LLM 压缩。比例是装箱上限，不要求每段填满，来源索引仍仅用于定位。
+**required装不下仍明确失败。** 三个Agent各自可配置128K、256K或更小额度，局部材料比例随预留后的材料额度变化；不会因一次超限自动加到256K。剩余空间用于职责、任务、问答、元数据和运行反馈。原生历史与 `workspace_reads`、`command_results` 等领域投影的重复内容不会去重，都会计量；系统不自适应借材料额度；旧协议历史可在统一边界做 LLM 压缩，当前领域必需段不由摘要替代。比例是装箱上限，不要求每段填满，来源索引仍仅用于定位。
 
 输出额度是另一项配置：思考与最终正文可能共享 Provider 的输出额度。它不能用来解释所有输入裁剪，也不因为输入还有空间就自动增大。环境变量及部署默认值统一查 [CLI 配置](../../apps/cli/README.md#6-模型与上下文预算)，本文不另设一套值。
 
 **源码与测试**：[Composer / 额度换算 / 选择器](../../packages/runtime/src/resagent2_runtime/context.py)、[ModelProfile / 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[执行Agent容量](../../tests/e2e/test_native_context_capacity.py)、[Scientific容量](../../tests/e2e/test_scientific_context_capacity.py)。128K是当前工程选择，不承诺所有任务都足够或成本/延迟不变。
+
+<a id="compaction"></a>
+
+### 6.1 Session 会一直累积吗？
+
+**磁盘原始记录会累积；不再把全部旧历史无限塞回 128K。** 仅压缩旧协议历史，不删除原始 tool_turns/events，不改当前任务、回答、领域 memory、文件工件或完成状态。没有自动磁盘清理/归档，也不保证超长 Session 的存储或重写成本恒定。
+
+- 完整请求超过有效输入的 80%，或组装必需段时实际超限，才考虑压缩。每轮最多做一次；没有更早完整前缀就不做。
+- 至少保留最新一个完整 turn（包含全部 tool calls/receipts/reasoning），再尽量保留合计不超过有效输入 20% 的近期完整回合。20% 是选择目标，不是切断单个回合的刀。
+- 较早完整回合连同已有摘要送给同一个客户端作纯文本交接；输入整包仍受相同容量限制。摘要正文限有效输入的 5% 换算字符、上限 16384 字符，Provider 输出额度仍沿用 ModelProfile，避免 thinking 挤空正文。
+- 接受摘要后先验证新请求装得下，再把摘要和绝对边界一起写入 history_checkpoint，同时追加 compaction 审计事件。失败、空摘要、过长摘要、unfinished prefix、重建超限都不推进边界。
+- 后续发送“摘要 + 边界后的完整回合 + 最新领域上下文”；重启从持久检查点继续，不重复总结已经覆盖的原始前缀。总结只提供做过什么、待办和来源线索，不具证据权威性。
+- 摘要调用和 HTTP 重试计入原有 max_llm_calls，开始前至少留下两次额度（摘要与下一次动作）；不设置另一份摘要调用钱包。正常暂停恢复沿用 Run 余额，跨进程崩溃不具 Run/Session/Provider 的事务级 exactly-once 计量。
+- 没有可选 summarize_history 的注入客户端仍可运行；真正装不下时明确失败。摘要失败不会悄悄换模型、增大预算或自动无限重试。
+
+这里新增的是一个共享检查点，不是分 Agent 的长期记忆、阅读笔记或向量检索。Compiler 没有 Session，不走压缩。压缩有损；它不保证避免所有循环、保留所有历史细节或节省每次调用费用。
+
+**源码与测试**：[规划函数](../../packages/runtime/src/resagent2_runtime/compaction.py)、[Loop](../../packages/runtime/src/resagent2_runtime/loop.py)、[检查点模型](../../packages/runtime/src/resagent2_runtime/models.py)、[规划/传输测试](../../tests/runtime/test_compaction.py)、[循环/重启测试](../../tests/runtime/test_history_checkpoint.py)。服务器要求见[本轮验收单](../history/reviews/RUNTIME_CONTINUATION_ACCEPTANCE.md)。
 
 <a id="verification"></a>
 
@@ -298,7 +318,7 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 3. **模型是否使用**：真实动作有没有读相关材料，是否按答案行动；不能只看测试驱动替模型挑好了范围。
 4. **结果是否对应**：真实执行证据、最终结论与被读取的信息是否一致；读过也不等于相信或正确理解。
 
-原生调用的 full trace `request_text` 是序列化的 `{messages, tools}` JSON，可核对最终请求；`raw_tool_calls` 保存 Provider 返回的调用数组，`parsed_action` 仍投影为 `{tool, arguments}` 供既有诊断使用。工具调用响应的 `raw_response_text` 可以为 null，这不表示模型返回了空动作。完整 reasoning 可帮助分析，但不是控制状态或证据。trace 包含敏感源码/输入，应按现有访问边界处理，不把其原文复制到公开文档。详见 [trace 契约](CONTRACTS.md#trace)。
+原生调用的 full trace `request_text` 是序列化的 `{messages, tools}` JSON，可核对最终请求；`raw_tool_calls` 保存 Provider 返回的调用数组，单工具的 `parsed_action` 为 `{tool, arguments}`，多工具为相同对象组成的数组，并用 `tools` 列表展示名称；摘要请求 included_sections 含 compaction、action_valid/tool/parsed_action 为 null，不能计为无效工具动作。工具调用响应的 `raw_response_text` 可以为 null，这不表示模型返回了空动作。完整 reasoning 可帮助分析，但不是控制状态或证据。trace 包含敏感源码/输入，应按现有访问边界处理，不把其原文复制到公开文档。详见 [trace 契约](CONTRACTS.md#trace)。
 
 <a id="maintenance"></a>
 
@@ -310,4 +330,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-实现保持原状态机、公开业务schema、完成门禁及模型反馈规则；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用的范围和验证状态见[本阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，不能用确定性测试代替模型行为证据。
+本轮保持原状态机、领域输入输出、完成门禁及模型反馈规则；TaskBudget 删除 max_steps，公开 schema 升至 8.0，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，本轮串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，不能用确定性测试代替模型行为证据。

@@ -99,6 +99,20 @@ def _rows(definition):
             (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
 
 
+def test_more_than_fifty_calls_use_only_the_allocated_budget(setup):
+    definition, store, requests, install = setup
+    install([
+        *[_reply([_call("write_value", {"key": "x", "value": i}, call_id=f"call_{i}")])
+          for i in range(51)],
+        _reply(),
+    ])
+    result = AgentLoop(store=store).run(definition, _request(calls=52), session_id="session_native")
+    state = store.load("session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == state.llm_calls_used == state.step == len(requests) == 52
+    assert state.memory["x"] == 50
+
+
 def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
     definition, store, requests, install = setup
     install([

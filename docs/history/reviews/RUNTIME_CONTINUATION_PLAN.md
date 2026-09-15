@@ -22,5 +22,10 @@
 
 - 阶段 1：Runtime 确定性测试 167 passed；覆盖批次顺序、后项非法零执行、权限变化、失败/超时取消后续、崩溃中间项未知而后项未开始。
 - 阶段 2：全量确定性测试 964 passed / 1 skipped；mock E2E completed；schema 8.0，移除 max_steps 和 Scheduler 的 50 次隐藏上限，异常客户端用量不伪造入账。
-- 阶段 3：待集成验证。独立 compaction helper 尚未接入循环，不能把 helper 测试当产品完成。
-- 服务器：待本地阶段完成后给专门验收单；不运行 GPU 全流程来代替边界测试。
+- 阶段 3：共享 Loop/Session 检查点已集成；原历史保留、近期成对续传、失败不推进边界、摘要和 HTTP 重试共用计量、跨暂停/磁盘重建恢复均有测试。CLI 仅补活动显示，组合根不变。
+- 最终本地：`python -m pytest tests apps/cli/tests -q` → **997 passed / 1 skipped**；mock E2E completed；git diff --check 干净。包括超过 50 次调用的确定性回归，不用付费请求凑调用次数。
+- 服务器：尚未运行本轮真实 LLM；交付[专门验收单](RUNTIME_CONTINUATION_ACCEPTANCE.md)。只需小型标准库任务与独立小输入压力探针，不运行 GPU 全流程来代替边界测试；旧 L3 保持不动。
+
+实现保持三层清晰分工：Tool 定义及权限/完成检查不换；Runtime 负责串行协议、计量和检查点；领域 builder 继续组织最新业务事实。原生完整 history 与当前工作集可能包含重复内容，仍按完整请求计量，不另加通用去重或检索框架。
+
+阶段提交：`1058847`（串行回执）、`373a20f`（schema 8.0 / 唯一调用预算）；检查点集成与文档在其后独立提交。工作分支未自动推送/合并。

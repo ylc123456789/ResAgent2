@@ -26,6 +26,21 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def _trace_activity(record: dict) -> str:
+    tool = record.get("tool")
+    if isinstance(tool, str) and tool:
+        return tool
+    tools = record.get("tools")
+    if isinstance(tools, list):
+        names = [name for name in tools if isinstance(name, str) and name]
+        if names:
+            return " → ".join(names)
+    sections = record.get("included_sections")
+    if isinstance(sections, list) and "compaction" in sections:
+        return "compaction"
+    return "None"
+
+
 def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
     """One compact, redrawable block for the in-progress view.
 
@@ -58,7 +73,7 @@ def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
                     )
     if trace_records:
         record = trace_records[-1]
-        activity = f"{record.get('agent')}/{record.get('tool')}"
+        activity = f"{record.get('agent')}/{_trace_activity(record)}"
         if record.get("step") is not None:
             activity += f" (step {record.get('step')})"
         lines.append(f"→ {activity}")
@@ -142,7 +157,7 @@ def render_trace(records: list[dict]) -> list[str]:
     for record in records:
         lines.append("-" * 40)
         meta = f"seq={record.get('sequence')} agent={record.get('agent')}"
-        meta += f" tool={record.get('tool')} step={record.get('step')}"
+        meta += f" tool={_trace_activity(record)} step={record.get('step')}"
         if record.get("latency_ms") is not None:
             meta += f" latency_ms={record.get('latency_ms')}"
         lines.append(meta)

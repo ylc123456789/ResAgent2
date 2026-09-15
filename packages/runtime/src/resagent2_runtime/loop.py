@@ -26,6 +26,7 @@ from resagent2_contracts import (
 )
 
 from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer
+from .compaction import plan_compaction
 from .llm import LLMClient, LLMExhaustedError
 from .models import (
     AgentAction,
@@ -34,6 +35,7 @@ from .models import (
     CompletionDecision,
     ContextSection,
     FinishCandidate,
+    HistoryCheckpoint,
     PermissionDecision,
     ToolCallTurn,
     ToolObservation,
@@ -305,66 +307,50 @@ class AgentLoop:
                     retryable=True,
                 )
 
+            tracer = getattr(definition.llm_client, "set_trace_context", None)
+            if tracer is not None:
+                tracer(run_id=request.run_id, session_id=state.session_id,
+                       task_id=request.task_id, agent=definition.name, step=state.step)
             try:
                 context_limit = definition.max_context_tokens
                 if native_call is not None:
                     budgeter = getattr(definition.llm_client, "tool_input_limit", None)
                     if budgeter is not None:
                         context_limit = min(context_limit, budgeter(context_limit))
-                    material_limit = native_context_budget(context_limit, schemas, state.tool_turns)
                 else:
                     budgeter = getattr(definition.llm_client, "context_budget", None)
                     if budgeter is not None:
-                        context_limit = min(context_limit, budgeter(
-                            definition.action_type, context_limit,
-                        ))
-                    material_limit = context_limit
+                        context_limit = min(context_limit, budgeter(definition.action_type, context_limit))
                 if context_limit < 1:
                     raise ContextBudgetExceeded("effective context limit must be positive")
-                sections = list(definition.context_builder(request, state, material_limit))
-                recent = self._recent_observations_section(state) if native_call is None else None
-                if recent is not None:
-                    sections.insert(0, recent)
-                if state.runtime_feedback is not None:
-                    content = (
-                        "Your previous action was rejected. Address this "
-                        "before retrying the same action:\n"
-                        f"{state.runtime_feedback.summary}"
+                context = None
+                context_error = None
+                try:
+                    context = self._compose_context(
+                        definition, request, state, schemas, context_limit, native=native_call is not None,
                     )
-                    if state.runtime_feedback.value is not None:
-                        content += (
-                            "\nRejection details:\n"
-                            + _trim_json(state.runtime_feedback.value, 800)
+                except ContextBudgetExceeded as error:
+                    context_error = error
+                if native_call is not None and callable(getattr(definition.llm_client, "summarize_history", None)):
+                    checkpoint = state.history_checkpoint
+                    plan = plan_compaction(
+                        current_context=context.text if context is not None else "",
+                        schemas=schemas, turns=state.tool_turns,
+                        history_start=checkpoint.history_start if checkpoint else 0,
+                        previous_summary=checkpoint.summary if checkpoint else None,
+                        max_input_tokens=context_limit, force=context is None,
+                    )
+                    if plan is not None:
+                        failure = self._compact_history(
+                            definition, request, state, schemas, context_limit, plan,
                         )
-                    sections.insert(
-                        0,
-                        ContextSection(
-                            name="runtime_feedback",
-                            content=content,
-                            priority=1000,
-                            required=True,
-                        ),
-                    )
-                if native_call is None:
-                    sections.append(
-                        ContextSection(
-                            name="tool_contracts",
-                            content=tool_contracts_text(definition.tools),
-                            priority=990,
-                            required=True,
+                        if failure is not None:
+                            return failure
+                        context = self._compose_context(
+                            definition, request, state, schemas, context_limit, native=True,
                         )
-                    )
-                compose_options = {}
-                if native_call is not None:
-                    compose_options["measure"] = lambda text: self.context_composer.estimate_tokens(
-                        native_input_text(text, schemas, state.tool_turns)
-                    )
-                context = self.context_composer.compose(
-                    definition.system_prompt,
-                    sections,
-                    max_tokens=context_limit,
-                    **compose_options,
-                )
+                if context is None:
+                    raise context_error or ContextBudgetExceeded("current context does not fit")
             except ContextBudgetExceeded as error:
                 return self._failure(
                     state,
@@ -380,22 +366,15 @@ class AgentLoop:
                     retryable=False,
                 )
 
-            tracer = getattr(definition.llm_client, "set_trace_context", None)
-            if tracer is not None:
-                tracer(
-                    run_id=request.run_id,
-                    session_id=session_id,
-                    task_id=request.task_id,
-                    agent=definition.name,
-                    step=state.step,
-                )
+            if self.clock() - started >= request.budget.timeout_seconds:
+                return self._failure(state, ErrorCode.TIMEOUT, "Agent session exceeded timeout", retryable=True)
             limiter = getattr(definition.llm_client, "set_attempt_limit", None)
             if limiter is not None:
                 limiter(request.budget.max_llm_calls - self._run_llm_calls)
             charged = False
             try:
                 if native_call is not None:
-                    reply = native_call(context, schemas, state.tool_turns, max_input_tokens=context_limit)
+                    reply = native_call(context, schemas, self._active_turns(state), max_input_tokens=context_limit)
                 else:
                     reply = definition.llm_client.next_action(context, definition.action_type)
                 failure = self._charge_calls(state, definition.llm_client, response_received=True)
@@ -743,6 +722,112 @@ class AgentLoop:
             retryable=False,
             details=self._failure_details(state),
         )
+
+
+    @staticmethod
+    def _active_turns(state: AgentState) -> list[ToolCallTurn]:
+        start = state.history_checkpoint.history_start if state.history_checkpoint else 0
+        return state.tool_turns[start:]
+
+    def _compose_context(self, definition, request, state, schemas, context_limit, *, native):
+        """Use the same domain builder with a bounded, paired protocol suffix."""
+        turns = self._active_turns(state)
+        material_limit = native_context_budget(context_limit, schemas, turns) if native else context_limit
+        sections = list(definition.context_builder(request, state, material_limit))
+        if state.history_checkpoint is not None:
+            sections.insert(0, ContextSection(
+                name="history_checkpoint",
+                content=(
+                    "Lossy handoff of older completed tool interactions, not evidence or current "
+                    "workspace/verification state. Current checked context and user answers take "
+                    "precedence. Re-read sources for exact code or evidence.\n"
+                    + state.history_checkpoint.summary
+                ),
+                required=True, priority=900,
+            ))
+        recent = self._recent_observations_section(state) if not native else None
+        if recent is not None:
+            sections.insert(0, recent)
+        if state.runtime_feedback is not None:
+            content = (
+                "Your previous action was rejected. Address this "
+                "before retrying the same action:\n"
+                f"{state.runtime_feedback.summary}"
+            )
+            if state.runtime_feedback.value is not None:
+                content += (
+                    "\nRejection details:\n"
+                    + _trim_json(state.runtime_feedback.value, 800)
+                )
+            sections.insert(
+                0,
+                ContextSection(
+                    name="runtime_feedback",
+                    content=content,
+                    priority=1000,
+                    required=True,
+                ),
+            )
+        if not native:
+            sections.append(
+                ContextSection(
+                    name="tool_contracts",
+                    content=tool_contracts_text(definition.tools),
+                    priority=990,
+                    required=True,
+                )
+            )
+        compose_options = {}
+        if native:
+            compose_options["measure"] = lambda text: self.context_composer.estimate_tokens(
+                native_input_text(text, schemas, turns)
+            )
+        return self.context_composer.compose(
+            definition.system_prompt,
+            sections,
+            max_tokens=context_limit,
+            **compose_options,
+        )
+
+    def _compact_history(self, definition, request, state, schemas, context_limit, plan) -> ModuleResult | None:
+        """Charge one bounded summary request and atomically publish a usable checkpoint."""
+        client = definition.llm_client
+        remaining = request.budget.max_llm_calls - self._run_llm_calls
+        if remaining < 2:
+            return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
+                                 "Insufficient calls for compaction and continuation", retryable=False)
+        limiter = getattr(client, "set_attempt_limit", None)
+        if limiter is not None:
+            limiter(remaining - 1)
+        try:
+            summary = client.summarize_history(plan.prompt, max_input_tokens=context_limit)
+        except Exception as error:
+            failure = self._charge_calls(state, client, response_received=False)
+            if failure is not None:
+                return failure
+            return self._failure(state, ErrorCode.TOOL_FAILED,
+                                 f"History compaction failed: {error}", retryable=False,
+                                 details={"component": "compaction"})
+        failure = self._charge_calls(state, client, response_received=True)
+        if failure is not None:
+            return failure
+        if self._run_llm_calls >= request.budget.max_llm_calls:
+            return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
+                                 "Compaction consumed the remaining call budget", retryable=False)
+        if not isinstance(summary, str) or not summary.strip() or len(summary) > plan.max_summary_chars:
+            return self._failure(state, ErrorCode.CONTRACT_ERROR,
+                                 "Compaction handoff must be nonempty text within its declared size limit",
+                                 retryable=False, details={"component": "compaction"})
+        checkpoint = HistoryCheckpoint(history_start=plan.history_start, summary=summary)
+        # Compose against the proposed checkpoint before publishing it. A failed
+        # summary or still-oversized request never advances the durable boundary.
+        proposed = state.model_copy(update={"history_checkpoint": checkpoint})
+        self._compose_context(definition, request, proposed, schemas, context_limit, native=True)
+        state.history_checkpoint = checkpoint
+        self._append_event(state, event_type="compaction", tool=None,
+                           data=checkpoint.model_dump(mode="json"))
+        self._save(state)
+        return None
 
     def _append_event(
         self,

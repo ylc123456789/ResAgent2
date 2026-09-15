@@ -181,11 +181,11 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 `metadata` 不保存消息正文；`full` 会保存 request、response、原生 tool calls 和模型提供时的 reasoning，适合调试但可能包含源码和用户输入。full trace 目录和文件分别按 `0700` / `0600` 创建，仍应只放在可信存储上并按需清理。
 
-失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning/tool calls。顶层响应字段对应最后一次尝试。Agent 原生调用的 `request_text` 是序列化的 `{messages, tools}` JSON，`raw_tool_calls` 是 Provider 返回的数组，`parsed_action` 仍是便于既有诊断的 `{tool, arguments}`；工具调用的 `raw_response_text` 可以为 null，不代表空动作。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应和原生 tool calls；逐次失败细节查看 JSONL 的 attempts。
+失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning/tool calls。顶层响应字段对应最后一次尝试。Agent 原生调用的 `request_text` 是序列化的 `{messages, tools}` JSON，`raw_tool_calls` 是 Provider 返回的数组，单工具 `parsed_action` 为 `{tool, arguments}`、多工具为该对象的数组，`tools` 按执行顺序记录名称；工具调用的 `raw_response_text` 可以为 null，不代表空动作。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应和原生 tool calls；压缩调用显示 compaction，其 action_valid/tool/parsed_action 为 null，不是无效工具动作；逐次失败细节查看 JSONL 的 attempts。
 
-三个 Agent 的 Session 独立保存在 data root 下的 `sessions/coding`、`sessions/experiment`、`sessions/scientific`，目录/文件权限为 `0700` / `0600`。Session 持久化不受 LLM trace level 控制：即使 trace 为 `off`，原生 assistant/tool 配对历史和 Provider 返回的 reasoning 仍会保存并在同一 Session 中续传。它们可能包含敏感输入或工具结果，应按与 full trace 相同的可信存储边界管理。
+三个 Agent 的 Session 独立保存在 data root 下的 `sessions/coding`、`sessions/experiment`、`sessions/scientific`，目录/文件权限为 `0700` / `0600`。Session 持久化不受 LLM trace level 控制：即使 trace 为 `off`，原生 assistant/tool 配对历史和 Provider 返回的 reasoning 仍会完整保存；模型输入仅续传近期完整回合与可用交接摘要，不累积旧 prompt。原始 Session 文件不会因压缩变小，仍需按需管理存储。它们可能包含敏感输入或工具结果，应按与 full trace 相同的可信存储边界管理。
 
-原生 Session 创建时绑定协议版本、API endpoint 和模型名的哈希身份，不包含 API key；恢复必须匹配。旧 JSON-only Session、没有该身份的旧记录，或更换了模型/API endpoint 后都不会静默续接，需要新建 Run，当前没有记录迁移。运行时会在工具派发前保存 checkpoint，重启发现未配对调用时标记结果未知且不自动重放；这不承诺掉电持久性，也不是有副作用工具的 exactly-once 保证。
+原生 Session 创建时绑定协议版本、API endpoint 和模型名的哈希身份，不包含 API key；恢复必须匹配。旧 JSON-only Session、没有该身份的旧记录，或更换了模型/API endpoint 后都不会静默续接，需要新建 Run，当前没有记录迁移。运行时会在工具派发前保存 checkpoint，重启仅把 executing_call_id 对应缺回执项标记未知，后续缺回执项标记未开始，已完成回执不变且不自动重放；这不承诺掉电持久性，也不是有副作用工具的 exactly-once 保证。
 
 ## 6. 模型与上下文预算
 
@@ -209,7 +209,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `workspace_reads`、`control_state`、`command_results` 等领域投影的重复内容都会计量。
 
-Loop先从有效额度中预留 tools schema 与历史，再按剩余材料额度组织当前领域内容：Coding/Experiment文件、工件各25%；Scientific只有工件，使用50%；执行诊断使用1/16。Composer 按完整请求（包含 JSON 序列化与转义）复核；历史/schema 或 required 领域段放不下时明确 `budget_exhausted`，不删除半个消息对、不自动压缩或扩到256K。计量仍是近似 `ceil(chars / 4)`，不是 Provider tokenizer 的精确结果。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)。
+Loop先从有效额度中预留 tools schema 与当前续传历史，再按剩余材料额度组织领域内容：Coding/Experiment文件、工件各25%；Scientific工件50%；执行诊断1/16。完整请求超过80%或实际装不下时，尝试总结旧完整回合、保留近期完整配对；原始记录不删，摘要与边界成功验证后才保存。摘要也消耗同一 Run 调用预算，输出额度仍用原模型配置。无安全前缀、摘要失败、schema/单回合/required领域段仍超限时明确失败，不扩到256K。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
 实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent默认128K，Compiler默认4096。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 

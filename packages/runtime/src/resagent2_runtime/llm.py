@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel
 
+from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
 from .tool_calling import (
@@ -150,6 +151,10 @@ class LLMExhaustedError(RuntimeError):
     """Raised when a scripted client has no action left to return."""
 
 
+class LLMTextResponseError(ValueError):
+    """Raised when a compaction response is not complete plain text."""
+
+
 class ScriptedLLMClient:
     """Deterministic mock LLM that returns predefined structured candidates."""
 
@@ -276,6 +281,37 @@ class OpenAICompatibleClient:
         # regular native protocol is shared across OpenAI-compatible providers.
         return self._request(context, message, body_data, native=True)
 
+    def summarize_history(
+        self,
+        prompt: str,
+        *,
+        max_input_tokens: int,
+    ) -> str:
+        """Make one bounded plain-text checkpoint request through shared transport."""
+
+        self.last_attempts = 0
+        if max_input_tokens < 1:
+            raise ValueError("compaction input budget must be positive")
+
+        message = compaction_input_text(prompt)
+        estimated = ContextComposer.estimate_tokens(message)
+        if estimated > self.tool_input_limit(max_input_tokens):
+            raise ContextBudgetExceeded("compaction request exceeds the total input budget")
+        context = ComposedContext(
+            text=prompt,
+            included_sections=["compaction"],
+            omitted_sections=[],
+            estimated_tokens=estimated,
+        )
+        body_data = {
+            "model": self.model,
+            **compaction_input(prompt),
+            "temperature": 0,
+        }
+        if self.model_profile is not None:
+            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+        return self._request(context, message, body_data, native=False, text=True)
+
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
         self._trace_context = dict(kwargs)
@@ -324,19 +360,25 @@ class OpenAICompatibleClient:
         usage,
         finish_reason: str | None,
         response_message: dict | None = None,
+        *,
+        text: bool = False,
     ) -> dict:
         """Project one response with the same content boundary at every attempt."""
-        if isinstance(parsed_action, ToolCallTurn):
+        if not text and isinstance(parsed_action, ToolCallTurn):
             try:
                 actions = native_actions(parsed_action)
                 parsed_action = actions[0] if len(actions) == 1 else actions
             except (json.JSONDecodeError, NativeToolCallError) as error:
                 parsed_action = None
                 validation_error = str(error)
-        tool = parsed_action.get("tool") if isinstance(parsed_action, dict) else None
+        tool = (
+            parsed_action.get("tool")
+            if not text and isinstance(parsed_action, dict)
+            else None
+        )
         record = {
             "tool": tool,
-            "action_valid": parsed_action is not None,
+            "action_valid": None if text else parsed_action is not None,
             "validation_error": validation_error,
             "usage": usage,
             "finish_reason": finish_reason,
@@ -345,7 +387,7 @@ class OpenAICompatibleClient:
             record["tools"] = [action["tool"] for action in parsed_action]
         if self.trace_level == "full":
             record["raw_response_text"] = raw_response_text
-            record["parsed_action"] = parsed_action
+            record["parsed_action"] = None if text else parsed_action
             record["raw_reasoning_text"] = raw_reasoning_text
             if response_message is not None and "tool_calls" in response_message:
                 record["raw_tool_calls"] = response_message["tool_calls"]
@@ -353,7 +395,7 @@ class OpenAICompatibleClient:
             record["response_sha256"] = self._sha256(raw_response_text)
             record["action_sha256"] = (
                 self._sha256(json.dumps(parsed_action, ensure_ascii=False, default=str))
-                if parsed_action is not None
+                if not text and parsed_action is not None
                 else None
             )
             if response_message is not None and "tool_calls" in response_message:
@@ -418,8 +460,11 @@ class OpenAICompatibleClient:
         body_data: dict,
         *,
         native: bool,
+        text: bool = False,
     ):
         """One transport/retry/accounting implementation for both output protocols."""
+        if native and text:
+            raise ValueError("native tool and plain-text response modes are exclusive")
         attempt_limit = min(3, self._attempt_limit or 3)
         self._attempt_limit = None
         self.last_attempts = 0
@@ -475,13 +520,13 @@ class OpenAICompatibleClient:
                         reasoning_content if isinstance(reasoning_content, str) else None
                     )
                     raw_response_text = response_message.get("content")
-                    if not native and not isinstance(raw_response_text, str):
+                    if not native and not text and not isinstance(raw_response_text, str):
                         raise TypeError(
                             "provider returned non-string message content: "
                             f"{type(raw_response_text).__name__}"
                         )
                     content = raw_response_text.strip() if isinstance(raw_response_text, str) else ""
-                    if not native and content.startswith("```"):
+                    if not native and not text and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
                 except HTTPError as error:
@@ -502,11 +547,27 @@ class OpenAICompatibleClient:
                     # outside the transport handlers so the error reaches the
                     # caller, while both finally blocks still preserve trace.
                     try:
-                        parsed_action = (
-                            parse_tool_turn(response_message, finish_reason)
-                            if native else json.loads(content)
-                        )
-                    except (json.JSONDecodeError, NativeToolCallError) as error:
+                        if native:
+                            parsed_action = parse_tool_turn(response_message, finish_reason)
+                        elif text:
+                            if finish_reason != "stop":
+                                raise LLMTextResponseError(
+                                    "compaction response did not finish with stop"
+                                )
+                            if response_message.get("tool_calls"):
+                                raise LLMTextResponseError(
+                                    "compaction response must not contain tool calls"
+                                )
+                            if not isinstance(raw_response_text, str) or not content:
+                                raise LLMTextResponseError(
+                                    "compaction response must contain non-empty text"
+                                )
+                            parsed_action = content
+                        else:
+                            parsed_action = json.loads(content)
+                    except (
+                        json.JSONDecodeError, NativeToolCallError, LLMTextResponseError,
+                    ) as error:
                         last_error = error
                         raise
                     break
@@ -518,6 +579,7 @@ class OpenAICompatibleClient:
                             str(last_error) if last_error is not None else None,
                             usage, finish_reason,
                             response_message,
+                            text=text,
                         ),
                     })
         finally:

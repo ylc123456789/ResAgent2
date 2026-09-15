@@ -400,7 +400,7 @@ def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
 
 def test_json_correction_still_respects_wall_clock(recovery):
     definition, request, store = recovery
-    ticks = iter([0, 0, 61])  # start, first call, next iteration
+    ticks = iter([0, 0, 0, 61])  # start, first iteration, pre-request guard, next iteration
     with mock.patch("resagent2_runtime.llm.urlopen", return_value=_response("bad JSON")) as provider:
         result = AgentLoop(store=store, clock=lambda: next(ticks)).run(
             definition, request, session_id="session_r",

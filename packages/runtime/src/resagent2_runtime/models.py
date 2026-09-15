@@ -133,7 +133,7 @@ class AgentEvent(RuntimeModel):
 
     sequence: int = Field(ge=1)
     step: int = Field(ge=0)
-    type: Literal["action", "observation", "error"]
+    type: Literal["action", "observation", "error", "compaction"]
     tool: str | None = None
     data: JsonValue
     created_at: datetime
@@ -177,6 +177,13 @@ class ToolCallTurn(RuntimeModel):
         return self
 
 
+class HistoryCheckpoint(RuntimeModel):
+    """Lossy navigation recap and absolute boundary; original turns stay intact."""
+
+    history_start: int = Field(ge=1)
+    summary: NonEmptyStr
+
+
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
@@ -198,5 +205,20 @@ class AgentState(RuntimeModel):
     # client's protocol/configuration identity, never credentials.
     tool_protocol_key: NonEmptyStr | None = None
     tool_turns: list[ToolCallTurn] = Field(default_factory=list)
+    history_checkpoint: HistoryCheckpoint | None = None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def validate_history_checkpoint(self) -> "AgentState":
+        checkpoint = self.history_checkpoint
+        if checkpoint is not None:
+            if checkpoint.history_start >= len(self.tool_turns):
+                raise ValueError("history checkpoint must retain a recent complete turn")
+            if any(
+                turn.executing_call_id is not None
+                or len(turn.tool_results) != len(turn.tool_calls)
+                for turn in self.tool_turns[:checkpoint.history_start]
+            ):
+                raise ValueError("history checkpoint cannot include unfinished tool calls")
+        return self

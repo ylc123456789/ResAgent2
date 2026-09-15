@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from math import ceil
 
 from resagent2_contracts import RecordedAnswer
@@ -67,11 +67,13 @@ class ContextComposer:
         sections: list[ContextSection],
         *,
         max_tokens: int,
+        measure: Callable[[str], int] | None = None,
     ) -> ComposedContext:
-        """Compose a context without exceeding max_tokens."""
+        """Pack sections using the complete rendered request's cost when supplied."""
 
         if max_tokens < 1:
             raise ContextBudgetExceeded("max_tokens must be positive")
+        cost = measure or self.estimate_tokens
 
         system = ContextSection(
             name="system",
@@ -91,7 +93,7 @@ class ContextComposer:
         for section in [*required, *optional]:
             rendered = f"## {section.name}\n{section.content}"
             candidate = f"{text}\n\n{rendered}" if included else rendered
-            if self.estimate_tokens(candidate) > max_tokens:
+            if cost(candidate) > max_tokens:
                 if section.required:
                     raise ContextBudgetExceeded(
                         f"required context section {section.name!r} exceeds budget"
@@ -104,7 +106,7 @@ class ContextComposer:
             text=text,
             included_sections=[section.name for section in included],
             omitted_sections=omitted,
-            estimated_tokens=self.estimate_tokens(text),
+            estimated_tokens=cost(text),
         )
 
 

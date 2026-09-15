@@ -4,6 +4,8 @@
 
 ## 最近已完成的主线
 
+原生工具调用已完成本地实现，服务器效果待验：三个Agent复用原Tool与Session接入原生调用，Compiler仍用正文JSON；不迁移旧会话、不扩大预算。见[实施与取舍](reviews/NATIVE_TOOL_CALLS_PLAN.md)、[标准库小型验收](reviews/NATIVE_TOOL_CALLS_ACCEPTANCE.md)。旧L3现场保留，不能以本地通过代替真实模型结论。
+
 上下文语义、128K 预算与文献呈现已完成阶段验收（产品 `3efce21`，服务器实测 `ba84547`，schema 7.0 不变）。状态/历史语义、共享失败诊断、相关风险提示和预算均在原始请求中核对；本地及服务器全量 859 passed、1 skipped。实时文献两次因 arXiv timeout/429 暂停，另用历史真实检索记录加真实 Flash 模型补齐文献消费链验证，不能写成实时检索已恢复。见 [最终结果、勘误与边界](reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)、[原始审查与演变](reviews/CONTEXT_REVIEW_2026-09-13.md)；当前规则见 [CONTEXT](../current/CONTEXT.md)。未新增记忆系统、动态预算分配器或 JSON 专项修复。
 
 前一阶段语义交接（产品 `704dbd9`、`0065088`，实测 `f2d4421`）一并收尾：模块解释通过既有工件读取链交付，Controller 把原题与回答配对后传给对应 Agent。代码理解和三个 Agent 的短回答已有真实消费证据；当时风险报告未读、文献翻页和 Coding 上下文缺口转入上述上下文阶段，不能把后续补验倒写为旧提交全绿。见 [ADR-0014](decisions/0014-semantic-handoffs.md)、[分阶段结果](reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md#verified-closeout)。旧 schema、原报告、失败现场、环境和缓存原样保留。

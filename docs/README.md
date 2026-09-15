@@ -24,7 +24,7 @@
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
-想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。当前只有规程，尚未执行 L3 验收。
+想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。此前L3已运行并因Coding未完成而暂停；原现场保留。当前先按[原生工具调用小验收](history/reviews/NATIVE_TOOL_CALLS_ACCEPTANCE.md)验证格式与执行闭环，不直接重跑GPU任务。
 
 L3 预检遇到 arXiv 限流后，先按 [文献平级来源补验](history/reviews/LITERATURE_FALLBACK_ACCEPTANCE.md) 核验请求节奏、双向切换与真实检索，再确认新版 200 次调用 / 4 小时执行预算；旧预检与实验准备保留。
 

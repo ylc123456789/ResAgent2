@@ -109,7 +109,7 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 |---|---|---|
 | Run / WorkRequest | 整个研究过程 / 其中一轮工作需求 | Controller |
 | Workflow / Task / Attempt | 已接受任务图 / 任务 / 一次执行尝试 | Scheduler |
-| Session / events / memory | Agent 内部执行记录 | Agent 与 runtime |
+| Session / events / memory / tool_turns | Agent 内部执行记录与原生工具协议续传 | Agent 与 runtime |
 | ArtifactRef 与冻结内容 | 有来源和 hash 的证据引用及文件 | Registry 登记；Controller/Scheduler 收入 Run |
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
@@ -123,6 +123,8 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 ### 恢复保证的范围
 
 - 派发前保存运行意图。重启按已有规则保留/结算中断记录，再决定恢复或重试，不把遗留 running 当成功。
+- Session 创建时固定工具协议身份：正文 JSON 为 `None`，OpenAI-compatible 原生身份由协议、endpoint、model 构成且不含 API key；自定义原生客户端须提供稳定身份。恢复拒绝 JSON↔原生切换和原生 endpoint/model 变化，不做迁移。
+- 原生 AgentLoop 在工具派发前先保存 tool call，观察事件保存时再配对 receipt。进程重启发现未配对 call 时只补记 unknown outcome，并要求模型检查当前状态；不自动重放。这只提供进程重启 checkpoint，不保证掉电持久化，也不承诺外部副作用 exactly-once。
 - 已接受图优先恢复；未接受编译可重做，但 LLM 不保证每次选择相同任务。
 - 原生 Scientific 按工作请求或问题身份去重交付；不能推广成所有 Port/工具的自动幂等。
 - 单个 JSON 快照可原子替换，但 Run、Session、文件和命令不构成一个大事务。当前以单进程、单写入者为前提，不支持同一 Run 并发推进。
@@ -164,11 +166,13 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 - Runtime先确定模块/模型有效输入额度，再交给builder和Composer。三个Agent默认128K，Compiler仍4096；workspace_context用固定比例保留文件、工件和失败命令诊断，不另建缓存。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记或LLM调用。详见[材料与预算](CONTEXT.md#budgets)。
 - 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[能力实现](../../packages/capabilities/README.md)。
 
-Agent 选择 ContextSection，Runtime 统一加入工具契约、反馈和历史，再由 Composer 计量最终文本。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
+Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
 
-LLM client 必需方法为 next_action，计量、预算和 trace hooks 可选；内部有重试的客户端应提供真实计量。细节见 [Runtime 参考](CONTRACTS.md#tools)；部署参数集中在 [CLI README](../../apps/cli/README.md#6-模型与上下文预算)。
+最小 LLM client 仍只须 `next_action`；AgentLoop 会探测可选的 `next_tool_call`。OpenAICompatibleClient 同时提供两条路径：AgentLoop 用原生工具调用，Compiler 经 PromptLLMClient 继续用正文 JSON；两者不互相降级。计量、预算和 trace hooks 仍可选，内部有重试的客户端应提供真实计量。细节见 [Runtime 参考](CONTRACTS.md#tools)；部署参数集中在 [CLI README](../../apps/cli/README.md#6-模型与上下文预算)。
 
-模型正文不是合法 JSON 时，客户端抛出标准 `JSONDecodeError`，不原样重发同一请求。AgentLoop 把解析原因送入已有的 required `runtime_feedback`，在同一 Session/Attempt 内允许有限纠正；Compiler 使用已有的两版 draft 上限处理同类错误，不引入 AgentLoop。网络及响应封装故障仍走客户端原有有界重试。原始坏正文仅留在 full trace，不提取第一个 JSON 执行，也不把 reasoning 当动作。
+正文 JSON 路径的模型正文不是合法 JSON，或原生路径的 tool arguments 不是 JSON object 时，客户端不原样重发同一请求。AgentLoop 把简短原因送入已有的 required `runtime_feedback`，在同一 Session/Attempt 内允许有限纠正；原生每轮只接受一个 tool call，零个/多个整批拒绝，assistant content 不是备用指令。Compiler 使用已有的两版 draft 上限处理正文 JSON 错误，不引入 AgentLoop。网络及响应封装故障仍走客户端原有有界重试。
+
+原生 Session 的 `tool_turns` 保存已配对 assistant/tool 消息；下一轮只重建最新业务 Context 并与这段协议历史一起发送，不无限保存旧 prompt，也不引入压缩记忆。完整 `messages + tools`（含 JSON 转义）与业务 Context 共用 128K 总输入额度，不扩大 max steps 或 LLM-call 预算。`reasoning_content` 只用于同 Session 协议续传，不是业务证据。
 
 <a id="principles"></a>
 
@@ -187,6 +191,6 @@ LLM client 必需方法为 next_action，计量、预算和 trace hooks 可选�
 
 没有通用 MCP/A2A 服务、动态插件市场、分布式调度或通用逐轮聊天控制。Port 是替换位置，不代表这些功能已实现。
 
-权限与 shell-free 执行不是 OS 沙箱；环境 audit 不是安全认证。预算检查不抢占正在运行的工具；没有全 Run 货币/总输出 token 硬预算。full trace 可能含源码和用户输入，只用于受控调试，不自动成为科学证据。
+权限与 shell-free 执行不是 OS 沙箱；环境 audit 不是安全认证。预算检查不抢占正在运行的工具；没有全 Run 货币/总输出 token 硬预算。Session 目录/文件固定为 `0700/0600`，不受 trace 档位影响；full trace 还可能含源码、用户输入、`raw_tool_calls` 和 `raw_reasoning_text`，只用于受控调试，不自动成为科学证据。metadata 仅留 hash，不表示 Session 不保存原生协议续传字段。
 
 历史取舍和验收见 [决策与历史](../history/README.md)。这些限制不是本轮文档调整新增的功能或降级。

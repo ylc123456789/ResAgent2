@@ -18,7 +18,10 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel
 
 from .context import ContextBudgetExceeded, ContextComposer
-from .models import ComposedContext, ContextSection
+from .models import ComposedContext, ContextSection, ToolCallTurn
+from .tool_calling import (
+    NativeToolCallError, native_action, native_input, native_input_text, parse_tool_turn,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,8 @@ class LLMClient(Protocol):
 
     Consumers feature-detect optional budget and trace hooks. A minimal client
     needs none of them; absent attempt accounting means one call per request.
+    AgentLoop prefers ``next_tool_call`` when provided; Compiler still uses
+    ``next_action``. Native history belongs to Session, never to the client.
     """
 
     def next_action(
@@ -166,7 +171,11 @@ class ScriptedLLMClient:
 
 
 class OpenAICompatibleClient:
-    """Minimal stateless client for one JSON response per chat-completions call."""
+    """Stateless transport for native tools or Compiler structured JSON output.
+
+    The caller owns native conversation history; sharing a client cannot share
+    Session reasoning or tool results. Neither path falls back to the other.
+    """
 
     def __init__(
         self,
@@ -227,6 +236,46 @@ class OpenAICompatibleClient:
             raise ValueError("max_attempts must be positive")
         self._attempt_limit = max_attempts
 
+    def tool_input_limit(self, component_limit: int) -> int:
+        """Native schema/history are counted in the total request, not twice."""
+        if self.model_profile is None:
+            return component_limit
+        return self.model_profile.input_budget(schema_tokens=0, component_limit=component_limit)
+
+    @property
+    def tool_session_key(self) -> str:
+        """Bind private continuation to the same wire protocol, endpoint and model."""
+        identity = json.dumps(["openai-compatible-tools/v1", self.endpoint, self.model])
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def next_tool_call(
+        self,
+        context: ComposedContext,
+        schemas: list[dict],
+        turns: list[ToolCallTurn],
+        *,
+        max_input_tokens: int,
+    ) -> ToolCallTurn:
+        """Request native calls; serial execution remains the Runtime's policy."""
+        self.last_attempts = 0
+        wire_input = native_input(context.text, schemas, turns)
+        message = native_input_text(context.text, schemas, turns)
+        estimated = ContextComposer.estimate_tokens(message)
+        if estimated > self.tool_input_limit(max_input_tokens):
+            raise ContextBudgetExceeded("native request exceeds the total input budget")
+        included = [*context.included_sections, "native_tools"]
+        if turns:
+            included.append("tool_history")
+        context = context.model_copy(update={
+            "estimated_tokens": estimated, "included_sections": included,
+        })
+        body_data = {"model": self.model, **wire_input, "temperature": 0}
+        if self.model_profile is not None:
+            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+        # No JSON response_format, force-tool option or beta strict mode. The
+        # regular native protocol is shared across OpenAI-compatible providers.
+        return self._request(context, message, body_data, native=True)
+
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
         self._trace_context = dict(kwargs)
@@ -248,7 +297,7 @@ class OpenAICompatibleClient:
         os.chmod(path, 0o600)
 
     def record_validation(self, validation_error: str) -> None:
-        """Record an action-schema validation failure, keyed by the last call_id."""
+        """Record caller-side candidate validation, keyed by the last call_id."""
         if self.trace_dir is None or self.trace_level == "off":
             return
         self._write_trace(
@@ -274,8 +323,15 @@ class OpenAICompatibleClient:
         validation_error: str | None,
         usage,
         finish_reason: str | None,
+        response_message: dict | None = None,
     ) -> dict:
         """Project one response with the same content boundary at every attempt."""
+        if isinstance(parsed_action, ToolCallTurn):
+            try:
+                parsed_action = native_action(parsed_action)
+            except (json.JSONDecodeError, NativeToolCallError) as error:
+                parsed_action = None
+                validation_error = str(error)
         tool = parsed_action.get("tool") if isinstance(parsed_action, dict) else None
         record = {
             "tool": tool,
@@ -288,6 +344,8 @@ class OpenAICompatibleClient:
             record["raw_response_text"] = raw_response_text
             record["parsed_action"] = parsed_action
             record["raw_reasoning_text"] = raw_reasoning_text
+            if response_message is not None and "tool_calls" in response_message:
+                record["raw_tool_calls"] = response_message["tool_calls"]
         else:
             record["response_sha256"] = self._sha256(raw_response_text)
             record["action_sha256"] = (
@@ -295,6 +353,8 @@ class OpenAICompatibleClient:
                 if parsed_action is not None
                 else None
             )
+            if response_message is not None and "tool_calls" in response_message:
+                record["tool_calls_sha256"] = self._sha256(response_message["tool_calls"])
         return record
 
     def _trace_record(
@@ -336,12 +396,7 @@ class OpenAICompatibleClient:
         context: ComposedContext,
         action_type: type[BaseModel],
     ) -> BaseModel | dict:
-        attempt_limit = min(3, self._attempt_limit or 3)
-        self._attempt_limit = None
-        self.last_attempts = 0
-        api_key = os.environ.get(self.api_key_env)
-        if not api_key:
-            raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
+        """Structured output for Compiler and explicit JSON-only callers."""
         message = f"{context.text}\n\n{self._action_instruction(action_type)}"
         body_data = {
             "model": self.model,
@@ -351,6 +406,23 @@ class OpenAICompatibleClient:
         }
         if self.model_profile is not None:
             body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+        return self._request(context, message, body_data, native=False)
+
+    def _request(
+        self,
+        context: ComposedContext,
+        message: str,
+        body_data: dict,
+        *,
+        native: bool,
+    ):
+        """One transport/retry/accounting implementation for both output protocols."""
+        attempt_limit = min(3, self._attempt_limit or 3)
+        self._attempt_limit = None
+        self.last_attempts = 0
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
         body = json.dumps(body_data).encode("utf-8")
         request = Request(
             self.endpoint,
@@ -376,6 +448,7 @@ class OpenAICompatibleClient:
                 # Never attribute an earlier response to a later transport failure.
                 raw_response_text = None
                 raw_reasoning_text = None
+                response_message = None
                 parsed_action = None
                 usage = None
                 finish_reason = None
@@ -398,14 +471,14 @@ class OpenAICompatibleClient:
                     raw_reasoning_text = (
                         reasoning_content if isinstance(reasoning_content, str) else None
                     )
-                    raw_response_text = response_message["content"]
-                    if not isinstance(raw_response_text, str):
+                    raw_response_text = response_message.get("content")
+                    if not native and not isinstance(raw_response_text, str):
                         raise TypeError(
                             "provider returned non-string message content: "
                             f"{type(raw_response_text).__name__}"
                         )
-                    content = raw_response_text.strip()
-                    if content.startswith("```"):
+                    content = raw_response_text.strip() if isinstance(raw_response_text, str) else ""
+                    if not native and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
                 except HTTPError as error:
@@ -426,8 +499,11 @@ class OpenAICompatibleClient:
                     # outside the transport handlers so the error reaches the
                     # caller, while both finally blocks still preserve trace.
                     try:
-                        parsed_action = json.loads(content)
-                    except json.JSONDecodeError as error:
+                        parsed_action = (
+                            parse_tool_turn(response_message, finish_reason)
+                            if native else json.loads(content)
+                        )
+                    except (json.JSONDecodeError, NativeToolCallError) as error:
                         last_error = error
                         raise
                     break
@@ -438,6 +514,7 @@ class OpenAICompatibleClient:
                             parsed_action, raw_response_text, raw_reasoning_text,
                             str(last_error) if last_error is not None else None,
                             usage, finish_reason,
+                            response_message,
                         ),
                     })
         finally:

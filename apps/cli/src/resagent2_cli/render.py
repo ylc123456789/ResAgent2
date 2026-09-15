@@ -8,6 +8,7 @@ both modes.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 _TERMINAL_MARKS = {
@@ -157,4 +158,7 @@ def render_trace(records: list[dict]) -> list[str]:
         if response is not None:
             lines.append("[response]")
             lines.append(response)
+        if record.get("raw_tool_calls") is not None:
+            lines.append("[tool_calls]")
+            lines.append(json.dumps(record["raw_tool_calls"], ensure_ascii=False, indent=2))
     return lines

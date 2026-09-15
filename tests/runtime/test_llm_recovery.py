@@ -1,4 +1,4 @@
-"""Malformed output uses existing bounded feedback, not a new Task Attempt."""
+"""JSON-only injected clients keep bounded recovery; native clients share the ledger."""
 
 import json
 from datetime import UTC, datetime
@@ -42,6 +42,12 @@ from resagent2_runtime import (
 )
 
 
+class _JSONOnlyClient(OpenAICompatibleClient):
+    """Exercise the minimal next_action protocol without native-tool support."""
+
+    next_tool_call = None
+
+
 class _FakeResponse:
     def __init__(self, payload: dict) -> None:
         self._payload = payload
@@ -77,7 +83,7 @@ def test_bad_json_stops_at_existing_limits(
     monkeypatch, tmp_path, call_budget, expected_code, calls,
 ) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
-    client = OpenAICompatibleClient(
+    client = _JSONOnlyClient(
         model="test-model",
         api_base="https://example.com/v1",
         api_key_env="TEST_LLM_KEY",
@@ -142,12 +148,14 @@ class _LoopPort:
 
 
 @pytest.mark.parametrize("network_failure", [False, True])
+@pytest.mark.parametrize("native", [False, True])
 def test_scheduler_keeps_attempt_for_json_but_retries_transport(
-    monkeypatch, tmp_path, network_failure,
+    monkeypatch, tmp_path, network_failure, native,
 ) -> None:
     """Correct JSON in-place; unchanged transport exhaustion retries the Task."""
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
-    client = OpenAICompatibleClient(
+    client_type = OpenAICompatibleClient if native else _JSONOnlyClient
+    client = client_type(
         model="test-model",
         api_base="https://example.com/v1",
         api_key_env="TEST_LLM_KEY",
@@ -231,6 +239,15 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
         }
     )
 
+    if native:
+        message = valid._payload["choices"][0]["message"]
+        action = json.loads(message["content"])
+        message["content"] = None
+        message["tool_calls"] = [{
+            "id": "call_finish", "type": "function",
+            "function": {"name": action["tool"], "arguments": json.dumps(action["arguments"])},
+        }]
+
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
         mock.patch(
@@ -270,7 +287,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
 def recovery(monkeypatch, tmp_path):
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
     monkeypatch.setattr("resagent2_runtime.llm.time.sleep", lambda _: None)
-    client = OpenAICompatibleClient(
+    client = _JSONOnlyClient(
         model="test-model", api_base="https://example.invalid/v1",
         api_key_env="TEST_LLM_KEY", trace_dir=tmp_path / "traces", trace_level="full",
     )

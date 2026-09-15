@@ -139,6 +139,37 @@ class AgentEvent(RuntimeModel):
     created_at: datetime
 
 
+class NativeToolCall(RuntimeModel):
+    """Provider call identity and raw arguments; validation precedes execution."""
+
+    id: Annotated[str, Field(min_length=1)]
+    name: Annotated[str, Field(min_length=1)]
+    arguments: str
+
+
+class ToolCallTurn(RuntimeModel):
+    """One assistant reply and its paired tool receipts, owned by one Session.
+
+    Reasoning is protocol continuation, not evidence. Raw arguments may be
+    invalid JSON; keeping a rejected call with its error receipt never executes it.
+    An absent receipt means an interrupted/unfinished call, not a successful one.
+    """
+
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[NativeToolCall] = Field(default_factory=list)
+    tool_results: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_call_ids(self) -> "ToolCallTurn":
+        ids = [call.id for call in self.tool_calls]
+        if len(ids) != len(set(ids)):
+            raise ValueError("native tool call IDs must be unique within a reply")
+        if not self.tool_results.keys() <= set(ids):
+            raise ValueError("tool receipt must refer to a call in this reply")
+        return self
+
+
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
@@ -156,5 +187,9 @@ class AgentState(RuntimeModel):
     runtime_feedback: ToolObservation | None = None
     runtime_feedback_source: Literal["completion_check", "tool_error"] | None = None
     events: list[AgentEvent] = Field(default_factory=list)
+    # None identifies JSON-only sessions; native continuation is bound to the
+    # client's protocol/configuration identity, never credentials.
+    tool_protocol_key: NonEmptyStr | None = None
+    tool_turns: list[ToolCallTurn] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

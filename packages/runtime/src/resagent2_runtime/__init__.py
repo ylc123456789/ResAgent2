@@ -40,7 +40,9 @@ from .models import (
     ComposedContext,
     ContextSection,
     FinishCandidate,
+    NativeToolCall,
     PermissionDecision,
+    ToolCallTurn,
     ToolObservation,
 )
 from .store import InMemorySessionStore, JsonSessionStore, SessionStore
@@ -84,6 +86,7 @@ __all__ = [
     "LLMClient",
     "LLMExhaustedError",
     "ModelProfile",
+    "NativeToolCall",
     "OpenAICompatibleClient",
     "PermissionDecision",
     "PermissionPolicy",
@@ -96,6 +99,7 @@ __all__ = [
     "ScriptedLLMClient",
     "SessionStore",
     "Tool",
+    "ToolCallTurn",
     "ToolNotFoundError",
     "ToolObservation",
     "ToolRegistry",

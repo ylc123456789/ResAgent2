@@ -182,3 +182,20 @@ def test_render_trace_full_level():
     assert "[request]" in joined and "REQ" in joined
     assert "[reasoning]" in joined and "THINK" in joined
     assert "[response]" in joined and "RESP" in joined
+
+
+def test_render_trace_native_calls_with_null_content():
+    calls = [{"id": "call_read", "type": "function", "function": {
+        "name": "read_file", "arguments": '{"path":"train.py"}',
+    }}]
+    record = {"tool": "read_file", "raw_response_text": None, "raw_tool_calls": calls}
+    before = deepcopy(record)
+    joined = "\n".join(render_trace([record]))
+    assert "[tool_calls]" in joined and "call_read" in joined and "train.py" in joined
+    assert "[response]" not in joined
+    assert record == before
+
+
+def test_render_trace_metadata_does_not_invent_raw_calls():
+    joined = "\n".join(render_trace([{"tool": "finish", "tool_calls_sha256": "opaque"}]))
+    assert "[tool_calls]" not in joined and "opaque" not in joined

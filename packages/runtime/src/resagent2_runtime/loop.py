@@ -35,10 +35,15 @@ from .models import (
     ContextSection,
     FinishCandidate,
     PermissionDecision,
+    ToolCallTurn,
     ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
 from .tools import Tool, ToolRegistry, tool_contracts_text
+from .tool_calling import (
+    NativeToolCallError, complete_pending_turn, native_action,
+    native_context_budget, native_input_text, native_tool_schemas, tool_receipt,
+)
 
 _CONSECUTIVE_FAILURE_LIMIT = 5
 _RECENT_OBSERVATION_LIMIT = 6
@@ -174,6 +179,21 @@ class AgentLoop:
 
         self._run_llm_calls = 0
         now = datetime.now(UTC)
+        native_call = getattr(definition.llm_client, "next_tool_call", None)
+        protocol_key = (
+            getattr(definition.llm_client, "tool_session_key", None)
+            if native_call is not None else None
+        )
+        if native_call is not None and (not isinstance(protocol_key, str) or not protocol_key.strip()):
+            return ModuleResult(
+                status=ModuleStatus.FAILED,
+                summary="native client must provide a stable tool_session_key",
+                error=ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message="native client must provide a stable tool_session_key",
+                    retryable=False,
+                ),
+            )
         resume_id = request.parent_session_id
         if resume_id is not None:
             if not self.store.exists(resume_id):
@@ -195,12 +215,13 @@ class AgentLoop:
                 or state.attempt_number != request.attempt_number
                 or state.owner != definition.owner
                 or state.agent_name != definition.name
+                or state.tool_protocol_key != protocol_key
             ):
                 error = ModuleError(
                     code=ErrorCode.CONTRACT_ERROR,
                     message=(
                         "resume target does not match request or is not "
-                        "recoverable"
+                        "recoverable (including model/provider protocol identity)"
                     ),
                     retryable=False,
                 )
@@ -220,6 +241,7 @@ class AgentLoop:
                 task_id=request.task_id,
                 attempt_number=request.attempt_number,
                 memory=initial_memory or {},
+                tool_protocol_key=protocol_key,
                 created_at=now,
                 updated_at=now,
             )
@@ -246,6 +268,36 @@ class AgentLoop:
                 retryable=False,
             )
 
+        try:
+            schemas = native_tool_schemas(definition.tools) if native_call is not None else []
+        except Exception as error:
+            return self._failure(
+                state, ErrorCode.CONTRACT_ERROR,
+                f"tool schema construction failed: {error}", retryable=False,
+            )
+        if state.tool_turns and native_call is None:
+            return self._failure(
+                state, ErrorCode.CONTRACT_ERROR,
+                "native Session requires a tool-calling client", retryable=False,
+            )
+        interrupted = False
+        for turn in state.tool_turns:
+            if len(turn.tool_results) < len(turn.tool_calls):
+                complete_pending_turn(turn, tool_receipt(ToolObservation(
+                    ok=False,
+                    summary=(
+                        "Interrupted before a durable tool result was recorded. "
+                        "Execution outcome is unknown; inspect current state before retrying. "
+                        "The runtime has not replayed this call."
+                    ),
+                )))
+                interrupted = True
+        if interrupted:
+            self._feedback(
+                state, "An interrupted tool call has unknown outcome. Inspect current state before retrying.",
+                tool="runtime",
+            )
+
         started = self.clock()
         attempt_steps = 0
         consecutive_failures = 0
@@ -263,15 +315,22 @@ class AgentLoop:
 
             try:
                 context_limit = definition.max_context_tokens
-                budgeter = getattr(definition.llm_client, "context_budget", None)
-                if budgeter is not None:
-                    context_limit = min(context_limit, budgeter(
-                        definition.action_type, context_limit,
-                    ))
+                if native_call is not None:
+                    budgeter = getattr(definition.llm_client, "tool_input_limit", None)
+                    if budgeter is not None:
+                        context_limit = min(context_limit, budgeter(context_limit))
+                    material_limit = native_context_budget(context_limit, schemas, state.tool_turns)
+                else:
+                    budgeter = getattr(definition.llm_client, "context_budget", None)
+                    if budgeter is not None:
+                        context_limit = min(context_limit, budgeter(
+                            definition.action_type, context_limit,
+                        ))
+                    material_limit = context_limit
                 if context_limit < 1:
                     raise ContextBudgetExceeded("effective context limit must be positive")
-                sections = list(definition.context_builder(request, state, context_limit))
-                recent = self._recent_observations_section(state)
+                sections = list(definition.context_builder(request, state, material_limit))
+                recent = self._recent_observations_section(state) if native_call is None else None
                 if recent is not None:
                     sections.insert(0, recent)
                 if state.runtime_feedback is not None:
@@ -294,18 +353,25 @@ class AgentLoop:
                             required=True,
                         ),
                     )
-                sections.append(
-                    ContextSection(
-                        name="tool_contracts",
-                        content=tool_contracts_text(definition.tools),
-                        priority=990,
-                        required=True,
+                if native_call is None:
+                    sections.append(
+                        ContextSection(
+                            name="tool_contracts",
+                            content=tool_contracts_text(definition.tools),
+                            priority=990,
+                            required=True,
+                        )
                     )
-                )
+                compose_options = {}
+                if native_call is not None:
+                    compose_options["measure"] = lambda text: self.context_composer.estimate_tokens(
+                        native_input_text(text, schemas, state.tool_turns)
+                    )
                 context = self.context_composer.compose(
                     definition.system_prompt,
                     sections,
                     max_tokens=context_limit,
+                    **compose_options,
                 )
             except ContextBudgetExceeded as error:
                 return self._failure(
@@ -334,34 +400,66 @@ class AgentLoop:
             limiter = getattr(definition.llm_client, "set_attempt_limit", None)
             if limiter is not None:
                 limiter(request.budget.max_llm_calls - self._run_llm_calls)
+            charged = False
             try:
-                raw_action = definition.llm_client.next_action(
-                    context,
-                    definition.action_type,
-                )
+                if native_call is not None:
+                    reply = native_call(context, schemas, state.tool_turns, max_input_tokens=context_limit)
+                else:
+                    reply = definition.llm_client.next_action(context, definition.action_type)
                 attempts = getattr(definition.llm_client, "last_attempts", 1)
                 self._run_llm_calls += attempts
                 state.llm_calls_used += attempts
+                charged = True
+                if native_call is not None:
+                    turn = ToolCallTurn.model_validate(reply)
+                    used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
+                    rejection = None
+                    if turn.tool_results:
+                        rejection = "A model reply cannot provide tool execution receipts"
+                    if any(call.id in used_ids for call in turn.tool_calls):
+                        rejection = "Provider reused a historical tool call ID; no tool was executed"
+                    if rejection is not None:
+                        validator = getattr(definition.llm_client, "record_validation", None)
+                        if validator is not None:
+                            validator(rejection)
+                        raise NativeToolCallError(rejection)
+                    if turn.tool_calls or turn.content or turn.reasoning_content:
+                        state.tool_turns.append(turn)
+                        # Checkpoint before any dispatch. Missing receipts on
+                        # resume are unknown outcomes, never replay instructions.
+                        self._save(state)
+                    raw_action = native_action(turn)
+                else:
+                    raw_action = reply
                 # Tolerate the single historical dead field; every other unknown
                 # field still fails ``extra="forbid"`` validation.
                 if isinstance(raw_action, dict):
                     raw_action.pop("reasoning_summary", None)
                 action = definition.action_type.model_validate(raw_action)
-            except (json.JSONDecodeError, ValidationError) as error:
-                if isinstance(error, json.JSONDecodeError):
-                    # next_action raised before the success-path accounting.
-                    # Count any preceding transport retries as well.
+            except (json.JSONDecodeError, ValidationError, NativeToolCallError) as error:
+                if not charged:
                     attempts = getattr(definition.llm_client, "last_attempts", 1)
                     self._run_llm_calls += attempts
                     state.llm_calls_used += attempts
+                if isinstance(error, json.JSONDecodeError):
+                    # next_action raised before the success-path accounting.
+                    # Count any preceding transport retries as well.
                     summary = (
+                        f"Native tool arguments were not valid JSON: {error}. "
+                        "Return exactly one native tool call with a JSON object of arguments. "
+                        "No tool was executed."
+                    ) if native_call is not None else (
                         f"LLM output was not valid JSON: {error}. "
                         "Return exactly one JSON object matching the action "
                         "schema and tool contracts, with no surrounding text "
                         "or additional actions. No tool was executed."
                     )
-                    # Never copy the invalid response or reasoning into Session
-                    # or feedback. Full provider text belongs only in full trace.
+                    # Feedback never quotes invalid output. Native calls remain
+                    # in the paired protocol history, not domain memory; JSON-only
+                    # clients keep the raw response exclusively in full trace.
+                    details = None
+                elif isinstance(error, NativeToolCallError):
+                    summary = str(error) + " Return exactly one native tool call. No tool was executed."
                     details = None
                 else:
                     details = self._validation_details(error)
@@ -383,6 +481,10 @@ class AgentLoop:
                     return failure
                 consecutive_failures += 1
                 continue
+            except ContextBudgetExceeded as error:
+                return self._failure(
+                    state, ErrorCode.BUDGET_EXHAUSTED, str(error), retryable=False,
+                )
             except LLMExhaustedError as error:
                 return self._failure(
                     state,
@@ -394,9 +496,10 @@ class AgentLoop:
             except Exception as error:
                 # The transport failed after one or more real HTTP attempts;
                 # those attempts still count toward the Run ledger.
-                attempts = getattr(definition.llm_client, "last_attempts", 1)
-                self._run_llm_calls += attempts
-                state.llm_calls_used += attempts
+                if not charged:
+                    attempts = getattr(definition.llm_client, "last_attempts", 1)
+                    self._run_llm_calls += attempts
+                    state.llm_calls_used += attempts
                 return self._failure(
                     state,
                     ErrorCode.TOOL_FAILED,
@@ -635,6 +738,11 @@ class AgentLoop:
         tool: str | None,
         data,
     ) -> None:
+        if event_type == "observation" and state.tool_turns:
+            complete_pending_turn(
+                state.tool_turns[-1],
+                tool_receipt(ToolObservation.model_validate(data), len(state.events) + 1),
+            )
         state.events.append(
             AgentEvent(
                 sequence=len(state.events) + 1,
@@ -762,6 +870,10 @@ class AgentLoop:
             retryable=retryable,
             details=details or {},
         )
+        if state.tool_turns:
+            complete_pending_turn(state.tool_turns[-1], tool_receipt(ToolObservation(
+                ok=False, summary=message,
+            )))
         self._append_event(
             state,
             event_type="error",

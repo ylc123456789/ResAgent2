@@ -60,7 +60,7 @@ resagent2> /quit
 | `/answer <value>` | 当前问题只有一个字段时的简写 |
 | `/answer name=value ...` | 显式回答一个或多个字段 |
 | `/artifacts` | 列出当前 Run 的 Artifact |
-| `/trace [run_id]` | 查看 full trace 中的原始请求、响应和可选 reasoning |
+| `/trace [run_id]` | 查看 full trace 中的原始请求、响应、原生 tool calls 和可选 reasoning |
 | `/help` / `/quit` | 查看帮助 / 退出 shell |
 
 边界需要特别注意：
@@ -179,9 +179,13 @@ export RESAGENT2_LLM_TRACE_LEVEL=metadata   # off / metadata / full
 export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 ```
 
-`metadata` 不保存消息正文；`full` 会保存 request、response 和模型提供时的 reasoning，适合调试但可能包含源码和用户输入。full trace 目录和文件分别按 `0700` / `0600` 创建，仍应只放在可信存储上并按需清理。
+`metadata` 不保存消息正文；`full` 会保存 request、response、原生 tool calls 和模型提供时的 reasoning，适合调试但可能包含源码和用户输入。full trace 目录和文件分别按 `0700` / `0600` 创建，仍应只放在可信存储上并按需清理。
 
-失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning。顶层响应字段对应最后一次尝试。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应；逐次失败细节查看 JSONL 的 attempts。
+失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning/tool calls。顶层响应字段对应最后一次尝试。Agent 原生调用的 `request_text` 是序列化的 `{messages, tools}` JSON，`raw_tool_calls` 是 Provider 返回的数组，`parsed_action` 仍是便于既有诊断的 `{tool, arguments}`；工具调用的 `raw_response_text` 可以为 null，不代表空动作。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应和原生 tool calls；逐次失败细节查看 JSONL 的 attempts。
+
+三个 Agent 的 Session 独立保存在 data root 下的 `sessions/coding`、`sessions/experiment`、`sessions/scientific`，目录/文件权限为 `0700` / `0600`。Session 持久化不受 LLM trace level 控制：即使 trace 为 `off`，原生 assistant/tool 配对历史和 Provider 返回的 reasoning 仍会保存并在同一 Session 中续传。它们可能包含敏感输入或工具结果，应按与 full trace 相同的可信存储边界管理。
+
+原生 Session 创建时绑定协议版本、API endpoint 和模型名的哈希身份，不包含 API key；恢复必须匹配。旧 JSON-only Session、没有该身份的旧记录，或更换了模型/API endpoint 后都不会静默续接，需要新建 Run，当前没有记录迁移。运行时会在工具派发前保存 checkpoint，重启发现未配对调用时标记结果未知且不自动重放；这不承诺掉电持久性，也不是有副作用工具的 exactly-once 保证。
 
 ## 6. 模型与上下文预算
 
@@ -203,9 +207,11 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，包含任务、工具说明、反馈、材料等，不是每次填满。Loop先算有效额度，再按比例组织材料：Coding/Experiment文件、工件各25%；Scientific只有工件，使用50%；执行诊断使用1/16。字符换算与最终计量沿用现有算法。调小模块或模型容量会同时缩小材料额度；required仍装不下则明确失败，不自动扩到256K。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)。
+三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `workspace_reads`、`control_state`、`command_results` 等领域投影的重复内容都会计量。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出、action schema 与安全余量后”两者的较小值。1M是默认模型容量，不会把模块输入自动扩到1M：Agent默认128K，Compiler默认4096。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler复用Composer与预算算法，但仍是无状态编译器，不进入AgentLoop。
+Loop先从有效额度中预留 tools schema 与历史，再按剩余材料额度组织当前领域内容：Coding/Experiment文件、工件各25%；Scientific只有工件，使用50%；执行诊断使用1/16。Composer 按完整请求（包含 JSON 序列化与转义）复核；历史/schema 或 required 领域段放不下时明确 `budget_exhausted`，不删除半个消息对、不自动压缩或扩到256K。计量仍是近似 `ceil(chars / 4)`，不是 Provider tokenizer 的精确结果。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)。
+
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent默认128K，Compiler默认4096。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 
@@ -213,7 +219,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 **升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。程序化客户端和独立 E2E 组合根不会自动继承 CLI 的部署默认值。
 
-如果脚本仍设置某Agent的 `*_CONTEXT_TOKENS=8192`，该覆盖也会继续生效；使用本轮新默认需移除它或明确设为128000。更大输入允许保留更多已读材料，但也可能增加调用耗时和费用，不保证消除所有模型错误。
+如果脚本仍设置某Agent的 `*_CONTEXT_TOKENS=8192`，该覆盖也会继续生效；使用本轮新默认需移除它或明确设为128000。更大输入允许保留更多工具历史和已读材料，但也可能增加调用耗时和费用，不保证消除模型错误、重复动作或循环。
 
 ## 7. 退出码与常见情况
 

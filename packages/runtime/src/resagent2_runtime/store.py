@@ -55,6 +55,7 @@ class JsonSessionStore:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.root, 0o700)
 
     def _path(self, session_id: SessionId) -> Path:
         return self.root / f"{session_id}.json"
@@ -72,6 +73,7 @@ class JsonSessionStore:
                 delete=False,
             ) as handle:
                 temporary = Path(handle.name)
+                os.chmod(temporary, 0o600)
                 handle.write(state.model_dump_json(indent=2))
                 handle.flush()
                 os.fsync(handle.fileno())

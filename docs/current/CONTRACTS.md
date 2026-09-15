@@ -130,7 +130,7 @@ Port 由 orchestrator 声明，ScientificAgent 或替代实现提供。输入权
 
 Scientific 可检索文献、读工件，通过注入的 registration port 冻结检索结果，不直接调用执行 Agent。prompt 要求自有检索/阅读经已有重试仍失败时询问用户，不派代码或实验任务绕路；这是行为指引，不是确定性路由保证。
 
-文献后端仍统一实现 `LiteratureSearchBackend.search(query, max_results, start_year, end_year) -> list[LiteraturePaper]`。CLI/E2E 注入 arXiv 主源与 OpenAlex 备用，只有 `LiteratureUnavailableError`（限流/临时网络故障）触发备用；有效空列表不是服务故障，坏请求/损坏响应不能静默换源掩盖。返回项保留各自的 paper_id/source_url，工件格式和 Agent 契约不变；限速、冷却、认证属于后端实现，不增加 ResearchRequest 字段。详见 [能力实现](../../packages/capabilities/README.md)。
+文献后端仍统一实现 `LiteratureSearchBackend.search(query, max_results, start_year, end_year) -> list[LiteraturePaper]`。CLI/E2E 经 MultiSourceLiteratureBackend 注入平级的 arXiv、OpenAlex；继续使用最近成功来源，只有 `LiteratureUnavailableError`（限流/临时网络故障）触发其他来源，每次最多遍历一轮。有效空列表不是服务故障，坏请求/损坏响应不能静默换源掩盖。返回项保留各自的 paper_id/source_url，工件格式和 Agent 契约不变；选择索引、限速、冷却、认证属于后端实现，不增加 ResearchRequest 字段。详见 [能力实现](../../packages/capabilities/README.md)。
 
 interpreter.render_work_brief 投影目的、结果、解释性 narrative、warnings、失败诊断和授权证据指针。未解决任务来自完整 workflow 权威集合；有界 stderr 摘录标为 execution_diagnosis_only，非科学证据。模型不接收 raw 执行对象或内部 Task ID，不凭 narrative 自证结果。
 

@@ -37,7 +37,7 @@ from .hardware import HardwareAudit
 from .literature import (
     ArtifactRegistrationPort,
     ArxivLiteratureBackend,
-    FallbackLiteratureBackend,
+    MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchBackend,
     LiteratureSearchError,
@@ -84,7 +84,7 @@ __all__ = [
     "ArtifactReadError",
     "ArtifactRegistrationPort",
     "ArxivLiteratureBackend",
-    "FallbackLiteratureBackend",
+    "MultiSourceLiteratureBackend",
     "OpenAlexLiteratureBackend",
     "AuditEnvInput",
     "AuditEnvTool",

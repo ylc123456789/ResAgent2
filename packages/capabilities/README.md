@@ -23,11 +23,13 @@ runtime 只定义「Agent 怎么运行」（Agentic Loop 和 Tool 接口）；ca
 
 代码依赖分成两支：`contracts ← runtime ← capabilities ← agents`，以及 `contracts ← orchestrator`。composition root（CLI/E2E）同时依赖 orchestrator 与具体 Agents 并注入 ModulePort；orchestrator 不 import 具体 Agent。capabilities 依赖 runtime（Tool 协议、AgentState/ToolObservation）和 contracts，不依赖任何具体 Agent。
 
-`literature.py` 提供 `LiteratureSearchBackend` Protocol、`ArxivLiteratureBackend`、`FallbackLiteratureBackend`、`LiteratureSearchTool` 与 `ArtifactRegistrationPort`；`openalex.py` 提供 `OpenAlexLiteratureBackend`。CLI/E2E 显式装配 arXiv 主源 + OpenAlex 备用；Agent 仍只依赖原 Protocol。Tool 从 `AgentState` 取 run_id/session_id 做 provenance，不自行分配 ArtifactId/hash。
+`literature.py` 提供 `LiteratureSearchBackend` Protocol、`ArxivLiteratureBackend`、`MultiSourceLiteratureBackend`、`LiteratureSearchTool` 与 `ArtifactRegistrationPort`；`openalex.py` 提供 `OpenAlexLiteratureBackend`。CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入同一列表，互为备份；Agent 仍只依赖原 Protocol。Tool 从 `AgentState` 取 run_id/session_id 做 provenance，不自行分配 ArtifactId/hash。
+
+来源选择只保存一个实例内索引：首次按组合根配置顺序尝试，成功后继续用该源；它不可用则依次试其他源，每次检索最多遍历一轮。当前初始顺序是 arXiv、OpenAlex，不赋予固定主备身份；切到 OpenAlex 后，它不可用也能切回已恢复的 arXiv。没有轮询探活、健康表、额外冷却状态或持久选择记录，新建实例从初始顺序开始。不强制每次轮换，也不同时查询两个源。
 
 两个 HTTP 后端复用私有 `_literature_http.py`：应用 User-Agent、进程内按来源串行，arXiv 请求结束后至少间隔 3 秒、OpenAlex 1 秒。429 不立即重试，冷却至少 60 秒；Retry-After 支持秒数/HTTP 日期，更长则遵守更长等待。5xx/408 带 Retry-After 时同样进入冷却；其余超时、网络和 5xx/408 最多 3 次 HTTP 尝试，退避 3/6 秒；耗尽后冷却。冷却期调用直接返回不可用，不在 Agent 内长睡眠。`max_retries` 沿用已有参数名，含义是总尝试数。
 
-备用切换仅捕获 `LiteratureUnavailableError`；正常空结果、HTTP 4xx（除 408/429）、无效 XML/JSON 不触发切换，也不吞掉编程异常。主源失败原因和切换写应用日志；结果保留真实来源：arXiv ID/链接，或 `openalex:W...` / OpenAlex Work URL。只做单源 ID 去重，不合并两源、不把同标题当成同论文。两源都失败则报错，不登记空工件伪装成功。
+来源切换仅捕获 `LiteratureUnavailableError`；正常空结果是成功响应，HTTP 4xx（除 408/429）、无效 XML/JSON 不触发切换，也不吞掉编程异常。不可用原因写应用日志；全部不可用时汇总各源原因报错。结果保留真实来源：arXiv ID/链接，或 `openalex:W...` / OpenAlex Work URL。只返回一个成功来源的结果，不合并两源、不把同标题当成同论文。全部不可用不登记空工件伪装成功。
 
 OpenAlex 的可选 `OPENALEX_API_KEY` 仅由组合根读取，经 Authorization header 发送，不进入 URL、论文记录或模型上下文；未配置时匿名请求，额度/授权以服务端政策为准。摘要缺失就留空，两源都最多保留每篇 2000 字符，不获取 PDF 或新增 LLM 摘要。工件继续为原有 Markdown 条目。
 

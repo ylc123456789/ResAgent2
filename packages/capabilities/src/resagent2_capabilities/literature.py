@@ -219,14 +219,19 @@ class ArxivLiteratureBackend:
         return fragment.split("v", 1)[0] if "v" in fragment else fragment
 
 
-class FallbackLiteratureBackend:
-    """Use one backup only on availability failure, not on empty/invalid results."""
+class MultiSourceLiteratureBackend:
+    """Peer sources: keep the last successful one, switch on unavailability.
 
-    def __init__(
-        self, primary: LiteratureSearchBackend, fallback: LiteratureSearchBackend
-    ) -> None:
-        self.primary = primary
-        self.fallback = fallback
+    Each search traverses the configured sources at most once. The initial
+    order is a composition choice, not a primary/backup role. Only an index
+    is remembered in this instance; cooldown remains in the HTTP backends.
+    """
+
+    def __init__(self, *backends: LiteratureSearchBackend) -> None:
+        if not backends:
+            raise ValueError("at least one literature backend is required")
+        self.backends = backends
+        self._current_index = 0
 
     def search(
         self,
@@ -237,19 +242,25 @@ class FallbackLiteratureBackend:
         end_year: int | None = None,
     ) -> list[LiteraturePaper]:
         bounds = dict(max_results=max_results, start_year=start_year, end_year=end_year)
-        try:
-            return self.primary.search(query, **bounds)
-        except LiteratureUnavailableError as primary_error:
-            logging.getLogger(__name__).warning(
-                "Literature primary unavailable (%s); trying %s",
-                primary_error, type(self.fallback).__name__,
-            )
+        errors: list[str] = []
+        start = self._current_index
+        for offset in range(len(self.backends)):
+            index = (start + offset) % len(self.backends)
+            backend = self.backends[index]
             try:
-                return self.fallback.search(query, **bounds)
-            except LiteratureSearchError as fallback_error:
-                raise LiteratureSearchError(
-                    f"Primary unavailable: {primary_error}; backup failed: {fallback_error}"
-                ) from fallback_error
+                papers = backend.search(query, **bounds)
+            except LiteratureUnavailableError as error:
+                detail = f"{type(backend).__name__}: {error}"
+                errors.append(detail)
+                logging.getLogger(__name__).warning(
+                    "Literature source unavailable (%s)", detail
+                )
+                continue
+            self._current_index = index
+            return papers
+        raise LiteratureUnavailableError(
+            "All literature sources unavailable: " + "; ".join(errors)
+        )
 
 
 class LiteratureSearchToolInput(RuntimeModel):

@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from resagent2_capabilities import (
-    FallbackLiteratureBackend,
+    MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchError,
     LiteratureSearchTool,
@@ -114,15 +114,15 @@ class Failing:
         raise self.error
 
 
-def test_fallback_preserves_bounds_and_actual_source_in_artifact(caplog):
+def test_source_switch_preserves_bounds_and_actual_source_in_artifact(caplog):
     paper = OpenAlexLiteratureBackend()._paper(work())
-    backup = _FakeBackend([paper])
-    backend = FallbackLiteratureBackend(Failing(LiteratureUnavailableError("arXiv HTTP 429")), backup)
+    other = _FakeBackend([paper])
+    backend = MultiSourceLiteratureBackend(Failing(LiteratureUnavailableError("arXiv HTTP 429")), other)
     register = _FakeRegister()
     observation = LiteratureSearchTool(backend, register).execute(
         state(), LiteratureSearchToolInput(query="x", max_results=2, start_year=2020, end_year=2024),
     )
-    assert backup.last_kwargs == dict(query="x", max_results=2, start_year=2020, end_year=2024)
+    assert other.last_kwargs == dict(query="x", max_results=2, start_year=2020, end_year=2024)
     assert "arXiv HTTP 429" in caplog.text
     assert register.last_candidate.media_type == "text/markdown"
     assert "https://openalex.org/W123" in register.last_candidate.content
@@ -131,22 +131,22 @@ def test_fallback_preserves_bounds_and_actual_source_in_artifact(caplog):
     assert observation.value["papers"][0]["source_url"] == paper.source_url
 
 
-def test_empty_primary_result_does_not_trigger_fallback():
-    backup = _FakeBackend([])
-    assert FallbackLiteratureBackend(_FakeBackend([]), backup).search("x", max_results=1) == []
-    assert backup.last_kwargs is None
+def test_empty_result_does_not_trigger_source_switch():
+    other = _FakeBackend([])
+    assert MultiSourceLiteratureBackend(_FakeBackend([]), other).search("x", max_results=1) == []
+    assert other.last_kwargs is None
 
 
 @pytest.mark.parametrize("error", [LiteratureSearchError("HTTP 400"), LiteratureSearchError("invalid XML"), RuntimeError("bug")])
-def test_non_availability_errors_do_not_trigger_fallback(error):
-    backup = _FakeBackend([])
+def test_non_availability_errors_do_not_trigger_source_switch(error):
+    other = _FakeBackend([])
     with pytest.raises(type(error), match=str(error)):
-        FallbackLiteratureBackend(Failing(error), backup).search("x", max_results=1)
-    assert backup.last_kwargs is None
+        MultiSourceLiteratureBackend(Failing(error), other).search("x", max_results=1)
+    assert other.last_kwargs is None
 
 
 def test_both_sources_failing_never_registers_empty_artifact():
-    backend = FallbackLiteratureBackend(
+    backend = MultiSourceLiteratureBackend(
         Failing(LiteratureUnavailableError("arXiv HTTP 429")),
         Failing(LiteratureUnavailableError("OpenAlex TimeoutError")),
     )

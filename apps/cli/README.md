@@ -219,11 +219,11 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 ### 文献检索服务
 
-默认先查 arXiv；遇到 429、超时或临时服务故障时，自动尝试 OpenAlex。正常搜不到结果、坏请求或损坏响应不触发切换。两源都失败会返回工具错误，Scientific 沿用既有 ask_user 指引；不承诺模型每次一定立即询问。
+arXiv 和 OpenAlex 是平级来源，互为备份。新建实例初始按 arXiv、OpenAlex 顺序尝试；成功后继续用该源，遇到 429、超时或临时服务故障时再试其他源，能双向切换。每次检索最多遍历一轮，不并查或合并结果；来源选择不跨进程保存。正常搜不到结果、坏请求或损坏响应不触发切换。两源都不可用会返回工具错误，Scientific 沿用既有 ask_user 指引；不承诺模型每次一定立即询问。
 
 可选环境变量 `OPENALEX_API_KEY` 是 OpenAlex 服务密钥，与 LLM key 无关；未设置时使用匿名访问，是否可用及额度以服务端为准。通过现有安全方式加载，勿写入命令行、goal 或日志；后端只通过 Authorization header 发送，不放进 URL/工件/上下文。需要密钥或新费用时先由用户决定，不自动注册或付费。
 
-arXiv 在同进程内串行请求，间隔至少 3 秒；429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待，冷却期直接尝试备用。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。切换原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。两源都只提供检索记录与可用摘要，不代表读过论文全文。
+arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。两源都只提供检索记录与可用摘要，不代表读过论文全文。
 
 ### 退出码
 

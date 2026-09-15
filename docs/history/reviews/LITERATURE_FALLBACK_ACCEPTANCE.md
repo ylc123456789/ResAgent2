@@ -1,6 +1,6 @@
-# 文献请求节奏与 OpenAlex 备用：服务器补验
+# 文献请求节奏与平级来源：服务器补验
 
-日期：2026-09-15。分支：`fix/literature-fallback`。产品提交：`7f3411d`；最终同步分支 HEAD（后续文档提交可能更新 SHA）。旧正式产品基线为 `47f6231`，其上的 L3 文档提交不改变产品行为。
+日期：2026-09-15。分支：`fix/literature-fallback`。本版在 `9708c16` 后修订，**必须同步最终分支 HEAD**；`7f3411d` 初版的固定主备设计已被平级来源替换，不是本版验收目标。旧正式产品基线为 `47f6231`，其上的 L3 文档提交不改变产品行为。
 
 状态：**本地验证完成，服务器补验和 L3 正式 Run 尚未执行。** 本文不是验收通过报告。
 
@@ -8,7 +8,8 @@
 
 - arXiv 显式应用 User-Agent；同进程所有实例共用请求串行/间隔，至少 3 秒。429 不在同次搜索里短重试，冷却至少 60 秒；Retry-After 秒数/HTTP 日期给出更长等待时遵守它。
 - 暂时网络故障和无 Retry-After 的 5xx/408 最多 3 次 HTTP 尝试，退避 3/6 秒；带 Retry-After 的 5xx/408 直接冷却。冷却期调用快速返回不可用。
-- CLI/E2E 都显式装配 arXiv 主源 + OpenAlex 备用；只有服务不可用触发备用。有效空结果、400/401/403 等坏请求/授权错误、损坏 XML/JSON 不切换。两源都失败不登记伪成功工件。
+- CLI/E2E 都经 MultiSourceLiteratureBackend 装入 arXiv、OpenAlex 两个平级来源，不设 primary/fallback。首次按配置顺序，成功后继续用该源；它不可用再试其他源，每次最多遍历一轮，能双向切换。只记一个实例内索引，不保存第二套健康/冷却状态。
+- 只有服务不可用触发换源。有效空结果是成功响应，400/401/403 等坏请求/授权错误、损坏 XML/JSON 不切换。全部不可用时汇总原因报错，不登记伪成功工件。
 - OpenAlex 仍返回 LiteraturePaper，真实 OpenAlex Work ID/链接随 Markdown 工件交付；可用摘要最多 2000 字符，缺失就留空，不冒充全文。切换原因写应用日志，不另加业务字段。
 - 可选 `OPENALEX_API_KEY` 从组合根读环境，经 Authorization header 发送；不写 URL/工件/模型上下文。未配置时匿名访问，额度/授权以服务端实际返回为准。既有子进程清理规则会剥离含 API_KEY 的变量。
 - 未改 Agent/prompt、Runtime、状态机、schema、LLM 额度或 JSON 恢复；未加 SDK、源注册框架、融合排序、全文下载或新缓存。L3 **案例预算**改为 12/2/200/14400，产品默认预算不变。
@@ -17,11 +18,12 @@
 
 ## 2. 本地已完成的验证
 
-- `python -m pytest tests apps/cli/tests -q`：**903 passed, 1 skipped**；唯一 skip 仍是原有 opt-in arXiv 网络测试。
-- 文献三文件 + 双组合根测试：**53 passed, 1 skipped**。
+- `python -m pytest tests apps/cli/tests -q`：**911 passed, 1 skipped**；唯一 skip 仍是原有 opt-in arXiv 网络测试。上一版为 903/1，本轮新增 8 个平级来源用例。
+- 文献四文件（test_literature / test_literature_http / test_literature_sources / test_openalex）+ 双组合根测试：**61 passed, 1 skipped**。
 - `python -m e2e.mock_e2e`：completed；`git diff --check` 干净。
 - 虚拟时钟覆盖：跨实例间隔、429 单次请求、冷却跳过网络/到期恢复、Retry-After 秒数/日期、503 长等待、超时有限重试、400/401/403 不重试。
 - 规范化/切换覆盖：查询日期范围、摘要重建/缺失、来源/去重、坏响应不冒充空结果、有效空结果不切换、两源失败不登记工件、API key 只进 header、CLI/E2E 接同一策略。
+- 平级机制覆盖：A→B→A、反向配置 B→A→B、成功来源复用、每次遍历一轮、全部原因汇总。用真实两个后端的 HTTP 策略配合虚拟时钟验证：arXiv 在 t=0 限流，OpenAlex 成功；t=10 OpenAlex 也限流，arXiv 仍冷却且未发 HTTP；t=61 OpenAlex 仍冷却而 arXiv 已恢复，正确切回。该项是确定性注入，不冒充真实服务恢复。
 - 本机 WSL 对 OpenAlex 做一次真实匿名查询（无 LLM）：检索 SENet 返回 `openalex:W2752782242`、`openalex:W2963420686`，均带真实标题与摘要。**仅证明本机这一次可用，不证明服务器可用或服务永不限流。**
 
 ## 3. 服务器先做小补验
@@ -38,7 +40,7 @@
 使用与组合根相同的：
 
 ```python
-backend = FallbackLiteratureBackend(
+backend = MultiSourceLiteratureBackend(
     ArxivLiteratureBackend(),
     OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
 )
@@ -47,8 +49,9 @@ papers = backend.search("Squeeze-and-Excitation Networks", max_results=3)
 
 在独立驱动里记录时间、返回条目/来源及 stderr 切换日志。不要打印 Request headers、环境全集或 key。这里查询固定论文只检查服务，不将这些记录作为 L3 研究任务的输入或候选答案。
 
-- arXiv 429 → OpenAlex 真实记录：判备用可用，不宣称 arXiv 恢复。
-- arXiv 本次成功：判主源可用；如要补真实备用证据，单独一次驱动仅让 arXiv 的 `_request` 抛 HTTPError(429)，其余 HTTP 策略与 OpenAlex 仍真实运行。明确标记注入，不伪造/替换论文记录，不改产品源码。
+- arXiv 429 → OpenAlex 真实记录：判“arXiv 不可用、OpenAlex 可用”，不宣称 arXiv 恢复或将 OpenAlex 视为次级证据。
+- arXiv 本次成功：判 arXiv 可用；如要补换源到 OpenAlex 的真实证据，单独一次驱动仅让 arXiv 的 `_request` 抛 HTTPError(429)，其余 HTTP 策略与 OpenAlex 仍真实运行。明确标记注入，不伪造/替换论文记录，不改产品源码。
+- 双向机制已由新确定性测试覆盖；真实运行能观察哪个方向就记录哪个方向，不为了证明反向而反复请求仍被限流的 arXiv。不能以本轮未触发反向切换断言该路径不可用，也不能将虚拟时钟测试说成实时服务已恢复。
 - 若两源都不可用，或 OpenAlex 要求有效授权/额度：保存原错误，停在预检交用户决定；不反复运行到绿、不轮换出口绕过限制、不擅自申请付费服务。
 - 不因真实空结果直接宣称网络失败或换源成功。无需并发请求/压力测试，节奏与分支机制已有确定性覆盖。
 
@@ -87,4 +90,4 @@ resagent2 run --run-id run_literature_fallback_check \
 - **成本重新确认后**正式跑一次。ask_user 只按 L3 §6 有限代答；研究决策不代做，扩预算/权限/费用必须交用户。两源再次故障则如实报告，不静默取消查资料要求。
 - 不重跑 Pro/GPU 矩阵，不混入 JSON 或额外功能修复。所有失败保留，不重跑到绿；不合并 main、不 push、不清理旧现场。
 
-最终报告把两件事分开：A. 新文献能力补验；B. L3 研究交付及评分。请求节奏修好、备用可用，不代表 L3 一定能自主完成。
+最终报告把两件事分开：A. 文献平级来源补验；B. L3 研究交付及评分。请求节奏修好、有实际可用来源，不代表 L3 一定能自主完成。

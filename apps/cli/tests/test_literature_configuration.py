@@ -3,7 +3,7 @@
 import pytest
 
 from resagent2_capabilities import (
-    ArxivLiteratureBackend, FallbackLiteratureBackend,
+    ArxivLiteratureBackend, MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend, ResourceLayout,
 )
 from resagent2_cli import composition
@@ -27,7 +27,8 @@ def test_cli_and_e2e_wire_same_literature_backends(tmp_path, monkeypatch, api_ke
     )
     for agent in (app.controller.scientific_port, e2e_agent):
         backend = agent.literature_backend
-        assert isinstance(backend, FallbackLiteratureBackend)
-        assert isinstance(backend.primary, ArxivLiteratureBackend)
-        assert isinstance(backend.fallback, OpenAlexLiteratureBackend)
-        assert backend.fallback._api_key == api_key
+        assert isinstance(backend, MultiSourceLiteratureBackend)
+        assert len(backend.backends) == 2
+        assert isinstance(backend.backends[0], ArxivLiteratureBackend)
+        assert isinstance(backend.backends[1], OpenAlexLiteratureBackend)
+        assert backend.backends[1]._api_key == api_key

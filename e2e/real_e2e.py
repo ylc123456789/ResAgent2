@@ -43,7 +43,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     ArxivLiteratureBackend,
     DatasetCatalog,
-    FallbackLiteratureBackend,
+    MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
     ResourceLayout,
 )
@@ -353,7 +353,7 @@ def _scientific_agent(
 ) -> ScientificAgent:
     return ScientificAgent(
         _new_llm_client(),
-        literature_backend=FallbackLiteratureBackend(
+        literature_backend=MultiSourceLiteratureBackend(
             ArxivLiteratureBackend(),
             OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
         ),

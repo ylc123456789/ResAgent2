@@ -26,7 +26,7 @@ CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 
 
 想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。当前只有规程，尚未执行 L3 验收。
 
-L3 预检遇到 arXiv 限流后，先按 [文献备用来源补验](history/reviews/LITERATURE_FALLBACK_ACCEPTANCE.md) 核验请求节奏与 OpenAlex 链路，再确认新版 200 次调用 / 4 小时执行预算；旧预检与实验准备保留。
+L3 预检遇到 arXiv 限流后，先按 [文献平级来源补验](history/reviews/LITERATURE_FALLBACK_ACCEPTANCE.md) 核验请求节奏、双向切换与真实检索，再确认新版 200 次调用 / 4 小时执行预算；旧预检与实验准备保留。
 
 <a id="maintenance"></a>
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from resagent2_capabilities import (
     ArxivLiteratureBackend,
     DatasetCatalog,
-    FallbackLiteratureBackend,
+    MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
     ResourceLayout,
 )
@@ -212,7 +212,7 @@ def build_application(
     )
     scientific = ScientificAgent(
         _client(),
-        literature_backend=FallbackLiteratureBackend(
+        literature_backend=MultiSourceLiteratureBackend(
             ArxivLiteratureBackend(),
             OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
         ),

@@ -656,9 +656,9 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - 共享客户端的每次 HTTP 尝试（含重试）都计入 `llm_calls`；AgentLoop/Compiler 通过可选的 `set_attempt_limit`/`last_attempts` hooks 限制并计量实际尝试。最小 LLM 客户端只须有 `next_action`，无计数 hook 时一次调用按一次计；自带内部重试的实现应提供这两个 hooks；
 - 工具派发前重新检查 wall-clock 余量；LLM 或权限检查已用尽时间时，不再派发工具，已发生调用仍入账。这不等于能撤销或抢占已经执行的外部操作；
 - 一条 ToolObservation 的 `question`、`request_work`、`finish_candidate` 至多一个非空；普通观察可以全为空；
-- 连续失败计数：成功的非 finish 工具重置；`ok=False` 累加；completion check 拒绝的 finish 也累加；连续 5 次失败返回 `TOOL_FAILED`，先于 step 预算。
+- 连续失败计数：成功的非 finish 工具重置；`ok=False` 累加；completion check 拒绝的 finish 也累加；连续 5 次失败返回 `TOOL_FAILED`。这是有界纠错的停止条件，不是第二套任务步骤预算。
 
-LLM trace 的 `action_valid` 仅表示 provider 已解析出单一 action 候选；原生多调用整批拒绝，因此不会只挑其中一个标为有效。外层 Action schema 错误另以同一 `call_id` 记录。它不证明 Tool 参数通过校验、执行成功或科学结论有效；须结合 validation 记录和 Session 中的 observation/completion 结果阅读。
+LLM trace 的 `action_valid` 表示响应已解析出候选动作：单工具 parsed_action 为对象，合法原生多调用为对象数组并另记 tools 名称列表，不只挑其中一个标有效。外层 Action schema 错误另以同一 `call_id` 记录。它不证明整批预检通过、Tool 执行成功或科学结论有效；须结合 validation 记录和 Session 中的 observation/completion 结果阅读。摘要调用不产生动作，action_valid 为 null。
 
 <a id="completion"></a>
 

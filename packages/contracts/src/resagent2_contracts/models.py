@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "7.0"
+SCHEMA_VERSION = "8.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["7.0"] = SCHEMA_VERSION
+    schema_version: Literal["8.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +351,6 @@ class RunBudget(ContractModel):
 class TaskBudget(ContractModel):
     """Hard limits for one child-module invocation."""
 
-    max_steps: int = Field(ge=1)
     max_llm_calls: int = Field(ge=1)
     timeout_seconds: int = Field(ge=1)
 

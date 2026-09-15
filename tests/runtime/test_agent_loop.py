@@ -87,7 +87,7 @@ def request(capability: Capability) -> ModuleTaskRequest:
         capability=capability,
         goal="Exercise the shared loop",
         inputs=inputs,
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
     )
 
 
@@ -469,13 +469,13 @@ def test_consecutive_failures_stop_before_budget() -> None:
         capability=Capability.CODE_MODIFY,
         goal="g",
         inputs=CodeModifyInput(instructions="i"),
-        budget=TaskBudget(max_steps=50, max_llm_calls=50, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
     result = loop.run(profile, req, session_id="session_fail")
 
     assert result.status == ModuleStatus.FAILED
     assert result.error.code == ErrorCode.TOOL_FAILED
-    # It stopped at the recoverable-failure limit, not by exhausting 50 steps.
+    # It stopped at the recoverable-failure limit, not by exhausting 50 calls.
     assert store.load("session_fail").step < 50
 
 
@@ -530,7 +530,7 @@ def test_completion_rejection_counts_as_failure() -> None:
         capability=Capability.CODE_MODIFY,
         goal="g",
         inputs=CodeModifyInput(instructions="i"),
-        budget=TaskBudget(max_steps=50, max_llm_calls=50, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
     result = loop.run(profile, req, session_id="session_reject_finish")
 
@@ -756,7 +756,7 @@ def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
     bounded_request = request(Capability.CODE_MODIFY).model_copy(
         update={
             "budget": TaskBudget(
-                max_steps=1, max_llm_calls=1, timeout_seconds=60
+                max_llm_calls=1, timeout_seconds=60
             )
         }
     )

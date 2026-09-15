@@ -225,7 +225,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
         capability=Capability.CODE_MODIFY,
         goal="Change VALUE from 1 to 2",
         inputs=CodeModifyInput(instructions="Change VALUE from 1 to 2"),
-        budget=TaskBudget(max_steps=20, max_llm_calls=20, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=20, timeout_seconds=60),
         workspace=WorkspaceGrant(
             root=str(repo),
             mode=WorkspaceMode.READ_WRITE,

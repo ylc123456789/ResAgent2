@@ -537,6 +537,47 @@ def test_budget_exhaustion_does_not_persist_a_running_attempt() -> None:
     assert unchanged.attempts == []
 
 
+def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
+    from resagent2_orchestrator import scheduler as scheduler_module
+
+    class FixedClock:
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(scheduler_module, "datetime", FixedClock)
+    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    request = ResearchRequest(
+        goal="Use the full remaining budget",
+        budget=RunBudget(
+            max_tasks=1,
+            max_attempts_per_task=1,
+            max_llm_calls=120,
+            timeout_seconds=3600,
+        ),
+    )
+    _create_run(engine, "run_remaining_budget", request, WorkflowProposal(
+        work_request_id="work_legacy_initial",
+        summary="remaining budget",
+        compilation_rationale="Exercise child budget propagation",
+        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+    ))
+    run = engine.store.load("run_remaining_budget")
+    run.created_at = NOW
+    run.updated_at = NOW
+    run.llm_calls_used = 17
+
+    module_request = engine._module_request(
+        run,
+        run.workflow.tasks[0],
+        1,
+        parent_session_id=None,
+    )
+
+    assert module_request.budget.max_llm_calls == 103
+    assert module_request.budget.timeout_seconds == 3600
+
+
 def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
     request_work = ModuleResult(
         status=ModuleStatus.REQUEST_WORK,

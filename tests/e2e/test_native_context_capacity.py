@@ -82,7 +82,7 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
         else ExperimentRunInput(instructions="Review source and patch before evaluating"),
         input_artifacts=[artifact], workspace=grant, workspace_id="ws_capacity",
         output_dir=str(tmp_path / "outputs"),
-        budget=TaskBudget(max_steps=2, max_llm_calls=2, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=2, timeout_seconds=30),
     )
     now = datetime.now(UTC)
     state = AgentState(

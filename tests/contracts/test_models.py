@@ -97,10 +97,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "7.0"
+    assert restored.schema_version == "8.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -110,6 +110,11 @@ def test_previous_schema_state_is_rejected(schema_version: str) -> None:
             created_from="work_test",
             schema_version=schema_version,
         )
+
+
+def test_task_budget_rejects_removed_max_steps_field() -> None:
+    with pytest.raises(ValidationError, match="max_steps"):
+        TaskBudget(max_llm_calls=5, timeout_seconds=60, max_steps=5)
 
 
 def test_user_answer_requires_at_least_one_value() -> None:
@@ -212,7 +217,7 @@ def test_module_request_input_must_match_capability() -> None:
             capability=Capability.CODE_MODIFY,
             goal="Modify",
             inputs=CodeUnderstandInput(question="Where is the entry point?"),
-            budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=300),
+            budget=TaskBudget(max_llm_calls=5, timeout_seconds=300),
         )
 
 

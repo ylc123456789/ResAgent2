@@ -47,7 +47,7 @@ def _request(*, attempt: int, parent: str | None = None) -> ModuleTaskRequest:
         capability=Capability.CODE_UNDERSTAND,
         goal="Pick a dataset",
         inputs=CodeUnderstandInput(question="Which dataset?"),
-        budget=TaskBudget(max_steps=1, max_llm_calls=5, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id=parent,
     )
 
@@ -255,7 +255,7 @@ def test_resume_rejects_mismatched_task() -> None:
         capability=Capability.CODE_UNDERSTAND,
         goal="Pick a dataset",
         inputs=CodeUnderstandInput(question="Which dataset?"),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id="session_child",
     )
     result = loop.run(definition, other, session_id="session_child")

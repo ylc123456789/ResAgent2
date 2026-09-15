@@ -112,7 +112,10 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
     original_run = second.scientific_port.run
 
     def capture(request):
-        budgets.append(request.budget.timeout_seconds)
+        budgets.append((
+            request.budget.max_llm_calls,
+            request.budget.timeout_seconds,
+        ))
         return original_run(request)
 
     second.scientific_port.run = capture
@@ -122,7 +125,7 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
     )
     again = second.answer_question(paused.run_id, answer)
     assert again.status == RunStatus.PAUSED
-    assert budgets == [50]
+    assert budgets == [(49, 50)]
     assert again.user_wait_seconds == 2 * 86400
     assert again.remaining_timeout_seconds(run_clock.now()) == 40
     assert again.llm_calls_used == 2
@@ -170,6 +173,7 @@ def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
     ))
     assert completed.status == RunStatus.COMPLETED
     assert completed.user_wait_seconds == 86400
+    assert port.requests[-1].budget.max_llm_calls == 49
     assert port.requests[-1].budget.timeout_seconds == 60
     assert port.requests[-1].dataset_refs == source.refs
     assert port.requests[-1].parent_session_id == attempt.session.id

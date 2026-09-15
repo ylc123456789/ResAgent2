@@ -63,7 +63,7 @@ def _probe(root, kind, phase):
     )]
     common = dict(
         run_id="run_resources", dataset_refs=refs, answers=answers,
-        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
         parent_session_id=session_id if phase else None,
     )
     if scientific:
@@ -177,7 +177,7 @@ def test_scientific_invalid_resource_is_a_controlled_failure(tmp_path):
                 max_tasks=1, max_attempts_per_task=1, max_llm_calls=5, timeout_seconds=60,
             ),
         ),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "failed"
     assert result.error.code == "invalid_input"

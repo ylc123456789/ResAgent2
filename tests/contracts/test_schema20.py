@@ -236,7 +236,7 @@ def test_scientific_turn_request_first_call_rejects_outcome() -> None:
                     )
                 ],
             ),
-            budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+            budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
         )
 
 
@@ -266,7 +266,7 @@ def test_scientific_turn_request_resume_rejects_outcome_and_answers() -> None:
                 )
             ],
             parent_session_id="session_sci",
-            budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+            budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
         )
 
 
@@ -446,7 +446,7 @@ def test_scientific_turn_rejects_cross_run_artifact() -> None:
             run_id="run_example",
             research=research_request(),
             authorized_artifacts=[artifact],
-            budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+            budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         )
 
 
@@ -468,7 +468,7 @@ def test_scientific_turn_rejects_duplicate_authorized_artifact() -> None:
             run_id="run_example",
             research=research_request(),
             authorized_artifacts=[artifact, artifact],
-            budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=60),
+            budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         )
 
 

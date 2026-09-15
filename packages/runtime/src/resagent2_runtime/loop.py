@@ -295,12 +295,8 @@ class AgentLoop:
             )
 
         started = self.clock()
-        attempt_steps = 0
         consecutive_failures = 0
-        while (
-            attempt_steps < request.budget.max_steps
-            and self._run_llm_calls < request.budget.max_llm_calls
-        ):
+        while self._run_llm_calls < request.budget.max_llm_calls:
             if self.clock() - started >= request.budget.timeout_seconds:
                 return self._failure(
                     state,
@@ -402,10 +398,13 @@ class AgentLoop:
                     reply = native_call(context, schemas, state.tool_turns, max_input_tokens=context_limit)
                 else:
                     reply = definition.llm_client.next_action(context, definition.action_type)
-                attempts = getattr(definition.llm_client, "last_attempts", 1)
-                self._run_llm_calls += attempts
-                state.llm_calls_used += attempts
+                failure = self._charge_calls(state, definition.llm_client, response_received=True)
+                if failure is not None:
+                    return failure
                 charged = True
+                if self._run_llm_calls > request.budget.max_llm_calls:
+                    return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
+                                         "Client exceeded the allocated LLM-call budget", retryable=False)
                 if native_call is not None:
                     turn = ToolCallTurn.model_validate(reply)
                     used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
@@ -435,18 +434,14 @@ class AgentLoop:
                         raw_action.pop("reasoning_summary", None)
                     actions.append(definition.action_type.model_validate(raw_action))
                 if len(actions) > 1:
-                    if len(actions) > request.budget.max_steps - attempt_steps:
-                        return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
-                                             "Batch exceeds remaining step budget; no tool was executed",
-                                             retryable=False)
                     failure = self._preflight_batch(definition, registry, request, state, actions)
                     if failure is not None:
                         return failure
             except (json.JSONDecodeError, ValidationError, NativeToolCallError) as error:
                 if not charged:
-                    attempts = getattr(definition.llm_client, "last_attempts", 1)
-                    self._run_llm_calls += attempts
-                    state.llm_calls_used += attempts
+                    failure = self._charge_calls(state, definition.llm_client, response_received=True)
+                    if failure is not None:
+                        return failure
                 if isinstance(error, json.JSONDecodeError):
                     # next_action raised before the success-path accounting.
                     # Count any preceding transport retries as well.
@@ -503,9 +498,9 @@ class AgentLoop:
                 # The transport failed after one or more real HTTP attempts;
                 # those attempts still count toward the Run ledger.
                 if not charged:
-                    attempts = getattr(definition.llm_client, "last_attempts", 1)
-                    self._run_llm_calls += attempts
-                    state.llm_calls_used += attempts
+                    failure = self._charge_calls(state, definition.llm_client, response_received=False)
+                    if failure is not None:
+                        return failure
                 return self._failure(
                     state,
                     ErrorCode.TOOL_FAILED,
@@ -515,12 +510,8 @@ class AgentLoop:
                 )
 
             for index, action in enumerate(actions):
-                if attempt_steps >= request.budget.max_steps:
-                    return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
-                                         "Agent session exhausted step budget", retryable=False)
                 self._active_call_id = turn.tool_calls[index].id if native_call is not None else None
                 state.step += 1
-                attempt_steps += 1
                 self._append_event(
                     state,
                     event_type="action",
@@ -748,7 +739,7 @@ class AgentLoop:
         return self._failure(
             state,
             ErrorCode.BUDGET_EXHAUSTED,
-            "Agent session exhausted step or LLM-call budget",
+            "Agent session exhausted LLM-call budget",
             retryable=False,
             details=self._failure_details(state),
         )
@@ -779,6 +770,19 @@ class AgentLoop:
                 created_at=datetime.now(UTC),
             )
         )
+
+    def _charge_calls(self, state: AgentState, client, *, response_received: bool) -> ModuleResult | None:
+        """Use the same attempt ledger for actions, errors and compaction calls."""
+        attempts = getattr(client, "last_attempts", 1)
+        if type(attempts) is not int or attempts < 0 or (response_received and attempts == 0):
+            return self._failure(
+                state, ErrorCode.CONTRACT_ERROR,
+                "Client last_attempts must be a nonnegative integer and positive after a response; usage is unknown",
+                retryable=False, details={"component": "llm_usage"},
+            )
+        self._run_llm_calls += attempts
+        state.llm_calls_used += attempts
+        return None
 
     def _preflight_batch(self, definition, registry, request, state, actions) -> ModuleResult | None:
         """Validate the whole batch before its first side effect; recheck at dispatch."""

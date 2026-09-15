@@ -117,7 +117,7 @@ def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
         capability=capability,
         goal="Exercise the native Coding Agent",
         inputs=inputs,
-        budget=TaskBudget(max_steps=8, max_llm_calls=8, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
         workspace=WorkspaceGrant(
             root=str(root),
             mode=mode,

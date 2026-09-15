@@ -162,7 +162,7 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
     request = ModuleTaskRequest(
         run_id="run_context", task_id="task_context", attempt_number=1,
         capability=capability, inputs=inputs, goal="Bounded task",
-        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     sections = builder(request, state, binding=binding, max_context_tokens=8192)
     assert {s.name for s in sections} >= {"environment", "workspace_reads"}

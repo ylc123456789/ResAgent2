@@ -455,7 +455,7 @@ def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
         ),
         previous_work_request=_draft(),
         unresolved_task_outcomes=[],
-        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
         parent_session_id="session_x",
     )
     sections = build_context(

@@ -35,7 +35,7 @@ def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
     return [ContextSection(name="goal", content=request.goal, required=True)]
 
 
-def request(*, max_steps: int = 2, timeout_seconds: int = 60) -> ModuleTaskRequest:
+def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> ModuleTaskRequest:
     return ModuleTaskRequest(
         run_id="run_guard",
         task_id="task_guard",
@@ -44,8 +44,7 @@ def request(*, max_steps: int = 2, timeout_seconds: int = 60) -> ModuleTaskReque
         goal="Verify runtime boundaries",
         inputs=CodeUnderstandInput(question="Can the action run?"),
         budget=TaskBudget(
-            max_steps=max_steps,
-            max_llm_calls=max_steps,
+            max_llm_calls=max_llm_calls,
             timeout_seconds=timeout_seconds,
         ),
     )
@@ -144,7 +143,7 @@ def test_rejected_finish_exhausts_budget_instead_of_completing() -> None:
             ],
             allowed_tools={"finish"},
         ),
-        request(max_steps=1),
+        request(max_llm_calls=1),
         session_id="session_rejected_finish",
     )
 
@@ -166,7 +165,7 @@ def test_state_is_saved_incrementally_for_each_step() -> None:
             ],
             allowed_tools={"write_value", "finish"},
         ),
-        request(max_steps=2),
+        request(max_llm_calls=2),
         session_id="session_persisted",
     )
 

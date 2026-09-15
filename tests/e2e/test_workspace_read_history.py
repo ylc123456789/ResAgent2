@@ -72,7 +72,7 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
             allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
         ),
         workspace_id="ws_read_history", output_dir=str(tmp_path / "outputs"),
-        budget=TaskBudget(max_steps=20, max_llm_calls=20, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=20, timeout_seconds=30),
     )
     agent = NativeCodingAgent(
         client, store=store,

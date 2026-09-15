@@ -256,7 +256,6 @@ class ResearchController:
                 unresolved_task_outcomes=self._unresolved_tasks(run),
                 answers=self._pending_answers(run),
                 budget=TaskBudget(
-                    max_steps=remaining,
                     max_llm_calls=remaining,
                     timeout_seconds=remaining_timeout,
                 ),

@@ -51,7 +51,7 @@ def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
         goal="Run with CIFAR-10",
         inputs=ExperimentRunInput(instructions="Run with CIFAR-10"),
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
-        budget=TaskBudget(max_steps=3, max_llm_calls=3, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
     )
     now = datetime.now(UTC)
     state = AgentState(
@@ -191,7 +191,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
             expected_metrics=["accuracy"],
             expected_artifacts=["metrics.json"],
         ),
-        budget=TaskBudget(max_steps=8, max_llm_calls=8, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
     )
     return AgentLoop(store=InMemorySessionStore()).run(
         definition,

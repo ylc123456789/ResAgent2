@@ -108,7 +108,7 @@ def test_bad_json_stops_at_existing_limits(
         capability=Capability.CODE_UNDERSTAND,
         goal="exercise recovery",
         inputs=CodeUnderstandInput(question="q"),
-        budget=TaskBudget(max_steps=50, max_llm_calls=call_budget, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60),
     )
 
     with (
@@ -303,7 +303,7 @@ def recovery(monkeypatch, tmp_path):
         run_id="run_r", task_id="task_r", attempt_number=1,
         capability=Capability.CODE_UNDERSTAND, goal="exercise recovery",
         inputs=CodeUnderstandInput(question="q"),
-        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
     )
     return definition, request, InMemorySessionStore()
 
@@ -361,7 +361,7 @@ def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
 ):
     definition, request, store = recovery
     request = request.model_copy(update={"budget": TaskBudget(
-        max_steps=10, max_llm_calls=call_budget, timeout_seconds=60,
+        max_llm_calls=call_budget, timeout_seconds=60,
     )})
     with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
         URLError("transient"), _response("bad JSON"), _response(_FINISH),

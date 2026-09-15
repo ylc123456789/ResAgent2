@@ -376,8 +376,7 @@ class WorkflowScheduler:
                 if run.answer_task_ids.get(answer.question_id) == task.id
             ],
             budget=TaskBudget(
-                max_steps=50,
-                max_llm_calls=min(50, remaining_calls),
+                max_llm_calls=remaining_calls,
                 timeout_seconds=max(
                     1,
                     int(run.remaining_timeout_seconds(datetime.now(UTC))),

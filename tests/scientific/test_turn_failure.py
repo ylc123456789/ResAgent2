@@ -19,7 +19,7 @@ def _request(session_id):
         research=ResearchRequest(goal="Check a scientific signal", budget=RunBudget(
             max_tasks=2, max_attempts_per_task=1, max_llm_calls=10, timeout_seconds=60,
         )),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     )
 
 

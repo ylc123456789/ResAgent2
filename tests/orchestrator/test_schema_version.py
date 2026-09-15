@@ -23,7 +23,7 @@ def test_old_run_rejected_without_rewriting_file(tmp_path):
     assert store.load(run.run_id) == run
 
     path = tmp_path / "run_schema.json"
-    legacy = path.read_bytes().replace(f'"{SCHEMA_VERSION}"'.encode(), b'"6.0"')
+    legacy = path.read_bytes().replace(f'"{SCHEMA_VERSION}"'.encode(), b'"7.0"')
     path.write_bytes(legacy)
     with pytest.raises(ValidationError):
         store.load(run.run_id)

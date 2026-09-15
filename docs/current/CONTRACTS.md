@@ -26,7 +26,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="7.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="8.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -79,6 +79,8 @@ ResearchRequest 只表达研究意图和调用方约束，不承载数据集目�
 
 `timeout_seconds` 是 Run 墙钟额度，但扣除显式 `ask_user` 等待。安装、LLM 延迟、执行和普通进程中断仍计时；不是 CPU 时间，也不抢占已运行工具。Controller/Scheduler 共用 `ResearchRun.remaining_timeout_seconds(now)`。
 `user_wait_seconds` 记录已结束暂停的累计秒数；当前暂停从 PendingQuestion.created_at 推导。回答时按系统时钟结算，与答案、任务恢复一次保存，不使用用户的 answered_at 延长预算；重复答案不会重复增加等待时长或重置 LLM 计数。
+
+`TaskBudget` 只含 `max_llm_calls` 与 `timeout_seconds`。Controller 和 Scheduler 按调用当时的 Run 剩余额度下发，不另设步骤上限或隐藏的单任务调用上限；Session 的 `step` 仅是动作记录序号，模型调用仍统一计入 Run 总账。
 
 <a id="questions"></a>
 
@@ -924,7 +926,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 7.0 将内部答案改为必带原题的 RecordedAnswer；公共 answer_question 仍接收 UserAnswer，原题由 Controller 从 PendingQuestion 配对（[ADR-0014](../history/decisions/0014-semantic-handoffs.md)）。保留上一版的运行期资源与人工等待规则（[ADR-0013](../history/decisions/0013-runtime-resources.md)），不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 6.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 8.0 删除重复的 `TaskBudget.max_steps`，子模块只接收 Run 剩余的模型调用与执行时间预算；`step` 保留为动作记录序号。它保留 7.0 的 RecordedAnswer、运行期资源与人工等待规则，不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 7.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 

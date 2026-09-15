@@ -138,7 +138,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
         goal="Ask for a decision",
         inputs=CodeUnderstandInput(question="Ask first") if coding else
             ExperimentRunInput(instructions="Ask first"),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
         workspace=WorkspaceGrant(
             root=str(workspace), mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
@@ -213,7 +213,7 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     agent = ScientificAgent(client, registration_port=WrongResolver())
     result = agent.run(ScientificTurnRequest(
         run_id="run_b", research=_research(),
-        budget=TaskBudget(max_steps=3, max_llm_calls=3, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
     ))
     assert result.status == "completed"
     assert result.observed_artifact_ids == []
@@ -282,7 +282,7 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
     result = agent.run(ScientificTurnRequest(
         run_id="run_a", research=_research(),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "completed"
     state = agent.store.load(result.session.id)

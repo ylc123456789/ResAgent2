@@ -50,12 +50,12 @@ def _context(request, state, limit):
     return [ContextSection(name="task", content=request.goal, required=True)]
 
 
-def _request(*, parent=None, calls=10, steps=10, goal="current task"):
+def _request(*, parent=None, calls=10, goal="current task"):
     return ModuleTaskRequest(
         run_id="run_native", task_id="task_native", attempt_number=1,
         capability=Capability.CODE_UNDERSTAND, goal=goal,
         inputs=CodeUnderstandInput(question="inspect"), parent_session_id=parent,
-        budget=TaskBudget(max_steps=steps, max_llm_calls=calls, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60),
     )
 
 
@@ -652,11 +652,27 @@ def test_overlarge_batch_is_rejected_before_execution(setup):
     assert len(state.tool_turns[0].tool_results) == MAX_TOOL_CALLS_PER_TURN + 1
 
 
-def test_batch_step_budget_is_checked_before_any_side_effect(setup):
+def test_one_model_call_can_execute_multiple_actions_without_a_step_budget(setup):
     definition, store, _, install = setup
     install([_reply(_writes(1, 2, 3))])
-    result = AgentLoop(store=store).run(definition, _request(steps=2), session_id="session_native")
+    result = AgentLoop(store=store).run(definition, _request(calls=1), session_id="session_native")
     state = store.load("session_native")
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert state.memory == {} and state.step == 0
+    assert state.memory == {"k0": 1, "k1": 2, "k2": 3} and state.step == 3
+    assert result.llm_calls == state.llm_calls_used == 1
     assert len(state.tool_turns[0].tool_results) == 3
+
+
+@pytest.mark.parametrize("reported", [0, -1, True, 1.5, None])
+def test_invalid_client_usage_is_a_contract_failure_not_an_unbounded_loop(setup, reported):
+    definition, store, _, _ = setup
+    from unittest.mock import Mock
+    definition.llm_client.next_tool_call = Mock(return_value=ToolCallTurn(
+        tool_calls=[NativeToolCall(id="call_finish", name="finish", arguments='{"result":{}}')],
+    ))
+    definition.llm_client.last_attempts = reported
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert result.error.code == ErrorCode.CONTRACT_ERROR
+    assert result.error.details["component"] == "llm_usage"
+    definition.llm_client.next_tool_call.assert_called_once()
+    assert store.load("session_native").step == 0

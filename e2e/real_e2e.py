@@ -535,7 +535,7 @@ def run_code(workdir: Path) -> ModuleResult:
         inputs=CodeModifyInput(
             instructions="Implement SELayer.forward in train.py (it raises NotImplementedError)",
         ),
-        budget=TaskBudget(max_steps=24, max_llm_calls=40, timeout_seconds=900),
+        budget=TaskBudget(max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
         output_dir=str(workdir / "out"),
     )
@@ -561,7 +561,7 @@ def run_experiment(workdir: Path) -> ModuleResult:
             expected_artifacts=["metrics.json"],
         ),
         dataset_refs=DatasetCatalog(resource_layout.dataset_root).references(),
-        budget=TaskBudget(max_steps=30, max_llm_calls=60, timeout_seconds=1800),
+        budget=TaskBudget(max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
         output_dir=str(workdir / "out"),
     )

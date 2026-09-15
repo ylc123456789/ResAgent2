@@ -55,7 +55,7 @@ def turn(*, work_outcome=None, unresolved=(), parent=None, artifacts=()) -> Scie
         work_outcome=work_outcome,
         previous_work_request=previous,
         unresolved_task_outcomes=list(unresolved),
-        budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
         parent_session_id=parent,
     )
 
@@ -72,7 +72,7 @@ def test_work_outcome_requires_previous_work_request() -> None:
             run_id="run_example",
             research=research_request(),
             work_outcome=outcome,
-            budget=TaskBudget(max_steps=10, max_llm_calls=10, timeout_seconds=60),
+            budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
             parent_session_id="session_x",
         )
 

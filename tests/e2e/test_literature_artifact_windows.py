@@ -124,7 +124,7 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             goal="Read the final comparison's result", required_evidence_kinds=["literature_search"],
             budget=RunBudget(max_tasks=1, max_attempts_per_task=1, max_llm_calls=5, timeout_seconds=30),
         ),
-        budget=TaskBudget(max_steps=5, max_llm_calls=5, timeout_seconds=30),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "completed"
     state = agent.store.load(result.session.id)

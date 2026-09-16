@@ -4,7 +4,9 @@
 
 ## 最近已完成的主线
 
-原生工具调用、串行批次、统一调用预算和上下文分配已完成阶段验收（最新产品 `f98b6fd`，schema **8.0**）：三个Agent共用Tool、Loop、Session与Composer，Compiler仍用正文JSON；移除TaskBudget.max_steps及隐藏50步上限，材料按权重起步、空余按优先级借用，历史压缩保存检查点，整包真正不足仍报错。本地/服务器全量1014 passed、1 skipped；六个真实小探针完成。主开发复核并纠正了报告的累计计量和暂停状态，详见[最终结果、勘误与边界](reviews/CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)、[分阶段实施](reviews/RUNTIME_CONTINUATION_PLAN.md)。旧L3保持暂停、不迁移；这不是科研级长任务通过声明。
+Compiler 默认额度与 L3 已完成收尾（产品 `e6688f3`，schema **8.0**）：Compiler 与三个 Agent 共用 128000 输入默认值，独立覆盖入口保留，CLI/E2E 同源；不改变 JSON-only 编译/审查或增加 Compiler 压缩。旧失败工作请求的编译探针通过，新 L3 自主完成四次 200-epoch 训练并交付负结果，50 次调用与账本一致。通过不等于全程零错误；原始 trace 中的恢复、指标身份限制、安装成本和报告勘误见 [验收收尾与待办](reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。
+
+前一阶段原生工具调用、串行批次、统一调用预算和上下文分配已完成阶段验收（产品 `f98b6fd`，schema **8.0**）：三个Agent共用Tool、Loop、Session与Composer，Compiler仍用正文JSON；移除TaskBudget.max_steps及隐藏50步上限，材料按权重起步、空余按优先级借用，历史压缩保存检查点，整包真正不足仍报错。本地/服务器全量1014 passed、1 skipped；六个真实小探针完成。主开发复核并纠正了报告的累计计量和暂停状态，详见[最终结果、勘误与边界](reviews/CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)、[分阶段实施](reviews/RUNTIME_CONTINUATION_PLAN.md)。旧L3保持暂停、不迁移；该轮小探针不是科研级长任务通过声明。
 
 上下文语义、128K 预算与文献呈现已完成阶段验收（产品 `3efce21`，服务器实测 `ba84547`，schema 7.0 不变）。状态/历史语义、共享失败诊断、相关风险提示和预算均在原始请求中核对；本地及服务器全量 859 passed、1 skipped。实时文献两次因 arXiv timeout/429 暂停，另用历史真实检索记录加真实 Flash 模型补齐文献消费链验证，不能写成实时检索已恢复。见 [最终结果、勘误与边界](reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)、[原始审查与演变](reviews/CONTEXT_REVIEW_2026-09-13.md)；当前规则见 [CONTEXT](../current/CONTEXT.md)。未新增记忆系统、动态预算分配器或 JSON 专项修复。
 

@@ -24,7 +24,7 @@
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
-想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。原生调用、串行续接和统一上下文分配已通过小型服务器验收，见[最终结果与报告勘误](history/reviews/CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)。此前L3因Coding未完成而暂停，原现场保留；它是旧schema任务，不直接恢复或迁移。小探针通过不等于科研级任务通过，后续需另行确认预算并以当前版本新Run验收。
+想看系统能否完成更真实的研究任务，使用 [L3 风格测试规程](guides/L3_RESEARCH_TEST.md)；外部基准与自进化方法的取舍见 [调研记录](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。原生调用、串行续接和统一上下文分配的小型服务器验收见[阶段结果与勘误](history/reviews/CONTEXT_ALLOCATION_REVIEW.md#verified-closeout)。随后 `e6688f3` 的新 L3 已完整完成真实对照实验，详见 [复核、勘误与待办](history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。旧 Coding 暂停和 Compiler 超限的现场仍保留，不迁移、不倒写为通过；后续新 Run 仍需单独确认成本。
 
 L3 预检遇到 arXiv 限流后，先按 [文献平级来源补验](history/reviews/LITERATURE_FALLBACK_ACCEPTANCE.md) 核验请求节奏、双向切换与真实检索，再确认新版 200 次调用 / 4 小时执行预算；旧预检与实验准备保留。
 

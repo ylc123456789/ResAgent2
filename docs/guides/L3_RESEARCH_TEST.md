@@ -1,6 +1,6 @@
 # L3 风格测试：在真实仓库里完成一次小型研究
 
-状态：**原47f6231预检之后，fa711a0的正式L3已运行并因Coding未完成而暂停，不能写成验收通过。** 旧Run、实验仓库和证据原样保留，不由本规程自动续跑。原生工具调用改动先按[标准库小验收](../history/reviews/NATIVE_TOOL_CALLS_ACCEPTANCE.md)验证；通过后仍需用户批准启动新L3，不能把旧JSON会话迁移到原生协议。命令和预算规则见 [CLI README](../../apps/cli/README.md)。
+状态（2026-09-16）：**`e6688f3` 的新 L3 已自主完成真实对照实验，主开发已复核原始证据并认可通过。** 结果、报告勘误和待办见 [验收收尾](../history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)；不把单次成功当作通用成功率。`fa711a0` 的旧 Coding 暂停与 `bf38e42` 的 Compiler 超限失败原样保留，不由本规程自动续跑，也不将旧 JSON 会话迁移到原生协议。未来运行仍先预检、确认成本并使用新 Run。命令和预算规则见 [CLI README](../../apps/cli/README.md)。
 
 2026-09-15 修订：改为“短任务 + 明确预算 + 有限问答 + 外部验收”。取代上一版固定 50 epochs、三个指定 seeds、六条训练及强制终期 test 的规程；这些旧要求不再作为隐藏评分条件。本文供测试人员阅读，**不要整篇放入 Agent 的输入或工作区**。
 
@@ -167,6 +167,7 @@ answer/resume 重传同一工作区，是为了兼容尚未物化工作区就暂
 - **信息交接**：相关 module_report/residual_risks 是否读取和解释；只读 metrics 不代表已理解实验局限。见 [上下文](../current/CONTEXT.md) 与 [接口契约](../current/CONTRACTS.md)。
 - **停不下来时**：定位首次重复动作前后的完整 request/response，检查看到了什么、缺了什么；不得仅以“Flash 随机性”归因。保留所有失败，不重跑到绿覆盖首次结果。
 - **计量**：按主 trace 的 call_id 去重，累加每条 `retry_number + 1`，与 Run 的 `llm_calls_used` 比较；schema 补充记录不重复计数。分别报告 JSON/schema/HTTP/Task Attempt 层，沿用已有恢复机制，不借测试另修 JSON。
+- **恢复记录**：同时检查 Session 的工具参数拒绝、命令失败和 completion_check 拒绝；trace 的 `action_valid=true` 仅说明对应动作解析边界通过，不能据此写“零错误”。最终自行恢复不等于没有发生过失败，恢复次数与终止结果分开记录。
 - **安全**：trace 目录 0700、文件 0600；用实际密钥定值检查泄漏但不打印密钥，不把 full trace 发布到公共 Git。
 
 自然发生失败时核查修复链，不额外埋 bug。本轮先正式跑一次；失败要先解释，诊断重跑须另获授权，使用新身份/目录并并列报告。一次研究内的多个训练 seeds **不是多次独立 Agent 系统成功率样本**。

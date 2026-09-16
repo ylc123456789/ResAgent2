@@ -46,6 +46,8 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 
+已完成一个真实仓库 L3 案例：自主查资料、实现一个学习率调度候选、完成两组配对训练并交付负结果；这是单案例闭环证据，不是通用成功率或统计显著性的保证。产品提交、原始证据复核、报告勘误及后续优化项见 [Compiler 额度与 L3 收尾记录](docs/history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。
+
 ## 通用部分如何复用
 
 Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。文件、Git、进程、环境、Artifact 读取等能力放在 `capabilities`，供需要它们的 Agent 复用；不要为名字相似但语义不同的职责强造统一接口。

@@ -71,7 +71,7 @@ Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果�
 
 ## 预算与最小压缩
 
-schema 8.0 的 TaskBudget 只含 max_llm_calls 和 timeout_seconds；Controller/Scheduler 下发 Run 当前余额，没有隐藏的 50 步/50 次上限。step 是已尝试动作序号，一次原生回复可产生多个动作；模型请求、HTTP 重试、格式失败、摘要调用均共用调用账本。非法 last_attempts 不伪造为 1。正常暂停恢复沿用 Run 余额；跨 Run/Session/外部请求没有事务级 exactly-once 计量。
+当前 TaskBudget 只含 max_llm_calls 和 timeout_seconds；Controller/Scheduler 下发 Run 当前余额，没有隐藏的 50 步/50 次上限。step 是已尝试动作序号，一次原生回复可产生多个动作；模型请求、HTTP 重试、格式失败、摘要调用均共用调用账本。非法 last_attempts 不伪造为 1。正常暂停恢复沿用 Run 余额；跨 Run/Session/外部请求没有事务级 exactly-once 计量。
 
 共用 [compaction.py](src/resagent2_runtime/compaction.py)：完整原生输入超过有效上限 80%，或必需上下文实际装不下时，尝试总结较早完整 turn；保留至少最新完整 turn，近期历史以 20% 额度为目标。仅支持压缩的客户端调用 summarize_history，OpenAICompatibleClient 复用原 HTTP/trace/计量实现；没有单独摘要 Agent。
 

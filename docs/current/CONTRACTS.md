@@ -26,7 +26,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="8.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="9.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -90,7 +90,6 @@ ResearchRequest 只表达研究意图和调用方约束，不承载数据集目�
 class QuestionDraft:
     text: NonEmptyStr
     requested_fields: list[NonEmptyStr] = Field(min_length=1)
-    reason: NonEmptyStr
 
 class PendingQuestion:
     id: QuestionId
@@ -109,7 +108,9 @@ class RecordedAnswer(UserAnswer):
     question_text: NonEmptyStr
 ```
 
-子 Agent 只生成 QuestionDraft；Orchestrator 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。同一 Attempt 的连续两个新问题使用不同 ID；重复提交已处理问题的答案不能满足下一问题。`reason` 是必填字段。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
+子 Agent 只生成 QuestionDraft；Orchestrator 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。同一 Attempt 的连续两个新问题使用不同 ID；重复提交已处理问题的答案不能满足下一问题。`text` 是直接展示给用户的完整问题，必须包含回答所需的背景，不另填隐藏的 `reason`。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
+
+Coding/Experiment 使用 Runtime 的 AskUserToolInput；Scientific 的 AskUserInput 继承该输入，仅增加 assessment。三者原生工具 schema 共用 text 的用法说明，不分别维护一套提问字段。描述要求背景完整，但不能确定性保证模型的提问质量。
 
 调用方仍只提交 UserAnswer。Controller 校验当前问题后，从已持久化的 PendingQuestion.text 取原题，构造 RecordedAnswer；question_text 不是用户/模型补写的字段。Run.answers、ModuleTaskRequest.answers 和 ScientificTurnRequest.answers 保存或传递 RecordedAnswer，原题与值一起进模型上下文。原有 QuestionId 校验、Task/Scientific 作用域、同 Session/Attempt 恢复和回答去重规则不变，不从模糊的历史工具摘要猜原题。外部业务字段不变不代表旧 wire 对象兼容：显式 schema 6.0 请求仍按统一版本边界拒绝。
 
@@ -217,6 +218,8 @@ class ScientificOpinion:
 
 verdict 与 RunStatus 独立：`inconclusive` 可以是一个成功完成的科学闭环。`supports`/`refutes` 必须至少引用一个 ArtifactId。failed/blocked Task 是 Controller/Validator 的执行账务：最终 gate 直接从 Run 对账并把它们确定性写进 final report；只要仍有此类 Task，ScientificOpinion 的 `limitations` 必须非空，说明其对科学结论的影响。Scientific 不回传内部 TaskId。
 
+Scientific 的 finish 工具只要求 `{"opinion": {...}}`；完成检查通过后，Runtime 所需的 CompletionDecision.summary 直接取 opinion.statement，不再要求模型重复写 ScientificFinish.summary。最终报告仍展示完整 opinion；Coding/Experiment 的结果 summary、工具回执摘要及错误诊断没有删除。
+
 <a id="scientific-turn"></a>
 
 ### 科学回合
@@ -300,7 +303,7 @@ output 是 WorkflowProposal（新图）或 WorkflowPatch（只追加），llm_ca
 
 **前置**：Controller 检查新编译的剩余任务名额；已接受图优先恢复，即使名额已满也不能重编。WorkRequest 给本轮目的，registry 给可用能力，workspace descriptor 是逻辑摘要而非物理授权。
 
-**过程**：LLM 给局部 CompilationDraft，代码分配 Run 内身份、绑定工作请求、解析依赖/workspace。draft/review 共用能力职责；review 看 goal、depends_on、constraints 和与物化器一致的 inputs。BaseModel 返回值也投影后重新校验。结构与语义拒绝共用一次纠错，最多两版 draft，各最多一次 review；不能证明自然语言需求必然完整。
+**过程**：LLM 给仅含 tasks 的局部 CompilationDraft，不写图级 summary/rationale；代码分配 Run 内身份、绑定工作请求、解析依赖/workspace。draft/review 共用能力职责；review 看 goal、depends_on、constraints 和与物化器一致的 inputs。BaseModel 返回值也投影后重新校验。结构与语义拒绝共用一次纠错，最多两版 draft，各最多一次 review；不能证明自然语言需求必然完整。CompilationReview.issues 与纠错反馈继续保留，删除图级说明不等于删除评审或错误解释。
 
 **接收**：workflow_validation.validate_workflow_candidate 是 Compiler/Scheduler 共用的非空及本轮依赖纯判据。Scheduler 持久化前另查 binding、workspace、预算与 revision；返回候选不等于已接受。“Workflow Validator”不是额外独立服务。
 
@@ -329,14 +332,11 @@ class TaskProposal:
 
 class WorkflowProposal:
     work_request_id: WorkRequestId
-    summary: NonEmptyStr
     tasks: list[TaskProposal]
-    compilation_rationale: NonEmptyStr
 
 class WorkflowPatch:
     work_request_id: WorkRequestId
     based_on_revision: int
-    reason: NonEmptyStr
     add_tasks: list[TaskProposal] = []
 
 class Workflow:
@@ -361,7 +361,7 @@ class WorkflowTask:
 ```
 
 - `WorkflowProposal` 是 Compiler 产生的初始图候选；`WorkflowPatch` 是**只追加**的修订。修复模型是「新 WorkRequest 增加新 Task、保留旧历史」，不更新或抹去旧任务。设计理由见 [ADR-0011](../history/decisions/0011-stabilization-schema-3.md)。
-- `TaskProposal`/`WorkflowTask` 不再有 `required`、`rationale` 或 `success_criteria`；编译理由只在 proposal/patch 级保留为 `compilation_rationale`。
+- `TaskProposal`/`WorkflowTask` 不含 `required`、`rationale` 或 `success_criteria`；proposal/patch 也不再另存图级摘要或编译理由。本轮目的由 WorkRequest 给出，每项任务仍有 goal、constraints 和 typed inputs，不能因删除图级说明而省略任务要求。
 - `capability` 必须与 discriminated `inputs.capability` 一致；图必须无环；Attempt number 必须从 1 连续递增；Task 的 `work_request_id` 必须等于所属 Proposal/Patch 的 `work_request_id`。图候选接收时必须非空，`depends_on` 只能引用本 Proposal/Patch 新增的 TaskId，不得依赖历史 WorkRequest 的 Task（无论旧 Task 成功还是失败）；共享判据在 Compiler 纠错与 Scheduler 接收两处调用。
 
 <a id="capabilities"></a>
@@ -930,7 +930,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 8.0 删除重复的 `TaskBudget.max_steps`，子模块只接收 Run 剩余的模型调用与执行时间预算；`step` 保留为动作记录序号。它保留 7.0 的 RecordedAnswer、运行期资源与人工等待规则，不新增迁移或兼容实现。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 7.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 9.0 删除 QuestionDraft.reason、WorkflowProposal.summary/compilation_rationale 和 WorkflowPatch.reason；同轮同步精简内部工具 ScientificFinish 与 CompilationDraft。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与验收边界见 [本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 8.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 

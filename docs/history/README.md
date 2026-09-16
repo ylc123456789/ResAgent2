@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 当前待验收
+
+下一轮字段精简正在独立分支验收（schema **9.0**，尚未合并）：Scientific 完成摘要从 opinion.statement 派生；提问背景统一进 text；Compiler 不再单独填写图级说明。代码与确定性检查见 [实施与小型对照验收单](reviews/SEMANTIC_FIELD_SLIMMING.md)。真实模型对照尚待执行，不能据此声称生成质量已验证；下列已完成阶段仍按当时版本记录。
+
 ## 最近已完成的主线
 
 Compiler 默认额度与 L3 已完成收尾（产品 `e6688f3`，schema **8.0**）：Compiler 与三个 Agent 共用 128000 输入默认值，独立覆盖入口保留，CLI/E2E 同源；不改变 JSON-only 编译/审查或增加 Compiler 压缩。旧失败工作请求的编译探针通过，新 L3 自主完成四次 200-epoch 训练并交付负结果，50 次调用与账本一致。通过不等于全程零错误；原始 trace 中的恢复、指标身份限制、安装成本和报告勘误见 [验收收尾与待办](reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。

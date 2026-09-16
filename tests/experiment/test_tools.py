@@ -143,6 +143,8 @@ def test_run_command_asks_for_confirmation(tmp_path) -> None:
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 
     assert observation.question is not None
+    assert "confirmation is enabled" in observation.question.text
+    assert "python train.py" in observation.question.text
     assert observation.question.requested_fields == ["approve"]
 
 

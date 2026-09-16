@@ -84,7 +84,7 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
         "arguments": {
             "assessment": {"statement": "Need user-provisioned resources"},
             "text": "Prepare the resources, then confirm.",
-            "requested_fields": ["ready"], "reason": "missing resource",
+            "requested_fields": ["ready"],
         },
     }
 
@@ -237,8 +237,6 @@ def registry() -> CapabilityRegistry:
 def proposal(work_request_id: str) -> WorkflowProposal:
     return WorkflowProposal(
         work_request_id=work_request_id,
-        summary="run one experiment",
-        compilation_rationale="produce evidence",
         tasks=[
             TaskProposal(
                 id="task_experiment",
@@ -305,7 +303,6 @@ def finish_action(verdict=ScientificVerdict.INCONCLUSIVE, limitations=()) -> dic
         "tool": "finish",
         "arguments": {
             "opinion": opinion,
-            "summary": "complete",
         },
     }
 
@@ -428,7 +425,6 @@ def _cycle_compiler():
                 WorkflowPatch(
                     work_request_id=request.id,
                     based_on_revision=current.revision,
-                    reason="request alternative work",
                     add_tasks=[
                         TaskProposal(
                             id=f"task_{request.id}",
@@ -519,7 +515,6 @@ def test_paused_question_then_answer_resumes() -> None:
             "assessment": {"statement": "need dataset"},
             "text": "Which dataset?",
             "requested_fields": ["dataset"],
-            "reason": "missing",
         },
     }
     controller = build_controller(
@@ -554,7 +549,6 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
             "assessment": {"statement": "cifar10 is unavailable"},
             "text": "Provision cifar10 and confirm when it is ready.",
             "requested_fields": ["dataset_ready"],
-            "reason": "required dataset is missing",
         },
     }
     controller = build_controller(
@@ -594,7 +588,6 @@ def test_catalog_refresh_survives_controller_restart_and_verbal_confirmation(tmp
             "assessment": {"statement": "Need demo data"},
             "text": "Place and register demo, then confirm",
             "requested_fields": ["dataset_ready"],
-            "reason": "missing data",
         },
     }
 
@@ -663,7 +656,6 @@ def _task_question_result() -> ModuleResult:
         question=QuestionDraft(
             text="Which dataset?",
             requested_fields=["dataset"],
-            reason="No dataset was selected",
         ),
         session=SessionRef(
             id="session_task_child",
@@ -1128,7 +1120,6 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
             "assessment": {"statement": "need dataset"},
             "text": "Which dataset?",
             "requested_fields": ["dataset"],
-            "reason": "missing",
         },
     }
     actions = [ask_action, request_work_action(), finish_action()]
@@ -1193,7 +1184,6 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
             "assessment": {"statement": "need dataset"},
             "text": "Which dataset?",
             "requested_fields": ["dataset"],
-            "reason": "missing",
         },
     }
     controller = _build_recoverable_controller(
@@ -1233,7 +1223,7 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     def ask(text):
         return {"tool": "ask_user", "arguments": {
             "assessment": {"statement": "A user choice is needed"},
-            "text": text, "requested_fields": ["answer"], "reason": "User preference",
+            "text": text, "requested_fields": ["answer"],
         }}
 
     def rebuild(actions):

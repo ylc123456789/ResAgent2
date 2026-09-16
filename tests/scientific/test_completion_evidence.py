@@ -33,7 +33,6 @@ def _finish(evidence: list[str]) -> FinishCandidate:
                 "unresolved_questions": [],
                 "recommended_next_steps": [],
             },
-            "summary": "done",
         }
     )
 
@@ -64,6 +63,15 @@ def test_required_literature_evidence_is_satisfied_by_citation(observation_key) 
     state = _state({observation_key: ["artifact_lit_1"]})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert decision.complete is True
+    assert decision.summary == decision.payload["opinion"]["statement"] == "supported"
+
+
+def test_scientific_finish_rejects_a_second_model_written_summary() -> None:
+    candidate = _finish(["artifact_lit_1"])
+    candidate.result["summary"] = "A competing account of the conclusion"
+    decision = ScientificCompletionCheck([]).evaluate(_state({}), candidate)
+    assert not decision.complete
+    assert "Extra inputs" in decision.summary
 
 
 def test_search_history_cannot_self_certify_an_unregistered_artifact() -> None:

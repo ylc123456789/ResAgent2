@@ -129,7 +129,7 @@ def _ask_result() -> ModuleResult:
         status=ModuleStatus.NEEDS_USER_INPUT,
         summary="input required",
         question=QuestionDraft(
-            text="pick one", requested_fields=["x"], reason="no input was given"
+            text="pick one", requested_fields=["x"]
         ),
         session=SessionRef(
             id="session_child",
@@ -154,8 +154,6 @@ def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="question",
-        compilation_rationale="ask for input",
         tasks=[task(task_id, Capability.EXPERIMENT_RUN)],
     )
     _create_run(engine, run_id, research_request(), proposal)
@@ -165,8 +163,6 @@ def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
 def test_linear_workflow_runs_to_completion() -> None:
     workflow = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="linear",
-        compilation_rationale="A minimal research sequence",
         tasks=[
             task("task_code", Capability.CODE_MODIFY),
             task("task_experiment", Capability.EXPERIMENT_RUN, ["task_code"]),
@@ -196,8 +192,6 @@ def test_linear_workflow_runs_to_completion() -> None:
 def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="parallel",
-        compilation_rationale="Compare two runs",
         tasks=[
             task("task_baseline", Capability.EXPERIMENT_RUN),
             task("task_treatment", Capability.EXPERIMENT_RUN),
@@ -246,8 +240,6 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="repair",
-        compilation_rationale="Exercise explicit recovery",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     _create_run(engine, "run_repair", research_request(), proposal)
@@ -260,7 +252,6 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
         WorkflowPatch(
             work_request_id="work_legacy_initial",
             based_on_revision=1,
-            reason="Add an explicit repair task",
             add_tasks=[task("task_repair", Capability.CODE_MODIFY)],
         ),
     )
@@ -283,7 +274,6 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
         question=QuestionDraft(
             text="Which dataset?",
             requested_fields=["dataset"],
-            reason="No dataset was selected",
         ),
         session=SessionRef(
             id="session_child",
@@ -306,8 +296,6 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="question",
-        compilation_rationale="Ask for missing input",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     _create_run(engine, "run_question", research_request(), proposal)
@@ -373,8 +361,7 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
         store=InMemoryRunStore(),
     )
     proposal = WorkflowProposal(
-        work_request_id="work_legacy_initial", summary="ask twice",
-        compilation_rationale="Two user choices in one execution attempt",
+        work_request_id="work_legacy_initial",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     )
     _create_run(engine, "run_two_questions", research_request(), proposal)
@@ -442,8 +429,6 @@ def test_failed_payload_cannot_be_promoted_to_completed() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            summary="failure",
-            compilation_rationale="Status is machine-owned",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -471,8 +456,6 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            summary="retry",
-            compilation_rationale="Retry a transient failure",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -487,8 +470,6 @@ def test_recovery_closes_interrupted_attempt_and_uses_normal_retry_budget() -> N
     engine = scheduler({Capability.EXPERIMENT_RUN: [completed("retry worked")]})
     _create_run(engine, "run_interrupted", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="interrupted",
-        compilation_rationale="recover one persisted attempt",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     ))
     run = engine.store.load("run_interrupted")
@@ -521,8 +502,6 @@ def test_budget_exhaustion_does_not_persist_a_running_attempt() -> None:
     engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
     _create_run(engine, "run_no_calls", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="no budget",
-        compilation_rationale="reject before starting",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     ))
     run = engine.store.load("run_no_calls")
@@ -558,8 +537,6 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
     )
     _create_run(engine, "run_remaining_budget", request, WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="remaining budget",
-        compilation_rationale="Exercise child budget propagation",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     ))
     run = engine.store.load("run_remaining_budget")
@@ -595,8 +572,6 @@ def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
     engine = scheduler({Capability.EXPERIMENT_RUN: [request_work]})
     _create_run(engine, "run_invalid_request_work", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="invalid control signal",
-        compilation_rationale="task modules cannot request workflow work",
         tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
     ))
 
@@ -627,8 +602,6 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            summary="invalid port",
-            compilation_rationale="Validate the module boundary",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -648,8 +621,6 @@ def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            summary="ready gate",
-            compilation_rationale="Ready work prevents early completion",
             tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
         ),
     )
@@ -666,8 +637,6 @@ def test_patch_is_append_only() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_a",
-            summary="first work request",
-            compilation_rationale="initial",
             tasks=[task("task_a", Capability.EXPERIMENT_RUN, work_request_id="work_a")],
         ),
     )
@@ -676,7 +645,6 @@ def test_patch_is_append_only() -> None:
         WorkflowPatch(
             work_request_id="work_b",
             based_on_revision=1,
-            reason="append a follow-up task",
             add_tasks=[task("task_b", Capability.EXPERIMENT_RUN, work_request_id="work_b")],
         ),
     )
@@ -705,12 +673,12 @@ def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
     with pytest.raises(OrchestrationError, match="empty task graph"):
         if kind == "proposal":
             engine.accept_proposal(run.run_id, WorkflowProposal(
-                work_request_id="work_legacy_initial", summary="empty",
-                compilation_rationale="invalid replacement compiler", tasks=[],
+                work_request_id="work_legacy_initial",
+                tasks=[],
             ))
         else:
             engine.apply_patch(run.run_id, WorkflowPatch(
-                work_request_id="work_next", based_on_revision=1, reason="empty",
+                work_request_id="work_next", based_on_revision=1,
                 add_tasks=[],
             ))
     assert engine.store.load(run.run_id).model_dump() == before
@@ -727,8 +695,7 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
         data_root=tmp_path / "data",
     )
     run = _create_run(engine, "run_candidate", research_request(), WorkflowProposal(
-        work_request_id="work_legacy_initial", summary="first",
-        compilation_rationale="initial round",
+        work_request_id="work_legacy_initial",
         tasks=[task("task_old", Capability.EXPERIMENT_RUN)],
     ))
     run.workflow.tasks[0].status = old_status
@@ -736,7 +703,7 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
     before = engine.store.load(run.run_id).model_dump()
     with pytest.raises(OrchestrationError, match="outside the current work request"):
         engine.apply_patch(run.run_id, WorkflowPatch(
-            work_request_id="work_next", based_on_revision=1, reason="invalid",
+            work_request_id="work_next", based_on_revision=1,
             add_tasks=[task(
                 "task_new", Capability.EXPERIMENT_RUN, ["task_old"],
                 work_request_id="work_next",
@@ -745,7 +712,7 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
     assert engine.store.load(run.run_id).model_dump() == before
 
     patched = engine.apply_patch(run.run_id, WorkflowPatch(
-        work_request_id="work_next", based_on_revision=1, reason="independent next round",
+        work_request_id="work_next", based_on_revision=1,
         add_tasks=[
             task("task_fix", Capability.EXPERIMENT_RUN, work_request_id="work_next"),
             task("task_rerun", Capability.EXPERIMENT_RUN, ["task_fix"], work_request_id="work_next"),

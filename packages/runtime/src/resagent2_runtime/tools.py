@@ -149,9 +149,11 @@ class FinishTool:
 class AskUserToolInput(RuntimeModel):
     """Input schema for AskUserTool."""
 
-    text: NonEmptyStr
+    text: NonEmptyStr = Field(
+        description="Self-contained question shown to the user. Include the "
+        "background needed to answer in this text."
+    )
     requested_fields: list[NonEmptyStr] = Field(min_length=1)
-    reason: NonEmptyStr
 
 
 class AskUserTool:

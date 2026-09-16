@@ -58,7 +58,6 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
         *[{"tool": "list_files", "arguments": {"path": "."}} for _ in range(7)],
         {"tool": "ask_user", "arguments": {
             "text": "Continue with verification?", "requested_fields": ["approval"],
-            "reason": "Stop at the context boundary without installing an environment",
         }},
     ]
     client = _ActionClient(actions)

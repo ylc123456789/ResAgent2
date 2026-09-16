@@ -131,6 +131,6 @@ class ScientificCompletionCheck:
 
         return CompletionDecision(
             complete=True,
-            summary=finish.summary,
+            summary=opinion.statement,
             payload={"opinion": opinion.model_dump(mode="json")},
         )

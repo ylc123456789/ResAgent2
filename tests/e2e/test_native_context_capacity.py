@@ -44,7 +44,6 @@ class _CaptureClient:
             "arguments": {
                 "text": "Confirm the next evaluation?",
                 "requested_fields": ["approval"],
-                "reason": "This fixture ends at the context boundary",
             },
         }
 

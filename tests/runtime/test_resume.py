@@ -67,7 +67,6 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
                     arguments={
                         "text": "Which dataset?",
                         "requested_fields": ["dataset"],
-                        "reason": "No dataset selected.",
                     },
                 ),
                 AgentAction(tool="finish", arguments={"result": {"dataset": "demo"}}),
@@ -235,7 +234,7 @@ def test_resume_rejects_mismatched_task() -> None:
             [
                 AgentAction(
                     tool="ask_user",
-                    arguments={"text": "Which?", "requested_fields": ["x"], "reason": "r"},
+                    arguments={"text": "Which?", "requested_fields": ["x"]},
                 ),
                 AgentAction(tool="finish", arguments={"result": {}}),
             ]

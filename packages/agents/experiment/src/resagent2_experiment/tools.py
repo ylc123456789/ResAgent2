@@ -128,9 +128,11 @@ class RunCommandTool:
                 summary="Experiment confirmation required",
                 value={"blocked": True, "reason": "confirmation required"},
                 question=QuestionDraft(
-                    text=f"Confirm running the experiment command: {args.command}",
+                    text=(
+                        "Pre-experiment confirmation is enabled. "
+                        f"Confirm running the experiment command: {args.command}"
+                    ),
                     requested_fields=["approve"],
-                    reason="confirm_before_experiment is enabled",
                 ),
             )
         index = int(state.memory.get("command_count", 0)) + 1

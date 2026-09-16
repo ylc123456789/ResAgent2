@@ -103,7 +103,6 @@ def _finish() -> dict:
                 "statement": "the first run failed, then a fix restored it",
                 "limitations": ["the first run failed before the fix"],
             },
-            "summary": "done",
         },
     }
 
@@ -113,8 +112,6 @@ def test_candidate_rejects_empty_graph() -> None:
 
     proposal = WorkflowProposal(
         work_request_id="work_1",
-        summary="empty",
-        compilation_rationale="no work",
         tasks=[],
     )
     with pytest.raises(ValueError, match="empty task graph"):
@@ -127,7 +124,6 @@ def test_candidate_rejects_cross_request_dependency() -> None:
     patch = WorkflowPatch(
         work_request_id="work_2",
         based_on_revision=1,
-        reason="repair",
         add_tasks=[
             TaskProposal(
                 id="task_exp2",
@@ -147,8 +143,6 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
     # Round 1: a single experiment task that fails.
     proposal = WorkflowProposal(
         work_request_id="work_1",
-        summary="run the experiment",
-        compilation_rationale="first attempt",
         tasks=[
             TaskProposal(
                 id="task_exp",
@@ -163,7 +157,6 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
     patch = WorkflowPatch(
         work_request_id="work_2",
         based_on_revision=1,
-        reason="repair the failed experiment",
         add_tasks=[
             TaskProposal(
                 id="task_fix",
@@ -245,8 +238,6 @@ class _ScriptedCompilerLLM:
 
 def _proposal_draft() -> dict:
     return {
-        "summary": "run the experiment",
-        "rationale": "first attempt",
         "tasks": [
             {
                 "key": "run_initial",
@@ -260,8 +251,6 @@ def _proposal_draft() -> dict:
 
 def _repair_draft() -> dict:
     return {
-        "summary": "repair",
-        "rationale": "fix the bug and rerun",
         "tasks": [
             {
                 "key": "fix",
@@ -289,7 +278,6 @@ def _finish_after_repair() -> dict:
                 "statement": "the first run failed, then a fix restored it",
                 "limitations": ["the first run failed before the fix"],
             },
-            "summary": "done",
         },
     }
 

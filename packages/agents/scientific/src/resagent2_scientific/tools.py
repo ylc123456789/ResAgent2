@@ -119,7 +119,6 @@ class AskUserTool:
             question=QuestionDraft(
                 text=args.text,
                 requested_fields=args.requested_fields,
-                reason=args.reason,
             ),
             memory_updates={
                 "latest_assessment": args.assessment.model_dump(mode="json"),

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
-
 from resagent2_contracts import (
     ScientificAssessment,
     ScientificOpinion,
     WorkRequestDraft,
 )
 from resagent2_runtime import AgentAction
-from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from resagent2_runtime.models import RuntimeModel
+from resagent2_runtime.tools import AskUserToolInput
 
 
 class ScientificAction(AgentAction):
@@ -34,17 +33,13 @@ class RequestWorkInput(RuntimeModel):
     work_request: WorkRequestDraft
 
 
-class AskUserInput(RuntimeModel):
+class AskUserInput(AskUserToolInput):
     """A user question paired with the current scientific assessment."""
 
     assessment: ScientificAssessment
-    text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
-    reason: NonEmptyStr
 
 
 class ScientificFinish(RuntimeModel):
     """LLM-proposed final opinion; the finalizer derives the observed ids."""
 
     opinion: ScientificOpinion
-    summary: NonEmptyStr

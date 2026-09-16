@@ -23,6 +23,7 @@ from resagent2_contracts import (
     TaskStatus,
     UserAnswer,
     Workflow,
+    WorkflowPatch,
     WorkflowProposal,
     WorkflowTask,
     WorkspaceGrant,
@@ -97,10 +98,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "8.0"
+    assert restored.schema_version == "9.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -191,9 +192,7 @@ def test_proposal_rejects_duplicate_task_ids() -> None:
     with pytest.raises(ValidationError, match="duplicate task"):
         WorkflowProposal(
             work_request_id="work_test",
-            summary="Plan",
             tasks=[proposal_task, proposal_task],
-            compilation_rationale="A plan is required before execution.",
         )
 
 
@@ -235,7 +234,7 @@ def test_needs_user_input_requires_a_paused_session() -> None:
             status=ModuleStatus.NEEDS_USER_INPUT,
             summary="A decision is required",
             question=QuestionDraft(
-                text="Which?", requested_fields=["answer"], reason="input is required"
+                text="Which?", requested_fields=["answer"]
             ),
         )
 
@@ -253,14 +252,46 @@ def test_completed_result_rejects_error_and_question() -> None:
             summary="Done",
             error=module_error(),
             question=QuestionDraft(
-                text="Continue?", requested_fields=["answer"], reason="Unexpected branch"
+                text="Continue?", requested_fields=["answer"]
             ),
         )
 
 
 def test_question_draft_requires_at_least_one_field() -> None:
     with pytest.raises(ValidationError, match="requested_fields"):
-        QuestionDraft(text="Which?", requested_fields=[], reason="input is required")
+        QuestionDraft(text="Which?", requested_fields=[])
+
+
+def test_question_keeps_background_in_visible_text_not_a_hidden_reason() -> None:
+    question = QuestionDraft(
+        text="No dataset is registered. Which dataset should be prepared?",
+        requested_fields=["dataset"],
+    )
+    assert QuestionDraft.model_validate_json(question.model_dump_json()) == question
+    with pytest.raises(ValidationError, match="reason"):
+        QuestionDraft(**question.model_dump(), reason="A second explanation")
+
+
+@pytest.mark.parametrize("field", ["summary", "compilation_rationale"])
+def test_proposal_rejects_removed_graph_prose(field: str) -> None:
+    candidate = WorkflowProposal(
+        work_request_id="work_test",
+        tasks=[TaskProposal(
+            id="task_inspect", work_request_id="work_test",
+            capability=Capability.CODE_UNDERSTAND, goal="Inspect the entry point",
+            inputs=CodeUnderstandInput(question="Where is the entry point?"),
+        )],
+    )
+    assert WorkflowProposal.model_validate_json(candidate.model_dump_json()) == candidate
+    with pytest.raises(ValidationError, match=field):
+        WorkflowProposal(**candidate.model_dump(), **{field: "Unused graph prose"})
+
+
+def test_patch_rejects_removed_graph_reason() -> None:
+    patch = WorkflowPatch(work_request_id="work_test", based_on_revision=1)
+    assert WorkflowPatch.model_validate_json(patch.model_dump_json()) == patch
+    with pytest.raises(ValidationError, match="reason"):
+        WorkflowPatch(**patch.model_dump(), reason="Unused graph prose")
 
 
 def test_warning_status_and_warning_records_cannot_disagree() -> None:

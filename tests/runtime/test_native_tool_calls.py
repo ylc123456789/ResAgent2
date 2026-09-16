@@ -230,7 +230,7 @@ def test_disk_pause_resume_uses_session_not_trace(setup, tmp_path, trace_level):
     definition.llm_client.trace_level = trace_level
     disk = JsonSessionStore(tmp_path / "sessions")
     install([
-        _reply([_call("ask_user", {"text": "Which mode?", "requested_fields": ["mode"], "reason": "need mode"},
+        _reply([_call("ask_user", {"text": "Which mode?", "requested_fields": ["mode"]},
                      call_id="call_question")], reasoning="PRIVATE_CONTINUATION"),
         _reply(),
     ])
@@ -265,7 +265,7 @@ def test_disk_pause_resume_uses_session_not_trace(setup, tmp_path, trace_level):
 
 def test_interrupted_call_is_not_replayed_and_gets_unknown_outcome_receipt(setup):
     definition, store, requests, install = setup
-    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"], "reason": "need"},
+    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]},
                          call_id="call_ask")]), _reply()])
     AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     state = store.load("session_native")
@@ -445,7 +445,7 @@ def test_historical_call_id_is_rejected_without_duplicate_execution(setup):
 
 def test_native_session_cannot_resume_with_json_only_client(setup):
     definition, store, requests, install = setup
-    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"], "reason": "need"})])])
+    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
     from resagent2_runtime import ScriptedLLMClient
@@ -460,7 +460,7 @@ def test_native_session_cannot_resume_with_json_only_client(setup):
 @pytest.mark.parametrize("changed", ["endpoint", "model", "old_json"])
 def test_session_rejects_silent_protocol_or_provider_migration(setup, changed):
     definition, store, requests, install = setup
-    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"], "reason": "need"})])])
+    install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
     if changed == "old_json":

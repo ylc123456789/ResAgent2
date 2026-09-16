@@ -72,7 +72,7 @@ def reply(run, status):
     common["assessment"] = ScientificAssessment(statement="Need additional input")
     if status == "needs_user_input":
         return ScientificQuestionResult(**common, question=QuestionDraft(
-            text="Which metric?", requested_fields=["metric"], reason="User preference",
+            text="Which metric?", requested_fields=["metric"],
         ))
     return ScientificWorkRequestResult(**common, work_request=WorkRequestDraft(
         objective="Repeat experiment", expected_evidence=["result"],

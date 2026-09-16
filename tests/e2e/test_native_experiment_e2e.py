@@ -220,8 +220,6 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="native experiment E2E",
-        compilation_rationale="Exercise the Phase 6 module boundary",
         tasks=[
             TaskProposal(
                 id="task_experiment_native",

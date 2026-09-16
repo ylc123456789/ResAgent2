@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "8.0"
+SCHEMA_VERSION = "9.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 RunId = Annotated[
@@ -70,7 +70,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["8.0"] = SCHEMA_VERSION
+    schema_version: Literal["9.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -386,11 +386,10 @@ class ResearchRequest(ContractModel):
 
 
 class QuestionDraft(ContractModel):
-    """Question proposed by a child module but not yet persisted by ResAgent."""
+    """Self-contained user question, including any background needed to answer."""
 
     text: NonEmptyStr
     requested_fields: list[NonEmptyStr] = Field(min_length=1)
-    reason: NonEmptyStr
 
 
 class PendingQuestion(ContractModel):
@@ -730,9 +729,7 @@ class WorkflowProposal(ContractModel):
     """Compiler-produced task graph candidate that needs orchestrator validation."""
 
     work_request_id: WorkRequestId
-    summary: NonEmptyStr
     tasks: list[TaskProposal]
-    compilation_rationale: NonEmptyStr
 
     @model_validator(mode="after")
     def validate_graph(self) -> WorkflowProposal:
@@ -768,7 +765,6 @@ class WorkflowPatch(ContractModel):
 
     work_request_id: WorkRequestId
     based_on_revision: int = Field(ge=1)
-    reason: NonEmptyStr
     add_tasks: list[TaskProposal] = Field(default_factory=list)
 
     @model_validator(mode="after")

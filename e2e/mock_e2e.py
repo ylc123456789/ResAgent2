@@ -67,8 +67,6 @@ def registry() -> CapabilityRegistry:
 def proposal() -> WorkflowProposal:
     return WorkflowProposal(
         work_request_id=WORK_REQUEST_ID,
-        summary="produce evidence for the scientific conclusion",
-        compilation_rationale="golden code -> experiment loop",
         tasks=[
             TaskProposal(
                 id="task_code",
@@ -124,7 +122,6 @@ def finish_action() -> dict:
         "tool": "finish",
         "arguments": {
             "opinion": {"verdict": ScientificVerdict.INCONCLUSIVE.value, "statement": "done"},
-            "summary": "complete",
         },
     }
 

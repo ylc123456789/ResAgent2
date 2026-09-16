@@ -111,7 +111,7 @@ def _run_dispatch(stage, elapsed, *, should_execute):
 
 CONTROL_SIGNALS = {
     "finish_candidate": {"result": {"done": True}},
-    "question": {"text": "Choose", "requested_fields": ["choice"], "reason": "Needed"},
+    "question": {"text": "Choose", "requested_fields": ["choice"]},
     # Empty objects are still present control signals, not falsey absence.
     "request_work": {},
 }

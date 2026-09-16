@@ -109,7 +109,7 @@ def test_full_cli_compilation_uses_new_defaults_for_draft_and_review(defaults, m
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "full")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "trace"))
     replies = iter([
-        {"summary": "Measure", "rationale": "Collect evidence", "tasks": [{
+        {"tasks": [{
             "key": "measure", "capability": "experiment_run", "goal": "Measure the method",
             "inputs": {"capability": "experiment_run", "instructions": "Measure the method"},
         }]},

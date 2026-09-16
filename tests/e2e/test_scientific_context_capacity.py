@@ -53,7 +53,6 @@ def _pause():
     return {"tool": "ask_user", "arguments": {
         "assessment": {"statement": "Evidence is available for the next decision"},
         "text": "Proceed with the next evaluation?", "requested_fields": ["approval"],
-        "reason": "The fixture stops after observing the composed context",
     }}
 
 

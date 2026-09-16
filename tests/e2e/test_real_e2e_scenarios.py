@@ -61,8 +61,6 @@ def _controller(workdir: Path, scientific: ScientificAgent) -> ResearchControlle
         compiler=DeterministicWorkflowCompiler(
             WorkflowProposal(
                 work_request_id="work_x",
-                summary="no work",
-                compilation_rationale="no work",
                 tasks=[],
             ),
             patch=None,
@@ -77,7 +75,6 @@ def _finish_inconclusive() -> dict:
         "tool": "finish",
         "arguments": {
             "opinion": {"verdict": ScientificVerdict.INCONCLUSIVE.value, "statement": "insufficient evidence"},
-            "summary": "done",
         },
     }
 
@@ -89,7 +86,6 @@ def _ask_user() -> dict:
             "assessment": {"statement": "need clarification"},
             "text": "Which metric should be reported?",
             "requested_fields": ["metric"],
-            "reason": "ambiguous goal",
         },
     }
 

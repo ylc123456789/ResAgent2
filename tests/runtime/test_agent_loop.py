@@ -246,7 +246,6 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
                     arguments={
                         "text": "Which dataset should be used?",
                         "requested_fields": ["dataset"],
-                        "reason": "The task has no dataset selection.",
                     },
                 )
             ]

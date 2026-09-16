@@ -88,7 +88,6 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
     sessions = JsonSessionStore(tmp_path / "sessions")
     agent = ScientificAgent(ScriptedLLMClient([
         {"tool": "finish", "arguments": {
-            "summary": "No experiment needed",
             "opinion": {"verdict": "inconclusive", "statement": "No evidence requested"},
         }},
     ]), store=sessions)
@@ -122,7 +121,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
     ask = {
         "tool": "ask_user",
         "arguments": {
-            "text": "Which option?", "reason": "User decision required",
+            "text": "Which option?",
             "requested_fields": ["option"],
         },
     }
@@ -205,7 +204,6 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     client = ScriptedLLMClient([
         {"tool": "read_artifact", "arguments": {"artifact_id": artifact.id}},
         {"tool": "finish", "arguments": {
-            "summary": "No authorized evidence available",
             "opinion": {"verdict": "inconclusive", "statement": "Evidence unavailable"},
         }},
     ])
@@ -273,7 +271,6 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             assert "# Literature search results" in context.text
             assert "No papers returned" in context.text
             return {"tool": "finish", "arguments": {
-                "summary": "No papers found",
                 "opinion": {"verdict": "inconclusive", "statement": "No papers found",
                             "evidence_artifact_ids": [self.artifact_id]},
             }}

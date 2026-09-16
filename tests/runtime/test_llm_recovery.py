@@ -207,8 +207,6 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
         "run_recovery_chain",
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            summary="recover after malformed provider content",
-            compilation_rationale="exercise the bounded retry chain",
             tasks=[
                 TaskProposal(
                     id="task_recovery",

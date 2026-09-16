@@ -42,8 +42,6 @@ def _request() -> ResearchRequest:
 def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
     return WorkflowProposal(
         work_request_id="work_1",
-        summary="one task",
-        compilation_rationale="workspace resolution test",
         tasks=[
             TaskProposal(
                 id="task_exp",
@@ -198,8 +196,6 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
     )
     proposal = WorkflowProposal(
         work_request_id="work_1",
-        summary="code then experiment",
-        compilation_rationale="shared workspace",
         tasks=[
             TaskProposal(
                 id="task_code",
@@ -291,8 +287,6 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
     )
     proposal = WorkflowProposal(
         work_request_id="work_1",
-        summary="one",
-        compilation_rationale="r",
         tasks=[
             TaskProposal(
                 id="task_exp",

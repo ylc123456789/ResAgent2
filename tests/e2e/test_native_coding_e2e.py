@@ -141,8 +141,6 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="Native Coding E2E",
-        compilation_rationale="Exercise the Phase 5 module boundary",
         tasks=[
             TaskProposal(
                 id="task_code_native",
@@ -202,7 +200,6 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
                     "arguments": {
                         "text": "Confirm the edit?",
                         "requested_fields": ["approve"],
-                        "reason": "confirm_before_edit",
                     },
                 },
                 _AUDIT,

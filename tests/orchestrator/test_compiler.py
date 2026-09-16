@@ -184,8 +184,6 @@ def proposal(*task_ids: str) -> WorkflowProposal:
     ]
     return WorkflowProposal(
         work_request_id="work_round1",
-        summary="compiled proposal",
-        compilation_rationale="semantic translation",
         tasks=tasks,
     )
 
@@ -195,8 +193,6 @@ def proposal(*task_ids: str) -> WorkflowProposal:
 
 def raw_experiment(key: str = "run") -> dict:
     return {
-        "summary": "run the experiment",
-        "rationale": "obtain evidence",
         "tasks": [
             {
                 "key": key,
@@ -210,8 +206,6 @@ def raw_experiment(key: str = "run") -> dict:
 
 def raw_repair() -> dict:
     return {
-        "summary": "repair",
-        "rationale": "fix the bug and rerun",
         "tasks": [
             {
                 "key": "fix",
@@ -313,7 +307,6 @@ def test_deterministic_compiler_returns_patch_for_existing_graph() -> None:
     patch = WorkflowPatch(
         work_request_id="work_round1",
         based_on_revision=1,
-        reason="add repair",
     )
     compiler = DeterministicWorkflowCompiler(proposal("task_experiment"), patch)
     result = compiler.compile(
@@ -336,7 +329,42 @@ def test_deterministic_compiler_requires_patch_for_existing_graph() -> None:
 
 def test_draft_rejects_empty_tasks() -> None:
     with pytest.raises(ValidationError):
-        CompilationDraft.model_validate({"summary": "s", "rationale": "r", "tasks": []})
+        CompilationDraft.model_validate({"tasks": []})
+
+
+@pytest.mark.parametrize("field", ["summary", "rationale"])
+def test_draft_rejects_removed_graph_prose(field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        CompilationDraft.model_validate({**raw_repair(), field: "Unused graph prose"})
+
+
+@pytest.mark.parametrize("current", [None, current_workflow()])
+def test_tasks_only_draft_keeps_review_and_materialized_graph(current) -> None:
+    raw = raw_repair()
+    raw["tasks"][0]["constraints"] = ["Do not change the data split"]
+    raw["tasks"][1]["inputs"]["instructions"] = "Measure after fixing; report errors if execution fails"
+    client = _FakeCompilerLLM(raw)
+    result = LLMWorkflowCompiler(client).compile(
+        work_request(), current=current, registry=registry(), budget=budget(),
+        workspaces=[WS_MAIN],
+    )
+    assert result.llm_calls == 2
+    assert client.schemas == [CompilationDraft, CompilationReview]
+    assert set(CompilationDraft.model_fields) == {"tasks"}
+    assert '"summary":' not in client.prompts[0]
+    assert '"rationale":' not in client.prompts[0]
+    tasks = result.output.tasks if current is None else result.output.add_tasks
+    assert [task.goal for task in tasks] == ["Fix the bug", "Rerun"]
+    assert tasks[1].depends_on == [tasks[0].id]
+    assert tasks[0].constraints == ["Do not change the data split"]
+    assert tasks[1].inputs.instructions == raw["tasks"][1]["inputs"]["instructions"]
+    for detail in ("Fix the bug", "Rerun", "Do not change the data split", "report errors"):
+        assert detail in client.prompts[1]
+    expected = (
+        {"schema_version", "work_request_id", "tasks"} if current is None
+        else {"schema_version", "work_request_id", "based_on_revision", "add_tasks"}
+    )
+    assert set(result.output.model_dump()) == expected
 
 
 def test_draft_rejects_unknown_top_level_field() -> None:
@@ -370,8 +398,6 @@ def test_materialize_rejects_unknown_dependency() -> None:
 
 def test_materialize_rejects_cycle() -> None:
     raw = {
-        "summary": "cycle",
-        "rationale": "bad",
         "tasks": [
             {
                 "key": "a",
@@ -395,8 +421,6 @@ def test_materialize_rejects_cycle() -> None:
 
 def test_materialize_rejects_undeclared_capability() -> None:
     raw = {
-        "summary": "inspect",
-        "rationale": "understand",
         "tasks": [
             {
                 "key": "understand",
@@ -412,8 +436,6 @@ def test_materialize_rejects_undeclared_capability() -> None:
 
 def test_materialize_rejects_capability_input_mismatch() -> None:
     raw = {
-        "summary": "mismatch",
-        "rationale": "bad",
         "tasks": [
             {
                 "key": "bad",
@@ -543,7 +565,7 @@ def test_materialize_generates_global_ids() -> None:
 
 
 def test_retry_recovers_from_empty_draft() -> None:
-    llm = _ScriptedCompilerLLM([{"summary": "s", "rationale": "r", "tasks": []}, raw_experiment("run")])
+    llm = _ScriptedCompilerLLM([{"tasks": []}, raw_experiment("run")])
     compiler = LLMWorkflowCompiler(llm)
     result = compiler.compile(
         work_request(), current=None, registry=registry(), budget=budget()
@@ -619,7 +641,7 @@ def test_retry_recovers_from_bad_dependency() -> None:
 
 
 def test_retry_fails_after_two_attempts() -> None:
-    bad = {"summary": "s", "rationale": "r", "tasks": []}
+    bad = {"tasks": []}
     compiler = LLMWorkflowCompiler(_ScriptedCompilerLLM([bad, bad]))
     with pytest.raises(CompilationError, match="2 attempts"):
         compiler.compile(
@@ -730,8 +752,6 @@ def test_compiler_proposal_over_budget_is_rejected() -> None:
 
 def test_materialize_strips_suggested_paths_for_code_modify() -> None:
     raw = {
-        "summary": "implement",
-        "rationale": "needed",
         "tasks": [
             {
                 "key": "implement",
@@ -871,8 +891,6 @@ def test_empty_fields_do_not_bypass_genuine_semantic_rejection() -> None:
 def test_semantic_review_rejects_incomplete_draft_then_recovers() -> None:
     incomplete = raw_experiment("run")
     corrected = {
-        "summary": "implement then run",
-        "rationale": "implement before the experiment",
         "tasks": [
             {
                 "key": "implement",
@@ -1003,8 +1021,6 @@ def test_semantic_review_rejects_twice_then_fails() -> None:
 
 def test_semantic_review_rejects_speculative_repair_round_then_recovers() -> None:
     speculative = {
-        "summary": "run and conditionally repair",
-        "rationale": "precompile every possible branch",
         "tasks": [
             *raw_experiment("run")["tasks"],
             {
@@ -1053,8 +1069,6 @@ def test_semantic_review_rejects_speculative_repair_round_then_recovers() -> Non
 
 def test_materialize_carries_task_constraints() -> None:
     raw = {
-        "summary": "implement",
-        "rationale": "needed",
         "tasks": [
             {
                 "key": "implement",
@@ -1084,8 +1098,6 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
 
     proposal = WorkflowProposal(
         work_request_id="work_1",
-        summary="s",
-        compilation_rationale="r",
         tasks=[
             TaskProposal(
                 id="task_x",
@@ -1194,7 +1206,7 @@ def test_compile_review_prompt_failure_preserves_one_call(monkeypatch) -> None:
 
 
 def test_compile_rejection_preserves_consumption() -> None:
-    invalid = {"summary": "invalid", "rationale": "invalid", "tasks": []}
+    invalid = {"tasks": []}
     compiler = LLMWorkflowCompiler(_ScriptedCompilerLLM([invalid, invalid]))
     with pytest.raises(CompilationError, match="2 attempts") as caught:
         compiler.compile(

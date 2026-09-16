@@ -33,7 +33,7 @@ def _opinion(evidence: list[str]) -> ScientificOpinion:
 
 
 def test_finish_tool_rejects_unread_citation() -> None:
-    finish = ScientificFinish(opinion=_opinion(["artifact_1"]), summary="done")
+    finish = ScientificFinish(opinion=_opinion(["artifact_1"]))
     obs = FinishTool().execute(_state(), finish)
 
     assert obs.ok is False
@@ -44,7 +44,7 @@ def test_finish_tool_rejects_unread_citation() -> None:
 
 def test_finish_tool_accepts_read_citation_and_clears_pending() -> None:
     state = _state({"read_artifact_ids": ["artifact_1"]})
-    finish = ScientificFinish(opinion=_opinion(["artifact_1"]), summary="done")
+    finish = ScientificFinish(opinion=_opinion(["artifact_1"]))
     obs = FinishTool().execute(state, finish)
 
     assert obs.ok is True

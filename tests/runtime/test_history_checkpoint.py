@@ -224,7 +224,7 @@ def test_checkpoint_survives_pause_and_disk_resume(setup, tmp_path):
     )
     ask = _call(
         "ask_user",
-        {"text": "Which mode?", "requested_fields": ["mode"], "reason": "needed"},
+        {"text": "Which mode?", "requested_fields": ["mode"]},
         call_id="call_pause",
     )
     install([_summary("durable checkpoint"), _reply([ask])])

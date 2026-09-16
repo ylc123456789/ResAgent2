@@ -63,8 +63,6 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             assert kwargs["current"] is None
             return CompilationResult(WorkflowProposal(
                 work_request_id=request.id,
-                summary="Inspect and hand off the result",
-                compilation_rationale="Only the follow-up consumes the first analysis",
                 tasks=[TaskProposal(
                     id=task_id, work_request_id=request.id,
                     capability=Capability.CODE_UNDERSTAND,
@@ -88,7 +86,6 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
         }},
         {"tool": "read_artifact", "arguments": {"artifact_id": report_id}},
         {"tool": "finish", "arguments": {
-            "summary": "Static analysis received",
             "opinion": {
                 "verdict": "not_applicable", "statement": answer,
                 "limitations": [uncertainty], "evidence_artifact_ids": [report_id],

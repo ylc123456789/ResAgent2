@@ -36,8 +36,6 @@ def request() -> ResearchRequest:
 def proposal() -> WorkflowProposal:
     return WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="one task",
-        compilation_rationale="Payload persistence test",
         tasks=[
             TaskProposal(
                 id="task_experiment",

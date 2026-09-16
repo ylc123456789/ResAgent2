@@ -114,7 +114,6 @@ def test_finish_with_existing_evidence_completes(tmp_path: Path) -> None:
                         "opinion": opinion(
                             ScientificVerdict.SUPPORTS, evidence=["artifact_1"]
                         ),
-                        "summary": "supported",
                     },
                 },
             ]
@@ -225,7 +224,6 @@ def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
                             ScientificVerdict.INCONCLUSIVE,
                             evidence=["artifact_lit"],
                         ),
-                        "summary": "reviewed literature",
                     },
                 },
             ]
@@ -252,7 +250,6 @@ def test_imported_literature_satisfies_required_kind_after_reading_without_searc
     client = ScriptedLLMClient([
         {"tool": "read_artifact", "arguments": {"artifact_id": imported.id}},
         {"tool": "finish", "arguments": {
-            "summary": "Reviewed the imported literature",
             "opinion": opinion(ScientificVerdict.SUPPORTS, evidence=[imported.id]),
         }},
     ])
@@ -274,9 +271,8 @@ def test_ask_user_pauses_with_question_and_assessment() -> None:
                     "tool": "ask_user",
                     "arguments": {
                         "assessment": {"statement": "need dataset choice"},
-                        "text": "Which dataset?",
+                        "text": "No dataset is selected. Which dataset should we use?",
                         "requested_fields": ["dataset"],
-                        "reason": "no dataset selected",
                     },
                 }
             ]
@@ -285,10 +281,30 @@ def test_ask_user_pauses_with_question_and_assessment() -> None:
     result = agent.run(turn())
 
     assert result.status == "needs_user_input"
-    assert result.question.text == "Which dataset?"
+    assert result.question.text == "No dataset is selected. Which dataset should we use?"
     assert result.question.requested_fields == ["dataset"]
-    assert result.question.reason == "no dataset selected"
+    assert "reason" not in result.question.model_dump()
     assert result.assessment.statement == "need dataset choice"
+
+
+def test_native_question_schemas_share_visible_background_guidance() -> None:
+    from resagent2_runtime import AskUserTool as RuntimeAskUserTool
+    from resagent2_runtime.tool_calling import native_tool_schemas
+    from resagent2_scientific.tools import AskUserTool, FinishTool
+
+    shared, scientific, finish = [
+        item["function"]["parameters"] for item in native_tool_schemas(
+            (RuntimeAskUserTool(), AskUserTool(), FinishTool())
+        )
+    ]
+    assert shared["properties"]["text"] == scientific["properties"]["text"]
+    assert "background needed to answer" in shared["properties"]["text"]["description"]
+    assert set(shared["required"]) == {"text", "requested_fields"}
+    assert set(scientific["required"]) == {"text", "requested_fields", "assessment"}
+    assert "reason" not in shared["properties"]
+    assert "reason" not in scientific["properties"]
+    assert set(finish["properties"]) == {"opinion"}
+    assert finish["required"] == ["opinion"]
 
 
 def test_resume_with_work_outcome_reuses_session() -> None:
@@ -304,7 +320,6 @@ def test_resume_with_work_outcome_reuses_session() -> None:
                 }},
                 {"tool": "finish", "arguments": {
                     "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
-                    "summary": "done",
                 }},
             ]
         )
@@ -337,11 +352,9 @@ def test_ask_user_resume_reuses_session() -> None:
                     "assessment": {"statement": "need input"},
                     "text": "Which?",
                     "requested_fields": ["x"],
-                    "reason": "need",
                 }},
                 {"tool": "finish", "arguments": {
                     "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
-                    "summary": "done",
                 }},
             ]
         )
@@ -364,7 +377,6 @@ def test_unobserved_evidence_is_rejected(tmp_path: Path) -> None:
                         "opinion": opinion(
                             ScientificVerdict.SUPPORTS, evidence=["artifact_fake"]
                         ),
-                        "summary": "fabricated",
                     },
                 }
             ]
@@ -394,7 +406,6 @@ def test_failed_task_without_limitation_is_rejected() -> None:
                     "tool": "finish",
                     "arguments": {
                         "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
-                        "summary": "ignored failure",
                     },
                 }
             ]
@@ -491,7 +502,6 @@ def test_obsolete_task_acknowledgement_field_is_rejected() -> None:
                             "acknowledged_task_ids": ["task_unknown"],
                             "limitations": ["something failed"],
                         },
-                        "summary": "used an obsolete control field",
                     },
                 }
             ]
@@ -523,7 +533,6 @@ def test_repeated_first_request_is_idempotent(tmp_path: Path) -> None:
                     "tool": "finish",
                     "arguments": {
                         "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
-                        "summary": "should not run",
                     },
                 },
             ]
@@ -552,7 +561,6 @@ def test_context_preserves_earlier_read_evidence(tmp_path: Path) -> None:
                             ScientificVerdict.INCONCLUSIVE,
                             evidence=["artifact_a", "artifact_b"],
                         ),
-                        "summary": "two evidence files",
                     },
                 },
             ]
@@ -590,12 +598,10 @@ def test_repeated_work_outcome_delivery_is_idempotent() -> None:
                 }},
                 {"tool": "finish", "arguments": {
                     "opinion": opinion(ScientificVerdict.INCONCLUSIVE),
-                    "summary": "done",
                 }},
                 # A third action that must never be reached on duplicate delivery.
                 {"tool": "finish", "arguments": {
                     "opinion": opinion(ScientificVerdict.SUPPORTS, evidence=["artifact_x"]),
-                    "summary": "should not run",
                 }},
             ]
         )

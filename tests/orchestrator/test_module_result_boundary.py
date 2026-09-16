@@ -60,7 +60,7 @@ def _execute(tmp_path, result, capability=Capability.EXPERIMENT_RUN):
         status=RunStatus.RUNNING, created_at=now, updated_at=now,
     ))
     engine.accept_proposal("run_boundary", WorkflowProposal(
-        work_request_id="work_boundary", summary="Test", compilation_rationale="Boundary test",
+        work_request_id="work_boundary",
         tasks=[TaskProposal(
             id="task_boundary", work_request_id="work_boundary", goal="Test",
             capability=capability, inputs=inputs,
@@ -119,7 +119,7 @@ def test_non_success_does_not_require_success_payload(tmp_path, status):
     if status == ModuleStatus.NEEDS_USER_INPUT:
         result = ModuleResult(
             status=status, summary="Need an answer", session=_session(SessionStatus.PAUSED),
-            question=QuestionDraft(text="Which metric?", requested_fields=["metric"], reason="User preference"),
+            question=QuestionDraft(text="Which metric?", requested_fields=["metric"]),
         )
     else:
         result = ModuleResult(

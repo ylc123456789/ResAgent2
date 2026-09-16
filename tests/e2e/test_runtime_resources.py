@@ -27,7 +27,6 @@ def _ask(scientific=False):
     args = {
         "text": "Provision demo under the dataset root and register it, then confirm.",
         "requested_fields": ["dataset_ready"],
-        "reason": "resource check",
     }
     if scientific:
         args["assessment"] = {"statement": "Check dataset availability"}

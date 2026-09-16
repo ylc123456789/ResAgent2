@@ -46,7 +46,8 @@ def test_ask_user_contract_requires_requested_fields() -> None:
     from resagent2_runtime import AskUserTool
 
     text = tool_contracts_text((AskUserTool(),))
-    assert "ask_user: text, requested_fields, reason" in text
+    assert "ask_user: text, requested_fields" in text
+    assert "reason" not in text
 
 
 def test_tool_contracts_include_optional_model_guidance() -> None:

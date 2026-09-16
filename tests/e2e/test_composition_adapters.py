@@ -44,7 +44,6 @@ def test_full_review_semantics_use_the_existing_context_budget(monkeypatch, tmp_
     repeats = DEFAULT_AGENT_CONTEXT_TOKENS if oversized else 4000
     instructions = "Measure accuracy without changing code." + " detail" * repeats
     draft = {
-        "summary": "Measure", "rationale": "Obtain evidence",
         "tasks": [{
             "key": "measure", "capability": "experiment_run", "goal": "Run measurement",
             "constraints": ["Use registered data only"],

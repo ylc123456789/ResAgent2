@@ -1,8 +1,10 @@
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
@@ -67,8 +69,6 @@ def request() -> ResearchRequest:
 def proposal() -> WorkflowProposal:
     return WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="one task",
-        compilation_rationale="Persistence test",
         tasks=[
             TaskProposal(
                 id="task_experiment",
@@ -79,6 +79,26 @@ def proposal() -> WorkflowProposal:
             )
         ],
     )
+
+
+def test_old_schema_run_is_rejected_without_rewriting_its_file(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    run = ResearchRun(
+        run_id="run_old_schema", request=request(), status=RunStatus.PENDING,
+        created_at=now, updated_at=now,
+    )
+    data = run.model_dump(mode="json")
+    data["request"]["schema_version"] = "8.0"
+    data["request"]["budget"]["schema_version"] = "8.0"
+    store = JsonRunStore(tmp_path / "old-state")
+    path = store.root / "run_old_schema.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(ValidationError, match="schema_version"):
+        store.load(run.run_id)
+
+    assert path.read_bytes() == before
 
 
 def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
@@ -185,8 +205,6 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
     )
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="forward",
-        compilation_rationale="Evidence must cross the module boundary",
         tasks=[experiment, analyze],
     )
     _create_run(engine, "run_forward", request(), combined)
@@ -271,8 +289,6 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     )
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        summary="retry",
-        compilation_rationale="A retried task must not leak its failed evidence",
         tasks=[experiment, analyze],
     )
     _create_run(engine, "run_retry", request(), combined)
@@ -333,7 +349,6 @@ def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path)
             WorkflowPatch(
                 work_request_id="work_legacy_initial",
                 based_on_revision=2,
-                reason="stale",
             ),
         )
 

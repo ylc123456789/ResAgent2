@@ -158,8 +158,6 @@ class CompilationDraft(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    summary: NonEmpty
-    rationale: NonEmpty
     tasks: list[CompilationTaskDraft] = Field(min_length=1)
 
 
@@ -290,8 +288,6 @@ def _compile_prompt(
             "",
             "Return a JSON draft with this exact shape:",
             "{",
-            '  "summary": "<one-line summary>",',
-            '  "rationale": "<why this graph>",',
             '  "tasks": [',
             "    {",
             '      "key": "<short snake_case id, unique within this draft>",',
@@ -560,14 +556,11 @@ def _materialize_draft(
     if current is None:
         return WorkflowProposal(
             work_request_id=request.id,
-            summary=draft.summary,
             tasks=proposals,
-            compilation_rationale=draft.rationale,
         )
     return WorkflowPatch(
         work_request_id=request.id,
         based_on_revision=current.revision,
-        reason=draft.rationale,
         add_tasks=proposals,
     )
 

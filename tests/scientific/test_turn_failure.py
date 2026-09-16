@@ -59,7 +59,7 @@ def test_translation_failure_settles_owned_session_and_caches_original_error(
         module_result = ModuleResult(status=ModuleStatus.COMPLETED, payload={}, **common)
     elif case in {"unobserved_question", "missing_question"}:
         module_result = ModuleResult(status=ModuleStatus.NEEDS_USER_INPUT, question=QuestionDraft(
-            text="Which metric?", requested_fields=["metric"], reason="User preference",
+            text="Which metric?", requested_fields=["metric"],
         ), **common)
         if case == "missing_question":
             # Simulate a damaged result that bypassed the ModuleResult validator.

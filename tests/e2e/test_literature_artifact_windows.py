@@ -111,7 +111,6 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             assert snippets[0]["truncated"] is False
             assert TAIL_EVIDENCE in snippets[0]["content"]
             return {"tool": "finish", "arguments": {
-                "summary": "Read the final paper's result from frozen evidence.",
                 "opinion": {"verdict": "supports", "statement": TAIL_EVIDENCE,
                             "evidence_artifact_ids": [ref.id]},
             }}

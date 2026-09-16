@@ -113,7 +113,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
 
-finish 只提交 opinion；Runtime 的完成摘要由 opinion.statement 派生，不另要一段模型摘要。ask_user 的 text 包含用户回答所需的背景；Scientific 与执行 Agent 复用同一份提问输入说明，仅额外附带 assessment。问题正文、原题配对和恢复答案的路径不变，见 [提问契约](CONTRACTS.md#questions)。
+finish 只提交 opinion；Runtime 的完成摘要由 opinion.statement 派生，不另要一段模型摘要。ask_user 的 text 包含用户回答所需的背景；Scientific 与执行 Agent 复用同一份提问输入说明及 AnswerFieldName 机器键约束，仅额外附带 assessment。约束随原生工具 schema 发送，不另加上下文段或每 Agent 提示补丁；问题正文、原题配对和恢复答案的路径不变，见 [提问契约](CONTRACTS.md#questions)。
 
 **work_brief 的用途分工：**
 
@@ -342,4 +342,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前字段精简使用 schema 9.0，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简状态见[本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。不能用确定性测试代替模型行为证据。
+上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前 schema 10.0 保留 9.0 字段精简并统一问答键约束，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简状态见[本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。不能用确定性测试代替模型行为证据。

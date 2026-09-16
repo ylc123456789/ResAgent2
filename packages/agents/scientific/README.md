@@ -9,7 +9,7 @@
 - `completed`：最终 `ScientificOpinion`（模型通过 finish 提议）；
 - `failed`：带原始诊断的模块失败。
 
-finish 输入只含 opinion；Runtime 的完成摘要直接取 opinion.statement，不要求模型再写 summary。ask_user 复用 Runtime 的 text/requested_fields 输入，仅增加 assessment；需要用户知道的背景写在 text 中，不另写隐藏的 reason。
+finish 输入只含 opinion；Runtime 的完成摘要直接取 opinion.statement，不要求模型再写 summary。ask_user 复用 Runtime 的 text/requested_fields 输入，仅增加 assessment；需要用户知道的背景写在 text 中，不另写隐藏的 reason。requested_fields 使用 contracts 的 AnswerFieldName 机器键约束，Scientific 不另写一套规则。
 
 允许：只读 Artifact、文献检索、科学推理。禁止：输出 WorkflowProposal/Patch、选择 capability/依赖/物理环境、修改 TaskStatus、调用其他子 Agent、把建议描述成已执行事实。
 

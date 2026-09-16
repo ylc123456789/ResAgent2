@@ -3,7 +3,7 @@
 日期：2026-09-16。对照基线：`f32f2e6`（schema 8.0）。
 产品提交：`c03115b`，分支 `refactor/semantic-field-slimming`，schema **9.0**。
 
-状态：本地实现与确定性验证完成；真实模型小型对照尚未执行，未合并、未 push。不能把“没有独立的代码消费者”直接等同于“删除字段不会影响生成质量”。
+状态：schema 9.0 的真实验收已复核，结果与覆盖缺口见 §4；随后以 `3476222` 修复共享答案键（schema **10.0**），本地验证完成，待 §6 小型补验。仍在独立分支，未合并、未 push。§1–§3 保留原阶段范围与基线，不把后续结果倒写成旧版全绿。
 
 ## 1. 这次究竟删什么
 
@@ -98,3 +98,56 @@ Flash：两例 × 新旧版本，各一次。Pro：新图 × 新旧版本，各�
 单独验收根保存 MANIFEST、logs、full traces、workdirs、ops。原始消息可读但不公开泄露；沿用 trace 0700/0600 与凭据扫描，不把 key 写进命令/脚本/报告。
 
 报告分开写：确定性契约是否正确、模型是否按新字段行动、工具是否真实执行、任务是否完成。保留第一次失败与所有纠错，区分外部故障与产品问题；不以一次成功证明“模型漂移永久消除”。本轮没有文献/网络检索或训练依赖，出现额外安装应先检查测试装配。
+
+## 4. schema 9.0 服务器复核与覆盖缺口
+
+实测 HEAD `5a2488b`，证据根 `/root/autodl-tmp/e2e-sfs-5a2488b-S7kP3x/`。原 MANIFEST、失败夹具和 trace 保留；以下是开发方对原始调用/Session 的复核，不是重新执行验收。
+
+- 确定性 1027 passed / 1 skipped；Compiler 新旧六探针通过，draft/review 均实际执行。三组字段精简成立；不据此推断永久生成等效。
+- Scientific、Experiment 的真实 ask_user 无 reason；Scientific finish 只交 opinion。原题配对与按“第二个”行动可见。
+- **Coding 自己提问尚未覆盖**：成功的 coding-qa3 是 Scientific 先提问，再派发 Coding 读取 helper_b。证明了上游答复传递，但不能当作 Coding ask_user → pause → resume 的直接证据。
+- **既存 CLI 字段名缺陷**：Experiment 生成 `selected option letter/name: 1 = "add" or 2 = "mul"` 作为键。CLI 按第一个等号切 NAME=VALUE，无法提交该键；当时测试改用 Controller 字典回答，故未覆盖 CLI 闭环。它不是 schema 9.0 引入，但也不能写成“无产品问题”。
+- direct 探针实际先因 supports 缺证据被拒，再检索、读取、完成；证明 finish 无 summary，不证明“无检索直接完成”。不放松证据门禁来凑 direct。
+- 精确计量为 **60 个逻辑调用 / 60 个唯一 call_id / 60 次尝试**，含保留的夹具迭代。coding-qa3 中一次 Scientific request_work 原生参数 JSON 的 Extra data 经现有反馈恢复，不记为零格式错误。
+
+## 5. schema 10.0 小修复与本地结果
+
+产品提交 `3476222`。只改三个产品文件：contracts 的 models/导出与 Runtime tools；不改变 Controller、CLI 分隔规则、Agent 状态机、Session 或上下文分配。
+
+共享 `AnswerFieldName` 约束为 `^[A-Za-z][A-Za-z0-9_]{0,63}$`：如 mode、file_choice。问题正文承载选项/背景，回答值仍可含中文、空格和等号。QuestionDraft、PendingQuestion、UserAnswer/RecordedAnswer 与 Runtime 的 AskUserToolInput 复用一个类型；Scientific 继续继承共享工具输入。
+
+说明与规则直接进入原生工具 schema；坏键在执行前校验失败，沿用现有有界反馈，不静默改名、不增加转义或兼容层。因为新规则会拒绝原先合法的键，升级 schema 10.0，旧 9.0 及更早 Run 原样保留、不续跑、不改版本号。
+
+本地验证：
+
+- **1052 passed, 1 skipped**；mock_e2e completed；diff-check 干净。
+- 25 个新增测试实例覆盖合法键 round-trip、非法键、旧版文件不改写、共享工具 schema、原生坏键反馈后暂停/同 Session 续接，以及 CLI/shell 的中文和含等号答案。
+- 真实模型能否一次生成正确键、Coding 是否自己提问，仍由 §6 补验，不用确定性测试替代。
+
+测试入口：[共享键](../../../tests/contracts/test_answer_fields.py)、[原生恢复](../../../tests/runtime/test_native_tool_calls.py)、[CLI](../../../apps/cli/tests/test_cli.py)、[shell](../../../apps/cli/tests/test_shell_parser.py)。当前定义见 [问答契约](../../current/CONTRACTS.md#questions)。
+
+<a id="answer-field-acceptance"></a>
+
+## 6. 交给测试 AI：本次最小补验
+
+### 6.1 预检与边界
+
+同步本分支**最新 HEAD**（包含产品 `3476222` 和后续文档提交），新干净 worktree，记录 8 包 editable 的前后指针。用 schema 10.0 新 Run/Session/trace，不加载或修改旧 Run；旧 L3 不动。沿用 §3.1 的本地命令，预期 **1052 passed / 1 skipped**，mock_e2e completed。
+
+只测下面三个小型问答，**不重跑 Compiler 新旧矩阵、GPU、L3 或文献检索**。Flash，原生工具、现有 128K/Profile 配置；每探针包括暂停/恢复累计不超过 20 次调用、1200s 有效运行时间。模块驱动恢复时扣除已用额度，不重新发一份全额预算。真实调用前按既有纪律确认费用；次数是调用上限，不是货币费用硬上限。
+
+准备独立、已 git init 并提交的标准库夹具，WorkspaceGrant/授权/输出目录使用现有正规装配。不改产品、prompt、模型配置或任务目标，不临时补安装大依赖；保留所有失败和纠错，不循环重跑到绿。
+
+### 6.2 三个探针（各一次）
+
+1. **Coding 自己提问（补齐上轮遗漏）**：通过现有 `NativeCodingAgent.invoke(ModuleTaskRequest)`，code_understand、JsonSessionStore、真实 LLM。参照 [Coding 夹具](../../../tests/coding/test_agent.py) 与 [恢复测试](../../../tests/e2e/test_native_coding_e2e.py)，不经 Scientific 代问。任务是“先请用户选择要解释的文件：1）helper_a.py；2）helper_b.py。收到选择后只读取所选文件并说明返回值。”两文件分别返回 111/222。必须看到 coding-understand 的自然 ask_user，text 保留选项，requested_fields 为合法键。按实际键回答“第二个”，由测试驱动按调用方职责配对原题/RecordedAnswer；新进程复用同 run/task/attempt/parent_session_id 恢复，只读取 helper_b，答案对应 222。不要把答案塞进 goal 冒充 answers 路径。
+2. **Experiment + CLI（修复原始缺陷）**：复用上一轮标准库 compute.py（add=5，mul=6）的完整 Controller/Scheduler 夹具，从新 Run 开始。要求 Experiment 在运行前询问模式，必须由 experiment-run 自然提问；Scientific 代问只能算旁路，不记覆盖。用真实 `resagent2 show` 读取 Fields，再通过 `resagent2 answer --field '实际键=第二个'` 回答，**不得改用 Controller 直答来绕过 CLI**。原题清楚列出 add/mul，恢复同 Session，真实执行 mul 并冻结结果 6。如出现既有运行前确认，单独按实际字段回答 yes 并记账，不删确认。
+3. **Scientific + CLI 冒烟**：目标为澄清用户偏好（Accuracy/F1），不要求论证科学命题；自然 ask_user 后，通过 CLI 用实际键回答“第二个”，同 Session 恢复。最终意见对应 F1；finish 只有 opinion，不要求 summary，不绕过证据门禁强求 supports。原生 schema 含共享键规则，Scientific 仍保留 assessment。
+
+三者逐项核对：工具 schema 的 pattern/说明实际到达；合法键不含空格或等号、长度不超过 64；ask_user 无 reason、text 自包含；原题逐字配对，答案实际影响行为。**不要强制模型生成某个固定键**，应使用它实际声明的合法键。
+
+### 6.3 错误反馈与交付
+
+坏键有界恢复已由本地原生调用测试覆盖。若本轮自然出现非法键，单独追踪“校验拒绝 → 负 receipt → 下一调用的单个 runtime_feedback → 改正后才暂停”，不能静默修键；自然未触发时明确报告“真实恢复未触发，本地确定性覆盖”。无需为了制造错误再跑一轮付费矩阵。
+
+新验收根保存 MANIFEST、原始 messages/tools/返回、Session 与结果、驱动和账本。精确核对逻辑调用、HTTP 尝试、预算；Schema 拒绝与 JSON 解析失败分开统计，任务完成与机制正确分开报告。trace 0700/0600，凭据定值扫描零命中。未满足指定提问方或改走旁路时报告覆盖缺口；未合并、未 push，由开发方复核后收口。

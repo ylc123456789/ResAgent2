@@ -26,7 +26,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="9.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="10.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -89,19 +89,19 @@ ResearchRequest 只表达研究意图和调用方约束，不承载数据集目�
 ```python
 class QuestionDraft:
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
 
 class PendingQuestion:
     id: QuestionId
     run_id: RunId
     task_id: TaskId | None = None
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
     created_at: datetime
 
 class UserAnswer:
     question_id: QuestionId
-    values: dict[NonEmptyStr, str] = Field(min_length=1)
+    values: dict[AnswerFieldName, str] = Field(min_length=1)
     answered_at: datetime
 
 class RecordedAnswer(UserAnswer):
@@ -110,7 +110,9 @@ class RecordedAnswer(UserAnswer):
 
 子 Agent 只生成 QuestionDraft；Orchestrator 分配 ID、持久化 PendingQuestion、暂停 Run、校验 Answer 并恢复。同一 Attempt 的连续两个新问题使用不同 ID；重复提交已处理问题的答案不能满足下一问题。`text` 是直接展示给用户的完整问题，必须包含回答所需的背景，不另填隐藏的 `reason`。问题必须声明至少一个答案字段（`requested_fields` 非空）：开放问题用 `["answer"]`、确认问题用 `["confirmation"]`、指标选择用 `["primary_evaluation_metric"]`；`UserAnswer.values` 同样非空——不允许「问了问题却不知道把回答保存在哪里」。
 
-Coding/Experiment 使用 Runtime 的 AskUserToolInput；Scientific 的 AskUserInput 继承该输入，仅增加 assessment。三者原生工具 schema 共用 text 的用法说明，不分别维护一套提问字段。描述要求背景完整，但不能确定性保证模型的提问质量。
+`AnswerFieldName` 是共享的答案键类型：1–64 个 ASCII 字母、数字或下划线，首字符必须是字母（`^[A-Za-z][A-Za-z0-9_]{0,63}$`）。例如 `mode`、`file_choice`；不是问题正文、选项说明或全局身份 ID。问题、选项和背景写在 `text`，用户回答仍是自然语言字符串，可含中文、空格和 `=`。同一规则用于问题的 requested_fields 和答案的 values 键；声明与回答还必须由 Controller 按当前问题匹配。
+
+Coding/Experiment 使用 Runtime 的 AskUserToolInput；Scientific 的 AskUserInput 继承该输入，仅增加 assessment。三者原生工具 schema 共用 text 的用法说明及 AnswerFieldName 的约束，不分别维护一套提示。非法模型字段名在工具执行前被现有校验拒绝，经既有有界反馈纠正；不静默重命名，也不新增 CLI 转义语法。描述要求背景完整，但不能确定性保证模型的提问质量。
 
 调用方仍只提交 UserAnswer。Controller 校验当前问题后，从已持久化的 PendingQuestion.text 取原题，构造 RecordedAnswer；question_text 不是用户/模型补写的字段。Run.answers、ModuleTaskRequest.answers 和 ScientificTurnRequest.answers 保存或传递 RecordedAnswer，原题与值一起进模型上下文。原有 QuestionId 校验、Task/Scientific 作用域、同 Session/Attempt 恢复和回答去重规则不变，不从模糊的历史工具摘要猜原题。外部业务字段不变不代表旧 wire 对象兼容：显式 schema 6.0 请求仍按统一版本边界拒绝。
 
@@ -930,7 +932,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 9.0 删除 QuestionDraft.reason、WorkflowProposal.summary/compilation_rationale 和 WorkflowPatch.reason；同轮同步精简内部工具 ScientificFinish 与 CompilationDraft。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与验收边界见 [本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 8.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 10.0 将提问和回答键统一约束为 AnswerFieldName，拒绝曾经合法的自然语言字段名；schema 9.0 的精简结果保持不变：QuestionDraft 无 reason、WorkflowProposal 无 summary/compilation_rationale、WorkflowPatch 无 reason，内部工具 ScientificFinish 与 CompilationDraft 同样不再要求重复说明。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与验收边界见 [本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 9.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 
@@ -946,7 +948,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 | 科学枚举 | ScientificVerdict、RequiredEvidenceKind |
 | 通用结果 | ModuleError、WarningRecord、SessionRef |
 | 入口/预算 | RunBudget、TaskBudget、ResearchRequest、ArtifactImport |
-| 人机交互 | QuestionDraft、PendingQuestion、UserAnswer、RecordedAnswer |
+| 人机交互 | AnswerFieldName、QuestionDraft、PendingQuestion、UserAnswer、RecordedAnswer |
 | 证据 | ArtifactCandidate、ArtifactRef |
 | capability 输入 | CodeUnderstandInput、CodeModifyInput、ExperimentRunInput、CapabilityInput |
 | 数据集/环境 | DatasetRef、EnvironmentSpec |

@@ -4,7 +4,7 @@
 
 ## 当前待验收
 
-下一轮字段精简正在独立分支验收（schema **9.0**，尚未合并）：Scientific 完成摘要从 opinion.statement 派生；提问背景统一进 text；Compiler 不再单独填写图级说明。代码与确定性检查见 [实施与小型对照验收单](reviews/SEMANTIC_FIELD_SLIMMING.md)。真实模型对照尚待执行，不能据此声称生成质量已验证；下列已完成阶段仍按当时版本记录。
+字段精简正在独立分支收尾（尚未合并）：schema **9.0** 的三组删除已获真实验收证据，但 Coding 自己提问未覆盖，另发现既存的自然语言字段名与 CLI 等号分隔冲突。共享答案键补修 `3476222` 将 schema 升至 **10.0**，本地 1052 passed / 1 skipped；三个小型问答补验待执行。详见 [结果复核、实现与补验单](reviews/SEMANTIC_FIELD_SLIMMING.md#answer-field-acceptance)。下列已完成阶段仍按当时版本记录，不改写旧结果。
 
 ## 最近已完成的主线
 

@@ -342,4 +342,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前 schema 10.0 保留 9.0 字段精简并统一问答键约束，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简状态见[本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。不能用确定性测试代替模型行为证据。
+上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前 schema 10.0 保留 9.0 字段精简并统一问答键约束，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简与共享问答的已验收结果及限制见[收尾记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)。不能用确定性测试代替模型行为证据。

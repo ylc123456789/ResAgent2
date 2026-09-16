@@ -932,7 +932,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 10.0 将提问和回答键统一约束为 AnswerFieldName，拒绝曾经合法的自然语言字段名；schema 9.0 的精简结果保持不变：QuestionDraft 无 reason、WorkflowProposal 无 summary/compilation_rationale、WorkflowPatch 无 reason，内部工具 ScientificFinish 与 CompilationDraft 同样不再要求重复说明。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与验收边界见 [本轮记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 9.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 10.0 将提问和回答键统一约束为 AnswerFieldName，拒绝曾经合法的自然语言字段名；schema 9.0 的精简结果保持不变：QuestionDraft 无 reason、WorkflowProposal 无 summary/compilation_rationale、WorkflowPatch 无 reason，内部工具 ScientificFinish 与 CompilationDraft 同样不再要求重复说明。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与已完成的分阶段验收边界见 [收尾记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 9.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 

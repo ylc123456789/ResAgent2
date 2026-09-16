@@ -2,11 +2,9 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
-## 当前待验收
-
-字段精简正在独立分支收尾（尚未合并）：schema **9.0** 的三组删除已获真实验收证据，但 Coding 自己提问未覆盖，另发现既存的自然语言字段名与 CLI 等号分隔冲突。共享答案键补修 `3476222` 将 schema 升至 **10.0**，本地 1052 passed / 1 skipped；三个小型问答补验待执行。详见 [结果复核、实现与补验单](reviews/SEMANTIC_FIELD_SLIMMING.md#answer-field-acceptance)。下列已完成阶段仍按当时版本记录，不改写旧结果。
-
 ## 最近已完成的主线
+
+自然语言字段精简与答案键规范已完成阶段验收（产品 `c03115b`、`3476222`，最终实测 `ee7d821`，schema **10.0**）：Scientific 完成摘要从 opinion.statement 派生，提问背景进 text，Compiler 不再重复填写图级说明；三个 Agent 与公共问答模型共用 AnswerFieldName。旧版 Compiler 新旧六探针通过，新版三问答补齐 Coding 自问及 Experiment 经 CLI 回答，结果 222/6/F1；本地/服务器 1052 passed、1 skipped。总计 21 次调用，单探针均未超过 20。Coding 测试驱动恢复时重给完整额度的偏差和后续复用要求见 [最终复核与收尾](reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)，不能写成预算扣减已验证；本轮无须额外付费重跑，不改写旧报告/失败现场。
 
 Compiler 默认额度与 L3 已完成收尾（产品 `e6688f3`，schema **8.0**）：Compiler 与三个 Agent 共用 128000 输入默认值，独立覆盖入口保留，CLI/E2E 同源；不改变 JSON-only 编译/审查或增加 Compiler 压缩。旧失败工作请求的编译探针通过，新 L3 自主完成四次 200-epoch 训练并交付负结果，50 次调用与账本一致。通过不等于全程零错误；原始 trace 中的恢复、指标身份限制、安装成本和报告勘误见 [验收收尾与待办](reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。
 

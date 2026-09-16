@@ -3,7 +3,7 @@
 日期：2026-09-16。对照基线：`f32f2e6`（schema 8.0）。
 产品提交：`c03115b`，分支 `refactor/semantic-field-slimming`，schema **9.0**。
 
-状态：schema 9.0 的真实验收已复核，结果与覆盖缺口见 §4；随后以 `3476222` 修复共享答案键（schema **10.0**），本地验证完成，待 §6 小型补验。仍在独立分支，未合并、未 push。§1–§3 保留原阶段范围与基线，不把后续结果倒写成旧版全绿。
+状态：阶段验收通过并完成文档收尾。schema 9.0 的三组精简与 schema **10.0** 的共享答案键修复均已复核；最终产品提交 `3476222`，服务器实测 HEAD `ee7d821`。最终结果、测试驱动偏差与后续边界见 [§7](#verified-closeout)。§1–§6 保留各阶段实现/验收要求，不把后续结果倒写成旧版全绿；本次收尾不再改产品行为。
 
 ## 1. 这次究竟删什么
 
@@ -151,3 +151,46 @@ Flash：两例 × 新旧版本，各一次。Pro：新图 × 新旧版本，各�
 坏键有界恢复已由本地原生调用测试覆盖。若本轮自然出现非法键，单独追踪“校验拒绝 → 负 receipt → 下一调用的单个 runtime_feedback → 改正后才暂停”，不能静默修键；自然未触发时明确报告“真实恢复未触发，本地确定性覆盖”。无需为了制造错误再跑一轮付费矩阵。
 
 新验收根保存 MANIFEST、原始 messages/tools/返回、Session 与结果、驱动和账本。精确核对逻辑调用、HTTP 尝试、预算；Schema 拒绝与 JSON 解析失败分开统计，任务完成与机制正确分开报告。trace 0700/0600，凭据定值扫描零命中。未满足指定提问方或改走旁路时报告覆盖缺口；未合并、未 push，由开发方复核后收口。
+
+<a id="verified-closeout"></a>
+
+## 7. 最终复核与收尾（2026-09-16）
+
+本轮产品 `3476222`，实测 `ee7d821`，schema **10.0**。服务器 checkout `/root/autodl-tmp/projects/ResAgent2-sfs10-ee7d821` 身份与干净状态已核对；证据根为 `/root/autodl-tmp/e2e-sfs10-ee7d821-T4kP7v/`。开发方只读检查了原始请求的工具 schema、模型工具调用、恢复答案、Session、命令回执与冻结结果，并非只采信 MANIFEST。
+
+### 7.1 已确认的结果
+
+服务器确定性 **1052 passed / 1 skipped**，mock_e2e completed，与本地基线一致；本轮三探针均完成：
+
+| 探针 | 原始消息与真实行为 | 调用 |
+|---|---|---|
+| Coding 自己提问 | coding-understand 自然询问 file_choice；两进程间通过 answers/RecordedAnswer 与 parent_session_id 恢复；只 read_file helper_b.py，说明返回 222 | 4 |
+| Experiment + CLI | experiment-run 自然询问 mode；CLI 回答“第二个”；真实执行 python compute.py mul，exit 0，stdout 为 mode=mul result=6；冻结 result.json 与工作区原文件字节一致 | 15（Scientific 3 + Compiler 2 + Experiment 10） |
+| Scientific + CLI | metric_choice=“第二个”映射 F1；finish 仅 opinion，verdict=not_applicable，无检索或实验；未擅自把偏好确认写成科学证据 | 2 |
+
+共 **21 个逻辑调用 = 21 个唯一 call_id = 21 次 HTTP 尝试**，无 HTTP retry、JSON 解析失败或 schema 拒绝。19 次原生 Agent 请求的 ask_user schema 均实际携带相同 pattern 与 machine-readable 说明；另 2 次为原有 JSON-only Compiler 调用。
+
+三者均无 ask_user.reason，Scientific 仍有 assessment。问题正文与答案逐字配对，回答不是偷偷塞进 goal。Coding 的同一 Session 有 8 个事件；Experiment **自身** Session 有 22 个事件、10 次模型调用，任务始终为同一 Attempt；Scientific 偏好探针同一 Session 有 4 个事件。不能只用 Experiment Run 中 Scientific Session 的复用来代替检查执行 Agent。
+
+关键原始证据在相应 `traces/<探针>/llm_traces.jsonl`：
+
+- Coding ask_user：`aaa2e6326b224636b858f04ac2eb531c`；随后 read_file：`b7245a741a3246259afaca9700f85954`。
+- Experiment ask_user：`c144f70460124a009aa4e7fe6be6b307`；真实计算命令：`97773621b8534eccacaf5641f766ed7b`。
+- Scientific 最终 finish：`7e5d5f158125493691fc3e50008e6100`。
+
+本轮 trace 目录 0700、文件 0600 已核对；凭据定值扫描零命中依据服务器验收记录。没有复制或公开密钥、改写旧记录、恢复旧 L3，亦未重跑 GPU/Pro/Compiler 新旧矩阵。
+
+### 7.2 报告说明与测试驱动偏差
+
+1. **总量与单探针上限分开**：“≤20”是每个探针的上限，不是三探针合计。本轮实际分别 4/15/2，总量为 21。
+2. **Coding 驱动没有扣减恢复额度**：`ops/probe1_coding.py` 的 answer 阶段重新 build_request，仍给完整 20 次调用/1200 秒，未按 §6.1 扣除第一阶段已用部分。实际两阶段各 2 次调用，未超支，问答/原题配对/同 Session 恢复证据仍成立；不能据此声称驱动的累计额度扣减已验证。这是测试装配偏差，不是本次 AnswerFieldName 修复或生产 Controller/Scheduler 的回归。
+
+模块直调的调用方负责下发本次剩余额度；复用此驱动前应保存首阶段实际消耗，恢复时下发剩余调用/有效运行时间，并用确定性测试验证不能重置额度。保留原驱动和本轮现场，另建修正版；**本轮无需为此重新跑付费模型**，也不把驱动缺口变成产品预算重构。
+
+另明确字段口径：精简的是 ScientificFinish 顶层 summary；Experiment 的 result.summary 仍存在，本轮真实 finish 也包含它。不要把“顶层无 summary”误写成所有结果摘要均已删除。
+
+### 7.3 接受结论与保留边界
+
+三组字段精简与共享答案键修复已获足够的分阶段证据，可以收口；本次只同步文档、提交并合入主线，不再追加产品代码或付费验收。schema 9.0 的 Compiler 新旧对照与 schema 10.0 的三问答结果分开保留，不宣称最终提交重新执行过完整科研 L3。
+
+坏键有界恢复在本轮真实调用中没有触发，仍是**确定性测试覆盖**；一次全部生成合法键不证明模型永不违规。既有校验/有界反馈继续生效，不引入自动改名、额外 prompt、CLI 转义或兼容层。旧 9.0 及更早 Run 不恢复、不迁移，旧 state/session/trace 与原 MANIFEST 全部原样保留。Scientific 对未明确的 F1 平均方式所作默认理解已写入 limitations，不能把它当作用户确认。

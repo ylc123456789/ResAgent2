@@ -39,9 +39,18 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "9.0"
+SCHEMA_VERSION = "10.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+AnswerFieldName = Annotated[
+    str,
+    StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$"),
+    Field(
+        description="Short machine-readable answer key, e.g. mode or file_choice. "
+        "Use 1-64 ASCII letters, digits or underscores, starting with a letter. "
+        "Put the question, options and explanations in text, not in this key."
+    ),
+]
 RunId = Annotated[
     str, StringConstraints(pattern=r"^run_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ]
@@ -70,7 +79,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["9.0"] = SCHEMA_VERSION
+    schema_version: Literal["10.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +398,7 @@ class QuestionDraft(ContractModel):
     """Self-contained user question, including any background needed to answer."""
 
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
 
 
 class PendingQuestion(ContractModel):
@@ -399,7 +408,7 @@ class PendingQuestion(ContractModel):
     run_id: RunId
     task_id: TaskId | None = None
     text: NonEmptyStr
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
     created_at: datetime
 
 
@@ -407,7 +416,7 @@ class UserAnswer(ContractModel):
     """Validated user values supplied for one persisted question."""
 
     question_id: QuestionId
-    values: dict[NonEmptyStr, str] = Field(min_length=1)
+    values: dict[AnswerFieldName, str] = Field(min_length=1)
     answered_at: datetime
 
 

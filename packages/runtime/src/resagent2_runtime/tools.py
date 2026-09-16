@@ -6,7 +6,7 @@ from typing import Protocol, cast
 
 from pydantic import BaseModel, Field, JsonValue
 
-from resagent2_contracts import QuestionDraft
+from resagent2_contracts import AnswerFieldName, QuestionDraft
 
 from .models import AgentState, FinishCandidate, NonEmptyStr, RuntimeModel, ToolObservation
 
@@ -153,7 +153,7 @@ class AskUserToolInput(RuntimeModel):
         description="Self-contained question shown to the user. Include the "
         "background needed to answer in this text."
     )
-    requested_fields: list[NonEmptyStr] = Field(min_length=1)
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
 
 
 class AskUserTool:

@@ -98,10 +98,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "9.0"
+    assert restored.schema_version == "10.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(

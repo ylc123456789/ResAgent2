@@ -7,6 +7,7 @@ from .identifiers import scientific_session_id, task_session_id
 from .models import (
     SCHEMA_VERSION,
     AgentOwner,
+    AnswerFieldName,
     ArtifactCandidate,
     ArtifactId,
     ArtifactImport,
@@ -81,6 +82,7 @@ __all__ = [
     "missing_required_evidence_kinds",
     "SCHEMA_VERSION",
     "AgentOwner",
+    "AnswerFieldName",
     "ArtifactCandidate",
     "ArtifactId",
     "ArtifactImport",

@@ -81,15 +81,16 @@ def proposal() -> WorkflowProposal:
     )
 
 
-def test_old_schema_run_is_rejected_without_rewriting_its_file(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_version", ["8.0", "9.0"])
+def test_old_schema_run_is_rejected_without_rewriting_its_file(tmp_path: Path, schema_version) -> None:
     now = datetime.now(UTC)
     run = ResearchRun(
         run_id="run_old_schema", request=request(), status=RunStatus.PENDING,
         created_at=now, updated_at=now,
     )
     data = run.model_dump(mode="json")
-    data["request"]["schema_version"] = "8.0"
-    data["request"]["budget"]["schema_version"] = "8.0"
+    data["request"]["schema_version"] = schema_version
+    data["request"]["budget"]["schema_version"] = schema_version
     store = JsonRunStore(tmp_path / "old-state")
     path = store.root / "run_old_schema.json"
     path.write_text(json.dumps(data), encoding="utf-8")

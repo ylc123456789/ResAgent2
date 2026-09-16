@@ -186,6 +186,44 @@ def test_rejected_native_response_never_executes_and_recovers_in_same_session(se
         assert len(state.tool_turns[0].tool_results) == 2
 
 
+def test_invalid_question_key_recovers_before_pause_in_same_session(setup):
+    definition, store, requests, install = setup
+    text = 'Choose a mode: 1 = "add", 2 = "mul".'
+    invalid_key = 'selected option letter/name: 1 = "add" or 2 = "mul"'
+    install([
+        _reply([_call("ask_user", {"text": text, "requested_fields": [invalid_key]},
+                     call_id="call_bad_key")]),
+        _reply([_call("ask_user", {"text": text, "requested_fields": ["mode"]},
+                     call_id="call_question")]),
+        _reply(),
+    ])
+    first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert first.status == ModuleStatus.NEEDS_USER_INPUT
+    assert first.question.text == text
+    assert first.question.requested_fields == ["mode"]
+    assert first.llm_calls == 2
+    state = store.load("session_native")
+    assert not json.loads(state.tool_turns[0].tool_results["call_bad_key"])["ok"]
+    assert json.loads(state.tool_turns[1].tool_results["call_question"])["ok"]
+    feedback = requests[1]["messages"][-1]["content"]
+    assert feedback.count("## runtime_feedback") == 1
+    assert "requested_fields" in feedback and "String should match pattern" in feedback
+    schema = next(t["function"]["parameters"] for t in requests[0]["tools"]
+                  if t["function"]["name"] == "ask_user")
+    assert schema["properties"]["requested_fields"]["items"]["pattern"] == r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
+
+    second = AgentLoop(store=store).run(
+        definition, _request(parent="session_native", goal="User selected mode=mul"),
+        session_id="session_native",
+    )
+    assert second.status == ModuleStatus.COMPLETED
+    assert second.llm_calls == 1
+    assert store.load("session_native").llm_calls_used == 3
+    rows = [row for row in _rows(definition) if "model" in row]
+    assert len({row["call_id"] for row in rows}) == 3
+    assert sum(row["retry_number"] + 1 for row in rows) == 3
+
+
 def test_empty_native_replies_exhaust_existing_failure_limit_without_steps(setup):
     definition, store, requests, install = setup
     install([_reply([], content="", reasoning=None)] * 5)

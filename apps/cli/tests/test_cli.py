@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from resagent2_cli import composition
 from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
@@ -174,7 +177,8 @@ def test_goal_file_is_read_explicitly(tmp_path: Path):
     assert controller.created[1].goal == "a long research goal"
 
 
-def test_answer_uses_persisted_question(tmp_path: Path):
+@pytest.mark.parametrize("answer", ["accuracy", "第二个", "第二个，mul=2*3"])
+def test_answer_uses_persisted_question(tmp_path: Path, answer: str):
     run = _run(RunStatus.PAUSED)
     run.pending_question = PendingQuestion(
         id="question_metric",
@@ -192,7 +196,7 @@ def test_answer_uses_persisted_question(tmp_path: Path):
             "answer",
             run.run_id,
             "--field",
-            "primary_metric=accuracy",
+            f"primary_metric={answer}",
             "--data-root",
             str(tmp_path / "data"),
         ],
@@ -203,7 +207,28 @@ def test_answer_uses_persisted_question(tmp_path: Path):
     assert result == EXIT_COMPLETED
     assert controller.answered[0] == run.run_id
     assert controller.answered[1].question_id == "question_metric"
-    assert controller.answered[1].values == {"primary_metric": "accuracy"}
+    assert controller.answered[1].values == {"primary_metric": answer}
+
+
+def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
+    run = _run(RunStatus.PAUSED)
+    run.pending_question = PendingQuestion(
+        id="question_mode", run_id=run.run_id, text="Which mode?",
+        requested_fields=["mode"], created_at=datetime.now(UTC),
+    )
+    store = InMemoryRunStore()
+    store.save(run)
+    controller = _Controller(_run())
+
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        cli(
+            ["answer", run.run_id, "--field", "mode choice=第二个",
+             "--data-root", str(tmp_path / "data")],
+            application_builder=_Builder(controller), store_factory=lambda root: store,
+        )
+
+    assert controller.answered is None
+    assert store.load(run.run_id).pending_question == run.pending_question
 
 
 def test_show_reads_store_without_building_application(tmp_path: Path, capsys):

@@ -298,6 +298,11 @@ def test_native_question_schemas_share_visible_background_guidance() -> None:
         )
     ]
     assert shared["properties"]["text"] == scientific["properties"]["text"]
+    shared_items = shared["properties"]["requested_fields"]["items"]
+    scientific_items = scientific["properties"]["requested_fields"]["items"]
+    assert shared_items == scientific_items
+    assert shared_items["pattern"] == r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
+    assert "options and explanations in text" in shared_items["description"]
     assert "background needed to answer" in shared["properties"]["text"]["description"]
     assert set(shared["required"]) == {"text", "requested_fields"}
     assert set(scientific["required"]) == {"text", "requested_fields", "assessment"}

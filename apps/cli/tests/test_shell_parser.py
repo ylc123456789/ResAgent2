@@ -65,6 +65,12 @@ def test_answer_values_explicit_name_value():
     assert _answer_values(_run(["a", "b"]), ["a=1", "b=2"]) == {"a": "1", "b": "2"}
 
 
+def test_answer_value_can_contain_natural_language_and_equals():
+    assert _answer_values(_run(["mode"]), ["mode=第二个，mul=2*3"]) == {
+        "mode": "第二个，mul=2*3"
+    }
+
+
 def test_answer_values_rejects_missing_pending_question():
     with pytest.raises(ValueError):
         _answer_values(_run(None), ["accuracy"])

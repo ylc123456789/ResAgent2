@@ -10,12 +10,14 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     AuditEnvTool,
-    EnvironmentBinding,
-    EnvironmentManagerError,
-    PreparedEnvironment,
     PrepareEnvironmentTool,
     RunSetupTool,
     SetupCommandPolicy,
+)
+from resagent2_components import (
+    EnvironmentBinding,
+    EnvironmentManagerError,
+    PreparedEnvironment,
     WorkspaceBoundary,
 )
 from resagent2_runtime import AgentState
@@ -389,8 +391,8 @@ def test_conda_update_uses_manager_conda_and_single_prefix(tmp_path) -> None:
 def test_environment_cleanup_selects_only_managed(tmp_path) -> None:
     import json
 
-    from resagent2_capabilities import EnvironmentManager
-    from resagent2_capabilities.environment import _BASE_MARKER
+    from resagent2_components import EnvironmentManager
+    from resagent2_components.environment import _BASE_MARKER
 
     env_root = tmp_path / "envs"
     manager = EnvironmentManager(env_root=env_root, conda_exe="conda")

@@ -37,9 +37,11 @@ def _create_run(engine, run_id, request, proposal):
     return engine.accept_proposal(run_id, proposal)
 from resagent2_capabilities import (
     AuditEnvTool,
+    PrepareEnvironmentTool,
+)
+from resagent2_components import (
     EnvironmentBinding,
     PreparedEnvironment,
-    PrepareEnvironmentTool,
     WorkspaceBoundary,
     WorkspaceObserver,
 )

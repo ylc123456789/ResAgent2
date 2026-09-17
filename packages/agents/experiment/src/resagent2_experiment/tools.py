@@ -8,7 +8,7 @@ from typing import cast
 from pydantic import BaseModel
 
 from resagent2_contracts import QuestionDraft
-from resagent2_capabilities import (
+from resagent2_components import (
     EnvironmentBinding,
     ProcessRunner,
     parse_command,

@@ -7,9 +7,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from resagent2_components import (
+    ArtifactReadError,
+    RegisteredArtifactReader,
+    WorkspaceBoundary,
+    WorkspacePermissionError,
+)
 from resagent2_capabilities import (
-    ArtifactReadError, ReadArtifactTool, ReadFileTool, RegisteredArtifactReader,
-    SearchTextTool, WorkspaceBoundary, WorkspacePermissionError,
+    ReadArtifactTool,
+    ReadFileTool,
+    SearchTextTool,
 )
 from resagent2_contracts import AgentOwner, ArtifactRef, WorkspaceGrant, WorkspaceMode
 from resagent2_runtime import AgentState

@@ -8,8 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from resagent2_capabilities import (
-    DatasetCatalog, ResourceLayout, dataset_context, resolve_dataset_refs,
+from resagent2_components import (
+    DatasetCatalog,
+    ResourceLayout,
+    dataset_context,
+    resolve_dataset_refs,
 )
 from resagent2_contracts import (
     Capability, CodeModifyInput, CodeUnderstandInput, ExperimentRunInput,

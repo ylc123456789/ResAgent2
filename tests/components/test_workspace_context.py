@@ -7,8 +7,15 @@ from types import SimpleNamespace
 import pytest
 
 from resagent2_capabilities import (
-    AuditEnvInput, AuditEnvTool, EnvironmentBinding, PreparedEnvironment,
-    RunSetupInput, RunSetupTool, workspace_context as _workspace_context,
+    AuditEnvInput,
+    AuditEnvTool,
+    RunSetupInput,
+    RunSetupTool,
+)
+from resagent2_components import (
+    EnvironmentBinding,
+    PreparedEnvironment,
+    workspace_context as _workspace_context,
 )
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS
 from resagent2_contracts import (
@@ -326,7 +333,7 @@ def test_batch_failure_survives_successful_paths_and_later_read_previews():
 
 @pytest.mark.parametrize("limit", [100, 1200, 4000])
 def test_command_projection_is_bounded_and_keeps_failure_before_success(limit):
-    from resagent2_capabilities.command_context import command_context
+    from resagent2_components.context import command_context
     state = _state()
     _observe(state, "run_verification", {"results": [
         _command_result(), _command_result(failed=True, stderr="x" * 20000 + "ROOT_CAUSE"),

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Thin command-line entrypoint for ResAgent2"
 requires-python = ">=3.12"
 dependencies = [
+  "resagent2-components>=0.1,<0.2",
   "resagent2-capabilities>=0.1,<0.2",
   "resagent2-coding>=0.1,<0.2",
   "resagent2-contracts>=0.1,<0.2",

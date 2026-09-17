@@ -431,7 +431,7 @@ def test_failure_without_stderr_tail_has_no_diagnostic_excerpt() -> None:
 
 
 def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
-    from resagent2_capabilities import resolve_dataset_refs
+    from resagent2_components import resolve_dataset_refs
 
     (tmp_path / "cifar-10").mkdir()
     turn = ScientificTurnRequest(

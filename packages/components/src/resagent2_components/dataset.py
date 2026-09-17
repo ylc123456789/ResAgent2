@@ -169,21 +169,3 @@ def dataset_env_overrides(
             ensure_ascii=False,
         ),
     }
-
-
-# Best-effort mirror acceleration profiles. These are operational overrides
-# (never part of environment identity) and are intentionally small.
-_MIRROR_PROFILES: dict[str, dict[str, str]] = {
-    "none": {},
-    "cn": {
-        "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
-    },
-    "autodl": {
-        "PIP_INDEX_URL": "https://mirrors.cloud.tencent.com/pypi/simple",
-    },
-}
-
-
-def mirror_env_overrides(profile: str) -> dict[str, str]:
-    """Return mirror env overrides for a named profile (``none`` is a no-op)."""
-    return dict(_MIRROR_PROFILES.get(profile, {}))

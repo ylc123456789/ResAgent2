@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import DatasetAvailability, dataset_context, workspace_context
+from resagent2_components import (
+    DatasetAvailability,
+    dataset_context,
+    workspace_context,
+)
 from resagent2_contracts import ScientificTurnRequest
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 

@@ -9,11 +9,11 @@ from urllib.request import url2pathname
 
 import pytest
 
-from resagent2_capabilities import (
+from resagent2_components import (
     ArtifactReadError,
-    LiteraturePaper,
     RegisteredArtifactReader,
 )
+from resagent2_capabilities import LiteraturePaper
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,

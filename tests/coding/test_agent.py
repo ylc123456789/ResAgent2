@@ -72,7 +72,7 @@ _AUDIT = {"tool": "audit_env", "arguments": {}}
 
 
 def test_coding_context_uses_shared_dataset_catalog(tmp_path) -> None:
-    from resagent2_capabilities import resolve_dataset_refs
+    from resagent2_components import resolve_dataset_refs
 
     (tmp_path / "cifar-10").mkdir()
     task = request(tmp_path, capability=Capability.CODE_UNDERSTAND).model_copy(

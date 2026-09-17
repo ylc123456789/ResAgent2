@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-from resagent2_capabilities import ResourceLayout
-from resagent2_capabilities.workspace_context import workspace_context
+from resagent2_components import ResourceLayout
+from resagent2_components.context import workspace_context
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     Capability, CodeModifyInput, ModuleStatus, ModuleTaskRequest, TaskBudget,

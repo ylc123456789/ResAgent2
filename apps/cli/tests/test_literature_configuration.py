@@ -3,9 +3,11 @@
 import pytest
 
 from resagent2_capabilities import (
-    ArxivLiteratureBackend, MultiSourceLiteratureBackend,
-    OpenAlexLiteratureBackend, ResourceLayout,
+    ArxivLiteratureBackend,
+    MultiSourceLiteratureBackend,
+    OpenAlexLiteratureBackend,
 )
+from resagent2_components import ResourceLayout
 from resagent2_cli import composition
 from resagent2_runtime import InMemorySessionStore
 

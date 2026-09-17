@@ -2,7 +2,10 @@
 
 import subprocess
 
-from resagent2_capabilities import RegisteredArtifactReader, ResourceLayout
+from resagent2_components import (
+    RegisteredArtifactReader,
+    ResourceLayout,
+)
 from resagent2_contracts import (
     AgentOwner, Capability, CapabilityDefinition, CapabilityRegistry,
     CodeUnderstandInput, ResearchRequest, RunBudget, RunStatus,

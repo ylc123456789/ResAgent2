@@ -1,7 +1,10 @@
 import copy
 
-from resagent2_capabilities import RegisteredArtifactReader, build_module_report
-from resagent2_capabilities.module_report import REPORT_LINE_CHARS
+from resagent2_components import (
+    RegisteredArtifactReader,
+    build_module_report,
+)
+from resagent2_components.artifacts import REPORT_LINE_CHARS
 from resagent2_contracts import AgentOwner
 from resagent2_orchestrator import ArtifactRegistry
 

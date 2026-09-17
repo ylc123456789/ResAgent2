@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 
-from resagent2_capabilities import (
-    DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
+from resagent2_components import (
+    DatasetAvailability,
+    EnvironmentBinding,
+    dataset_context,
+    workspace_context,
 )
 from resagent2_contracts import ModuleTaskRequest
 from resagent2_runtime import (

@@ -578,7 +578,10 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
 
 
 def test_catalog_refresh_survives_controller_restart_and_verbal_confirmation(tmp_path):
-    from resagent2_capabilities import DatasetCatalog, ResourceLayout
+    from resagent2_components import (
+        DatasetCatalog,
+        ResourceLayout,
+    )
 
     layout = ResourceLayout(resource_root=tmp_path / "resources")
     layout.dataset_root.mkdir(parents=True)

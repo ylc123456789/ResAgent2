@@ -38,10 +38,12 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     ArtifactRegistrationPort,
-    DatasetResolutionError,
     LiteratureSearchBackend,
     LiteratureSearchTool,
     ReadArtifactTool,
+)
+from resagent2_components import (
+    DatasetResolutionError,
     RegisteredArtifactReader,
     ResourceLayout,
     resolve_dataset_refs,

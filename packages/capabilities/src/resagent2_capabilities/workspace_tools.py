@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import mimetypes
 import hashlib
 import os
 import tempfile
@@ -16,12 +15,21 @@ from resagent2_contracts import VerificationResult
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
-from .artifacts import RegisteredArtifactReader
-from .environment import EnvironmentBinding
-from .git import GitBaseline, GitWorkspace
-from .process import ProcessRunner, VerificationCommandPolicy
-from .text import MAX_READ_CHARS, slice_text_lines
-from .workspace import WorkspaceBoundary
+from resagent2_components.artifacts import RegisteredArtifactReader
+from resagent2_components.environment import EnvironmentBinding
+from resagent2_components.git import (
+    GitBaseline,
+    GitWorkspace,
+)
+from resagent2_components.process import (
+    ProcessRunner,
+    VerificationCommandPolicy,
+)
+from resagent2_components.text import (
+    MAX_READ_CHARS,
+    slice_text_lines,
+)
+from resagent2_components.workspace import WorkspaceBoundary
 
 
 def _remember(state: AgentState, key: str, value: str) -> list[str]:
@@ -60,8 +68,6 @@ class ListFilesTool:
                 "truncated": truncated,
             },
         )
-
-
 class ReadFileInput(RuntimeModel):
     """Read one optional line range from a workspace file."""
 
@@ -488,7 +494,3 @@ class GitDiffTool:
             summary="Read current Git diff",
             value={"diff": diff[: args.max_chars], "truncated": truncated},
         )
-
-
-def media_type_for(path: str) -> str:
-    return mimetypes.guess_type(path)[0] or "application/octet-stream"

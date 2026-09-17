@@ -8,8 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from resagent2_capabilities import (
-    AuditEnvTool, EnvironmentBinding, EnvironmentManagerError, PreparedEnvironment,
-    PrepareEnvironmentTool, RunSetupTool, RunVerificationTool, WorkspaceBoundary,
+    AuditEnvTool,
+    PrepareEnvironmentTool,
+    RunSetupTool,
+    RunVerificationTool,
+)
+from resagent2_components import (
+    EnvironmentBinding,
+    EnvironmentManagerError,
+    PreparedEnvironment,
+    WorkspaceBoundary,
 )
 from resagent2_contracts import (
     AgentOwner, VerificationResult, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,

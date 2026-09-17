@@ -29,7 +29,10 @@ NOW = datetime(2026, 8, 28, tzinfo=UTC)
 def isolated_http(monkeypatch, request):
     if request.node.name == "test_arxiv_backend_live_smoke":
         return
-    from resagent2_capabilities import _literature_http, literature
+    from resagent2_capabilities import (
+        _literature_http,
+        literature,
+    )
 
     clock = [0.0]
     monkeypatch.setattr(_literature_http.time, "monotonic", lambda: clock[0])

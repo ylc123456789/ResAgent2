@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from resagent2_capabilities import (
+from resagent2_components import (
     WorkspaceBoundary,
     WorkspaceObserver,
     WorkspaceSnapshot,

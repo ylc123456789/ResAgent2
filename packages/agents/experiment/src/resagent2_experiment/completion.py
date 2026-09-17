@@ -13,7 +13,7 @@ from resagent2_contracts import (
     ModuleError,
     WarningRecord,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     WorkspaceObserver,
     WorkspaceSnapshot,
     build_module_report,

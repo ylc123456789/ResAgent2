@@ -7,8 +7,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from resagent2_capabilities import (
-    GitWorkspace, HardwareAudit, ResourceLayout, WorkspaceBoundary, WorkspaceSnapshot,
+from resagent2_components import (
+    GitWorkspace,
+    HardwareAudit,
+    ResourceLayout,
+    WorkspaceBoundary,
+    WorkspaceSnapshot,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (

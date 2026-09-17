@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter
 
-from resagent2_capabilities import (
+from resagent2_components import (
     ArtifactReadError,
     RegisteredArtifactReader,
     ResourceLayout,

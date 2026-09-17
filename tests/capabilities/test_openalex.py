@@ -14,7 +14,10 @@ from resagent2_capabilities import (
     LiteratureUnavailableError,
     OpenAlexLiteratureBackend,
 )
-from resagent2_capabilities import _literature_http, openalex
+from resagent2_capabilities import (
+    _literature_http,
+    openalex,
+)
 from tests.capabilities.test_literature import _FakeBackend, _FakeRegister, state
 
 

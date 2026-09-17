@@ -8,7 +8,7 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSourceKind,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     EnvironmentBinding,
     EnvironmentManager,
     PreparedEnvironment,

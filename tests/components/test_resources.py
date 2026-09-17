@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from resagent2_capabilities import (
+from resagent2_components import (
     DatasetCatalog,
     DatasetResolutionError,
     EnvironmentManager,
@@ -22,7 +22,7 @@ from resagent2_capabilities import (
     find_conda,
     resolve_dataset_refs,
 )
-from resagent2_capabilities.process import _descendant_pids
+from resagent2_components.process import _descendant_pids
 from resagent2_contracts import DatasetRef, WorkspaceSourceKind, WorkspaceSpec
 
 

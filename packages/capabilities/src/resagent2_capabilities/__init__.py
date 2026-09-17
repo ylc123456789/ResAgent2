@@ -1,28 +1,5 @@
-"""Concrete, assembable capabilities for ResAgent2 Agents.
+"""Model-callable Tool entry points, backed by reusable components."""
 
-The runtime package only defines how an Agent runs (the Agentic Loop and the
-Tool protocol). This package provides what an Agent can do: filesystem, Git,
-process, artifact, repository, environment, dataset and hardware primitives.
-Agents assemble the subset they need through their Tool Profile.
-"""
-
-from .artifacts import ArtifactReadError, RegisteredArtifactReader
-from .dataset import (
-    DatasetAvailability,
-    DatasetCatalog,
-    DatasetResolutionError,
-    dataset_context,
-    dataset_env_overrides,
-    mirror_env_overrides,
-    resolve_dataset_refs,
-)
-from .environment import (
-    EnvironmentBinding,
-    EnvironmentManager,
-    EnvironmentManagerError,
-    PreparedEnvironment,
-    find_conda,
-)
 from .environment_tools import (
     AuditEnvInput,
     AuditEnvTool,
@@ -32,8 +9,6 @@ from .environment_tools import (
     RunSetupTool,
     SetupCommandPolicy,
 )
-from .git import GitBaseline, GitWorkspace, GitWorkspaceError
-from .hardware import HardwareAudit
 from .literature import (
     ArtifactRegistrationPort,
     ArxivLiteratureBackend,
@@ -46,19 +21,6 @@ from .literature import (
     LiteratureSearchToolInput,
 )
 from .openalex import OpenAlexLiteratureBackend
-from .module_report import build_module_report
-from .process import (
-    CommandPermissionDecision,
-    ProcessRunner,
-    UnsafeCommandError,
-    VerificationCommandPolicy,
-    parse_command,
-)
-from .repo import MaterializedRepo, RepoMaterializer, RepoMaterializerError
-from .resources import ResourceLayout
-from .snapshot import WorkspaceObserver, WorkspaceSnapshot, snapshot_workspace
-from .workspace import WorkspaceBoundary, WorkspacePermissionError
-from .workspace_context import workspace_context
 from .workspace_tools import (
     CreateFileInput,
     CreateFileTool,
@@ -76,75 +38,40 @@ from .workspace_tools import (
     RunVerificationTool,
     SearchTextInput,
     SearchTextTool,
-    media_type_for,
 )
 
 __all__ = [
-    "DatasetAvailability",
-    "ArtifactReadError",
-    "ArtifactRegistrationPort",
-    "ArxivLiteratureBackend",
-    "MultiSourceLiteratureBackend",
-    "OpenAlexLiteratureBackend",
-    "AuditEnvInput",
-    "AuditEnvTool",
-    "CommandPermissionDecision",
-    "CreateFileInput",
-    "CreateFileTool",
-    "DatasetCatalog",
-    "DatasetResolutionError",
-    "EnvironmentBinding",
-    "EnvironmentManager",
-    "EnvironmentManagerError",
-    "GitBaseline",
-    "GitDiffInput",
-    "GitDiffTool",
-    "GitWorkspace",
-    "GitWorkspaceError",
-    "HardwareAudit",
-    "ListFilesInput",
-    "ListFilesTool",
-    "LiteraturePaper",
-    "LiteratureSearchBackend",
-    "LiteratureSearchError",
-    "LiteratureUnavailableError",
-    "LiteratureSearchTool",
-    "LiteratureSearchToolInput",
-    "MaterializedRepo",
-    "PreparedEnvironment",
-    "PrepareEnvironmentInput",
-    "PrepareEnvironmentTool",
-    "ProcessRunner",
-    "ReadArtifactInput",
-    "ReadArtifactTool",
-    "ReadFileInput",
-    "ReadFileTool",
-    "RegisteredArtifactReader",
-    "ReplaceTextInput",
-    "ReplaceTextTool",
-    "RepoMaterializer",
-    "RepoMaterializerError",
-    "ResourceLayout",
-    "RunSetupInput",
-    "RunSetupTool",
-    "RunVerificationInput",
-    "RunVerificationTool",
-    "SearchTextInput",
-    "SearchTextTool",
-    "SetupCommandPolicy",
-    "UnsafeCommandError",
-    "WorkspaceBoundary",
-    "WorkspaceObserver",
-    "WorkspacePermissionError",
-    "WorkspaceSnapshot",
-    "build_module_report",
-    "dataset_context",
-    "dataset_env_overrides",
-    "find_conda",
-    "media_type_for",
-    "mirror_env_overrides",
-    "parse_command",
-    "resolve_dataset_refs",
-    "snapshot_workspace",
-    "workspace_context",
+    'ArtifactRegistrationPort',
+    'ArxivLiteratureBackend',
+    'MultiSourceLiteratureBackend',
+    'OpenAlexLiteratureBackend',
+    'AuditEnvInput',
+    'AuditEnvTool',
+    'CreateFileInput',
+    'CreateFileTool',
+    'GitDiffInput',
+    'GitDiffTool',
+    'ListFilesInput',
+    'ListFilesTool',
+    'LiteraturePaper',
+    'LiteratureSearchBackend',
+    'LiteratureSearchError',
+    'LiteratureUnavailableError',
+    'LiteratureSearchTool',
+    'LiteratureSearchToolInput',
+    'PrepareEnvironmentInput',
+    'PrepareEnvironmentTool',
+    'ReadArtifactInput',
+    'ReadArtifactTool',
+    'ReadFileInput',
+    'ReadFileTool',
+    'ReplaceTextInput',
+    'ReplaceTextTool',
+    'RunSetupInput',
+    'RunSetupTool',
+    'RunVerificationInput',
+    'RunVerificationTool',
+    'SearchTextInput',
+    'SearchTextTool',
+    'SetupCommandPolicy',
 ]

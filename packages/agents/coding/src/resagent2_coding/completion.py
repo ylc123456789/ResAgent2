@@ -13,7 +13,7 @@ from resagent2_contracts import (
     CodeUnderstandResult,
     VerificationResult,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     EnvironmentBinding,
     GitBaseline,
     GitWorkspace,

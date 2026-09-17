@@ -33,7 +33,7 @@ from ._literature_http import (
     LiteratureSearchError,
     LiteratureUnavailableError,
 )
-from .text import wrap_text_lines
+from resagent2_components.text import wrap_text_lines
 
 
 class LiteraturePaper(RuntimeModel):

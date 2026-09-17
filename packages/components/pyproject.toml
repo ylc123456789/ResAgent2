@@ -3,14 +3,13 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "resagent2-experiment"
+name = "resagent2-components"
 version = "0.1.0"
-description = "Native Experiment Agent for ResAgent2"
+description = "Reusable operations and result presentation for ResAgent2"
 requires-python = ">=3.12"
 dependencies = [
+  "defusedxml>=0.7,<0.8",
   "pydantic>=2.12,<3",
-  "resagent2-components>=0.1,<0.2",
-  "resagent2-capabilities>=0.1,<0.2",
   "resagent2-contracts>=0.1,<0.2",
   "resagent2-runtime>=0.1,<0.2",
 ]

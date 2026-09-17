@@ -7,6 +7,7 @@ import resagent2_experiment
 
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "agents" / "experiment" / "src"
 ALLOWED_IMPORT_ROOTS = {
+    "resagent2_components",
     "__future__",
     "hashlib",
     "json",

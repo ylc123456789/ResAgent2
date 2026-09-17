@@ -42,9 +42,11 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     ArxivLiteratureBackend,
-    DatasetCatalog,
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
+)
+from resagent2_components import (
+    DatasetCatalog,
     ResourceLayout,
 )
 from resagent2_coding import NativeCodingAgent

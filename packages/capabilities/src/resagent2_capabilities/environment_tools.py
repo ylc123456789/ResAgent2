@@ -11,8 +11,12 @@ from pydantic import BaseModel
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
-from .environment import EnvironmentBinding, EnvironmentManagerError, version_matches
-from .process import (
+from resagent2_components.environment import (
+    EnvironmentBinding,
+    EnvironmentManagerError,
+    version_matches,
+)
+from resagent2_components.process import (
     CommandPermissionDecision,
     ProcessRunner,
     UnsafeCommandError,

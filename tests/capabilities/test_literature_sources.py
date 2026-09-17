@@ -100,7 +100,11 @@ def test_empty_configuration_is_rejected():
 def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     import json
     from urllib.error import HTTPError
-    from resagent2_capabilities import _literature_http, literature, openalex
+    from resagent2_capabilities import (
+        _literature_http,
+        literature,
+        openalex,
+    )
     from tests.capabilities.test_literature import ARXIV_ATOM
     from tests.capabilities.test_openalex import work
 

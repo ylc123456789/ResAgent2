@@ -14,19 +14,21 @@ from resagent2_contracts import (
     WorkspaceMode,
     WorkspaceSourceKind,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     ArtifactReadError,
     GitWorkspace,
     ProcessRunner,
-    ReadFileTool,
     RegisteredArtifactReader,
-    ReplaceTextTool,
-    RunVerificationTool,
     UnsafeCommandError,
     VerificationCommandPolicy,
     WorkspaceBoundary,
     WorkspacePermissionError,
     parse_command,
+)
+from resagent2_capabilities import (
+    ReadFileTool,
+    ReplaceTextTool,
+    RunVerificationTool,
 )
 from resagent2_runtime import AgentState
 

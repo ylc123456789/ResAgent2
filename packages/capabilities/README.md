@@ -4,12 +4,12 @@
 
 | 目录 | 模型工具 |
 |---|---|
-| [workspace/](src/resagent2_capabilities/workspace/__init__.py) | list_files、read_file、search_text、create_file、replace_text、git_diff |
-| [artifacts/](src/resagent2_capabilities/artifacts/__init__.py) | read_artifact |
-| [environment/](src/resagent2_capabilities/environment/__init__.py) | prepare_environment、run_setup、audit_env |
-| [literature/](src/resagent2_capabilities/literature/__init__.py) | literature_search |
+| [workspace/](src/resagent2_capabilities/workspace/tools.py) | list_files、read_file、search_text、create_file、replace_text、git_diff |
+| [artifacts/](src/resagent2_capabilities/artifacts/tools.py) | read_artifact |
+| [environment/](src/resagent2_capabilities/environment/tools.py) | prepare_environment、run_setup、audit_env |
+| [literature/](src/resagent2_capabilities/literature/tools.py) | literature_search |
 
-每组暂用一个 `__init__.py` 承载实现，不额外加只转发一次的 tools.py。确实长大后再拆，不要求每个 Tool 一个文件。
+每组的 `tools.py` 放 Tool、输入 schema 和工具专用辅助函数，`__init__.py` 只显式导出公开的 Tool 与输入模型。顶层包同样只负责导出；不要求每个 Tool 一个文件，也不要求与 Components 的文件一一对应。
 
 ## 调用与边界
 

@@ -207,7 +207,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 文件读取还受授权和默认 1,000,000 字节文件大小限制；工件读取先查授权、来源和整份冻结 hash，再切片。后者不因只取几行而跳过完整性校验。`search_text` 是大小写不敏感的字面子串搜索，不是正则；结果给出行号，但当前没有独立的长期搜索正文段。
 
-**源码与测试**：[workspace tools](../../packages/capabilities/src/resagent2_capabilities/workspace/__init__.py)、[工件读取](../../packages/components/src/resagent2_components/artifacts.py)、[切片函数](../../packages/components/src/resagent2_components/text.py)、[行窗口测试](../../tests/capabilities/test_text_windows.py)。
+**源码与测试**：[workspace tools](../../packages/capabilities/src/resagent2_capabilities/workspace/tools.py)、[工件读取](../../packages/components/src/resagent2_components/artifacts.py)、[切片函数](../../packages/components/src/resagent2_components/text.py)、[行窗口测试](../../tests/capabilities/test_text_windows.py)。
 
 ### 4.2 下一轮再从历史里选择片段
 
@@ -270,7 +270,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 外部 timeout/429 与本地上下文丢失是两种问题。前者可能确实需要外部帮助；如果所需证据已在冻结工件里，是否还需要重新联网，应依据已有内容判断，不能把当前片段缺失等同于从未检索到。相关实际轨迹和候选策略见 [审查 C5](../history/reviews/CONTEXT_REVIEW_2026-09-13.md#c5)。
 
-**源码与测试**：[文献后端与呈现](../../packages/components/src/resagent2_components/literature/backends.py)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/__init__.py)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。最后这类脚本化测试证明指定范围可达，不证明真实模型一定自己找到范围、也不证明翻页后不会遗忘。
+**源码与测试**：[文献后端与呈现](../../packages/components/src/resagent2_components/literature/backends.py)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/tools.py)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。最后这类脚本化测试证明指定范围可达，不证明真实模型一定自己找到范围、也不证明翻页后不会遗忘。
 
 <a id="budgets"></a>
 

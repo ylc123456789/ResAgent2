@@ -33,3 +33,7 @@ Capabilities 同时容纳模型 Tool、普通操作、资源配置、上下文�
 ## 验证
 
 基线工具 schema/说明指纹、原有确定性测试、包依赖与导出检查、CLI/E2E 装配回归。真实补验只用小型标准库任务，见 [验收单](../reviews/TOOL_COMPONENTS_ACCEPTANCE.md)。当前导航见 [架构](../../current/ARCHITECTURE.md#modules)。
+
+## 2026-09-17 收尾：工具实现与包导出分开
+
+四组工具最初直接定义在各自 `__init__.py`；收尾时统一移到同目录的 `tools.py`，`__init__.py` 只显式导出 Tool 与输入模型。实现文件更容易定位，原有公开导入保持可用；不改变上述职责边界，也不为每个 Tool 新建文件。

@@ -2,6 +2,8 @@
 
 本轮只调整 Python 实现归属和导入，不改变任务功能、prompt、模型 Tool 契约、预算、schema 10.0 或历史记录。原基线 `main@678b03f`；分支 `refactor/tool-components`。
 
+**当前状态**：`6672376` 的服务器补验与原始证据复核已完成，结果见 [最终复核与收尾](#verified-closeout)。第 1–4 节保留执行前的计划和边界；其中“待执行”是当时状态。
+
 ## 1. 本地已完成
 
 | 提交 | 内容 |
@@ -85,3 +87,29 @@ git diff --check
 - 最后交 MANIFEST：提交/9 包指针、逐项状态、调用计量、关键 call_id、真实 diff/日志/工件、已验证与未触发项。只完成 4 个小探针不宣称全科研 L3 重新验收。
 
 服务器补验通过后再决定合并；本轮没有授权自动 merge/push/deploy。
+
+<a id="verified-closeout"></a>
+
+## 5. 2026-09-17 最终复核与收尾
+
+服务器实测 `667237652719c204e609ff36b392888ecfeb571c`，验收根 `/root/autodl-tmp/e2e-tc-6672376-Wp4xR9/`，报告 `MANIFEST.md`。9 包 editable 指向同一待测 checkout；服务器确定性测试 1057 passed / 1 skipped、mock E2E completed。主开发通过 SSH 只读核对了原始模型请求/返回、Session 工具回执、实际结果和冻结文献；旧现场保留。
+
+| 探针 | 装配 / 调用数 | 复核结果 |
+|---|---|---|
+| Coding | CLI / 14 | 真实 a-b→a+b，两个 unittest 命令各 3 tests 通过，验证绑定 revision 1；patch/code_change 正常交付 |
+| Experiment | 直调 invoke / 7 | 读取真实登记的参数工件 7，执行 run.py 7，磁盘 metrics.json 为 value=42；输出仍为 Agent 候选，未冒称经 Scheduler 冻结 |
+| Scientific | CLI / 2 | 原题逐字配对，第二个进入恢复请求，最终 F1；同一 Scientific Session，未创建 Task/Attempt |
+| Literature | real_e2e / 6 | 9 次检索、2 次范围读取、finish，最终 supports；检索记录和观点明确限定为摘要级证据 |
+
+29 个逻辑调用按 call_id 去重后，与 retry_number+1 累计均为 29（14/7/2/6）；本轮 JSON/schema 拒绝均为 0。复核的工具批次调用/结果逐项配对，observed_at 顺序正确；trace 目录 0700、文件 0600。服务器报告凭据定值扫描 0 命中。
+
+报告口径更正与边界：
+
+- “并行原生调用”应为模型一次返回多个工具、Runtime **串行执行**。
+- 文献读取是 `artifact_sci_154e0729b79d57b3` 的 1–40 行（文件共 173 行）与 `artifact_sci_3998ee48a510cdff` 的 1–60 行（文件共 122 行），两次返回 truncated=false，冻结 hash 均匹配；不是两个完整工件或论文全文。两个窗口分别覆盖 1 / 4 篇完整检索摘要，包含 SENet `1709.01507`。
+- 最终引用 6 个检索工件，其中 2 个做过 read_artifact，另外 4 个只经搜索预览观察。现有 observed 语义允许后者，模型也明示部分来源仅见截短预览；不能写成 6 份全文均已阅读或科学因果已独立验证。
+- 本轮来源为 arXiv 成功返回，没有真实触发来源切换；切换仍由既有确定性测试覆盖。四探针不替代完整 L3。
+
+收尾调整：四组工具的原实现移入同目录 `tools.py`，`__init__.py` 只显式导出公开 Tool 与输入模型，当前源码链接同步更新。原公开导入和模型工具契约保持不变，schema 10.0 不变；服务器探针对应移动前的 `6672376`，最后这次纯文件组织调整以本地回归和工具指纹复核，不追加付费模型测试。
+
+收尾本地复核：**1057 passed / 1 skipped**，mock E2E completed，git diff --check 干净；既有 18 种模型工具指纹测试通过。四份 `tools.py` 与 `6672376` 的原实现逐字相同，22 个公开 Tool / 输入模型均显式导出；此次修改涉及的 128 个本地文档链接目标有效。收尾提交留在 `refactor/tool-components`，未合并或推送，也未改变服务器安装指针。

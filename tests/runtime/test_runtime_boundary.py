@@ -26,7 +26,7 @@ ALLOWED_IMPORT_ROOTS = {
 }
 
 
-def test_runtime_does_not_import_capabilities_orchestrator_or_agents() -> None:
+def test_runtime_does_not_import_components_capabilities_or_domain_modules() -> None:
     imported_roots: set[str] = set()
     for source_file in PACKAGE_ROOT.rglob("*.py"):
         tree = ast.parse(source_file.read_text(encoding="utf-8"))

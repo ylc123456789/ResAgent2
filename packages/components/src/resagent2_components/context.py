@@ -255,3 +255,12 @@ def command_context(state: AgentState, *, max_chars: int) -> ContextSection | No
     content = intro + "".join(item[2] for item in sorted(selected))
     content += f"\nOmitted command results: {len(records) - len(selected)}\n"
     return ContextSection(name="command_results", content=content, priority=96, required=True)
+
+
+def remember_source(state: AgentState, key: str, value: str) -> list[str]:
+    """Return a deduplicated source list for a tool's existing memory update."""
+    current = state.memory.get(key, [])
+    values = list(current) if isinstance(current, list) else []
+    if value not in values:
+        values.append(value)
+    return values

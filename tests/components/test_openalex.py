@@ -5,18 +5,20 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from resagent2_capabilities import (
+from resagent2_components import (
     MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchError,
-    LiteratureSearchTool,
-    LiteratureSearchToolInput,
     LiteratureUnavailableError,
     OpenAlexLiteratureBackend,
 )
 from resagent2_capabilities import (
-    _literature_http,
-    openalex,
+    LiteratureSearchTool,
+    LiteratureSearchToolInput,
+)
+from resagent2_components.literature import (
+    _http as _literature_http,
+    backends as openalex,
 )
 from tests.capabilities.test_literature import _FakeBackend, _FakeRegister, state
 

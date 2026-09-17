@@ -12,8 +12,8 @@ from resagent2_capabilities import (
     AuditEnvTool,
     PrepareEnvironmentTool,
     RunSetupTool,
-    SetupCommandPolicy,
 )
+from resagent2_components import SetupCommandPolicy
 from resagent2_components import (
     EnvironmentBinding,
     EnvironmentManagerError,

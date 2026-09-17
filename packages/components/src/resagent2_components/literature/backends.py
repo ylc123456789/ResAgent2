@@ -1,39 +1,26 @@
-"""Literature search capability: normalized papers, backends, and a Tool.
-
-The backend is injected by the composition root, so the Scientific Agent never
-imports a provider SDK. A successful search is normalized, deduplicated and
-truncated here, then handed to an injected ``ArtifactRegistrationPort`` that
-freezes it with the current run/session provenance. The Tool never assigns an
-ArtifactId or hash.
-"""
+"""Normalized bibliographic records, peer backends and artifact presentation."""
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
-from typing import Protocol, cast
+from typing import Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from defusedxml import ElementTree
+from pydantic import Field, ValidationError
 
-from pydantic import BaseModel, Field, ValidationError
-
-from resagent2_contracts import (
-    ArtifactCandidate,
-    ArtifactRef,
-    RunId,
-    SessionId,
-)
-from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
-from ._literature_http import (
-    USER_AGENT,
-    LiteratureHTTP,
-    LiteratureSearchError,
-    LiteratureUnavailableError,
+from ..text import wrap_text_lines
+from ._http import (
+    USER_AGENT, LiteratureHTTP, LiteratureSearchError, LiteratureUnavailableError,
 )
-from resagent2_components.text import wrap_text_lines
+
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_ARXIV_HTTP = LiteratureHTTP("arXiv", interval_seconds=3.0)
+_OPENALEX_HTTP = LiteratureHTTP("OpenAlex", interval_seconds=1.0)
 
 
 class LiteraturePaper(RuntimeModel):
@@ -59,35 +46,6 @@ class LiteratureSearchBackend(Protocol):
         end_year: int | None = None,
     ) -> list[LiteraturePaper]:
         """Return normalized, deduplicated, truncated papers for one query."""
-
-
-class ArtifactRegistrationPort(Protocol):
-    """Scientific Tool seam for freezing results via the ResAgent Registry.
-
-    The composition root adapts the orchestrator ArtifactRegistry to this shape;
-    capabilities must not import the orchestrator.
-    """
-
-    def register_scientific(
-        self,
-        candidate: ArtifactCandidate,
-        *,
-        run_id: RunId,
-        session_id: SessionId,
-    ) -> ArtifactRef:
-        """Freeze one candidate with session provenance and return its Ref."""
-
-    def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
-        """Return a live-authorized artifact of this Run, or ``None``.
-
-        This lets the Scientific Agent's ``read_artifact`` see an artifact
-        (e.g. a literature search) registered earlier in the same turn.
-        An artifact registered for another Run must never be returned.
-        """
-
-
-_ATOM = "{http://www.w3.org/2005/Atom}"
-_ARXIV_HTTP = LiteratureHTTP("arXiv", interval_seconds=3.0)
 
 
 class ArxivLiteratureBackend:
@@ -263,15 +221,6 @@ class MultiSourceLiteratureBackend:
         )
 
 
-class LiteratureSearchToolInput(RuntimeModel):
-    """Bounded literature query for the Scientific Agent."""
-
-    query: NonEmptyStr
-    max_results: int = Field(default=10, ge=1, le=20)
-    start_year: int | None = Field(default=None, ge=1900, le=2100)
-    end_year: int | None = Field(default=None, ge=1900, le=2100)
-
-
 def render_literature(papers: list[LiteraturePaper]) -> str:
     """Present retrieved records by paper, without LLM summaries or new facts."""
     sections = [
@@ -294,59 +243,107 @@ def render_literature(papers: list[LiteraturePaper]) -> str:
     return "\n\n".join(sections) + "\n"
 
 
-class LiteratureSearchTool:
-    """Search literature, then freeze the normalized result with provenance."""
+class OpenAlexLiteratureBackend:
+    """Normalize indexed records/abstracts, without fetching or inventing full text."""
 
-    name = "literature_search"
-    input_model = LiteratureSearchToolInput
+    _endpoint = "https://api.openalex.org/works"
 
     def __init__(
         self,
-        backend: LiteratureSearchBackend,
-        register: ArtifactRegistrationPort,
+        *,
+        api_key: str | None = None,
+        timeout_seconds: int = 30,
+        max_retries: int = 3,
+        max_abstract_chars: int = 2_000,
     ) -> None:
-        self.backend = backend
-        self.register = register
+        self._api_key = api_key
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries  # Total HTTP attempts, as in arXiv backend.
+        self.max_abstract_chars = max_abstract_chars
 
-    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        args = cast(LiteratureSearchToolInput, arguments)
-        papers = self.backend.search(
-            args.query,
-            max_results=args.max_results,
-            start_year=args.start_year,
-            end_year=args.end_year,
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int,
+        start_year: int | None = None,
+        end_year: int | None = None,
+    ) -> list[LiteraturePaper]:
+        params = {
+            "search": query,
+            "per_page": max_results,
+            "select": "id,display_name,publication_date,authorships,abstract_inverted_index",
+        }
+        filters = []
+        if start_year is not None:
+            filters.append(f"from_publication_date:{start_year}-01-01")
+        if end_year is not None:
+            filters.append(f"to_publication_date:{end_year}-12-31")
+        if filters:
+            params["filter"] = ",".join(filters)
+        url = f"{self._endpoint}?{urlencode(params)}"
+        body = _OPENALEX_HTTP.fetch(
+            lambda: self._request(url), max_attempts=self.max_retries
         )
-        candidate = ArtifactCandidate(
-            kind="literature_search",
-            path="literature_search.md",
-            media_type="text/markdown",
-            summary=f"Literature search: {args.query}",
-            metadata={"papers": [paper.model_dump(mode="json") for paper in papers]},
-            content=render_literature(papers),
+        return self._parse(body)
+
+    def _request(self, url: str) -> bytes:
+        headers = {"User-Agent": USER_AGENT}
+        if self._api_key:
+            # Never place credentials in URLs, artifacts, or model context.
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        request = Request(url, headers=headers)
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            return response.read()
+
+    def _parse(self, body: bytes) -> list[LiteraturePaper]:
+        try:
+            response = json.loads(body)
+            if not isinstance(response, dict) or not isinstance(
+                response.get("results"), list
+            ):
+                raise ValueError("missing results list")
+            papers = {}
+            for record in response["results"]:
+                paper = self._paper(record)
+                papers.setdefault(paper.paper_id, paper)
+            return list(papers.values())
+        except (ValueError, TypeError, KeyError, AttributeError) as error:
+            raise LiteratureSearchError(
+                "OpenAlex returned invalid bibliographic data"
+            ) from error
+
+    def _paper(self, record: dict) -> LiteraturePaper:
+        source_url = record["id"]
+        prefix = "https://openalex.org/W"
+        if not isinstance(source_url, str) or not source_url.startswith(prefix):
+            raise ValueError("invalid OpenAlex work id")
+        if not source_url[len(prefix):].isdigit():
+            raise ValueError("invalid OpenAlex work id")
+        published = record.get("publication_date")
+        return LiteraturePaper(
+            paper_id=f"openalex:{source_url.rsplit('/', 1)[-1]}",
+            title=record["display_name"],
+            authors=[
+                entry["author"]["display_name"]
+                for entry in (record.get("authorships") or [])
+                if entry["author"].get("display_name")
+            ],
+            published_at=date.fromisoformat(published) if published else None,
+            abstract=self._abstract(record.get("abstract_inverted_index")),
+            source_url=source_url,
         )
-        artifact = self.register.register_scientific(
-            candidate,
-            run_id=state.run_id,
-            session_id=state.session_id,
-        )
-        observed = list(state.memory.get("literature_artifact_ids", []))
-        if artifact.id not in observed:
-            observed.append(artifact.id)
-        # Bound the in-context summary: the full abstracts live in the frozen
-        # artifact (read via read_artifact), so the required last_observation
-        # context section never exceeds the context budget.
-        brief = []
-        for paper in papers:
-            data = paper.model_dump(mode="json")
-            data["abstract"] = (data.get("abstract") or "")[:200]
-            brief.append(data)
-        return ToolObservation(
-            summary=f"Found {len(papers)} papers for {args.query!r}",
-            value={
-                "artifact": artifact.model_dump(mode="json", exclude={"metadata"}),
-                "papers": brief,
-            },
-            memory_updates={
-                "literature_artifact_ids": observed,
-            },
-        )
+
+    def _abstract(self, index: dict[str, list[int]] | None) -> str:
+        if index is None:
+            return ""
+        words = {}
+        for word, positions in index.items():
+            if not isinstance(word, str) or not isinstance(positions, list):
+                raise ValueError("invalid abstract index")
+            for position in positions:
+                if type(position) is not int or position < 0 or position in words:
+                    raise ValueError("invalid abstract position")
+                words[position] = word
+        abstract = " ".join(words[position] for position in sorted(words))
+        return abstract[:self.max_abstract_chars]

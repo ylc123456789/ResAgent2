@@ -20,16 +20,16 @@ from resagent2_components import (
     ProcessRunner,
     RegisteredArtifactReader,
     UnsafeCommandError,
-    VerificationCommandPolicy,
     WorkspaceBoundary,
     WorkspacePermissionError,
     parse_command,
 )
+from resagent2_coding.verification import VerificationCommandPolicy
 from resagent2_capabilities import (
     ReadFileTool,
     ReplaceTextTool,
-    RunVerificationTool,
 )
+from resagent2_coding.verification import RunVerificationTool
 from resagent2_runtime import AgentState
 
 

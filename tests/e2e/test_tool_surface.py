@@ -19,9 +19,9 @@ from resagent2_capabilities import (
     ReadFileTool,
     ReplaceTextTool,
     RunSetupTool,
-    RunVerificationTool,
     SearchTextTool,
 )
+from resagent2_coding.verification import RunVerificationTool
 from resagent2_experiment.tools import RunCommandTool
 from resagent2_runtime import AskUserTool, FinishTool
 from resagent2_runtime.tool_calling import native_tool_schemas

@@ -36,9 +36,11 @@ from resagent2_contracts import (
     WorkRequestDraft,
     scientific_session_id,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     ArtifactRegistrationPort,
     LiteratureSearchBackend,
+)
+from resagent2_capabilities import (
     LiteratureSearchTool,
     ReadArtifactTool,
 )

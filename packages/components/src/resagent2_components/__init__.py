@@ -1,6 +1,7 @@
 """Reusable operations and presentation; no Tool entry points or Agent loop."""
 
 from .artifacts import (
+    ArtifactRegistrationPort,
     ArtifactReadError,
     RegisteredArtifactReader,
     build_module_report,
@@ -16,6 +17,7 @@ from .dataset import (
     resolve_dataset_refs,
 )
 from .environment import (
+    SetupCommandPolicy,
     mirror_env_overrides,
     EnvironmentBinding,
     EnvironmentManager,
@@ -33,7 +35,6 @@ from .process import (
     CommandPermissionDecision,
     ProcessRunner,
     UnsafeCommandError,
-    VerificationCommandPolicy,
     parse_command,
 )
 from .repo import (
@@ -52,7 +53,28 @@ from .workspace import (
     WorkspacePermissionError,
 )
 
+from .literature import (
+    ArxivLiteratureBackend,
+    OpenAlexLiteratureBackend,
+    MultiSourceLiteratureBackend,
+    LiteraturePaper,
+    LiteratureSearchBackend,
+    render_literature,
+    LiteratureSearchError,
+    LiteratureUnavailableError,
+)
+
 __all__ = [
+    'ArxivLiteratureBackend',
+    'OpenAlexLiteratureBackend',
+    'MultiSourceLiteratureBackend',
+    'LiteraturePaper',
+    'LiteratureSearchBackend',
+    'render_literature',
+    'LiteratureSearchError',
+    'LiteratureUnavailableError',
+    'ArtifactRegistrationPort',
+    'SetupCommandPolicy',
     'ArtifactReadError',
     'CommandPermissionDecision',
     'DatasetAvailability',
@@ -73,7 +95,6 @@ __all__ = [
     'RepoMaterializerError',
     'ResourceLayout',
     'UnsafeCommandError',
-    'VerificationCommandPolicy',
     'WorkspaceBoundary',
     'WorkspaceObserver',
     'WorkspacePermissionError',

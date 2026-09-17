@@ -28,9 +28,9 @@ from resagent2_capabilities import (
     ReadFileTool,
     ReplaceTextTool,
     RunSetupTool,
-    RunVerificationTool,
     SearchTextTool,
 )
+from .verification import RunVerificationTool
 from resagent2_components import (
     DatasetResolutionError,
     EnvironmentBinding,

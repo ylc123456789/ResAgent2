@@ -14,10 +14,10 @@ from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.environment import (
     EnvironmentBinding,
     EnvironmentManagerError,
+    SetupCommandPolicy,
     version_matches,
 )
 from resagent2_components.process import (
-    CommandPermissionDecision,
     ProcessRunner,
     UnsafeCommandError,
     parse_command,
@@ -281,71 +281,3 @@ def _conda_update_command(command: str, *, conda_exe: str, prefix: Path) -> str:
     argv = parse_command(command)
     result = [conda_exe, "env", "update", "-p", str(prefix), *argv[3:]]
     return shlex.join(result)
-
-
-class SetupCommandPolicy:
-    """Restrict ``run_setup`` to package-installation entry points.
-
-    Default-deny. Only ``python -m pip install ...`` / ``pip install ...`` and
-    ``conda env update -f ...`` are allowed; ``sudo``, ``conda create/remove``,
-    and explicit ``--prefix/-p/--name/-n/--target`` are forbidden. ``uv`` and
-    ``poetry`` are intentionally not supported yet (no bound-environment test).
-    """
-
-    _FORBIDDEN_FLAGS = {"--prefix", "-p", "--name", "-n", "--target"}
-
-    def check(self, command: str) -> CommandPermissionDecision:
-        try:
-            argv = parse_command(command)
-        except UnsafeCommandError as error:
-            return CommandPermissionDecision(allowed=False, reason=str(error))
-        executable = Path(argv[0]).name.lower()
-        args = [argument.lower() for argument in argv[1:]]
-        flag = self._forbidden_flag(args)
-        if flag is not None:
-            return CommandPermissionDecision(
-                allowed=False,
-                reason=(
-                    f"must not specify {flag} (the system binds the environment "
-                    "prefix)"
-                ),
-            )
-        if executable == "sudo":
-            return CommandPermissionDecision(allowed=False, reason="sudo is forbidden")
-        if executable in {"python", "python3"}:
-            if args[:2] == ["-m", "pip"] and len(args) >= 3 and args[2] == "install":
-                return CommandPermissionDecision(allowed=True)
-            return CommandPermissionDecision(
-                allowed=False,
-                reason="python setup must be 'python -m pip install ...'",
-            )
-        if executable in {"pip", "pip3"}:
-            if args and args[0] == "install":
-                return CommandPermissionDecision(allowed=True)
-            return CommandPermissionDecision(
-                allowed=False, reason="pip setup must be 'pip install ...'"
-            )
-        if executable == "conda":
-            if len(args) >= 2 and args[0] == "env" and args[1] == "update":
-                return CommandPermissionDecision(allowed=True)
-            if args and args[0] in {"create", "remove"}:
-                return CommandPermissionDecision(
-                    allowed=False, reason="conda create/remove is forbidden"
-                )
-            return CommandPermissionDecision(
-                allowed=False,
-                reason="conda setup must be 'conda env update -f ...'",
-            )
-        return CommandPermissionDecision(
-            allowed=False,
-            reason=f"executable {argv[0]!r} is not an allowed setup command",
-        )
-
-    @staticmethod
-    def _forbidden_flag(args: list[str]) -> str | None:
-        for argument in args:
-            if argument in SetupCommandPolicy._FORBIDDEN_FLAGS:
-                return argument
-            if argument.startswith(("--prefix=", "--name=", "--target=")):
-                return argument
-        return None

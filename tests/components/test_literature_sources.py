@@ -2,7 +2,7 @@
 
 import pytest
 
-from resagent2_capabilities import (
+from resagent2_components import (
     LiteratureSearchError,
     LiteratureUnavailableError,
     MultiSourceLiteratureBackend,
@@ -100,13 +100,13 @@ def test_empty_configuration_is_rejected():
 def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     import json
     from urllib.error import HTTPError
-    from resagent2_capabilities import (
-        _literature_http,
-        literature,
-        openalex,
+    from resagent2_components.literature import (
+        _http as _literature_http,
+        backends as literature,
+        backends as openalex,
     )
     from tests.capabilities.test_literature import ARXIV_ATOM
-    from tests.capabilities.test_openalex import work
+    from tests.components.test_openalex import work
 
     clock, calls = [0.0], []
     monkeypatch.setattr(_literature_http.time, "monotonic", lambda: clock[0])

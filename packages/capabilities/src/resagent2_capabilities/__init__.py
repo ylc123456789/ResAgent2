@@ -1,50 +1,37 @@
-"""Model-callable Tool entry points, backed by reusable components."""
+"""Model-callable tools and their input schemas; operations live in components."""
 
-from .environment_tools import (
-    AuditEnvInput,
-    AuditEnvTool,
+from .workspace import (
+    ListFilesInput,
+    ListFilesTool,
+    ReadFileInput,
+    ReadFileTool,
+    SearchTextInput,
+    SearchTextTool,
+    CreateFileInput,
+    CreateFileTool,
+    ReplaceTextInput,
+    ReplaceTextTool,
+    GitDiffInput,
+    GitDiffTool,
+)
+from .artifacts import (
+    ReadArtifactInput,
+    ReadArtifactTool,
+)
+from .environment import (
     PrepareEnvironmentInput,
     PrepareEnvironmentTool,
     RunSetupInput,
     RunSetupTool,
-    SetupCommandPolicy,
+    AuditEnvInput,
+    AuditEnvTool,
 )
 from .literature import (
-    ArtifactRegistrationPort,
-    ArxivLiteratureBackend,
-    MultiSourceLiteratureBackend,
-    LiteraturePaper,
-    LiteratureSearchBackend,
-    LiteratureSearchError,
-    LiteratureUnavailableError,
-    LiteratureSearchTool,
     LiteratureSearchToolInput,
-)
-from .openalex import OpenAlexLiteratureBackend
-from .workspace_tools import (
-    CreateFileInput,
-    CreateFileTool,
-    GitDiffInput,
-    GitDiffTool,
-    ListFilesInput,
-    ListFilesTool,
-    ReadArtifactInput,
-    ReadArtifactTool,
-    ReadFileInput,
-    ReadFileTool,
-    ReplaceTextInput,
-    ReplaceTextTool,
-    RunVerificationInput,
-    RunVerificationTool,
-    SearchTextInput,
-    SearchTextTool,
+    LiteratureSearchTool,
 )
 
 __all__ = [
-    'ArtifactRegistrationPort',
-    'ArxivLiteratureBackend',
-    'MultiSourceLiteratureBackend',
-    'OpenAlexLiteratureBackend',
     'AuditEnvInput',
     'AuditEnvTool',
     'CreateFileInput',
@@ -53,10 +40,6 @@ __all__ = [
     'GitDiffTool',
     'ListFilesInput',
     'ListFilesTool',
-    'LiteraturePaper',
-    'LiteratureSearchBackend',
-    'LiteratureSearchError',
-    'LiteratureUnavailableError',
     'LiteratureSearchTool',
     'LiteratureSearchToolInput',
     'PrepareEnvironmentInput',
@@ -69,9 +52,6 @@ __all__ = [
     'ReplaceTextTool',
     'RunSetupInput',
     'RunSetupTool',
-    'RunVerificationInput',
-    'RunVerificationTool',
     'SearchTextInput',
     'SearchTextTool',
-    'SetupCommandPolicy',
 ]

@@ -172,7 +172,7 @@ def test_empty_expected_evidence_is_rejected_before_tool_execution(monkeypatch) 
 
 
 def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
-    from resagent2_capabilities import LiteraturePaper
+    from resagent2_components import LiteraturePaper
 
     class _Backend:
         def search(self, query, *, max_results, start_year=None, end_year=None):

@@ -4,10 +4,12 @@ from datetime import UTC, datetime, date
 
 import pytest
 
-from resagent2_capabilities import (
+from resagent2_components import (
     ArxivLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchError,
+)
+from resagent2_capabilities import (
     LiteratureSearchTool,
     LiteratureSearchToolInput,
 )
@@ -29,9 +31,9 @@ NOW = datetime(2026, 8, 28, tzinfo=UTC)
 def isolated_http(monkeypatch, request):
     if request.node.name == "test_arxiv_backend_live_smoke":
         return
-    from resagent2_capabilities import (
-        _literature_http,
-        literature,
+    from resagent2_components.literature import (
+        _http as _literature_http,
+        backends as literature,
     )
 
     clock = [0.0]
@@ -297,7 +299,7 @@ def test_arxiv_invalid_feed_is_not_an_empty_search(body):
 
 def test_arxiv_request_identifies_application(monkeypatch):
     import io
-    from resagent2_capabilities import literature
+    from resagent2_components.literature import backends as literature
 
     requests = []
     def open_request(request, *, timeout):

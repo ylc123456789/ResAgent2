@@ -13,7 +13,7 @@ from resagent2_components import (
     ArtifactReadError,
     RegisteredArtifactReader,
 )
-from resagent2_capabilities import LiteraturePaper
+from resagent2_components import LiteraturePaper
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,

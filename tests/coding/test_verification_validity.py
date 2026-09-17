@@ -11,8 +11,8 @@ from resagent2_capabilities import (
     AuditEnvTool,
     PrepareEnvironmentTool,
     RunSetupTool,
-    RunVerificationTool,
 )
+from resagent2_coding.verification import RunVerificationTool
 from resagent2_components import (
     EnvironmentBinding,
     EnvironmentManagerError,

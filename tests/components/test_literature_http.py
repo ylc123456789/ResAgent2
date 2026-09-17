@@ -7,8 +7,8 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from resagent2_capabilities import _literature_http as http
-from resagent2_capabilities import literature
+from resagent2_components.literature import _http as http
+from resagent2_components.literature import backends as literature
 
 
 @pytest.fixture

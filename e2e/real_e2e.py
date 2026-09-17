@@ -40,7 +40,7 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_capabilities import (
+from resagent2_components import (
     ArxivLiteratureBackend,
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,

@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from resagent2_capabilities import (
+from resagent2_components import (
     ArxivLiteratureBackend,
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,

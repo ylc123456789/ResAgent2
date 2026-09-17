@@ -1,43 +1,24 @@
-"""Typed filesystem, Artifact, Git, and verification Tools."""
+"""Workspace file and Git-diff tools."""
 
 from __future__ import annotations
 
-import hashlib
-import os
-import tempfile
-from pathlib import Path
-from time import monotonic
 from typing import cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-from resagent2_contracts import VerificationResult
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
-from resagent2_components.artifacts import RegisteredArtifactReader
-from resagent2_components.environment import EnvironmentBinding
-from resagent2_components.git import (
-    GitBaseline,
-    GitWorkspace,
-)
-from resagent2_components.process import (
-    ProcessRunner,
-    VerificationCommandPolicy,
-)
-from resagent2_components.text import (
-    MAX_READ_CHARS,
-    slice_text_lines,
-)
+import os
+import tempfile
+from pathlib import Path
+
+from pydantic import field_validator
+
+from resagent2_components.context import remember_source as _remember
+from resagent2_components.git import GitBaseline, GitWorkspace
+from resagent2_components.text import MAX_READ_CHARS, slice_text_lines
 from resagent2_components.workspace import WorkspaceBoundary
-
-
-def _remember(state: AgentState, key: str, value: str) -> list[str]:
-    current = state.memory.get(key, [])
-    values = list(current) if isinstance(current, list) else []
-    if value not in values:
-        values.append(value)
-    return values
 
 
 class ListFilesInput(RuntimeModel):
@@ -68,6 +49,8 @@ class ListFilesTool:
                 "truncated": truncated,
             },
         )
+
+
 class ReadFileInput(RuntimeModel):
     """Read one optional line range from a workspace file."""
 
@@ -185,46 +168,6 @@ class SearchTextTool:
         )
 
 
-class ReadArtifactInput(RuntimeModel):
-    """Identify one registered ArtifactRef and an optional inclusive line range."""
-
-    artifact_id: NonEmptyStr
-    start_line: int | None = Field(default=None, ge=1)
-    end_line: int | None = Field(default=None, ge=1)
-
-
-class ReadArtifactTool:
-    """Read a provided ArtifactRef after integrity verification."""
-
-    name = "read_artifact"
-    input_model = ReadArtifactInput
-    model_guidance = (
-        "If an artifact read is truncated, read a bounded start_line/end_line "
-        "range; do not repeat the same unbounded read. The full frozen file "
-        "is integrity-checked before any range is returned."
-    )
-
-    def __init__(self, reader: RegisteredArtifactReader) -> None:
-        self.reader = reader
-
-    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        args = cast(ReadArtifactInput, arguments)
-        value = self.reader.read_text(
-            args.artifact_id, start_line=args.start_line, end_line=args.end_line,
-        )
-        return ToolObservation(
-            summary=f"Read registered Artifact {args.artifact_id}",
-            value=value,
-            memory_updates={
-                "read_artifact_ids": _remember(
-                    state,
-                    "read_artifact_ids",
-                    args.artifact_id,
-                ),
-            },
-        )
-
-
 class CreateFileInput(RuntimeModel):
     """Create one new UTF-8 workspace file."""
 
@@ -319,148 +262,6 @@ class ReplaceTextTool:
             summary=f"Replaced one exact match in {args.path}",
             value={"path": args.path},
             memory_updates={"edit_revision": revision},
-        )
-
-
-class RunVerificationInput(RuntimeModel):
-    """Agent-chosen shell-free commands, run as one bounded verification pass."""
-
-    commands: list[NonEmptyStr] = Field(min_length=1)
-
-
-class RunVerificationTool:
-    """Run Agent-chosen commands and bind results to the edit revision."""
-
-    name = "run_verification"
-    input_model = RunVerificationInput
-
-    def __init__(
-        self,
-        runner: ProcessRunner,
-        repository: GitWorkspace,
-        *,
-        log_root: str,
-        timeout_seconds: int,
-        permission_policy: VerificationCommandPolicy | None = None,
-        baseline: GitBaseline,
-        env_binding: EnvironmentBinding | None = None,
-        extra_env: dict[str, str] | None = None,
-    ) -> None:
-        self.runner = runner
-        self.repository = repository
-        self.log_root = log_root
-        self.timeout_seconds = timeout_seconds
-        self.permission_policy = permission_policy or VerificationCommandPolicy()
-        self.baseline = baseline
-        self.env_binding = env_binding
-        self.extra_env = dict(extra_env or {})
-
-    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        args = cast(RunVerificationInput, arguments)
-        decision = self.permission_policy.check(args.commands)
-        if not decision.allowed:
-            raise ValueError(f"verification commands rejected: {decision.reason}")
-        argv_prefix = None
-        if self.env_binding is not None:
-            argv_prefix = self.env_binding.argv_prefix()
-            if argv_prefix is None:
-                return ToolObservation(
-                    summary="No environment prepared; call prepare_environment before verification",
-                    ok=False,
-                    value={"blocked": True, "reason": "no_environment"},
-                )
-            if not self.env_binding.certified:
-                return ToolObservation(
-                    summary="Environment not audited; call audit_env before verification",
-                    ok=False,
-                    value={"blocked": True, "reason": "not_certified"},
-                )
-        revision = int(state.memory.get("edit_revision", 0))
-
-        def _digest() -> str:
-            diff = self.repository.diff_since(self.baseline)
-            return hashlib.sha256(diff.encode("utf-8")).hexdigest()
-
-        before_digest = _digest()
-        deadline = monotonic() + self.timeout_seconds
-        results: list[VerificationResult] = []
-        for index, command in enumerate(args.commands, start=1):
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                # A command that never ran must still produce a failure record,
-                # so a partial verification pass can never be mistaken for
-                # success (ADR-0011 §3).
-                results.append(
-                    VerificationResult(
-                        command=command,
-                        exit_code=1,
-                        timed_out=True,
-                        stdout_path=(
-                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stdout"
-                        ),
-                        stderr_path=(
-                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stderr"
-                        ),
-                        duration_seconds=0.0,
-                    )
-                )
-                continue
-            results.append(
-                self.runner.run(
-                    command,
-                    log_dir=f"{self.log_root}/revision_{revision}",
-                    index=index,
-                    timeout_seconds=remaining,
-                    argv_prefix=argv_prefix,
-                    extra_env=self.extra_env,
-                )
-            )
-        after_digest = _digest()
-        workspace_unchanged = before_digest == after_digest
-        payload = [result.model_dump(mode="json") for result in results]
-        passed = (
-            len(results) == len(args.commands)
-            and workspace_unchanged
-            and all(
-                result.exit_code == 0 and not result.timed_out for result in results
-            )
-        )
-        observations = [
-            {
-                **result.model_dump(mode="json"),
-                "stdout_tail": (
-                    self.runner.boundary.root / result.stdout_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
-                if Path(result.stdout_path).exists()
-                else "",
-                "stderr_tail": (
-                    self.runner.boundary.root / result.stderr_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
-                if Path(result.stderr_path).exists()
-                else "",
-            }
-            for result in results
-        ]
-        return ToolObservation(
-            summary=(
-                f"Verification {'passed' if passed else 'failed'} at revision {revision}; "
-                f"workspace_unchanged={workspace_unchanged}"
-            ),
-            ok=passed,
-            value={
-                "passed": passed,
-                "workspace_unchanged": workspace_unchanged,
-                "results": observations,
-            },
-            memory_updates={
-                "verification_revision": revision,
-                "verification_results": payload,
-                "verification_diff_sha256": after_digest,
-                "verification_workspace_unchanged": workspace_unchanged,
-                "verification_environment_generation": (
-                    self.env_binding.generation if self.env_binding is not None else None
-                ),
-            },
         )
 
 

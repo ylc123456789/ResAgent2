@@ -6,10 +6,11 @@ import hashlib
 import mimetypes
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId
+from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId
 
 from .text import MAX_READ_CHARS, slice_text_lines, wrap_text_lines
 
@@ -118,3 +119,28 @@ def build_module_report(details: dict[str, str | list[str]]) -> ArtifactCandidat
 
 def media_type_for(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
+class ArtifactRegistrationPort(Protocol):
+    """Scientific Tool seam for freezing results via the ResAgent Registry.
+
+    The composition root adapts the orchestrator ArtifactRegistry to this shape;
+    capabilities must not import the orchestrator.
+    """
+
+    def register_scientific(
+        self,
+        candidate: ArtifactCandidate,
+        *,
+        run_id: RunId,
+        session_id: SessionId,
+    ) -> ArtifactRef:
+        """Freeze one candidate with session provenance and return its Ref."""
+
+    def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
+        """Return a live-authorized artifact of this Run, or ``None``.
+
+        This lets the Scientific Agent's ``read_artifact`` see an artifact
+        (e.g. a literature search) registered earlier in the same turn.
+        An artifact registered for another Run must never be returned.
+        """

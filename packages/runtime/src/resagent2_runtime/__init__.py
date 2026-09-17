@@ -4,7 +4,8 @@ This package owns the execution engine only: the Agentic Loop, Agent state,
 context composition, LLM calls, session persistence and the Tool protocol plus
 the loop's own finish/ask_user tools. Concrete abilities (filesystem, Git,
 process, repository, environment, dataset, hardware) live in
-``resagent2_capabilities``, which Agents assemble through their Tool Profile.
+``resagent2_components``. Model-facing wrappers live in
+``resagent2_capabilities``; Agents choose tools through their Tool Profile.
 """
 
 from .context import (

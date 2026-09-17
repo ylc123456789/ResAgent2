@@ -17,6 +17,7 @@
 | Controller → Compiler | WorkflowCompiler.compile | WorkRequest + 图/能力/预算 → CompilationResult | [工作编译](#compiler) |
 | Scheduler → Coding / Experiment | ModulePort.invoke | ModuleTaskRequest → ModuleResult | [执行任务](#module) |
 | AgentLoop → ToolRegistry → Tool | dispatch / execute | arguments → ToolObservation | [工具与运行](#tools) |
+| Tool / Agent / 组合根 → Components | 普通 Python 调用 | 授权、资源、命令、事件 → 操作结果或内容投影 | [普通组件](#components) |
 | AgentLoop → 领域完成检查 | CompletionCheck.evaluate | 真实记录 + 提议 → CompletionDecision | [完成与报告](#completion) |
 | 生产方 → Registry；Agent → reader | register / read_text | Candidate → Ref；授权 Ref → 内容 | [工件](#artifacts) |
 
@@ -135,7 +136,7 @@ Port 由 orchestrator 声明，ScientificAgent 或替代实现提供。输入权
 
 Scientific 可检索文献、读工件，通过注入的 registration port 冻结检索结果，不直接调用执行 Agent。prompt 要求自有检索/阅读经已有重试仍失败时询问用户，不派代码或实验任务绕路；这是行为指引，不是确定性路由保证。
 
-文献后端仍统一实现 `LiteratureSearchBackend.search(query, max_results, start_year, end_year) -> list[LiteraturePaper]`。CLI/E2E 经 MultiSourceLiteratureBackend 注入平级的 arXiv、OpenAlex；继续使用最近成功来源，只有 `LiteratureUnavailableError`（限流/临时网络故障）触发其他来源，每次最多遍历一轮。有效空列表不是服务故障，坏请求/损坏响应不能静默换源掩盖。返回项保留各自的 paper_id/source_url，工件格式和 Agent 契约不变；选择索引、限速、冷却、认证属于后端实现，不增加 ResearchRequest 字段。详见 [能力实现](../../packages/capabilities/README.md)。
+文献后端仍统一实现 `LiteratureSearchBackend.search(query, max_results, start_year, end_year) -> list[LiteraturePaper]`。CLI/E2E 经 MultiSourceLiteratureBackend 注入平级的 arXiv、OpenAlex；继续使用最近成功来源，只有 `LiteratureUnavailableError`（限流/临时网络故障）触发其他来源，每次最多遍历一轮。有效空列表不是服务故障，坏请求/损坏响应不能静默换源掩盖。返回项保留各自的 paper_id/source_url，工件格式和 Agent 契约不变；选择索引、限速、冷却、认证属于后端实现，不增加 ResearchRequest 字段。详见 [文献组件](../../packages/components/README.md#literature)。
 
 interpreter.render_work_brief 投影目的、结果、解释性 narrative、warnings、失败诊断和授权证据指针。未解决任务来自完整 workflow 权威集合；有界 stderr 摘录标为 execution_diagnosis_only，非科学证据。模型不接收 raw 执行对象或内部 Task ID，不凭 narrative 自证结果。
 
@@ -539,7 +540,7 @@ payload 保留原有领域结果，同时通过既有 Artifact 通道交付下�
 
 - 原生 code_understand 通过完成检查后，总是追加一个 `kind=module_report` 工件，正文以 `## answer`、`## uncertainty`、`## evidence_files` 标题呈现选定内容。来源路径是模块引用的路径，不把源码全文复制进报告。
 - 原生 code_modify / experiment_run 只在 residual_risks 非空时追加同种报告，以 `## summary`、`## residual_risks` 呈现 finish.summary 与风险；空风险不生成额外报告。原 payload 字段不删、不改义。
-- 三处共用 capabilities 的 `build_module_report(details)` 纯函数，生成 `path=module_report.md`、`media_type=text/markdown` 的 ArtifactCandidate；不做 IO、不再调用模型、不打包完整 payload。开头的用途说明和导航 summary 明示：模块解释，不是独立验证或测量证据。
+- 三处共用 components 的 `build_module_report(details)` 纯函数，生成 `path=module_report.md`、`media_type=text/markdown` 的 ArtifactCandidate；不做 IO、不再调用模型、不打包完整 payload。开头的用途说明和导航 summary 明示：模块解释，不是独立验证或测量证据。
 - 报告是可读投影，长物理行按 1000 字符分行，不删解释内容；因此可用既有 read_artifact 的 start_line/end_line 取到长答案后部，不必放大上下文额度。展示换行不承诺与原 payload 字节相同；原 payload 中的精确原文不改，冻结 hash 对应实际 Markdown 字节。报告里的行号不是源码行号。
 - Scheduler 仍按原有工件登记/来源/授权规则处理，依赖 Task 通过 input_artifacts 获得引用；Scientific 用 read_artifact 读取。interpreter 对该 kind 标记 `read_for_module_explanation_not_measured_evidence`，报告中的结论不能替代原始代码、验证或实验工件。
 - 报告在原生完成门槛和实验 metrics 推导之后追加，不计入 ExperimentResult.evidence_files，不替代成功命令、真实变更或缺失的预期实验文件。未通过完成检查时不能靠一份报告变成成功。
@@ -589,6 +590,8 @@ Attempt 属于 Orchestrator 历史，Session 属于子 Agent。retry（failed/bl
 
 ## 5. AgentLoop → 工具与运行机制
 
+模型工具协议归 Runtime；通用模型入口由 Capabilities 提供，其公开导出只有 Tool 和对应输入模型。[Coding 验证工具](../../packages/agents/coding/src/resagent2_coding/verification.py)、Experiment 执行工具与各模块控制工具仍由所属 Agent/Runtime 提供。普通操作改从 `resagent2_components` 导入，不通过 Capabilities 转发。Tool 仍按下列协议运行，Python 文件移动不改变模型动作名、参数或 schema 10.0。
+
 ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再调用 `Tool.execute(state, parsed_arguments) -> ToolObservation`。工具不直接写 AgentState，返回 memory_updates / 候选工件 / 控制信号，由 Loop 应用；但可实际写文件、运行命令或改变 EnvironmentBinding，并非纯函数。
 
 OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `Tool.input_model.model_json_schema()` 作为原生 `tools` 参数的完整参数 schema；无 `next_tool_call` 的测试或注入客户端继续走 `next_action`，并收到从同一 input_model 派生的必填顶层参数与 guidance，作为 required `tool_contracts`。无论走哪条路径，供应商返回都不替代执行前的 ToolRegistry 完整校验。
@@ -605,7 +608,7 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | PermissionPolicy.check(action, state, request) | 派发前确定性允许/拒绝，不是 OS 沙箱或人工审批 UI |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
 
-LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域 inputs 和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、WorkspaceSnapshot 留在 capabilities，不变成 wire 消息。
+LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域 inputs 和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、WorkspaceSnapshot 留在 components，不变成 wire 消息。
 
 参数错误、ok=False 和执行时 PermissionError 等可恢复错误进反馈；PermissionPolicy 明确拒绝则立即 permission_denied。未知工具走既有拒绝策略，不放宽 schema。Action 校验前只移除旧 reasoning_summary 字段，不忽略其它未知字段。
 
@@ -624,6 +627,27 @@ Compiler 不运行 AgentLoop，也不使用原生工具：draft/review 仍经 `P
 **容量**：ModelProfile 声明窗口、输出预留、安全余量，模块声明输入上限；有效额度取模块与剩余模型容量之小值。正文 JSON 路径计量渲染后的 Context，Action schema 另在有Profile时从模型容量预留，不计入Context的estimated_tokens；原生路径计量 `messages + tools` 完整 JSON 序列化，包括历史、schema 与转义开销。均使用字符/4近似；三个Agent及Compiler默认均为128000。不另加隐藏调用额度；压缩、动作和重试共用 Run 剩余 calls，step 仅记录时序。required 保持顺序，optional 按优先级稳定选入；大可选段放不下不阻挡后续小段。不查询或按模型名猜容量，不新增长期记忆系统；只对旧协议历史做共享的有损检查点。
 
 <a id="trace"></a>
+
+<a id="components"></a>
+
+### 普通调用方 → Components
+
+这一层是进程内 Python 调用，不是原生 function call，也不新增远程协议。Tool、Agent 准备/完成检查、CLI/E2E 可直接使用；不强制一个 Tool 对应一个组件。Runtime 不依赖这里。
+
+| 入口 | 输入 → 输出 / 副作用 | 失败与边界 |
+|---|---|---|
+| [WorkspaceBoundary](../../packages/components/src/resagent2_components/workspace.py) | 工作区授权 + 相对路径 → 已检查 Path / 文件清单 | 路径与软链越界拒绝；不代替 OS 沙箱 |
+| [GitWorkspace](../../packages/components/src/resagent2_components/git.py)、[WorkspaceObserver](../../packages/components/src/resagent2_components/snapshot.py) | 工作区、Attempt 基线 → 变化路径 / patch / snapshot | 保持原基线与归属规则；不以模型说明推断修改 |
+| [RepoMaterializer](../../packages/components/src/resagent2_components/repo.py) | 仓库来源、目标工作区 → MaterializedRepo，可准备仓库文件 | 来源/目录校验失败抛明确错误；不决定任务图 |
+| [ProcessRunner.run](../../packages/components/src/resagent2_components/process.py) | 命令、目录、超时和环境 → VerificationResult，落 stdout/stderr | shell 组合拒绝，超时终止进程树；结果是执行事实，不是科学结论。历史类型名不在本次调整 |
+| [EnvironmentManager / Binding](../../packages/components/src/resagent2_components/environment.py) | Run/workspace、Python 版本 → 环境及认证状态 | 环境失效/代次更新规则不变；SetupCommandPolicy 限制安装入口，Coding 验证策略不在这里 |
+| [DatasetCatalog / resolve_dataset_refs](../../packages/components/src/resagent2_components/dataset.py) | 部署目录 / Run 引用 → 登记引用 / DatasetAvailability | 不下载、不猜准备状态；资源缺失怎样询问仍由 Agent 决定 |
+| [ResourceLayout](../../packages/components/src/resagent2_components/resources.py) | 部署配置 → 数据集与环境根目录 | 不管理 pip/conda 下载缓存，不成为 ResearchRequest 字段 |
+| [RegisteredArtifactReader / build_module_report](../../packages/components/src/resagent2_components/artifacts.py) | 授权 ID + 行范围 → 正文；模块说明 → ArtifactCandidate | 读取先校验 Run 与整份 hash；报告生成纯函数，不自行登记或生成科学证据 |
+| [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、数量和年份 → 规范化论文列表 | 两源保持平级切换；服务不可用与合法空结果区分，不伪造全文 |
+| [workspace_context](../../packages/components/src/resagent2_components/context.py)、[文本切片](../../packages/components/src/resagent2_components/text.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 / 文本窗口 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
+
+文献 Tool 通过工件组件中的 `ArtifactRegistrationPort` 接受组合根注入的登记/解析对象；实现仍是 Orchestrator 的 ScientificArtifactRegistration，Components 不反向 import Orchestrator。错误如何转为 ToolObservation、反馈、ModuleError 仍由已有 Tool/Loop/Agent 边界处理，组件不另建恢复机制。
 
 ### LLM 计量与 trace
 
@@ -651,7 +675,7 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - 已配对的 RecordedAnswer 由调用方限定作用域，经 Agent 的 context builder 进入同一 ContextComposer。Coding/Experiment 共用 `user_answers_section`，Scientific 保留已有 `answers` 段；原题 question_text 与回答 values 一起呈现，不重复注入、不缓存或静默裁掉答案，必需段装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - 正文 JSON 客户端使用 `recent_observations` 有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 是约 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整。原生客户端改为重放 `tool_turns` 中检查点之后已配对的 assistant/tool 消息，并在末尾加入最新业务 Context；两者都不把历史 prompt 当第二套记忆；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
-- 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。capabilities 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
+- 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。components 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
 - 三个Agent及Compiler默认输入上限同源为128000 tokens，模块分别可配置；CLI与real E2E的Compiler复用同一默认常量，Compiler仍无Session或历史压缩。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按文件/工件/诊断/目录16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
 - 共享command_results从原事件中选择run_verification/run_setup/run_command各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
 - directory附observed_at并明确是历史目录观察，创建文件不会自动重写旧清单。Coding控制投影用edited_since_verification表达编辑/验证版本差，不再把它叫workspace_changed；这些是模型可见投影，不增加业务schema字段；
@@ -716,7 +740,7 @@ ScientificArtifactRegistration 是共享适配器，冻结后更新 Run 索引�
 
 register_scientific 冻结前将自产 JSON 写为 indent=2 多行，再按实际字节 hash，便于按行读；不改旧工件，reader 不重新格式化。已登记不等于已观察，正文省略可按范围再取，full trace 不自动成为 Artifact 或科学证据。失败工件可作诊断，不包装成成功实验；各登记入口重复保护不代表所有副作用 exactly-once。
 
-**源码与测试**：[Registry / 共享适配](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[reader](../../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[持久化与工件](../../tests/orchestrator/test_persistence_and_artifacts.py)、[最终报告](../../tests/orchestrator/test_scientific_completion.py)。
+**源码与测试**：[Registry / 共享适配](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[reader](../../packages/components/src/resagent2_components/artifacts.py)、[持久化与工件](../../tests/orchestrator/test_persistence_and_artifacts.py)、[最终报告](../../tests/orchestrator/test_scientific_completion.py)。
 
 <a id="artifact-models"></a>
 
@@ -877,7 +901,7 @@ class WorkspaceDescriptor:
 
 `WorkspaceSpec` 是逻辑来源声明，`location` 可包含仓库 URL 或本地来源路径，但不是 Attempt 的物理授权；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
 
-capabilities 提供一个内部 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline` 的 tree hash，非 Git workspace 用有界 file-hash fallback）表达 Attempt 起点；GitDiffTool、Coding finalizer、failed patch 与 Experiment evidence ownership 都消费同一个 snapshot，删除 HEAD-relative legacy diff API（ADR-0011 [状态与所有权](#states)）。
+components 提供一个内部 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline` 的 tree hash，非 Git workspace 用有界 file-hash fallback）表达 Attempt 起点；GitDiffTool、Coding finalizer、failed patch 与 Experiment evidence ownership 都消费同一个 snapshot，删除 HEAD-relative legacy diff API（ADR-0011 [状态与所有权](#states)）。
 
 <a id="resources"></a>
 

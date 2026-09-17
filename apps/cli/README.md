@@ -15,6 +15,8 @@ CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入�
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：
 
+当前共 9 个包（包含新增 `resagent2-components`）。它承接资源、环境等普通实现，不增加 CLI 参数；切换 checkout 时须一并更新全部 editable 指针。命令和 E2E 仍独立装配。
+
 ```bash
 conda env create -f environment.yml
 conda activate ResAgent2

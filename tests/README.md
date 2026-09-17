@@ -6,7 +6,8 @@
 |---|---|
 | contracts/ | schema、ID、字段组合与状态不变量 |
 | runtime/ | Loop、Tool、权限、上下文、LLM、持久化和恢复 |
-| capabilities/ | 文件、Git、进程、环境、数据集、工件和投影 |
+| capabilities/ | 模型 Tool 参数、观测、副作用与集成行为 |
+| components/ | 普通操作、文献后端、资源、工件与共享投影（部分混合工具测试仍在 capabilities/） |
 | orchestrator/ | 编译、图、Task/Attempt、问答、路由、接收与最终 gate |
 | coding/、experiment/、scientific/ | 领域 Agent 行为 |
 | e2e/ | 确定性端到端检查；真实模型入口另在仓库 e2e/ |
@@ -15,3 +16,5 @@
 普通单测不依赖真实 LLM、网络、GPU 或服务器。安全、状态和完成条件要有确定性负例，不能只检查 prompt。真实验收另记提交、配置、原始响应、观测与工件；一次通过不证明永远稳定。
 
 边界见 [接口与契约](../docs/current/CONTRACTS.md)，历史验收见 [记录索引](../docs/history/README.md)。
+
+工具与组件边界由各包依赖测试约束；[test_tool_surface.py](e2e/test_tool_surface.py) 固定整理前模型可见 schema、docstring 和 guidance 的指纹，不应为使测试通过自动更新基线。

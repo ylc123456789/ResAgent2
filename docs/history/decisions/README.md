@@ -20,5 +20,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0012：最小状态恢复边界](0012-state-recovery-boundaries.md)
 - [ADR-0013：运行期资源与人工等待预算](0013-runtime-resources.md)
 - [ADR-0014：解释工件与原题配对的语义交接](0014-semantic-handoffs.md)
+- [ADR-0015：Tool 与普通组件分离](0015-tool-components-boundary.md)
 
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

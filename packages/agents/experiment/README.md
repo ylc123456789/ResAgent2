@@ -5,7 +5,7 @@
 输入：实验目标、WorkspaceGrant、环境/资源要求。`instructions` 承载实验及证据语义；`expected_metrics` / `expected_artifacts` 只用于可信调用方已知的精确 JSON 键和相对路径。LLMCompiler 不猜这些名称，需求留在 instructions。
 输出：ExperimentResult、命令证据、文件派生指标、环境和 repo identity；summary 是说明，不代替证据。
 
-复用 runtime 的 permission、context 和 AgentLoop，并装配 capabilities 的 filesystem、process、Artifact 与 provisioning 组件（`RepoMaterializer`/`EnvironmentManager`/`HardwareAudit`）。实验策略和 experiment evidence finalizer 属于本模块。
+复用 runtime 的 permission、context 和 AgentLoop，装配 capabilities 的共享 Tool；准备/执行/完成检查直接使用 components 的 ProcessRunner、工件及环境组件（`RepoMaterializer`/`EnvironmentManager`/`HardwareAudit`）。实验策略和 experiment evidence finalizer 属于本模块。
 
 原生实现：
 

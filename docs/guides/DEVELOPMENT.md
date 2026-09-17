@@ -48,11 +48,14 @@ cd "$repo_dir"
 | 代码修改策略 | agents/coding | 真实变更、当前版本验证和失败记录 |
 | 实验执行或指标 | agents/experiment | 命令记录、完整证据集和 warnings |
 | Run、图、暂停恢复 | orchestrator | 身份、状态、重复交付、消费保留 |
-| 文件、环境或进程 | capabilities | 所有同语义消费者，别复制进另一 Agent |
+| 文件授权、环境、进程、文献后端、资源与共享呈现 | components | 所有同语义消费者，别复制进另一 Agent |
+| 模型工具入口、参数与局部工具逻辑 | capabilities | 复用 components/runtime，不要求对应组件；领域控制与验证策略留在 Agent |
 | 上下文、反馈、工具派发 | runtime | 三个 Agent；Compiler 是否经相同适配受影响 |
 | 公共字段和组合规则 | contracts | 生产/接收端、持久化、恢复与版本 |
 
 先找现有组件，能补一个函数或判据就不新增框架。内部算法未变更外部约定时，调用方不应被迫一起改。
+
+判断位置可以问三句：是“怎样驱动模型与工具循环”吗？放 Runtime。是模型可调用的通用 Tool 吗？放 Capabilities 对应目录。是普通调用方需要的具体操作或共享投影吗？放 Components。领域任务规则仍归 Agent，不属于这三者的兜底共用代码。参见 [工具目录](../../packages/capabilities/README.md) / [组件目录](../../packages/components/README.md)。
 
 ## 4. 怎样验证接口修改
 

@@ -113,7 +113,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 它们都需要请求模型、调工具、记录观测、处理失败，所以复用 runtime.AgentLoop，只装配不同 prompt、工具、权限、上下文和完成检查。
 
-文件、Git、进程、环境和工件校验放在 capabilities。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
+普通文件授权、Git、进程、环境和工件校验放在 components；暴露给模型的工具入口放在 capabilities。Agent 的普通代码也可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
 
 Compiler 需要上下文和 LLM，不需要整个工具循环，因此只复用 PromptLLMClient。**复用能力不等于采用同一个业务流程。**
 
@@ -134,7 +134,7 @@ Compiler 需要上下文和 LLM，不需要整个工具循环，因此只复用 
 | 谁选择 ready Task、记录 Attempt？ | [scheduler.py](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) |
 | Scientific 怎样看执行结果？ | [interpreter.py](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py) |
 | Agent 怎样共享循环？ | [loop.py](../../packages/runtime/src/resagent2_runtime/loop.py) |
-| 文件、工件如何进入上下文？ | [workspace_context.py](../../packages/capabilities/src/resagent2_capabilities/workspace_context.py) |
+| 文件、工件如何进入上下文？ | [components/context.py](../../packages/components/src/resagent2_components/context.py) |
 | 某字段是什么意思？ | [接口与契约](../current/CONTRACTS.md)，再查 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) |
 
 不必依次精读这些文件。先跑 [本地 mock](DEVELOPMENT.md#local-checks)，再挑一条想改的行为，更容易把代码和流程对应起来。

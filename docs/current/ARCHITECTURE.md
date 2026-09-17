@@ -29,7 +29,7 @@ flowchart TB
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
-Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime 与 capabilities。
+Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime、components 与 capabilities。
 
 <a id="modules"></a>
 
@@ -43,31 +43,43 @@ Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头�
 | `agents/coding` | 理解代码；或修改后验证，交付真实变更 | 不承担正式训练对比和科学结论 | [agent.py](../../packages/agents/coding/src/resagent2_coding/agent.py) / [ModulePort](CONTRACTS.md#module) |
 | `agents/experiment` | 准备环境、运行实验、从本次真实证据派生指标 | 不修改产品代码，不用 LLM 自报值代替指标 | [agent.py](../../packages/agents/experiment/src/resagent2_experiment/agent.py) / [ModulePort](CONTRACTS.md#module) |
 | `runtime` | AgentLoop、LLM、上下文、Tool 协议、反馈、Session、权限与完成检查的调用机制 | 不理解科研目标，不调度 Workflow，不实现具体文件/环境能力 | [包入口](../../packages/runtime/src/resagent2_runtime/) / [工具与运行](CONTRACTS.md#tools) |
-| `capabilities` | 文件、Git、进程、环境、数据集、工件、文献访问等可复用组件 | 不含领域 Agent prompt，不决定任务图或科学结论 | [包入口](../../packages/capabilities/src/resagent2_capabilities/) / [工具](CONTRACTS.md#tools)、[工件](CONTRACTS.md#artifacts)、[资源](CONTRACTS.md#resources) |
+| `components` | 工作区、Git、进程、环境、数据集、工件、文献后端与共享内容投影，供普通 Python 调用 | 不提供 Tool 入口，不启动 Loop，不决定领域流程 | [组件目录](../../packages/components/README.md) / [调用约定](CONTRACTS.md#components) |
+| `capabilities` | 模型可调用的工作区、工件、环境、文献 Tool，以及输入 schema 和局部工具逻辑 | 不作为普通组件的转发入口，不存放 Agent 工作流策略 | [工具目录](../../packages/capabilities/README.md) / [工具协议](CONTRACTS.md#tools) |
 | `contracts` | 跨模块数据类型、字段和纯组合判据 | 不执行 LLM、IO 或状态迁移 | [models.py](../../packages/contracts/src/resagent2_contracts/models.py) / [字段参考](CONTRACTS.md) |
 
 ### 依赖倒置与组合根
 
-两支核心依赖是 `contracts ← runtime ← capabilities ← agents` 和 `contracts ← orchestrator`；Agent 也可直接依赖 contracts/runtime。箭头指向被依赖者。
+这是按职责划分的依赖图，**不是必须逐层调用的流水线**。Capabilities 按需使用 Components 和 Runtime；一个 Tool 可以使用多个组件，也可以直接实现简单操作。Agent 的准备、完成检查和组合根可以直接调用 Components。Components 中的共享投影使用 Runtime 的类型和选择函数，底层操作只引入实际需要的依赖。箭头指向被依赖者。
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e8eef8", "primaryTextColor": "#172b4d", "primaryBorderColor": "#597fa6", "lineColor": "#597fa6", "textColor": "#172b4d", "edgeLabelBackground": "#e8eef8"}, "flowchart": {"nodeSpacing": 50, "rankSpacing": 60}}}%%
 flowchart TB
     Runtime[runtime] --> Contracts[contracts]
+    Components[components：普通操作与呈现] --> Contracts
+    Components --> Runtime
     Caps[capabilities] --> Runtime
+    Caps --> Components
     Caps --> Contracts
     Agents[三个 Agent] --> Caps
     Agents --> Runtime
+    Agents --> Components
     Agents --> Contracts
     Orch[orchestrator] --> Contracts
     Root[CLI / E2E 各自的组合根] --> Orch
     Root --> Agents
     Root --> Caps
+    Root --> Components
     Root --> Runtime
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
 Orchestrator 通过 ScientificPort / ModulePort 调用注入的实现，不 import 具体 Agent；外层组合根负责接线。Port 是进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
+
+Runtime 不 import Components 或 Capabilities；Components 不 import Capabilities、Agent 或 Orchestrator；Capabilities 不 import Agent 或 Orchestrator。组件与 Tool **没有一一对应关系**，不建立注册器、适配器基类或自动映射。
+
+Capabilities 的四个目录是 `workspace/`、`artifacts/`、`environment/`、`literature/`，每组在 `__init__.py` 放 Tool 实现。Components 按实际复杂度组织：多数操作一个文件；文献后端及其共用 HTTP 实现在 `literature/`；小函数跟随使用它们的实现。目录示例不是“每类都必须拆文件”的规则。
+
+`run_verification` 的命令规则、编辑 revision 和验证记录属于 Coding，放在 [verification.py](../../packages/agents/coding/src/resagent2_coding/verification.py)，与 Experiment 自有 `run_command` 对称；二者共用 Components 的 ProcessRunner。Runtime 自有 finish/ask_user 和 Scientific 的控制工具仍留在原模块，不为统一目录搬走领域控制。
 
 CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配。两者共享 PromptLLMClient 和 ScientificArtifactRegistration 等机制，但保留各自配置与测试目标，不合成隐藏的全局 bootstrap。
 
@@ -85,7 +97,7 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 
 interpreter 属于 Scientific，因为它负责“Scientific 应怎样理解执行结果”，不改变执行事实。它无 LLM、无 IO、无状态，不是新服务。stderr 摘录只作执行诊断，summary 是解释性文字，科学证据仍须通过授权工件读取。
 
-代码理解的答案、不确定性和来源路径，以及修改/实验结果中非空的残余风险，通过 `kind=module_report` 的冻结 Markdown 工件交接。三个完成检查复用 capabilities 的 `build_module_report` 纯函数生成带字段标题的可读投影；长物理行按 1000 字符分行，便于既有 read_artifact 按行读取后部内容，不删解释内容。展示换行不承诺与原 payload 字节相同，原 payload 的精确原文保持不变；不另调 LLM、不把整个 payload 倒给 Scientific。报告经既有 Registry、依赖工件授权和读取机制交接；interpreter 标明其用途是模块解释，不能当成独立测量证据。
+代码理解的答案、不确定性和来源路径，以及修改/实验结果中非空的残余风险，通过 `kind=module_report` 的冻结 Markdown 工件交接。三个完成检查复用 components 的 `build_module_report` 纯函数生成带字段标题的可读投影；长物理行按 1000 字符分行，便于既有 read_artifact 按行读取后部内容，不删解释内容。展示换行不承诺与原 payload 字节相同，原 payload 的精确原文保持不变；不另调 LLM、不把整个 payload 倒给 Scientific。报告经既有 Registry、依赖工件授权和读取机制交接；interpreter 标明其用途是模块解释，不能当成独立测量证据。
 
 ### 三个循环，不要混在一起
 
@@ -157,14 +169,14 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用 → Agent 的实际可用性检查。缺所需资源复用 ask_user，不增资源状态机。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 
-能力组件是普通 Python 对象或 Tool，不要求每项能力配一个 Agent、Session 或管理器。
+Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者不要求每项配一个 Agent、Session 或管理器。只服务单个 Tool 的小逻辑可留在 Tool 内；业务策略留在所属 Agent，不一概塞进“共用”目录。
 
 - WorkspaceBoundary 管文件访问范围；WorkspaceObserver 在 Git 下用 Attempt baseline，非 Git 下用有界文件 hash 观察变化。
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
 - Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用128000的默认输入额度，Compiler仍为无状态JSON编译/审查，不使用Session压缩；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
-- 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[能力实现](../../packages/capabilities/README.md)。
+- 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[文献组件](../../packages/components/README.md#literature)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
 

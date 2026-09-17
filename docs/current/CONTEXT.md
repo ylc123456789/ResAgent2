@@ -45,11 +45,11 @@
 | 所在位置 | 负责什么 | 不负责什么 |
 |---|---|---|
 | Agent 的 context builder / Scientific interpreter | 领域信息的选择、组织和用途说明 | 不替代上层调度，不变更执行事实 |
-| capabilities 的共享投影 | 环境、数据集、读取材料等可复用内容 | 不决定科学结论，不保管第二份 Run |
+| components 的共享投影 | 环境、数据集、读取材料等可复用内容 | 不决定科学结论，不保管第二份 Run |
 | runtime 的 Loop / Composer | 运行反馈、原生协议历史/检查点、工具 schema 与完整请求预算 | 不理解哪篇论文更重要，不自动总结或压缩研究发现 |
 | 外层组合根 | 注入模型、容量及模块配置 | 不负责每步阅读内容的选择 |
 
-**源码**：[Scientific context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[workspace_context](../../packages/capabilities/src/resagent2_capabilities/workspace_context.py)、[AgentLoop](../../packages/runtime/src/resagent2_runtime/loop.py)、[ContextComposer](../../packages/runtime/src/resagent2_runtime/context.py)。
+**源码**：[Scientific context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[workspace_context](../../packages/components/src/resagent2_components/context.py)、[AgentLoop](../../packages/runtime/src/resagent2_runtime/loop.py)、[ContextComposer](../../packages/runtime/src/resagent2_runtime/context.py)。
 
 ### 2.1 required、priority 与顺序不是一回事
 
@@ -174,7 +174,7 @@ hardware/repo 在首次 Session 的 initial_memory 中初始化，恢复时从�
 
 工具已经捕获并截断的命令 stdout/stderr 与 evidence_files 清单会进入原生 receipt 历史，`command_results` 再投影有界诊断；证据文件正文不会因此自动读入。最终 metrics 由 completion check 从本次实际证据文件推导，不由模型在上下文里自报数字就算完成。
 
-**源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/capabilities/test_workspace_context.py)。
+**源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/components/test_workspace_context.py)。
 
 <a id="compiler"></a>
 
@@ -207,7 +207,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 文件读取还受授权和默认 1,000,000 字节文件大小限制；工件读取先查授权、来源和整份冻结 hash，再切片。后者不因只取几行而跳过完整性校验。`search_text` 是大小写不敏感的字面子串搜索，不是正则；结果给出行号，但当前没有独立的长期搜索正文段。
 
-**源码与测试**：[workspace tools](../../packages/capabilities/src/resagent2_capabilities/workspace_tools.py)、[工件读取](../../packages/capabilities/src/resagent2_capabilities/artifacts.py)、[切片函数](../../packages/capabilities/src/resagent2_capabilities/text.py)、[行窗口测试](../../tests/capabilities/test_text_windows.py)。
+**源码与测试**：[workspace tools](../../packages/capabilities/src/resagent2_capabilities/workspace/__init__.py)、[工件读取](../../packages/components/src/resagent2_components/artifacts.py)、[切片函数](../../packages/components/src/resagent2_components/text.py)、[行窗口测试](../../tests/capabilities/test_text_windows.py)。
 
 ### 4.2 下一轮再从历史里选择片段
 
@@ -239,7 +239,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 资源字段、路径授权等公开约定仍以 [资源契约](CONTRACTS.md#resources)、[问答契约](CONTRACTS.md#questions) 为准。
 
-**源码与测试**：[共享投影](../../packages/capabilities/src/resagent2_capabilities/workspace_context.py)、[片段选择](../../packages/runtime/src/resagent2_runtime/context.py)、[数据集视图](../../packages/capabilities/src/resagent2_capabilities/dataset.py)、[读取时序](../../tests/e2e/test_workspace_read_history.py)、[资源恢复](../../tests/e2e/test_runtime_resources.py)。
+**源码与测试**：[共享投影](../../packages/components/src/resagent2_components/context.py)、[片段选择](../../packages/runtime/src/resagent2_runtime/context.py)、[数据集视图](../../packages/components/src/resagent2_components/dataset.py)、[读取时序](../../tests/e2e/test_workspace_read_history.py)、[资源恢复](../../tests/e2e/test_runtime_resources.py)。
 
 <a id="commands"></a>
 
@@ -253,7 +253,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 - 同一工具较新的命令结果取代投影中的旧结果，但不删除Session事件；后续普通读文件不会把最近的验证失败挤出这个段。
 - 这些是历史执行诊断，不是当前状态或科学测量。验证是否仍有效，由现有control_state/完成门禁决定。
 
-此处没有IO、LLM摘要或第二份状态缓存。完整日志仍留原处，也不承诺有限摘录覆盖所有失败原因。[源码](../../packages/capabilities/src/resagent2_capabilities/command_context.py)与[共享投影测试](../../tests/capabilities/test_workspace_context.py)。
+此处没有IO、LLM摘要或第二份状态缓存。完整日志仍留原处，也不承诺有限摘录覆盖所有失败原因。[源码](../../packages/components/src/resagent2_components/context.py)与[共享投影测试](../../tests/components/test_workspace_context.py)。
 
 <a id="literature"></a>
 
@@ -270,7 +270,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 外部 timeout/429 与本地上下文丢失是两种问题。前者可能确实需要外部帮助；如果所需证据已在冻结工件里，是否还需要重新联网，应依据已有内容判断，不能把当前片段缺失等同于从未检索到。相关实际轨迹和候选策略见 [审查 C5](../history/reviews/CONTEXT_REVIEW_2026-09-13.md#c5)。
 
-**源码与测试**：[literature backend / Tool](../../packages/capabilities/src/resagent2_capabilities/literature.py)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。最后这类脚本化测试证明指定范围可达，不证明真实模型一定自己找到范围、也不证明翻页后不会遗忘。
+**源码与测试**：[文献后端与呈现](../../packages/components/src/resagent2_components/literature/backends.py)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/__init__.py)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。最后这类脚本化测试证明指定范围可达，不证明真实模型一定自己找到范围、也不证明翻页后不会遗忘。
 
 <a id="budgets"></a>
 

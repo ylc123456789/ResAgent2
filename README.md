@@ -36,7 +36,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `10.0`（`SCHEMA_VERSION="10.0"`），不保留旧 schema 的第二条运行路径；旧 9.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `10.0`（`SCHEMA_VERSION="10.0"`），不保留旧 schema 的第二条运行路径；旧 9.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities，真实执行不依赖旧项目的 Agent。
 
 调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
 
@@ -50,7 +50,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 通用部分如何复用
 
-Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。文件、Git、进程、环境、Artifact 读取等能力放在 `capabilities`，供需要它们的 Agent 复用；不要为名字相似但语义不同的职责强造统一接口。
+Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。`capabilities` 放模型可调用的 Tool；`components` 放文件授权、Git、进程、环境、工件读取、文献后端等普通 Python 实现。Tool、Agent 和组合根按需直接调用组件，不要求一一对应，也不强制经过中间层。Runtime 仍只管运行机制。入口见 [工具目录](packages/capabilities/README.md) 与 [组件目录](packages/components/README.md)。
 
 LLM 客户端的必需方法是 `next_action`；预算和 trace hooks 可选。Compiler 使用同一 LLM/上下文基础，但不必运行 Agentic Loop。
 
@@ -62,7 +62,8 @@ packages/
   agents/coding/              代码理解、修改与验证
   agents/experiment/          实验执行与证据交付
   runtime/                    共享 Agent 循环、上下文、Tool 协议、LLM、Session
-  capabilities/               可复用的文件、Git、进程、环境、证据等组件
+  capabilities/               按用途分组的模型 Tool 与输入 schema
+  components/                 普通调用可复用的操作、资源和内容呈现
   contracts/                  跨模块对象、字段与组合约束
 tests/                        本地契约与行为测试
 e2e/                          独立的端到端装配和验收入口

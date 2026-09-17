@@ -42,7 +42,7 @@
 
 测试人员先交付下面的预检记录；这一步未通过就停止，不消耗正式研究预算反复试错。
 
-1. **产品身份**：干净 checkout、Git SHA、8 个包的实际 import 路径、CLI 安装位置；不得用零散 scp 源码制造不明版本。
+1. **产品身份**：干净 checkout、Git SHA、9 个包（含 components）的实际 import 路径、CLI 安装位置；不得用零散 scp 源码制造不明版本。
 2. **数据就绪**：资源库 catalog 已登记 `cifar10`，目录和数据内容可读；记录校验和。`RESAGENT2_DATASETS_JSON` 是运行时 ID→路径的 JSON，不是 catalog 文件路径。实际缺资源时沿用 ask_user，不能只回答“ready”骗过检查。见 [资源约定](../current/CONTRACTS.md#resources)。
 3. **实验仓库**：建议候选 [kuangliu/pytorch-cifar](https://github.com/kuangliu/pytorch-cifar)，但已核对的 `main.py` 默认是 SimpleDLA、200 epochs、逐 epoch 测试，**不能原样当作 ResNet18 基线**。启动前必须锁 SHA，核对许可与源码，不依赖浮动 master 的行为。
 4. **独立准备 diff**：优先使用已有可运行基线；必要时只做中性准备：选 ResNet18，支持资源路径/禁止下载、seed/epochs 参数及独立输出目录。若提供 train/validation 切分，要固定索引并在 README 如实说明；不能把官方 test 冒充 validation。保留 upstream SHA、准备 commit/diff 和文件 hash。不得预实现候选、预写实验结论或修改 ResAgent2。系统仍负责实验设计、候选实现和正式比较；测试方不得在 Run 启动后继续替它修实验代码。
@@ -103,7 +103,7 @@ resagent2 show "$RUN_ID" --data-root "$ROOT/data"
 
 `12 / 2 / 200 / 14400` 是本案例运行前显式冻结的预算，不是产品默认值；当前 CLI 默认是 `8 / 2 / 200 / 7200`。正式运行中不临时提高这些额度。
 
-这里 `--timeout-seconds` 是整个 Run 的执行时间预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。LLM socket timeout 与 Run timeout 也不是一回事。依赖安装可能耗掉很大部分时间；显式暂停等待用户的时间单独计量、不计入此执行预算，所以 4 小时不是总墙钟硬截止。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/capabilities/src/resagent2_capabilities/process.py)。
+这里 `--timeout-seconds` 是整个 Run 的执行时间预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。LLM socket timeout 与 Run timeout 也不是一回事。依赖安装可能耗掉很大部分时间；显式暂停等待用户的时间单独计量、不计入此执行预算，所以 4 小时不是总墙钟硬截止。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/components/src/resagent2_components/process.py)。
 
 若 paused：按下一节规则判断是否允许代答。先用 show 读取原题及实际 `requested_fields`；`ACTUAL_FIELD` 是占位符，不是固定字段名。多字段问题逐项用 `--field` 提交，不能猜字段名或改 Run JSON 绕过校验。
 

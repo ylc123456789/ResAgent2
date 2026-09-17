@@ -8,10 +8,8 @@ from pydantic import BaseModel, Field
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
-
 from resagent2_components.artifacts import RegisteredArtifactReader
 from resagent2_components.context import remember_source as _remember
-
 
 class ReadArtifactInput(RuntimeModel):
     """Identify one registered ArtifactRef and an optional inclusive line range."""

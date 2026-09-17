@@ -1,6 +1,6 @@
 """Public exports for literature tools and their input schemas."""
 
-from .tools import (
+from .literature_search import (
     LiteratureSearchToolInput,
     LiteratureSearchTool,
 )

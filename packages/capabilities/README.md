@@ -2,14 +2,14 @@
 
 这里放 **Tool、它的输入 schema 和少量工具专用逻辑**。普通 Python 操作与资源实现放在 [Components](../components/README.md)，运行循环与 Tool 协议放在 [Runtime](../runtime/README.md)。
 
-| 目录 | 模型工具 |
+| 目录 | 模型工具（每个 Tool 一个实现文件） |
 |---|---|
-| [workspace/](src/resagent2_capabilities/workspace/tools.py) | list_files、read_file、search_text、create_file、replace_text、git_diff |
-| [artifacts/](src/resagent2_capabilities/artifacts/tools.py) | read_artifact |
-| [environment/](src/resagent2_capabilities/environment/tools.py) | prepare_environment、run_setup、audit_env |
-| [literature/](src/resagent2_capabilities/literature/tools.py) | literature_search |
+| [workspace/](src/resagent2_capabilities/workspace/__init__.py) | [list_files](src/resagent2_capabilities/workspace/list_files.py)、[read_file](src/resagent2_capabilities/workspace/read_file.py)、[search_text](src/resagent2_capabilities/workspace/search_text.py)、[create_file](src/resagent2_capabilities/workspace/create_file.py)、[replace_text](src/resagent2_capabilities/workspace/replace_text.py)、[git_diff](src/resagent2_capabilities/workspace/git_diff.py) |
+| [artifacts/](src/resagent2_capabilities/artifacts/__init__.py) | [read_artifact](src/resagent2_capabilities/artifacts/read_artifact.py) |
+| [environment/](src/resagent2_capabilities/environment/__init__.py) | [prepare_environment](src/resagent2_capabilities/environment/prepare_environment.py)、[run_setup](src/resagent2_capabilities/environment/run_setup.py)、[audit_env](src/resagent2_capabilities/environment/audit_env.py) |
+| [literature/](src/resagent2_capabilities/literature/__init__.py) | [literature_search](src/resagent2_capabilities/literature/literature_search.py) |
 
-每组的 `tools.py` 放 Tool、输入 schema 和工具专用辅助函数，`__init__.py` 只显式导出公开的 Tool 与输入模型。顶层包同样只负责导出；不要求每个 Tool 一个文件，也不要求与 Components 的文件一一对应。
+每组按模型可调用的 Tool 拆分实现文件，例如 `read_file.py`、`replace_text.py`；`__init__.py` 只显式导出公开的 Tool 与输入模型。顶层包同样只负责导出；不要求与 Components 的文件一一对应。
 
 ## 调用与边界
 

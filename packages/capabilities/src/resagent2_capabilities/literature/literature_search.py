@@ -6,13 +6,11 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
+from resagent2_contracts import ArtifactCandidate
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
-
-from resagent2_contracts import ArtifactCandidate
 from resagent2_components.artifacts import ArtifactRegistrationPort
 from resagent2_components.literature import LiteratureSearchBackend, render_literature
-
 
 class LiteratureSearchToolInput(RuntimeModel):
     """Bounded literature query for the Scientific Agent."""

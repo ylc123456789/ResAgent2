@@ -1,6 +1,6 @@
 """Public exports for artifacts tools and their input schemas."""
 
-from .tools import (
+from .read_artifact import (
     ReadArtifactInput,
     ReadArtifactTool,
 )

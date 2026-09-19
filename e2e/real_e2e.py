@@ -20,11 +20,10 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
+    AcceptanceSpec,
     Capability,
     CapabilityDefinition,
     CapabilityRegistry,
-    CodeModifyInput,
-    ExperimentRunInput,
     ModuleResult,
     ModuleStatus,
     ModuleTaskRequest,
@@ -534,9 +533,9 @@ def run_code(workdir: Path) -> ModuleResult:
         task_id="task_code",
         attempt_number=1,
         capability=Capability.CODE_MODIFY,
-        goal="Implement the Squeeze-and-Excitation forward pass in train.py",
-        inputs=CodeModifyInput(
-            instructions="Implement SELayer.forward in train.py (it raises NotImplementedError)",
+        instruction=(
+            "Goal:\nImplement the Squeeze-and-Excitation forward pass in train.py\n\n"
+            "Task:\nImplement SELayer.forward in train.py (it raises NotImplementedError)"
         ),
         budget=TaskBudget(max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
@@ -553,15 +552,15 @@ def run_experiment(workdir: Path) -> ModuleResult:
         task_id="task_experiment",
         attempt_number=1,
         capability=Capability.EXPERIMENT_RUN,
-        goal="Run train.py and record baseline and candidate accuracy",
-        inputs=ExperimentRunInput(
-            instructions=(
-                "Run train.py (it trains both the baseline and the SE candidate "
-                "and writes metrics.json with baseline_accuracy and "
-                "candidate_accuracy). Record those accuracies."
-            ),
-            expected_metrics=["accuracy"],
-            expected_artifacts=["metrics.json"],
+        instruction=(
+            "Goal:\nRun train.py and record baseline and candidate accuracy\n\n"
+            "Task:\nRun train.py (it trains both the baseline and the SE candidate "
+            "and writes metrics.json with baseline_accuracy and candidate_accuracy). "
+            "Record those accuracies."
+        ),
+        acceptance=AcceptanceSpec(
+            required_metric_keys=["accuracy"],
+            required_artifact_paths=["metrics.json"],
         ),
         dataset_refs=DatasetCatalog(resource_layout.dataset_root).references(),
         budget=TaskBudget(max_llm_calls=60, timeout_seconds=1800),

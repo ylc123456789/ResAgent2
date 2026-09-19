@@ -223,7 +223,7 @@ def test_scientific_turn_request_first_call_rejects_outcome() -> None:
     with pytest.raises(ValidationError, match="first call"):
         ScientificTurnRequest(
             run_id="run_example",
-            research=research_request(),
+            instruction="Evaluate the method",
             work_outcome=WorkOutcome(
                 work_request_id="work_round1",
                 workflow_revision=1,
@@ -244,7 +244,7 @@ def test_scientific_turn_request_resume_rejects_outcome_and_answers() -> None:
     with pytest.raises(ValidationError, match="cannot carry both"):
         ScientificTurnRequest(
             run_id="run_example",
-            research=research_request(),
+            instruction="Evaluate the method",
             work_outcome=WorkOutcome(
                 work_request_id="work_round1",
                 workflow_revision=1,
@@ -444,7 +444,7 @@ def test_scientific_turn_rejects_cross_run_artifact() -> None:
     with pytest.raises(ValidationError, match="same run"):
         ScientificTurnRequest(
             run_id="run_example",
-            research=research_request(),
+            instruction="Evaluate the method",
             authorized_artifacts=[artifact],
             budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         )
@@ -466,7 +466,7 @@ def test_scientific_turn_rejects_duplicate_authorized_artifact() -> None:
     with pytest.raises(ValidationError, match="unique"):
         ScientificTurnRequest(
             run_id="run_example",
-            research=research_request(),
+            instruction="Evaluate the method",
             authorized_artifacts=[artifact, artifact],
             budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         )

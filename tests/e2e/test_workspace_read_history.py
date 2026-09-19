@@ -64,8 +64,7 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
     store = InMemorySessionStore()
     request = ModuleTaskRequest(
         run_id="run_read_history", task_id="task_read_history", attempt_number=1,
-        capability=Capability.CODE_MODIFY, goal="Fix the misspelled return variable",
-        inputs=CodeModifyInput(instructions="Read the function before editing it"),
+        capability=Capability.CODE_MODIFY, instruction="Read the function before editing it",
         workspace=WorkspaceGrant(
             root=str(root), mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,

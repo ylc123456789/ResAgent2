@@ -142,7 +142,6 @@ class _NativeExperimentPort:
             ),
             FinishTool(),
         )
-        inputs = request.inputs
         definition = AgentDefinition(
             name="experiment-run",
             owner=AgentOwner.EXPERIMENT,
@@ -168,8 +167,8 @@ class _NativeExperimentPort:
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
                 WorkspaceObserver(boundary),
-                expected_metrics=list(inputs.expected_metrics),
-                expected_artifacts=list(inputs.expected_artifacts),
+                expected_metrics=list(request.acceptance.required_metric_keys),
+                expected_artifacts=list(request.acceptance.required_artifact_paths),
                 env_id="resenv_x",
                 repo_url="https://example.com/repo.git",
                 commit="abc",

@@ -2,7 +2,7 @@
 
 程序员。
 
-输入：代码任务、WorkspaceGrant、constraints、input Artifact。
+输入：`ModuleTaskRequest.instruction`（本次代码任务语义）、WorkspaceGrant、资源/答案/工件等结构化控制字段。
 输出：完整代码变化、验证结果、风险和 ArtifactCandidate。
 
 复用 runtime 的 permission、context 和 AgentLoop，装配 capabilities 的文件、Git 和工件 Tool；准备/完成检查直接使用 components 的 workspace、process、Git 与 Artifact 操作。代码策略、验证策略和 patch finalizer 属于本模块。

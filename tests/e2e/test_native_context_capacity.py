@@ -80,9 +80,8 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     request = ModuleTaskRequest(
         run_id="run_capacity", task_id="task_capacity", attempt_number=1,
         parent_session_id=session_id, capability=capability,
-        goal="Use the current source and the previous patch to determine the next step",
-        inputs=CodeModifyInput(instructions="Review source and patch before modifying") if coding
-        else ExperimentRunInput(instructions="Review source and patch before evaluating"),
+        instruction="Review source and patch before modifying" if coding
+        else "Review source and patch before evaluating",
         input_artifacts=[artifact], workspace=grant, workspace_id="ws_capacity",
         output_dir=str(tmp_path / "outputs"),
         budget=TaskBudget(max_llm_calls=2, timeout_seconds=30),

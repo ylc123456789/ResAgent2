@@ -47,14 +47,13 @@ class _Completion:
 
 
 def _context(request, state, limit):
-    return [ContextSection(name="task", content=request.goal, required=True)]
+    return [ContextSection(name="task", content=request.instruction, required=True)]
 
 
 def _request(*, parent=None, calls=10, goal="current task"):
     return ModuleTaskRequest(
         run_id="run_native", task_id="task_native", attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND, goal=goal,
-        inputs=CodeUnderstandInput(question="inspect"), parent_session_id=parent,
+        capability=Capability.CODE_UNDERSTAND, instruction=goal, parent_session_id=parent,
         budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60),
     )
 

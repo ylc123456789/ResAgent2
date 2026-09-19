@@ -183,7 +183,7 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
     _observe(state, "read_artifact", {"artifact_id": "artifact_patch", "content": "Y" * 6000})
     request = ModuleTaskRequest(
         run_id="run_context", task_id="task_context", attempt_number=1,
-        capability=capability, inputs=inputs, goal="Bounded task",
+        capability=capability, instruction="Bounded task",
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     sections = builder(request, state, binding=binding, max_context_tokens=8192)

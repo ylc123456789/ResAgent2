@@ -103,20 +103,17 @@ def test_coding_context_uses_shared_dataset_catalog(tmp_path) -> None:
 
 def request(root: Path, *, capability: Capability) -> ModuleTaskRequest:
     if capability == Capability.CODE_MODIFY:
-        inputs = CodeModifyInput(
-            instructions="Add a docstring to add and keep behavior unchanged"
-        )
+        instruction = "Add a docstring to add and keep behavior unchanged"
         mode = WorkspaceMode.READ_WRITE
     else:
-        inputs = CodeUnderstandInput(question="Where is add implemented?")
+        instruction = "Where is add implemented?"
         mode = WorkspaceMode.READ_ONLY
     return ModuleTaskRequest(
         run_id="run_native_coding",
         task_id="task_native_coding",
         attempt_number=1,
         capability=capability,
-        goal="Exercise the native Coding Agent",
-        inputs=inputs,
+        instruction=instruction,
         budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
         workspace=WorkspaceGrant(
             root=str(root),

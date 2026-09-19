@@ -32,7 +32,7 @@ class NeverFinish:
 
 
 def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
-    return [ContextSection(name="goal", content=request.goal, required=True)]
+    return [ContextSection(name="instruction", content=request.instruction, required=True)]
 
 
 def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> ModuleTaskRequest:
@@ -41,8 +41,7 @@ def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> ModuleTaskR
         task_id="task_guard",
         attempt_number=1,
         capability=Capability.CODE_UNDERSTAND,
-        goal="Verify runtime boundaries",
-        inputs=CodeUnderstandInput(question="Can the action run?"),
+        instruction="Can the action run?",
         budget=TaskBudget(
             max_llm_calls=max_llm_calls,
             timeout_seconds=timeout_seconds,

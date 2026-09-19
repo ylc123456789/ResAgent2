@@ -50,7 +50,7 @@ def turn(*, work_outcome=None, unresolved=(), parent=None, artifacts=()) -> Scie
         )
     return ScientificTurnRequest(
         run_id="run_example",
-        research=research_request(),
+        instruction="Evaluate the method",
         authorized_artifacts=list(artifacts),
         work_outcome=work_outcome,
         previous_work_request=previous,
@@ -70,7 +70,7 @@ def test_work_outcome_requires_previous_work_request() -> None:
     with pytest.raises(ValidationError, match="paired"):
         ScientificTurnRequest(
             run_id="run_example",
-            research=research_request(),
+            instruction="Evaluate the method",
             work_outcome=outcome,
             budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
             parent_session_id="session_x",
@@ -232,7 +232,7 @@ def test_finish_after_search_tracks_observed_artifact(tmp_path: Path) -> None:
         registration_port=_Register(),
     )
     request = turn()
-    request.research.required_evidence_kinds = ["literature_search"]
+    request.required_evidence_kinds = ["literature_search"]
     result = agent.run(request)
 
     assert result.status == "completed"
@@ -255,7 +255,7 @@ def test_imported_literature_satisfies_required_kind_after_reading_without_searc
     ])
     agent = ScientificAgent(client)  # No search backend or registration port.
     request = turn(artifacts=[imported])
-    request.research.required_evidence_kinds = ["literature_search"]
+    request.required_evidence_kinds = ["literature_search"]
     result = agent.run(request)
     assert result.status == "completed"
     assert result.observed_artifact_ids == [imported.id]

@@ -71,7 +71,7 @@ class _AcceptFinish:
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
-        ContextSection(name="task", content=request.goal, priority=100, required=True)
+        ContextSection(name="task", content=request.instruction, priority=100, required=True)
     ]
 
 
@@ -106,8 +106,7 @@ def test_bad_json_stops_at_existing_limits(
         task_id="task_r",
         attempt_number=1,
         capability=Capability.CODE_UNDERSTAND,
-        goal="exercise recovery",
-        inputs=CodeUnderstandInput(question="q"),
+        instruction="q",
         budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60),
     )
 
@@ -299,8 +298,7 @@ def recovery(monkeypatch, tmp_path):
     )
     request = ModuleTaskRequest(
         run_id="run_r", task_id="task_r", attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND, goal="exercise recovery",
-        inputs=CodeUnderstandInput(question="q"),
+        capability=Capability.CODE_UNDERSTAND, instruction="q",
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
     )
     return definition, request, InMemorySessionStore()

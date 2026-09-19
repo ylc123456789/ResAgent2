@@ -59,10 +59,7 @@ def _pause():
 def _turn(artifacts, *, parent=None):
     return ScientificTurnRequest(
         run_id="run_scientific_capacity",
-        research=ResearchRequest(
-            goal="Review the supplied evidence before asking for approval",
-            budget=RunBudget(max_tasks=2, max_attempts_per_task=1, max_llm_calls=20, timeout_seconds=60),
-        ),
+        instruction="Review the supplied evidence before asking for approval",
         authorized_artifacts=artifacts, parent_session_id=parent,
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )

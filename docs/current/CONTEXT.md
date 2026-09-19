@@ -15,7 +15,7 @@
 
 | 东西 | 保存什么 | 是否每轮完整交给模型 |
 |---|---|---|
-| 模块请求 | 本次目标、输入、约束、授权工件、已配对回答等 | 否；由各模块选取、组织 |
+| 模块请求 | 本次 `instruction`、能力/预算/工作区等控制字段、授权工件、已配对回答等 | 否；由各模块选取、组织 |
 | Session 与冻结工件 | 工具事件、内部记忆、已获取的文件内容和结果，以及原生 assistant/tool 配对历史 | 否；领域材料仍由各模块选择，原生协议发送近期完整历史及可用检查点摘要，原始历史仍留在 Session；工具结果自身也可能已截断 |
 | 本轮领域上下文 | 本次调用重新选中的职责、状态、材料片段和反馈 | 是；作为原生请求最后一条 `user` 消息的正文 |
 
@@ -104,7 +104,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
 | `evidence_control_state` | 本 Session 已观察工件编号、当前请求中未观察的授权编号、尚待补读/撤回的引用 | 必需；每步根据请求和 memory 重算 |
-| `research` | research 的 goal、hypothesis、context、constraints、required_evidence_kinds | 必需；来自当前回合请求 |
+| `research` | 当前回合的 `instruction`（由 Controller 组合目标、假设、背景和约束）以及 `required_evidence_kinds` | 必需；来自当前回合请求 |
 | `dataset_catalog` | 同次数据集解析得到的可用/不可用 ID 与共享用法说明 | 必需；不是数据正文 |
 | `authorized_artifacts` | 当前请求的工件 id、kind、summary | 必需；是入口清单，不是工件正文 |
 | `work_brief` | interpreter 将上轮需求、当前交付结果、仍未解决的执行问题整理成简报 | 必需；不转存一份新状态 |
@@ -135,7 +135,7 @@ finish 只提交 opinion；Runtime 的完成摘要由 opinion.statement 派生�
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `task` | goal、typed inputs、task constraints、workspace_mode，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
+| `task` | `instruction`、workspace_mode，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
 | `dataset_catalog` | 当前 invoke 解析的数据集视图与共享说明 | 必需 |
 | `answers` | 调用方限定在本 Task 的已配对原题与回答 | 非空才出现，必需；共享 user_answers_section，不借别的 Task 的回答 |
 | `control_state` | 修改、验证及环境相关的下一步指引 | 仅 code_modify，必需；每步调用 derive_control_state |
@@ -160,7 +160,7 @@ finish 只提交 opinion；Runtime 的完成摘要由 opinion.statement 派生�
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `task` | goal、typed inputs、task constraints 和输入工件的 id/kind/summary | 必需 |
+| `task` | `instruction`、输入工件的 id/kind/summary，以及 Experiment 的 `acceptance` 和 `confirm_before_experiment` 控制项 | 必需 |
 | `datasets` | 与另两个 Agent 同源的 dataset_context，只是段名不同 | 必需 |
 | `answers` | 本 Task 的 RecordedAnswer | 非空才出现，必需；与 Coding 共用函数 |
 | `environment` | 实际环境绑定与认证状态 | 必需；每次构造读取同一绑定 |
@@ -342,4 +342,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前 schema 10.0 保留 9.0 字段精简并统一问答键约束，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简与共享问答的已验收结果及限制见[收尾记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)。不能用确定性测试代替模型行为证据。
+上下文管理保持原状态机、完成门禁及模型反馈规则；TaskBudget 只含调用与时间额度，step 仅记时序。当前 schema 11.0 统一执行 Agent 的 `instruction` 入口，并保留 9.0/10.0 的字段精简和问答键约束，旧记录原样保留不迁移；Compiler/显式 JSON-only 调用保留既有 JSON 恢复路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。这些机制不保证模型消除重复动作或循环。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)；原生调用起点见[原阶段记录](../history/reviews/NATIVE_TOOL_CALLS_PLAN.md)，串行/预算/压缩见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)，字段精简与共享问答的已验收结果及限制见[收尾记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)。不能用确定性测试代替模型行为证据。

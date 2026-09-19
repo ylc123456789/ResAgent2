@@ -4,6 +4,8 @@
 
 实现 ScientificPort 边界（[接口与契约](../../../docs/current/CONTRACTS.md#scientific)）：`ScientificAgent.run(ScientificTurnRequest)` 返回四态 `ScientificTurnResult`。
 
+入口请求用一条 `ScientificTurnRequest.instruction` 表达当前研究回合的语义；`required_evidence_kinds`、数据集、授权工件、答案、工作结果和预算保持结构化，分别承担机器可检查的控制和状态职责。
+
 - `request_work`：当前 `ScientificAssessment` + 语义化 `WorkRequestDraft`；
 - `needs_user_input`：带 assessment 的用户问题（模型通过 ask_user 提议）；
 - `completed`：最终 `ScientificOpinion`（模型通过 finish 提议）；

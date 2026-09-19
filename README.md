@@ -36,7 +36,9 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `10.0`（`SCHEMA_VERSION="10.0"`），不保留旧 schema 的第二条运行路径；旧 9.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `11.0`（`SCHEMA_VERSION="11.0"`），不保留旧 schema 的第二条运行路径；旧 10.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities，真实执行不依赖旧项目的 Agent。
+
+执行 Agent 的入口保持统一：`ModuleTaskRequest` 用一条 `instruction` 表达本次语义任务，预算、工作区、Session、数据集、输入工件和答案等仍由结构化字段控制；Experiment 的精确指标/产物要求放在 `AcceptanceSpec`，确认开关放在 `confirm_before_experiment`。Scientific 回合同样用 `ScientificTurnRequest.instruction`，并单独传递所需证据种类。Compiler 内部的 Workflow 图仍保留 typed `goal`、`inputs` 和 `constraints`，Scheduler 在执行边界把它们物化为 instruction 和控制字段。
 
 调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
 

@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **10.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **11.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -30,6 +30,8 @@ flowchart TB
 ```
 
 Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime、components 与 capabilities。
+
+执行入口保持统一：三个执行 Agent 都接收一条自然语言 `instruction`，其余入口字段用于身份、预算、工作区、Session、资源、答案和结果控制。只有 Experiment 额外接收 `AcceptanceSpec` 与 `confirm_before_experiment`；这些是确定性控制，不塞进自然语言。Compiler 的内部 Workflow 图仍可使用 typed `goal`、`inputs` 和 `constraints`，由 Scheduler 在执行边界转换成 instruction 和控制字段。
 
 <a id="modules"></a>
 

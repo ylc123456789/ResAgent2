@@ -111,7 +111,6 @@ class NativeExperimentAgent:
         if request.output_dir is None:
             return self._failure("ExperimentAgent requires an output_dir", blocked=True)
 
-        inputs = request.inputs  # ExperimentRunInput
         spec = request.workspace_spec
         if spec is None:
             spec = WorkspaceSpec(
@@ -162,7 +161,7 @@ class NativeExperimentAgent:
         )
         env_id = manager.env_id(run_id=request.run_id, workspace_id=workspace_id)
 
-        confirmed = _confirmation_granted(request, inputs.confirm_before_experiment)
+        confirmed = _confirmation_granted(request, request.confirm_before_experiment)
         dataset_env = dataset_env_overrides(resource_layout.dataset_root, datasets)
 
         output_dir = request.output_dir
@@ -188,7 +187,7 @@ class NativeExperimentAgent:
             RunCommandTool(
                 runner,
                 binding,
-                confirm_before_experiment=inputs.confirm_before_experiment,
+                confirm_before_experiment=request.confirm_before_experiment,
                 confirmed=confirmed,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env,
@@ -209,8 +208,8 @@ class NativeExperimentAgent:
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
                 observer,
-                expected_metrics=list(inputs.expected_metrics),
-                expected_artifacts=list(inputs.expected_artifacts),
+                expected_metrics=list(request.acceptance.required_metric_keys),
+                expected_artifacts=list(request.acceptance.required_artifact_paths),
                 env_id=env_id,
                 repo_url=source_ref,
                 commit=materialized.commit,

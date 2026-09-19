@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "10.0"
+SCHEMA_VERSION = "11.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -79,7 +79,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["10.0"] = SCHEMA_VERSION
+    schema_version: Literal["11.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +362,18 @@ class TaskBudget(ContractModel):
 
     max_llm_calls: int = Field(ge=1)
     timeout_seconds: int = Field(ge=1)
+
+
+class AcceptanceSpec(ContractModel):
+    """Optional exact delivery requirements for one execution Agent."""
+
+    required_metric_keys: list[NonEmptyStr] = Field(default_factory=list)
+    required_artifact_paths: list[NonEmptyStr] = Field(default_factory=list)
+
+    @field_validator("required_artifact_paths")
+    @classmethod
+    def validate_artifact_paths(cls, values: list[str]) -> list[str]:
+        return [_validate_relative_path(value) for value in values]
 
 
 class ArtifactImport(ContractModel):
@@ -865,13 +877,13 @@ class ModuleTaskRequest(ContractModel):
     task_id: TaskId
     attempt_number: int = Field(ge=1)
     capability: Capability
-    goal: NonEmptyStr
-    inputs: CapabilityInput
+    instruction: NonEmptyStr
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
-    constraints: list[NonEmptyStr] = Field(default_factory=list)
     answers: list[RecordedAnswer] = Field(default_factory=list)
     budget: TaskBudget
+    acceptance: AcceptanceSpec = Field(default_factory=AcceptanceSpec)
+    confirm_before_experiment: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
@@ -880,8 +892,12 @@ class ModuleTaskRequest(ContractModel):
     parent_session_id: SessionId | None = None
 
     @model_validator(mode="after")
-    def validate_input_type(self) -> ModuleTaskRequest:
-        _validate_capability_input(self.capability, self.inputs)
+    def validate_acceptance_scope(self) -> ModuleTaskRequest:
+        if self.capability != Capability.EXPERIMENT_RUN:
+            if self.acceptance.required_metric_keys or self.acceptance.required_artifact_paths:
+                raise ValueError("acceptance is only valid for experiment_run")
+            if self.confirm_before_experiment:
+                raise ValueError("confirm_before_experiment is only valid for experiment_run")
         return self
 
     @model_validator(mode="after")
@@ -1123,10 +1139,11 @@ class ScientificOpinion(ContractModel):
 
 
 class ScientificTurnRequest(ContractModel):
-    """One Orchestrator-to-Scientific call: goal, evidence, and new outcome."""
+    """One Orchestrator-to-Scientific call with one semantic instruction."""
 
     run_id: RunId
-    research: ResearchRequest
+    instruction: NonEmptyStr
+    required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
     authorized_artifacts: list[ArtifactRef] = Field(default_factory=list)
     work_outcome: WorkOutcome | None = None

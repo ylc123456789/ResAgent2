@@ -16,9 +16,7 @@ from resagent2_scientific import ScientificAgent
 def _request(session_id):
     return ScientificTurnRequest(
         run_id="run_translation", parent_session_id=session_id,
-        research=ResearchRequest(goal="Check a scientific signal", budget=RunBudget(
-            max_tasks=2, max_attempts_per_task=1, max_llm_calls=10, timeout_seconds=60,
-        )),
+        instruction="Check a scientific signal",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     )
 

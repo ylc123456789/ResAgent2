@@ -63,7 +63,7 @@ def build_context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
         ContextSection(
             name="task",
-            content=f"Goal: {request.goal}",
+            content=f"Instruction: {request.instruction}",
             priority=100,
             required=True,
         ),
@@ -85,8 +85,7 @@ def request(capability: Capability) -> ModuleTaskRequest:
         task_id="task_runtime",
         attempt_number=1,
         capability=capability,
-        goal="Exercise the shared loop",
-        inputs=inputs,
+        instruction=inputs.instructions if hasattr(inputs, "instructions") else inputs.question,
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
     )
 
@@ -466,8 +465,7 @@ def test_consecutive_failures_stop_before_budget() -> None:
         task_id="task_x",
         attempt_number=1,
         capability=Capability.CODE_MODIFY,
-        goal="g",
-        inputs=CodeModifyInput(instructions="i"),
+        instruction="i",
         budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
     result = loop.run(profile, req, session_id="session_fail")
@@ -527,8 +525,7 @@ def test_completion_rejection_counts_as_failure() -> None:
         task_id="task_x",
         attempt_number=1,
         capability=Capability.CODE_MODIFY,
-        goal="g",
-        inputs=CodeModifyInput(instructions="i"),
+        instruction="i",
         budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
     result = loop.run(profile, req, session_id="session_reject_finish")

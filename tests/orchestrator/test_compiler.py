@@ -1130,8 +1130,8 @@ def test_scheduler_passes_task_constraints_not_run_constraints() -> None:
         proposal,
     )
     scheduler.run_until_stable("run_x")
-    assert port.requests[0].constraints == ["use accuracy"]
-    assert "stale run-level constraint" not in port.requests[0].constraints
+    assert "use accuracy" in port.requests[0].instruction
+    assert "stale run-level constraint" not in port.requests[0].instruction
 
 
 @pytest.mark.parametrize("failure_stage", [CompilationDraft, CompilationReview])

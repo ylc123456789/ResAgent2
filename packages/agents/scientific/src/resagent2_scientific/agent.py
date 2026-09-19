@@ -150,7 +150,7 @@ class ScientificAgent:
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(
                 list(request.unresolved_task_outcomes),
-                list(request.research.required_evidence_kinds),
+                list(request.required_evidence_kinds),
                 resolve_artifact=reader.resolve_ref,
             ),
             action_type=ScientificAction,

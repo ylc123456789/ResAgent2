@@ -27,7 +27,7 @@
 
 ## 阅读约定
 
-- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="10.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
+- 公共模型继承 ContractModel，extra="forbid"，当前 schema_version="11.0"。以下代码是字段示意，省略继承字段及部分 validator，不是可直接复制的完整类。
 - 方法签名解决“能否调用”，接收校验、所有权、恢复和计量解决“是否守约”。替换实现两者都要满足。
 - 机器状态用结构字段判断，不解析 summary。说明、数字投影、冻结证据各有用途，不能互相替代。
 - runtime 的 AgentDefinition、ToolObservation、ContextSection 等不是公共 wire 类型，不全部搬入 contracts。
@@ -45,7 +45,7 @@ ResearchController.run_until_stable(run_id) -> ResearchRun
 
 CLI 或其他组合根调用 Controller，它是唯一 Run 业务入口。create_run 保存后执行到稳定，非只创建记录；answer_question 保存当前问题答案再继续；run_until_stable 不制造答案、不越过 paused。查看状态使用 RunStore.load，不调用推进接口。
 
-Controller 管 Run、工作请求和问题路由；Scheduler 管 Task/Attempt，Agent/runtime 管 Session。任务级回答在同一 Run 对象内记录答案并恢复 Task 后保存，继续同一 Attempt。子任务约束来自已编译 task.constraints，不广播原始研究控制约束。
+Controller 管 Run、工作请求和问题路由；Scheduler 管 Task/Attempt，Agent/runtime 管 Session。任务级回答在同一 Run 对象内记录答案并恢复 Task 后保存，继续同一 Attempt。Workflow 图中的约束由 Scheduler 在执行边界编入唯一的 `instruction`；不广播原始研究控制约束，也不让执行 Agent 重新解释整张图。
 
 RunStore 原子 JSON 保存不构成跨 Run/Session/文件事务，也不是多写入者锁。新 Run ID 不复用已有身份；重复答案按持久化 QuestionId 识别，不能自动套给下一题。
 
@@ -230,7 +230,8 @@ Scientific 的 finish 工具只要求 `{"opinion": {...}}`；完成检查通过�
 ```python
 class ScientificTurnRequest:
     run_id: RunId
-    research: ResearchRequest
+    instruction: NonEmptyStr
+    required_evidence_kinds: list[RequiredEvidenceKind] = []
     dataset_refs: list[DatasetRef] = []  # Controller 提供的系统目录引用
     authorized_artifacts: list[ArtifactRef] = []
     work_outcome: WorkOutcome | None = None
@@ -239,6 +240,8 @@ class ScientificTurnRequest:
     answers: list[RecordedAnswer] = []
     budget: TaskBudget
     parent_session_id: SessionId | None = None
+
+`instruction` 是 Controller 将当前研究目标、可选假设、背景和约束组合后的唯一语义入口；`required_evidence_kinds` 是机器可检查的证据约束，不能塞回自然语言。数据集、授权工件、答案、工作结果和预算仍是独立的控制/状态字段。
 
 class ScientificWorkRequestResult:
     status: Literal["request_work"]
@@ -310,7 +313,7 @@ output 是 WorkflowProposal（新图）或 WorkflowPatch（只追加），llm_ca
 
 **接收**：workflow_validation.validate_workflow_candidate 是 Compiler/Scheduler 共用的非空及本轮依赖纯判据。Scheduler 持久化前另查 binding、workspace、预算与 revision；返回候选不等于已接受。“Workflow Validator”不是额外独立服务。
 
-**职责**：Compiler 不扫描代码或执行。LLMCompiler 清空猜测的 suggested_paths、expected_metrics/expected_artifacts，将实验语义留在本 Task.instructions；公开精确字段服务可信调用方。不能为任务名额让 code_modify 承担正式训练。成功依赖不是失败分支，条件修复等真实失败后由 Scientific 发新工作请求。
+**职责**：Compiler 不扫描代码或执行。LLMCompiler 清空猜测的 suggested_paths、expected_metrics/expected_artifacts，将实验语义留在本 Task.instructions；公开精确字段服务可信调用方。Scheduler 执行时把这些图级语义渲染为 `ModuleTaskRequest.instruction`，把可信的 Experiment 交付要求渲染为 `AcceptanceSpec`。不能为任务名额让 code_modify 承担正式训练。成功依赖不是失败分支，条件修复等真实失败后由 Scientific 发新工作请求。
 
 生成与评审通过同一 `_capability_context` 获取上述字段语义：这些数组在本 LLM 编译路径的规范化输入中有意留空，不能仅以空数组为拒绝理由，也不能要求模型编造名称补齐。评审从 goal、inputs.instructions、constraints 合起来判断证据覆盖；真正缺少证据要求、能力分工错误或遗漏前置任务仍须拒绝。该说明不改变 `_sanitize_inputs`、公开字段或可信直接调用方的精确标准，也不覆盖模型返回的拒绝结果。
 
@@ -364,7 +367,7 @@ class WorkflowTask:
 ```
 
 - `WorkflowProposal` 是 Compiler 产生的初始图候选；`WorkflowPatch` 是**只追加**的修订。修复模型是「新 WorkRequest 增加新 Task、保留旧历史」，不更新或抹去旧任务。设计理由见 [ADR-0011](../history/decisions/0011-stabilization-schema-3.md)。
-- `TaskProposal`/`WorkflowTask` 不含 `required`、`rationale` 或 `success_criteria`；proposal/patch 也不再另存图级摘要或编译理由。本轮目的由 WorkRequest 给出，每项任务仍有 goal、constraints 和 typed inputs，不能因删除图级说明而省略任务要求。
+- `TaskProposal`/`WorkflowTask` 不含 `required`、`rationale` 或 `success_criteria`；proposal/patch 也不再另存图级摘要或编译理由。本轮目的由 WorkRequest 给出，图中每项任务仍有 `goal`、`constraints` 和 typed `inputs`。这些字段属于 Compiler/Scheduler 的内部任务图，不是执行 Agent 的公开入口；物化时合并为一条 `instruction`，不能因入口精简而省略任务要求。
 - `capability` 必须与 discriminated `inputs.capability` 一致；图必须无环；Attempt number 必须从 1 连续递增；Task 的 `work_request_id` 必须等于所属 Proposal/Patch 的 `work_request_id`。图候选接收时必须非空，`depends_on` 只能引用本 Proposal/Patch 新增的 TaskId，不得依赖历史 WorkRequest 的 Task（无论旧 Task 成功还是失败）；共享判据在 Compiler 纠错与 Scheduler 接收两处调用。
 
 <a id="capabilities"></a>
@@ -410,7 +413,7 @@ Scheduler 从已接受 Task 与 Run 组装请求并保存 running 意图；Codin
 | needs_user_input | 保存问题、暂停；回答后同 Attempt、Session、输出目录和基线继续 |
 | request_work | 子模块不允许，拒绝；只有 Scientific 能提出研究工作需求 |
 
-一次 invoke 是执行区间，不一定结束整个 Attempt；llm_calls 只报此次新增 HTTP 尝试，不重报整个 Session。任务 constraints、Run 数据集、WorkspaceSpec Python 要求、WorkspaceGrant 物理授权各有唯一来源。
+一次 invoke 是执行区间，不一定结束整个 Attempt；llm_calls 只报此次新增 HTTP 尝试，不重报整个 Session。任务图语义由 Scheduler 渲染进 `instruction`；Run 数据集、WorkspaceSpec Python 要求、WorkspaceGrant 物理授权和 Session 控制各有唯一结构化来源。
 
 Scheduler 重验外壳、capability 对应成功 payload 和身份。空/错 payload 变为不可自动重试的 contract_error；结构验证不代替 finalizer 的真实执行校验。失败保留消费、Session、原始诊断和工件，登记失败不能吞掉这些事实。
 
@@ -428,13 +431,13 @@ class ModuleTaskRequest:
     task_id: TaskId
     attempt_number: int
     capability: Capability
-    goal: NonEmptyStr
-    inputs: CapabilityInput
+    instruction: NonEmptyStr
     input_artifacts: list[ArtifactRef] = []
     dataset_refs: list[DatasetRef] = []
-    constraints: list[NonEmptyStr] = []
     answers: list[RecordedAnswer] = []
     budget: TaskBudget
+    acceptance: AcceptanceSpec = AcceptanceSpec()
+    confirm_before_experiment: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
@@ -443,13 +446,17 @@ class ModuleTaskRequest:
     parent_session_id: SessionId | None = None
 ```
 
+`instruction` 是 Scheduler 从当前任务图渲染出的唯一语义入口；能力、预算、工作区、Session、数据集、输入工件、答案和 Experiment 的验收要求仍由结构化字段控制。
+
 | 字段 | 控制流语义 |
 |---|---|
 | run/task/attempt | provenance 与幂等边界 |
-| capability + inputs | 选择模块 profile；二者 discriminator 必须一致 |
+| capability + instruction | 选择模块 profile，并提供本次唯一的自然语言任务说明；不把 Compiler 图对象继续暴露给 Agent |
 | input_artifacts | 已登记且已授权给本 Task 的输入证据 |
 | dataset_refs | Scheduler 从 ResearchRun 提供的已知目录引用，非用户要求、非 LLM 生成，也不表示都要用；Agent 检查哪些目录实际可用 |
 | answers | 只包含属于本 Task 的 RecordedAnswer，可含该 Task 的较早回答；每项同时含系统配对的 question_text 与用户 values。Coding/Experiment 每一步经共享 user_answers_section 按传入顺序呈现为 required answers 段，不从 Session 另取一份 |
+| acceptance | Experiment 的精确交付门槛：`required_metric_keys` 与 `required_artifact_paths`；仅由可信调用方提供，其他 capability 必须为空 |
+| confirm_before_experiment | 是否在正式实验前要求用户确认；仅对 `experiment_run` 有效，属于控制字段，不放入 instruction |
 | workspace / workspace_id / workspace_spec | 此 Attempt 的物理授权范围、逻辑工作区 id、来源声明（Agent 在 loop 前确定性 materialize） |
 | environment_spec | 上游声明的环境硬约束（`EnvironmentSpec.python_version`） |
 | output_dir | code_modify / experiment_run 的输出目录 |
@@ -590,7 +597,7 @@ Attempt 属于 Orchestrator 历史，Session 属于子 Agent。retry（failed/bl
 
 ## 5. AgentLoop → 工具与运行机制
 
-模型工具协议归 Runtime；通用模型入口由 Capabilities 提供，其公开导出只有 Tool 和对应输入模型。[Coding 验证工具](../../packages/agents/coding/src/resagent2_coding/verification.py)、Experiment 执行工具与各模块控制工具仍由所属 Agent/Runtime 提供。普通操作改从 `resagent2_components` 导入，不通过 Capabilities 转发。Tool 仍按下列协议运行，Python 文件移动不改变模型动作名、参数或 schema 10.0。
+模型工具协议归 Runtime；通用模型入口由 Capabilities 提供，其公开导出只有 Tool 和对应输入模型。[Coding 验证工具](../../packages/agents/coding/src/resagent2_coding/verification.py)、Experiment 执行工具与各模块控制工具仍由所属 Agent/Runtime 提供。普通操作改从 `resagent2_components` 导入，不通过 Capabilities 转发。Tool 仍按下列协议运行，Python 文件移动不改变模型动作名、参数或 schema 11.0。
 
 ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再调用 `Tool.execute(state, parsed_arguments) -> ToolObservation`。工具不直接写 AgentState，返回 memory_updates / 候选工件 / 控制信号，由 Loop 应用；但可实际写文件、运行命令或改变 EnvironmentBinding，并非纯函数。
 
@@ -956,7 +963,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 10.0 将提问和回答键统一约束为 AnswerFieldName，拒绝曾经合法的自然语言字段名；schema 9.0 的精简结果保持不变：QuestionDraft 无 reason、WorkflowProposal 无 summary/compilation_rationale、WorkflowPatch 无 reason，内部工具 ScientificFinish 与 CompilationDraft 同样不再要求重复说明。保留原有身份、任务依赖、RecordedAnswer、运行期资源和预算规则，不新增迁移或兼容实现。完整字段取舍与已完成的分阶段验收边界见 [收尾记录](../history/reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 9.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 11.0 在保留 AnswerFieldName 约束和 schema 9.0 字段精简的基础上，统一执行 Agent 入口：ModuleTaskRequest 使用 `instruction`，并用 AcceptanceSpec/confirm_before_experiment 表达 Experiment 的确定性控制要求；ScientificTurnRequest 也使用 `instruction`，所需证据种类保持独立字段。Compiler 内部 Workflow 图仍保留 typed goal/inputs/constraints，Scheduler 负责在执行边界物化，不新增兼容运行路径。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 10.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 

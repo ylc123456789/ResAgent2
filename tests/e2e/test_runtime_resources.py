@@ -70,27 +70,21 @@ def _probe(root, kind, phase):
     )
     if scientific:
         request = ScientificTurnRequest(
-            **common, research=ResearchRequest(
-                goal="Check availability without downloading data",
-                budget=RunBudget(
-                    max_tasks=1, max_attempts_per_task=1,
-                    max_llm_calls=20, timeout_seconds=60,
-                ),
-            ),
+            **common, instruction="Check availability without downloading data",
         )
         result = ScientificAgent(
             client, store=sessions, resource_layout=layout,
         ).run(request)
     else:
         capability = Capability(kind)
-        inputs = {
-            Capability.CODE_UNDERSTAND: CodeUnderstandInput(question="Inspect code"),
-            Capability.CODE_MODIFY: CodeModifyInput(instructions="Inspect before editing"),
-            Capability.EXPERIMENT_RUN: ExperimentRunInput(instructions="Inspect before running"),
+        instruction = {
+            Capability.CODE_UNDERSTAND: "Inspect code",
+            Capability.CODE_MODIFY: "Inspect before editing",
+            Capability.EXPERIMENT_RUN: "Inspect before running",
         }[capability]
         request = ModuleTaskRequest(
             **common, task_id="task_resources", attempt_number=1,
-            capability=capability, goal="Check resources", inputs=inputs,
+            capability=capability, instruction=instruction,
             workspace=WorkspaceGrant(
                 root=str(root / "repo"), mode=(
                     WorkspaceMode.READ_ONLY if capability == Capability.CODE_UNDERSTAND
@@ -174,11 +168,7 @@ def test_scientific_invalid_resource_is_a_controlled_failure(tmp_path):
     client = ScriptedLLMClient([])
     result = ScientificAgent(client, resource_layout=layout).run(ScientificTurnRequest(
         run_id="run_invalid", dataset_refs=[DatasetRef(dataset_id="x", relative_path="link")],
-        research=ResearchRequest(
-            goal="No unsafe resource paths", budget=RunBudget(
-                max_tasks=1, max_attempts_per_task=1, max_llm_calls=5, timeout_seconds=60,
-            ),
-        ),
+        instruction="No unsafe resource paths",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "failed"

@@ -437,15 +437,7 @@ def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
     turn = ScientificTurnRequest(
         run_id="run_example",
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
-        research=ResearchRequest(
-            goal="Evaluate the method",
-            budget=RunBudget(
-                max_tasks=5,
-                max_attempts_per_task=2,
-                max_llm_calls=20,
-                timeout_seconds=60,
-            ),
-        ),
+        instruction="Evaluate the method",
         authorized_artifacts=[],
         work_outcome=WorkOutcome(
             work_request_id="work_1",

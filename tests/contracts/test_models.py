@@ -8,6 +8,7 @@ from resagent2_contracts import (
     ArtifactRef,
     Attempt,
     AttemptStatus,
+    AcceptanceSpec,
     Capability,
     CodeUnderstandInput,
     ErrorCode,
@@ -98,10 +99,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "10.0"
+    assert restored.schema_version == "11.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -207,15 +208,15 @@ def test_task_input_must_match_capability() -> None:
         )
 
 
-def test_module_request_input_must_match_capability() -> None:
-    with pytest.raises(ValidationError, match="does not match"):
+def test_module_request_acceptance_must_match_capability() -> None:
+    with pytest.raises(ValidationError, match="acceptance"):
         ModuleTaskRequest(
             run_id="run_example",
             task_id="task_plan",
             attempt_number=1,
             capability=Capability.CODE_MODIFY,
-            goal="Modify",
-            inputs=CodeUnderstandInput(question="Where is the entry point?"),
+            instruction="Modify",
+            acceptance=AcceptanceSpec(required_metric_keys=["accuracy"]),
             budget=TaskBudget(max_llm_calls=5, timeout_seconds=300),
         )
 

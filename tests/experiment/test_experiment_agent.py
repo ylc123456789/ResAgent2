@@ -6,7 +6,7 @@ from resagent2_contracts import (
     AgentOwner,
     Capability,
     DatasetRef,
-    ExperimentRunInput,
+    AcceptanceSpec,
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
@@ -50,8 +50,7 @@ def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
         task_id="task_experiment",
         attempt_number=1,
         capability=Capability.EXPERIMENT_RUN,
-        goal="Run with CIFAR-10",
-        inputs=ExperimentRunInput(instructions="Run with CIFAR-10"),
+        instruction="Run with CIFAR-10",
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
         budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
     )
@@ -187,11 +186,10 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         task_id="task_experiment",
         attempt_number=1,
         capability=Capability.EXPERIMENT_RUN,
-        goal="Run train.py and record accuracy",
-        inputs=ExperimentRunInput(
-            instructions="Run train.py and record accuracy",
-            expected_metrics=["accuracy"],
-            expected_artifacts=["metrics.json"],
+        instruction="Run train.py and record accuracy",
+        acceptance=AcceptanceSpec(
+            required_metric_keys=["accuracy"],
+            required_artifact_paths=["metrics.json"],
         ),
         budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
     )

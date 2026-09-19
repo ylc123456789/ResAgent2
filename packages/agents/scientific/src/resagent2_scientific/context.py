@@ -150,11 +150,8 @@ def build_context(
     """Compose fixed scientific partitions from one turn and generic state."""
 
     research = {
-        "goal": turn.research.goal,
-        "hypothesis": turn.research.hypothesis,
-        "context": turn.research.context,
-        "constraints": turn.research.constraints,
-        "required_evidence_kinds": list(turn.research.required_evidence_kinds),
+        "instruction": turn.instruction,
+        "required_evidence_kinds": list(turn.required_evidence_kinds),
     }
     authorized = [
         {

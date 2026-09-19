@@ -119,10 +119,8 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
     result = agent.run(ScientificTurnRequest(
         run_id=RUN_ID,
-        research=ResearchRequest(
-            goal="Read the final comparison's result", required_evidence_kinds=["literature_search"],
-            budget=RunBudget(max_tasks=1, max_attempts_per_task=1, max_llm_calls=5, timeout_seconds=30),
-        ),
+        instruction="Read the final comparison's result",
+        required_evidence_kinds=["literature_search"],
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "completed"

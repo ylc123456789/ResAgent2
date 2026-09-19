@@ -84,8 +84,7 @@ def _run_dispatch(stage, elapsed, *, should_execute):
     )
     request = ModuleTaskRequest(
         run_id="run_deadline", task_id="task_deadline", attempt_number=1,
-        capability=Capability.CODE_MODIFY, goal="Write once",
-        inputs=CodeModifyInput(instructions="Write once"),
+        capability=Capability.CODE_MODIFY, instruction="Write once",
         budget=TaskBudget(max_llm_calls=3, timeout_seconds=10),
     )
 

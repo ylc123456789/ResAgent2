@@ -134,9 +134,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
     request = ModuleTaskRequest(
         run_id="run_a", task_id="task_shared", attempt_number=1,
         capability=Capability.CODE_UNDERSTAND if coding else Capability.EXPERIMENT_RUN,
-        goal="Ask for a decision",
-        inputs=CodeUnderstandInput(question="Ask first") if coding else
-            ExperimentRunInput(instructions="Ask first"),
+        instruction="Ask first",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
         workspace=WorkspaceGrant(
             root=str(workspace), mode=WorkspaceMode.READ_WRITE,
@@ -210,7 +208,7 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("must not read"))
     agent = ScientificAgent(client, registration_port=WrongResolver())
     result = agent.run(ScientificTurnRequest(
-        run_id="run_b", research=_research(),
+        run_id="run_b", instruction="Check Run isolation",
         budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
     ))
     assert result.status == "completed"
@@ -278,7 +276,7 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
     result = agent.run(ScientificTurnRequest(
-        run_id="run_a", research=_research(),
+        run_id="run_a", instruction="Check Run isolation",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "completed"

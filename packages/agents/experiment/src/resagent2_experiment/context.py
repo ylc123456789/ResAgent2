@@ -93,7 +93,6 @@ def build_context(
     datasets: DatasetAvailability | None = None,
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
 ) -> list[ContextSection | ContextMaterial]:
-    inputs = request.inputs.model_dump(mode="json")
     artifacts = [
         {"id": artifact.id, "kind": artifact.kind, "summary": artifact.summary}
         for artifact in request.input_artifacts
@@ -103,9 +102,9 @@ def build_context(
             name="task",
             content=json.dumps(
                 {
-                    "goal": request.goal,
-                    "inputs": inputs,
-                    "constraints": request.constraints,
+                    "instruction": request.instruction,
+                    "acceptance": request.acceptance.model_dump(mode="json"),
+                    "confirm_before_experiment": request.confirm_before_experiment,
                     "input_artifacts": artifacts,
                 },
                 ensure_ascii=False,

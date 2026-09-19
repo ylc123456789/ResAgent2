@@ -58,6 +58,20 @@ from .scheduler import (
 _TURN_RESULT = TypeAdapter(ScientificTurnResult)
 
 
+def _scientific_instruction(request: ResearchRequest) -> str:
+    """Render the run-level research semantics once at the Agent boundary."""
+    sections = [("Goal", request.goal)]
+    if request.hypothesis:
+        sections.append(("Hypothesis", request.hypothesis))
+    if request.context:
+        sections.append(("Context", request.context))
+    if request.constraints:
+        sections.append(
+            ("Constraints", "\n".join(f"- {item}" for item in request.constraints))
+        )
+    return "\n\n".join(f"{title}:\n{content}" for title, content in sections)
+
+
 class ScientificPort(Protocol):
     """Boundary the controller uses to drive one Scientific turn."""
 
@@ -248,7 +262,8 @@ class ResearchController:
         return self.scientific_port.run(
             ScientificTurnRequest(
                 run_id=run.run_id,
-                research=run.request,
+                instruction=_scientific_instruction(run.request),
+                required_evidence_kinds=list(run.request.required_evidence_kinds),
                 dataset_refs=list(run.dataset_refs),
                 authorized_artifacts=self._authorized_artifacts(run),
                 work_outcome=work_outcome,

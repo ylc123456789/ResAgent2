@@ -26,7 +26,7 @@ from resagent2_runtime import (
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
-        ContextSection(name="task", content=request.goal, priority=100, required=True)
+        ContextSection(name="task", content=request.instruction, priority=100, required=True)
     ]
 
 
@@ -45,8 +45,7 @@ def _request(*, attempt: int, parent: str | None = None) -> ModuleTaskRequest:
         task_id="task_experiment",
         attempt_number=attempt,
         capability=Capability.CODE_UNDERSTAND,
-        goal="Pick a dataset",
-        inputs=CodeUnderstandInput(question="Which dataset?"),
+        instruction="Which dataset?",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id=parent,
     )
@@ -252,8 +251,7 @@ def test_resume_rejects_mismatched_task() -> None:
         task_id="task_other",
         attempt_number=2,
         capability=Capability.CODE_UNDERSTAND,
-        goal="Pick a dataset",
-        inputs=CodeUnderstandInput(question="Which dataset?"),
+        instruction="Which dataset?",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id="session_child",
     )

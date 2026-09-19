@@ -220,8 +220,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
         task_id="task_code",
         attempt_number=1,
         capability=Capability.CODE_MODIFY,
-        goal="Change VALUE from 1 to 2",
-        inputs=CodeModifyInput(instructions="Change VALUE from 1 to 2"),
+        instruction="Change VALUE from 1 to 2",
         budget=TaskBudget(max_llm_calls=20, timeout_seconds=60),
         workspace=WorkspaceGrant(
             root=str(repo),

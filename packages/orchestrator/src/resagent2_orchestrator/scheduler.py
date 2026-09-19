@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
+    AcceptanceSpec,
     Attempt,
     AttemptStatus,
     Capability,
@@ -53,6 +55,30 @@ from .workflow_validation import validate_workflow_candidate
 
 class OrchestrationError(ValueError):
     """Raised when a requested orchestration transition is invalid."""
+
+
+def _module_instruction(task: WorkflowTask) -> str:
+    """Render one stable semantic instruction at the execution boundary."""
+    values = task.inputs.model_dump(mode="json")
+    sections = [("Goal", task.goal)]
+    for key, title in (("question", "Task"), ("instructions", "Task")):
+        if values.get(key):
+            sections.append((title, values[key]))
+            break
+    if task.constraints:
+        sections.append(("Constraints", "\n".join(f"- {item}" for item in task.constraints)))
+    for key, title in (("paths", "Path hints"), ("suggested_paths", "Path hints")):
+        if values.get(key):
+            sections.append((title, "\n".join(f"- {item}" for item in values[key])))
+            break
+    if values.get("parameters"):
+        sections.append(
+            (
+                "Parameters",
+                json.dumps(values["parameters"], ensure_ascii=False, sort_keys=True, indent=2),
+            )
+        )
+    return "\n\n".join(f"{title}:\n{content}" for title, content in sections)
 
 
 def _validate_answer(question: PendingQuestion | None, answer: UserAnswer) -> None:
@@ -365,11 +391,9 @@ class WorkflowScheduler:
             task_id=task.id,
             attempt_number=attempt_number,
             capability=task.capability,
-            goal=task.goal,
-            inputs=task.inputs,
+            instruction=_module_instruction(task),
             input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
             dataset_refs=list(run.dataset_refs),
-            constraints=task.constraints,
             answers=[
                 answer
                 for answer in run.answers
@@ -381,6 +405,23 @@ class WorkflowScheduler:
                     1,
                     int(run.remaining_timeout_seconds(datetime.now(UTC))),
                 ),
+            ),
+            acceptance=AcceptanceSpec(
+                required_metric_keys=(
+                    list(task.inputs.expected_metrics)
+                    if task.capability == Capability.EXPERIMENT_RUN
+                    else []
+                ),
+                required_artifact_paths=(
+                    list(task.inputs.expected_artifacts)
+                    if task.capability == Capability.EXPERIMENT_RUN
+                    else []
+                ),
+            ),
+            confirm_before_experiment=(
+                bool(task.inputs.confirm_before_experiment)
+                if task.capability == Capability.EXPERIMENT_RUN
+                else False
             ),
             workspace=grant,
             workspace_id=task.workspace_id,

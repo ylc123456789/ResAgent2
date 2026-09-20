@@ -4,6 +4,8 @@
 
 ## 最近已完成的主线
 
+统一 Agent IO V2 已完成本地实现（schema **12.0**，分支 `refactor/unified-agent-entry`）：三个 Agent 共用单一 invoke 和报告/工件协议；本地 **1036 passed、1 skipped**，模拟 E2E 与 CLI 入口通过。代码已分段提交，尚未合并或推送；真实模型与 GPU 验收等待服务器启动。具体范围、提交和验证边界见 [本地验收记录](reviews/UNIFIED_AGENT_IO_V2_ACCEPTANCE_2026-09-20.md)。
+
 Tool / Components 职责整理已完成服务器四个小探针及原始证据复核（实测 `6672376`，产品 `4cdb725` / `54fab5c`），schema 10.0 不变。新增 Components，Capabilities 聚焦模型 Tool，Runtime 引擎不改；当前每个模型可调用 Tool 都有独立实现文件，`__init__.py` 只负责公开导出。分支 `refactor/tool-components` 尚未合并。设计见 [ADR-0015](decisions/0015-tool-components-boundary.md)，本地验证、29 次模型调用、文献阅读范围和报告勘误见 [最终复核与收尾](reviews/TOOL_COMPONENTS_ACCEPTANCE.md#verified-closeout)。四探针不代表重跑科研 L3。
 
 自然语言字段精简与答案键规范已完成阶段验收（产品 `c03115b`、`3476222`，最终实测 `ee7d821`，schema **10.0**）：Scientific 完成摘要从 opinion.statement 派生，提问背景进 text，Compiler 不再重复填写图级说明；三个 Agent 与公共问答模型共用 AnswerFieldName。旧版 Compiler 新旧六探针通过，新版三问答补齐 Coding 自问及 Experiment 经 CLI 回答，结果 222/6/F1；本地/服务器 1052 passed、1 skipped。总计 21 次调用，单探针均未超过 20。Coding 测试驱动恢复时重给完整额度的偏差和后续复用要求见 [最终复核与收尾](reviews/SEMANTIC_FIELD_SLIMMING.md#verified-closeout)，不能写成预算扣减已验证；本轮无须额外付费重跑，不改写旧报告/失败现场。

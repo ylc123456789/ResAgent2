@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 11.0。旧 10.0 及更早 Run 不支持 resume，请用新 data root/新 Run 开始；旧记录原样保留作查阅，不要求删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同的资源组件，而非合并成一个总入口。执行 Agent 的请求统一以 `instruction` 表达语义任务；预算、工作区、Session、资源、答案和 Experiment 的验收要求仍由结构化字段控制。
+当前 contracts schema 为 12.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -211,7 +211,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`control_state`、`command_results` 等领域投影的重复内容都会计量。
+三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
 
 Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不扩到256K、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 

@@ -10,8 +10,8 @@ ResAgent2 可以先用一句话理解：**让模型决定科研上需要什么�
 |---|---|---|
 | Scientific Agent | 科学判断者 | 当前观点、工作需求、用户问题或最终意见 |
 | Orchestrator | 研究过程的控制程序 | 已接受任务图、执行状态、结果汇总与正式报告 |
-| Coding Agent | 程序员 | 代码理解，或真实修改与验证结果 |
-| Experiment Agent | 实验执行者 | 命令记录、证据工件、文件中提取的指标 |
+| Coding Agent | 程序员 | 代码分析、修改、验证记录和工件 |
+| Experiment Agent | 实验执行者 | 已有结果分析、真实命令记录和证据工件 |
 
 ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有三个分工：Controller 管整个过程，Compiler 把当前需求翻成任务图，Scheduler 执行图中的任务。
 
@@ -38,34 +38,34 @@ Scientific 关心：“为了回答这个研究问题，还缺什么证据？”
 Compiler 可能生成候选：
 
 ```text
-实现改动并验证 [code_modify]
+实现改动并验证 [coding]
               ↓ 依赖上游成功
-运行正式比较 [experiment_run]
+运行正式比较 [experiment]
 ```
 
-LLM 负责语义草图，代码分配正式身份、绑定工作区并校验。Scheduler 再检查路由、授权、预算和图版本，接受后才执行。
+LLM 生成一个包含 instruction 的任务草图，代码分配正式身份、绑定工作区并校验；结构错误最多纠正一次。Scheduler 再检查路由、授权、预算和图版本，接受后才执行。若下游需要某份尚未生成的产物，上游声明 output_name，下游用 FutureArtifactBinding 选择它，执行时才解析成真实工件 ID。
 
 所以 Scientific 不需要知道每个任务怎么调度：翻译和接收由 Orchestrator 承担。
 
 ### 第四步：Coding 改代码，但不能只说“改好了”
 
-Scheduler 通过 ModulePort.invoke 交给 Coding 一个 ModuleTaskRequest，包含任务目标、专属输入、工作区授权、预算和证据引用等。
+三个 Agent 都通过 ModulePort.invoke 接收 AgentRequest：一条 instruction、授权 input_artifacts，以及工作区、权限、预算和恢复身份。Coding 没有“理解/修改”两种接口；一次调用可以先读代码，再根据任务决定是否修改。可写权限允许修改，并不要求为了完成任务必须修改。
 
-Coding 内部运行共享 AgentLoop：读取 → 修改 → 调工具 → 看真实结果 → 验证。完成检查核对相对本 Attempt 基线的变化，以及当前代码/环境是否真正验证通过。
+Coding 内部运行共享 AgentLoop：读取 → 按需修改 → 调工具 → 看真实结果 → 验证。完成检查从本 Attempt 基线、工具回执和环境代次生成 patch 与验证工件，标明验证是否覆盖当前代码。任务明确要求成功执行时，Scheduler 再按冻结的 acceptance_requirements 工件验收。
 
-ModuleResult 同时有机器状态、typed payload、说明和候选工件。summary 可以解释过程，但不能推翻真实验证结果或替代它。
+AgentResult 的业务输出只有 report 和 artifacts，另有机器状态、消费、Session 引用及必要控制信号。报告解释过程，不能替代真实执行记录。长说明可作为 module_report 工件交给下游按需读取。
 
-### 第五步：Experiment 真跑，代码提取指标
+### 第五步：Experiment 按任务分析或执行
 
-上游成功后，Experiment 收到自己的任务，准备或复用环境、审计、执行正式命令、收集本次新建或变化的证据。
+上游成功后，Experiment 收到同样形状的请求。这个例子需要新实验，所以它准备或复用环境、审计、执行命令并交付证据；仅分析已有结果的任务可以直接读工件，无需为了切换业务模式额外执行一次命令。
 
-实验脚本写出的 JSON 指标文件是证据来源。完成检查从完整证据集中提取数值，不让模型在 finish 随意报一个数字作为事实。
+实验脚本写出的 JSON 指标文件是证据来源，execution_record 来自真实命令回执。精确要求通过 acceptance_requirements 传入；验收检查要求的数值键、文件、工件种类、命名输出和成功执行记录。
 
-原始工件是根源，metrics 是便于机器消费的投影，summary 是解释。看到矛盾应回查证据，而不是因为某字段听起来可信就忽略原文件。
+原始工件是根源，report 是解释。看到矛盾应回查证据，不能把报告中的数字当作已验证测量。
 
 ### 第六步：Scientific 收到可理解的工作简报
 
-Scheduler 登记工件、保存结果，再形成 WorkOutcome。Scientific 内的 interpreter.render_work_brief 整理成：做了什么，有什么结果/警告，为什么失败，有哪些证据可以读。
+Scheduler 登记工件、保存结果，再形成 WorkOutcome。Controller 将它与原工作需求配对成 work_feedback 工件，用 resume_artifact_ids 标识本次交付。Scientific 内的 interpreter.render_work_brief 从该工件整理：做了什么，有什么结果/警告，为什么失败，有哪些证据可以读。
 
 interpreter 是无状态纯函数，不再调用一次 LLM。它属于 Scientific，因为它决定“给 Scientific 看什么”，不拥有执行状态。
 
@@ -73,7 +73,7 @@ Scientific 主动读取授权工件后判断结果是否支持假设，或还需
 
 ### 第七步：意见完成，不代表整个 Run 自动通过
 
-Scientific 提出最终 opinion，Orchestrator 再检查执行状态、证据归属、已读引用和必要局限，通过后登记报告并标记 completed。
+Scientific 用同一个 finish 提交 report 和 scientific_opinion 工件；代码另生成 observation_trace。Orchestrator 根据这些公共输出检查执行状态、证据归属、已读引用和必要局限，通过后登记报告并标记 completed。它不读取 Scientific 的私有 Session。
 
 “实验成功执行”和“假设被支持”不是同一回事。证据不足时给 inconclusive，也可能是诚实完成的研究过程。
 
@@ -83,7 +83,7 @@ Scientific 提出最终 opinion，Orchestrator 再检查执行状态、证据归
 
 **需要用户选择**：ask_user 提出问题并声明非空字段。Controller 保存问题、Run paused；回答以实际 pending question 字段为准，不猜字段名。任务级问答恢复同一 Attempt 和 Session，不算一次 retry。
 
-例如你回答“用 mul 模式”，系统不只是把这句话记进 Run：它还会把本 Task 的实际回答放进 Agent 后续每一步的 `answers` 上下文段，供模型据此选择命令。这个段和文件片段共用原来的上下文预算，没有另造记忆系统。回答“数据准备好了”则仍要与重新检查的目录事实对照；目录仍缺，应继续询问。
+例如你回答“用 mul 算法”，Controller 从保存的问题配对原题和答案，冻结为 answer 工件。恢复调用用 resume_artifact_ids 指向它，当前恢复材料以必需上下文段交给模型，并使用原来的预算。回答“数据准备好了”仍须与重新检查的目录事实对照；目录仍缺，应继续询问。
 
 **进程中断**：快照帮助恢复身份和状态，但不是外部操作的事务回滚。保留 Session 不代表命令一定只执行过一次。
 
@@ -103,7 +103,7 @@ Scientific 提出最终 opinion，Orchestrator 再检查执行状态、证据归
 |---|---|
 | Run | 整件“实现并比较效果”的研究请求 |
 | WorkRequest | Scientific 某一轮需求；修复通常是下一轮 |
-| Task | 图中一个节点，例如 code_modify |
+| Task | 图中一次 coding 或 experiment 调用 |
 | Attempt | 某任务的一次尝试；问答续跑不变，retry 才新增 |
 | Session | Agent 的动作、观测和内部记忆；Scientific 跨回合，执行 Agent 的属于 Attempt |
 

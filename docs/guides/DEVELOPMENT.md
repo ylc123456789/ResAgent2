@@ -61,12 +61,14 @@ cd "$repo_dir"
 
 先在 [调用边界](../current/CONTRACTS.md#boundaries) 找输入、分支、状态归属和失败规则，再补测试：
 
-- 正常返回能接收；错误身份、错 payload 和矛盾状态会拒绝。
+- 三个 Agent 都遵守 invoke(AgentRequest) → AgentResult；正常返回能接收，错误身份、越权工件和矛盾状态会拒绝。
+- instruction + input_artifacts 表达业务输入，report + artifacts 表达业务输出；不另加模式、领域结果外壳或一套隐式字段。
+- 验收要求绑定冻结工件；未来工件只用声明的 output_name 解析，缺失和歧义须明确失败。
 - 暂停回答继续同一次尝试；真正 retry 才新建 Attempt。
 - 失败保留实际消费、原始错误、Session 和已有工件，不伪装成功。
 - 重复交付不误消费下一题/工作结果；跨 Run 不串证据。
 
-Protocol 描述方法形状，不保证实现守约。替换 Port 必须通过行为测试，不仅让类型检查通过。
+Protocol 描述方法形状，不保证实现守约。注入的进程内 ModulePort 和原生确定性 finalizer 属于可信实现；模型候选不能提交 execution_record、verification_result 或 observation_trace。上游只检验公开返回和登记工件，不读取下游私有 Session；替换 Port 必须通过相同的行为测试。
 
 ## 5. 什么时候需要真实服务器验收
 

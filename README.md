@@ -20,7 +20,7 @@ ResAgent2 是整个项目的名字；Orchestrator 是其中的研究编排模块
 | Scientific Agent | 科学判断、证据需求、最终观点与局限 | 生成执行图、直接调用其他 Agent |
 | Orchestrator | 工作请求转任务图、调度、状态、预算、暂停恢复和最终验收 | 自己改代码、跑实验或形成科学观点 |
 | Coding Agent | 阅读、修改、准备环境并验证代码 | 形成最终科学结论 |
-| Experiment Agent | 准备环境、运行实验、派生指标并提交候选证据 | 修改产品代码或形成最终科学结论 |
+| Experiment Agent | 分析已有结果、准备环境、运行实验并提交证据 | 修改产品代码或形成最终科学结论 |
 
 Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻译当前工作请求，Scheduler 执行任务。Scientific 的 `interpreter.py` 只是整理返回结果的内部纯函数，不是新 Agent 或调度层。
 
@@ -36,15 +36,15 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `11.0`（`SCHEMA_VERSION="11.0"`），不保留旧 schema 的第二条运行路径；旧 10.0 及更早的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities，真实执行不依赖旧项目的 Agent。
+当前只实现 contracts schema `12.0`（`SCHEMA_VERSION="12.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
-执行 Agent 的入口保持统一：`ModuleTaskRequest` 用一条 `instruction` 表达本次语义任务，预算、工作区、Session、数据集、输入工件和答案等仍由结构化字段控制；Experiment 的精确指标/产物要求放在 `AcceptanceSpec`，确认开关放在 `confirm_before_experiment`。Scientific 回合同样用 `ScientificTurnRequest.instruction`，并单独传递所需证据种类。Compiler 内部的 Workflow 图仍保留 typed `goal`、`inputs` 和 `constraints`，Scheduler 在执行边界把它们物化为 instruction 和控制字段。
+Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 
 调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
 
-接口契约优化已完成并合入 main。分阶段提交、真实服务器验收及已知边界见 [决策与历史](docs/history/README.md)；当前文档不再维护一份重复的轮次清单。
+Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Compiler 生成一个任务草图，结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，历史验收不代表本次重构已完成真实服务器验证。
 
-代码理解答案及模块残余风险通过可分页读取的 `module_report` 交接；它是带用途说明的模块解释，不是测量证据。用户仍只提交答案，Controller 从已保存的问题配对原题，再把完整问答交回对应 Agent。设计见 [ADR-0014](docs/history/decisions/0014-semantic-handoffs.md)，验证要求与结果集中在 [验收单](docs/history/reviews/SEMANTIC_HANDOFFS_ACCEPTANCE.md)。
+`report` 解释发现、结果与局限，较长说明可作为 `module_report` 工件交接；测量以原始证据为准。Controller 将原题与用户回答配对成 `answer` 工件，再恢复对应 Session。命令、验证与观察记录由原生 Agent 的确定性完成检查生成，上游只接收公共结果和工件，不读取下游私有 Session。
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 

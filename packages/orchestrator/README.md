@@ -9,30 +9,33 @@ ResAgent2 的顶层控制模块。
 - WorkRequest → WorkflowProposal/Patch 的 WorkflowCompiler；
 - Workflow validation/revision；
 - Task/Attempt 状态；
-- capability 路由；
+- coding / experiment 模块路由；
 - Module Port/Adapter；
 - retry、Ask User 和 finish gate；
 - ScientificCompletionValidator 与 deterministic final report renderer；
 - Artifact index。
 
-它不直接实现科学判断、代码修改和实验执行。普通调度由确定性代码完成；内部 WorkflowCompiler 用有界 draft/review 把语义工作请求翻译成任务图，结构与语义拒绝共享一次纠错，LLM 不直接修改状态。
+它不直接实现科学判断、代码修改和实验执行。普通调度由确定性代码完成；WorkflowCompiler 生成一个任务草图，解析或结构错误最多纠正一次，无额外语义复审调用。LLM 不直接修改状态。
 
 ## 当前已实现
 
 - ResearchController 根据 ResearchRequest 创建 ResearchRun；已有 Run 中的工作请求再编译、接受为 WorkflowProposal/Patch；
 - 按原始任务顺序稳定计算 ready Task 集合；
-- capability → ModuleBinding → ModulePort 路由；
+- WorkflowAgentKind → ModuleBinding → ModulePort 路由；
 - Task/Attempt 状态机和自动 retry；
 - blocked/failed 后显式 repair 与 retry；
 - PendingQuestion、UserAnswer 和 Session resume；
-- 依赖任务 Artifact 自动传给下游 ModuleTaskRequest；
+- AgentRequest 的 instruction 与 input_artifacts；未来输入用 output_name 显式绑定上游成功 Attempt 的唯一产物；
+- answer、work_feedback、dataset_catalog 及验收要求的冻结工件交接；
 - ArtifactCandidate 的 workspace 边界检查、hash、复制和 provenance 登记；
 - revision-bound WorkflowPatch 和旧 revision 历史；
 - finish gate；
 - 内存 RunStore 和原子 JSON RunStore；
-- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft、各最多一次 review）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [接口](../../docs/current/CONTRACTS.md#compiler)。
+- WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [接口](../../docs/current/CONTRACTS.md#compiler)。
 
-当前 ModulePort 可以注入原生 Coding/Experiment Agent；orchestrator 自身仍不 import 具体 Agent。Coding/Experiment/Scientific 三个 legacy adapter 已分别在 Phase 5/6/7 删除，全部由原生 Agent 取代。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
+
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 12.0，旧 Run 保留但不迁移或恢复。
 
 production composition root 走 `ResearchController`：`create_run(run_id, request)` 进入科学控制循环，`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 Proposal/Patch，Scheduler 执行 Coding/Experiment 图，`WorkOutcome` 回传后形成最终 `ScientificOpinion` 并经 `ScientificCompletionValidator` 写 completed。旧 PlanningPort 路径已删除，不保留两套总控逻辑。
 

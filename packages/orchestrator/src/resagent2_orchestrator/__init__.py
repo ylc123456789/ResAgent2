@@ -24,7 +24,6 @@ from .controller import (
     DatasetRefSource,
     ResearchController,
     ScientificGate,
-    ScientificPort,
 )
 from .layout import RunLayout
 from .models import CompletionViolation, CompletionViolationCode, ResearchRun
@@ -59,7 +58,6 @@ __all__ = [
     "ScientificArtifactRegistration",
     "ScientificGate",
     "ScientificCompletionValidator",
-    "ScientificPort",
     "ScriptedModulePort",
     "WorkflowCompiler",
     "WorkflowScheduler",

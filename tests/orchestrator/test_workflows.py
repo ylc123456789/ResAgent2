@@ -2,20 +2,21 @@ from datetime import UTC, datetime
 
 
 import pytest
+from resagent2_orchestrator.handoffs import read_json, system_artifact
 
 from resagent2_contracts import (
     AgentOwner,
+    AgentResult,
+    ArtifactCandidate,
     Attempt,
     AttemptStatus,
-    Capability,
-    CodeModifyInput,
-    CodeUnderstandInput,
-    ExperimentRunInput,
+    ControlSignal,
+    ErrorCode,
     ModuleError,
-    ModuleResult,
     ModuleStatus,
     QuestionDraft,
     RecordedAnswer,
+    ResearchRequest,
     RunBudget,
     RunStatus,
     SessionRef,
@@ -23,10 +24,9 @@ from resagent2_contracts import (
     TaskProposal,
     TaskStatus,
     UserAnswer,
+    WorkflowAgentKind,
     WorkflowPatch,
     WorkflowProposal,
-    ResearchRequest,
-    ErrorCode,
 )
 from resagent2_orchestrator import (
     InMemoryRunStore,
@@ -55,56 +55,36 @@ def research_request() -> ResearchRequest:
 
 def task(
     task_id: str,
-    capability: Capability,
+    agent_kind: WorkflowAgentKind,
     depends_on=(),
     *,
     work_request_id: str = "work_legacy_initial",
 ) -> TaskProposal:
-    if capability == Capability.CODE_UNDERSTAND:
-        inputs = CodeUnderstandInput(question="What does the evidence show?")
-    elif capability == Capability.CODE_MODIFY:
-        inputs = CodeModifyInput(instructions="Apply the required repair")
-    else:
-        inputs = ExperimentRunInput(instructions=f"Run {task_id}")
     return TaskProposal(
         id=task_id,
         work_request_id=work_request_id,
-        capability=capability,
-        goal=f"Complete {task_id}",
+        workflow_agent_kind=agent_kind,
+        instruction=f"Complete {task_id}",
         depends_on=list(depends_on),
-        inputs=inputs,
+
     )
 
 
-def completed(summary="done", *, capability=Capability.EXPERIMENT_RUN) -> ModuleResult:
-    if capability == Capability.CODE_UNDERSTAND:
-        payload = {"answer": "Code inspected", "evidence_files": ["train.py"]}
-    elif capability == Capability.CODE_MODIFY:
-        payload = {
-            "changed_files": ["train.py"], "patch_path": "changes.patch",
-            "verification_passed": True, "verification_results": [{
-                "command": "python -m pytest", "exit_code": 0,
-                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
-                "duration_seconds": 0.0,
-            }],
-        }
-    else:
-        payload = {"env_id": "resenv_test"}
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary=summary, payload=payload)
+def completed(summary="done") -> AgentResult:
+    return AgentResult(status=ModuleStatus.COMPLETED, report=summary)
 
 
-def scheduler(scripts: dict[Capability, list[ModuleResult]]) -> WorkflowScheduler:
+def scheduler(scripts: dict[WorkflowAgentKind, list[AgentResult]]) -> WorkflowScheduler:
     owners = {
-        Capability.CODE_UNDERSTAND: AgentOwner.CODING,
-        Capability.CODE_MODIFY: AgentOwner.CODING,
-        Capability.EXPERIMENT_RUN: AgentOwner.EXPERIMENT,
+        WorkflowAgentKind.CODING: AgentOwner.CODING,
+        WorkflowAgentKind.EXPERIMENT: AgentOwner.EXPERIMENT,
     }
     bindings = {
-        capability: ModuleBinding(
-            owner=owners[capability],
+        agent_kind: ModuleBinding(
+            owner=owners[agent_kind],
             port=ScriptedModulePort(results),
         )
-        for capability, results in scripts.items()
+        for agent_kind, results in scripts.items()
     }
     return WorkflowScheduler(bindings=bindings, store=InMemoryRunStore())
 
@@ -123,14 +103,12 @@ def _create_run(engine, run_id, request, proposal):
     return engine.accept_proposal(run_id, proposal)
 
 
-def _ask_result() -> ModuleResult:
+def _ask_result() -> AgentResult:
     """A paused needs_user_input result, for question-flow tests."""
-    return ModuleResult(
+    return AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
-        summary="input required",
-        question=QuestionDraft(
-            text="pick one", requested_fields=["x"]
-        ),
+        report="input required",
+        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='pick one', requested_fields=['x']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
         session=SessionRef(
             id="session_child",
             module=AgentOwner.EXPERIMENT,
@@ -145,7 +123,7 @@ def _ask_result() -> ModuleResult:
 def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([_ask_result()]),
             )
@@ -154,7 +132,7 @@ def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task(task_id, Capability.EXPERIMENT_RUN)],
+        tasks=[task(task_id, WorkflowAgentKind.EXPERIMENT)],
     )
     _create_run(engine, run_id, research_request(), proposal)
     return engine.run_until_stable(run_id)
@@ -164,16 +142,15 @@ def test_linear_workflow_runs_to_completion() -> None:
     workflow = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[
-            task("task_code", Capability.CODE_MODIFY),
-            task("task_experiment", Capability.EXPERIMENT_RUN, ["task_code"]),
-            task("task_analyze", Capability.CODE_UNDERSTAND, ["task_experiment"]),
+            task("task_code", WorkflowAgentKind.CODING),
+            task("task_experiment", WorkflowAgentKind.EXPERIMENT, ["task_code"]),
+            task("task_analyze", WorkflowAgentKind.CODING, ["task_experiment"]),
         ],
     )
     engine = scheduler(
         {
-            Capability.CODE_MODIFY: [completed(capability=Capability.CODE_MODIFY)],
-            Capability.EXPERIMENT_RUN: [completed()],
-            Capability.CODE_UNDERSTAND: [completed(capability=Capability.CODE_UNDERSTAND)],
+            WorkflowAgentKind.CODING: [completed(), completed()],
+            WorkflowAgentKind.EXPERIMENT: [completed()],
         }
     )
 
@@ -193,19 +170,19 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[
-            task("task_baseline", Capability.EXPERIMENT_RUN),
-            task("task_treatment", Capability.EXPERIMENT_RUN),
+            task("task_baseline", WorkflowAgentKind.EXPERIMENT),
+            task("task_treatment", WorkflowAgentKind.EXPERIMENT),
             task(
                 "task_analyze",
-                Capability.CODE_UNDERSTAND,
+                WorkflowAgentKind.CODING,
                 ["task_baseline", "task_treatment"],
             ),
         ],
     )
     engine = scheduler(
         {
-            Capability.EXPERIMENT_RUN: [completed("baseline"), completed("treatment")],
-            Capability.CODE_UNDERSTAND: [completed(capability=Capability.CODE_UNDERSTAND)],
+            WorkflowAgentKind.EXPERIMENT: [completed("baseline"), completed("treatment")],
+            WorkflowAgentKind.CODING: [completed()],
         }
     )
     _create_run(engine, "run_parallel", research_request(), proposal)
@@ -223,9 +200,9 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
 
 
 def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> None:
-    blocked = ModuleResult(
+    blocked = AgentResult(
         status=ModuleStatus.BLOCKED,
-        summary="Code repair required",
+        report="Code repair required",
         error=ModuleError(
             code=ErrorCode.TOOL_FAILED,
             message="Experiment cannot start",
@@ -234,13 +211,13 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
     )
     engine = scheduler(
         {
-            Capability.EXPERIMENT_RUN: [blocked, completed("retry succeeded")],
-            Capability.CODE_MODIFY: [completed("repair completed", capability=Capability.CODE_MODIFY)],
+            WorkflowAgentKind.EXPERIMENT: [blocked, completed("retry succeeded")],
+            WorkflowAgentKind.CODING: [completed("repair completed")],
         }
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     )
     _create_run(engine, "run_repair", research_request(), proposal)
 
@@ -252,7 +229,7 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
         WorkflowPatch(
             work_request_id="work_legacy_initial",
             based_on_revision=1,
-            add_tasks=[task("task_repair", Capability.CODE_MODIFY)],
+            add_tasks=[task("task_repair", WorkflowAgentKind.CODING)],
         ),
     )
     assert [item.revision for item in patched.workflow_history] == [1]
@@ -268,13 +245,10 @@ def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> No
 
 
 def test_question_pauses_and_answer_resumes_same_task_context() -> None:
-    question_result = ModuleResult(
+    question_result = AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
-        summary="Dataset required",
-        question=QuestionDraft(
-            text="Which dataset?",
-            requested_fields=["dataset"],
-        ),
+        report="Dataset required",
+        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='Which dataset?', requested_fields=['dataset']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
         session=SessionRef(
             id="session_child",
             module=AgentOwner.EXPERIMENT,
@@ -284,10 +258,13 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
             updated_at=NOW,
         ),
     )
-    port = ScriptedModulePort([question_result, completed()])
+    resumed_result = completed().model_copy(update={
+        "session": question_result.session.model_copy(update={"status": SessionStatus.COMPLETED}),
+    })
+    port = ScriptedModulePort([question_result, resumed_result])
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=port,
             )
@@ -296,7 +273,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     )
     _create_run(engine, "run_question", research_request(), proposal)
 
@@ -312,6 +289,8 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     answer = RecordedAnswer(
         question_id=paused.pending_question.id,
         question_text=paused.pending_question.text,
+        requested_fields=paused.pending_question.requested_fields,
+        run_id=paused.run_id, task_id="task_experiment", attempt_number=1,
         values={"dataset": "demo"},
         answered_at=NOW,
     )
@@ -319,6 +298,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     # task back into the ready set.
     run = engine.store.load("run_question")
     run.answers.append(answer)
+    system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
     run.pending_question = None
     run.status = RunStatus.RUNNING
     run.answer_task_ids[answer.question_id] = "task_experiment"
@@ -329,7 +309,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     assert final.workflow.tasks[0].status == TaskStatus.COMPLETED
     # The same Attempt resumed, not a new one.
     assert [attempt.number for attempt in final.workflow.tasks[0].attempts] == [1]
-    assert port.requests[1].answers == [answer]
+    assert [read_json(ref, RecordedAnswer) for ref in port.requests[1].input_artifacts if ref.kind == "answer"] == [answer]
     assert port.requests[1].parent_session_id == "session_child"
     assert port.requests[1].attempt_number == 1
 
@@ -343,11 +323,12 @@ def test_long_task_id_question_stays_within_id_cap() -> None:
     assert paused.pending_question.id.startswith("question_")
 
 
-def test_question_id_keeps_short_task_ids_readable() -> None:
+def test_question_id_keeps_owning_task_scope() -> None:
     paused = _pause_with_question("task_experiment", "run_short_question")
 
     assert paused.pending_question is not None
-    assert paused.pending_question.id.startswith("question_experiment_1_")
+    assert paused.pending_question.id.startswith("question_")
+    assert paused.pending_question.task_id == "task_experiment"
 
 
 def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> None:
@@ -355,24 +336,27 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
 
     port = ScriptedModulePort([_ask_result(), _ask_result()])
     engine = WorkflowScheduler(
-        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+        bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
             owner=AgentOwner.EXPERIMENT, port=port,
         )},
         store=InMemoryRunStore(),
     )
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     )
     _create_run(engine, "run_two_questions", research_request(), proposal)
     first = engine.run_until_stable("run_two_questions")
     answer = RecordedAnswer(
         question_id=first.pending_question.id, values={"x": "first"},
         question_text=first.pending_question.text,
+        requested_fields=first.pending_question.requested_fields,
+        run_id=first.run_id, task_id="task_experiment", attempt_number=1,
         answered_at=NOW,
     )
     run = engine.store.load(first.run_id)
     run.answers.append(answer)
+    system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
     run.answer_task_ids[answer.question_id] = "task_experiment"
     run.pending_question = None
     run.status = RunStatus.RUNNING
@@ -405,43 +389,43 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
 def test_question_id_is_strictly_bounded(task_id: str, attempt_number: int) -> None:
     from pydantic import TypeAdapter
 
-    from resagent2_contracts import QuestionId
+    from resagent2_contracts import (QuestionId, ArtifactCandidate, ControlSignal)
     from resagent2_orchestrator.scheduler import _question_id
 
     qid = _question_id(task_id, attempt_number)
     assert TypeAdapter(QuestionId).validate_python(qid) == qid
 
 
-def test_failed_payload_cannot_be_promoted_to_completed() -> None:
-    failed = ModuleResult(
+def test_failed_attempt_cannot_be_promoted_to_completed() -> None:
+    failed = AgentResult(
         status=ModuleStatus.FAILED,
-        summary="Native failure must win over payload text",
-        payload={"status": "completed", "summary": "looks successful"},
+        report="Measurement completed successfully",
+
         error=ModuleError(
             code=ErrorCode.TOOL_FAILED,
             message="Actual execution failed",
             retryable=False,
         ),
     )
-    engine = scheduler({Capability.EXPERIMENT_RUN: [failed]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [failed]})
     _create_run(engine,
-        "run_failed_payload",
+        "run_failed_report",
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+            tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
         ),
     )
 
-    run = engine.run_until_stable("run_failed_payload")
+    run = engine.run_until_stable("run_failed_report")
 
     assert run.workflow.tasks[0].status == TaskStatus.FAILED
 
 
 def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
-    retryable = ModuleResult(
+    retryable = AgentResult(
         status=ModuleStatus.FAILED,
-        summary="temporary failure",
+        report="temporary failure",
         error=ModuleError(
             code=ErrorCode.TIMEOUT,
             message="temporary timeout",
@@ -449,14 +433,14 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
         ),
     )
     engine = scheduler(
-        {Capability.EXPERIMENT_RUN: [retryable, completed("retry worked")]}
+        {WorkflowAgentKind.EXPERIMENT: [retryable, completed("retry worked")]}
     )
     _create_run(engine,
         "run_auto_retry",
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+            tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
         ),
     )
 
@@ -467,10 +451,10 @@ def test_retryable_failure_creates_a_new_attempt_automatically() -> None:
 
 
 def test_recovery_closes_interrupted_attempt_and_uses_normal_retry_budget() -> None:
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed("retry worked")]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed("retry worked")]})
     _create_run(engine, "run_interrupted", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     ))
     run = engine.store.load("run_interrupted")
     workflow_task = run.workflow.tasks[0]
@@ -499,10 +483,10 @@ def test_recovery_closes_interrupted_attempt_and_uses_normal_retry_budget() -> N
 
 
 def test_budget_exhaustion_does_not_persist_a_running_attempt() -> None:
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
     _create_run(engine, "run_no_calls", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     ))
     run = engine.store.load("run_no_calls")
     run.llm_calls_used = run.request.budget.max_llm_calls
@@ -525,7 +509,7 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
             return NOW
 
     monkeypatch.setattr(scheduler_module, "datetime", FixedClock)
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
     request = ResearchRequest(
         goal="Use the full remaining budget",
         budget=RunBudget(
@@ -537,7 +521,7 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
     )
     _create_run(engine, "run_remaining_budget", request, WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     ))
     run = engine.store.load("run_remaining_budget")
     run.created_at = NOW
@@ -556,10 +540,11 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
 
 
 def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
-    request_work = ModuleResult(
+    request_work = AgentResult.model_construct(
         status=ModuleStatus.REQUEST_WORK,
-        summary="invalid task result",
-        request_work={},
+        report="invalid task result",
+        artifacts=[ArtifactCandidate(kind="work_request", path="work.json", media_type="application/json", summary="Invalid control", content="{}")],
+        control=ControlSignal(action="request_work", candidate_index=0),
         session=SessionRef(
             id="session_invalid_task",
             module=AgentOwner.EXPERIMENT,
@@ -569,10 +554,10 @@ def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
             updated_at=NOW,
         ),
     )
-    engine = scheduler({Capability.EXPERIMENT_RUN: [request_work]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [request_work]})
     _create_run(engine, "run_invalid_request_work", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     ))
 
     run = engine.run_until_stable("run_invalid_request_work")
@@ -590,7 +575,7 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
 
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=InvalidPort(),
             )
@@ -602,7 +587,7 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+            tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
         ),
     )
 
@@ -615,13 +600,13 @@ def test_invalid_module_port_result_becomes_contract_failure() -> None:
 
 
 def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
     created = _create_run(engine,
         "run_ready_gate",
         research_request(),
         WorkflowProposal(
             work_request_id="work_legacy_initial",
-            tasks=[task("task_experiment", Capability.EXPERIMENT_RUN)],
+            tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
         ),
     )
 
@@ -631,13 +616,13 @@ def test_ready_work_keeps_run_running_until_it_is_executed() -> None:
 
 
 def test_patch_is_append_only() -> None:
-    engine = scheduler({Capability.EXPERIMENT_RUN: [completed()]})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
     _create_run(engine,
         "run_isolate",
         research_request(),
         WorkflowProposal(
             work_request_id="work_a",
-            tasks=[task("task_a", Capability.EXPERIMENT_RUN, work_request_id="work_a")],
+            tasks=[task("task_a", WorkflowAgentKind.EXPERIMENT, work_request_id="work_a")],
         ),
     )
     patched = engine.apply_patch(
@@ -645,7 +630,7 @@ def test_patch_is_append_only() -> None:
         WorkflowPatch(
             work_request_id="work_b",
             based_on_revision=1,
-            add_tasks=[task("task_b", Capability.EXPERIMENT_RUN, work_request_id="work_b")],
+            add_tasks=[task("task_b", WorkflowAgentKind.EXPERIMENT, work_request_id="work_b")],
         ),
     )
     assert [t.id for t in patched.workflow.tasks] == ["task_a", "task_b"]
@@ -663,14 +648,14 @@ def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
         created_at=now, updated_at=now,
     )
     if kind == "patch":
-        from resagent2_contracts import Workflow
+        from resagent2_contracts import (Workflow, ArtifactCandidate, ControlSignal)
         run.workflow = Workflow(
             run_id=run.run_id, revision=1, tasks=[],
             created_from="work_legacy_initial",
         )
     engine.store.save(run)
     before = engine.store.load(run.run_id).model_dump()
-    with pytest.raises(OrchestrationError, match="empty task graph"):
+    with pytest.raises(ValueError, match="empty task graph"):
         if kind == "proposal":
             engine.accept_proposal(run.run_id, WorkflowProposal(
                 work_request_id="work_legacy_initial",
@@ -688,7 +673,7 @@ def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
 @pytest.mark.parametrize("old_status", [TaskStatus.COMPLETED, TaskStatus.FAILED])
 def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_status) -> None:
     engine = WorkflowScheduler(
-        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+        bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
             owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([]),
         )},
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
@@ -696,16 +681,16 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
     )
     run = _create_run(engine, "run_candidate", research_request(), WorkflowProposal(
         work_request_id="work_legacy_initial",
-        tasks=[task("task_old", Capability.EXPERIMENT_RUN)],
+        tasks=[task("task_old", WorkflowAgentKind.EXPERIMENT)],
     ))
     run.workflow.tasks[0].status = old_status
     engine.store.save(run)
     before = engine.store.load(run.run_id).model_dump()
-    with pytest.raises(OrchestrationError, match="outside the current work request"):
+    with pytest.raises(ValueError, match="outside the current work request"):
         engine.apply_patch(run.run_id, WorkflowPatch(
             work_request_id="work_next", based_on_revision=1,
             add_tasks=[task(
-                "task_new", Capability.EXPERIMENT_RUN, ["task_old"],
+                "task_new", WorkflowAgentKind.EXPERIMENT, ["task_old"],
                 work_request_id="work_next",
             )],
         ))
@@ -714,8 +699,8 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
     patched = engine.apply_patch(run.run_id, WorkflowPatch(
         work_request_id="work_next", based_on_revision=1,
         add_tasks=[
-            task("task_fix", Capability.EXPERIMENT_RUN, work_request_id="work_next"),
-            task("task_rerun", Capability.EXPERIMENT_RUN, ["task_fix"], work_request_id="work_next"),
+            task("task_fix", WorkflowAgentKind.EXPERIMENT, work_request_id="work_next"),
+            task("task_rerun", WorkflowAgentKind.EXPERIMENT, ["task_fix"], work_request_id="work_next"),
         ],
     ))
     assert patched.workflow.revision == 2

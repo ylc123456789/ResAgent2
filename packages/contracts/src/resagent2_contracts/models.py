@@ -257,6 +257,10 @@ SCIENTIFIC_ARTIFACT_KINDS = frozenset({
     "literature_search", "scientific_opinion", "scientific_assessment",
     "observation_trace", "module_report",
 })
+SYSTEM_GENERATED_ARTIFACT_KINDS = SYSTEM_ARTIFACT_KINDS | frozenset({
+    "code_patch", "verification_result", "execution_record", "observation_trace",
+    "literature_search", "final_report",
+})
 
 
 class ArtifactRef(ContractModel):
@@ -911,7 +915,7 @@ class AgentResult(ContractModel):
     control: ControlSignal | None = None
     error: ModuleError | None = None
     warnings: list[WarningRecord] = Field(default_factory=list)
-    llm_calls: int = Field(default=0, ge=0)
+    llm_calls: int = Field(default=0, ge=0, strict=True)
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> AgentResult:
@@ -931,6 +935,16 @@ class AgentResult(ContractModel):
                 raise ValueError("failed or blocked result requires error and no control")
         elif self.error is not None or self.control is not None:
             raise ValueError("completed result cannot have error or control")
+        expected_session_status = {
+            ModuleStatus.COMPLETED: SessionStatus.COMPLETED,
+            ModuleStatus.COMPLETED_WITH_WARNINGS: SessionStatus.COMPLETED,
+            ModuleStatus.FAILED: SessionStatus.FAILED,
+            ModuleStatus.BLOCKED: SessionStatus.BLOCKED,
+            ModuleStatus.NEEDS_USER_INPUT: SessionStatus.PAUSED,
+            ModuleStatus.REQUEST_WORK: SessionStatus.PAUSED,
+        }[self.status]
+        if self.session is not None and self.session.status != expected_session_status:
+            raise ValueError("result status and session status disagree")
         if self.control is not None:
             control = self.control
             if control.candidate_index is not None:

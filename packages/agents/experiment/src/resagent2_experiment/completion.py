@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from resagent2_contracts import ArtifactCandidate, ErrorCode, ModuleError, VerificationResult
+from resagent2_contracts import ArtifactCandidate, ErrorCode, ModuleError, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
 from resagent2_components import WorkspaceObserver
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
 class ExperimentCompletionCheck:
-    def __init__(self, observer: WorkspaceObserver) -> None:
+    def __init__(self, observer: WorkspaceObserver, *, output_dir: str | None = None) -> None:
         self.observer = observer
+        self.output_dir = Path(output_dir).resolve() if output_dir is not None else None
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
-        if any(item.kind in {"execution_record", "verification_result"} for item in candidate.artifacts):
+        if any(item.kind in SYSTEM_GENERATED_ARTIFACT_KINDS for item in candidate.artifacts):
             return CompletionDecision(
                 complete=False, report="Execution records are generated from actual command observations",
             )
@@ -40,7 +42,13 @@ class ExperimentCompletionCheck:
             )
         for item in candidate.artifacts:
             if getattr(item, "content", None) is None and hasattr(item, "path"):
-                self.observer.boundary.resolve_read_file(item.path)
+                workspace_file = self.observer.boundary.root / item.path
+                output_file = (self.output_dir / item.path).resolve() if self.output_dir else None
+                if output_file is not None and output_file.is_file():
+                    if not output_file.is_relative_to(self.output_dir) or workspace_file.exists():
+                        raise PermissionError("Output artifact is outside its root or ambiguous")
+                else:
+                    self.observer.boundary.resolve_read_file(item.path)
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=artifacts,
         )

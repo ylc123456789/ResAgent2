@@ -8,21 +8,21 @@ from typing import Protocol
 
 from resagent2_contracts import (
     AgentOwner,
-    ModuleResult,
-    ModuleTaskRequest,
+    AgentResult,
+    AgentRequest,
 )
 
 
 class ModulePort(Protocol):
     """Uniform boundary implemented by native Agents or other task adapters."""
 
-    def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
+    def invoke(self, request: AgentRequest) -> AgentResult:
         """Execute until a result or pause; resume may invoke the same Attempt again."""
 
 
 @dataclass(frozen=True, slots=True)
 class ModuleBinding:
-    """Capability owner and invocation port.
+    """Execution Agent owner and invocation port.
 
     The workspace is no longer fixed here: the Scheduler resolves each task's
     ``workspace_id`` against ``ResearchRun.workspaces`` and derives a
@@ -36,11 +36,11 @@ class ModuleBinding:
 class ScriptedModulePort:
     """Deterministic fake ModulePort that returns predefined results."""
 
-    def __init__(self, results: list[ModuleResult]) -> None:
+    def __init__(self, results: list[AgentResult]) -> None:
         self._results = deque(results)
-        self.requests: list[ModuleTaskRequest] = []
+        self.requests: list[AgentRequest] = []
 
-    def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
+    def invoke(self, request: AgentRequest) -> AgentResult:
         self.requests.append(request)
         if not self._results:
             raise RuntimeError("scripted ModulePort has no remaining result")

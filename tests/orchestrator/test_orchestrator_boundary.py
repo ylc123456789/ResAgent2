@@ -16,6 +16,7 @@ ALLOWED_IMPORT_ROOTS = {
     "hashlib",
     "importlib",
     "json",
+    "math",
     "os",
     "pathlib",
     "shutil",

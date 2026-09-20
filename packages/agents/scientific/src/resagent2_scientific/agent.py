@@ -54,6 +54,10 @@ class ScientificAgent:
         )
 
     def invoke(self, request: AgentRequest) -> AgentResult:
+        try:
+            request = AgentRequest.model_validate(request)
+        except ValueError as error:
+            return self._failure(str(error))
         if request.agent != AgentOwner.SCIENTIFIC:
             return self._failure("ScientificAgent received a non-Scientific request")
         resolve = getattr(self.registration_port, "resolve", None)

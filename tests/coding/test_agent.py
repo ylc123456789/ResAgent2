@@ -152,10 +152,11 @@ def test_failed_call_retains_diagnostic_patch(tmp_path):
     assert result.error.retryable is False
 
 
-def test_model_cannot_fabricate_verification_record(tmp_path):
+@pytest.mark.parametrize("kind", ["verification_result", "execution_record", "observation_trace", "literature_search"])
+def test_model_cannot_fabricate_system_record(tmp_path, kind):
     init_repo(tmp_path)
     result = NativeCodingAgent(ScriptedLLMClient([finish(artifacts=[{
-        "kind": "verification_result", "path": "fake.json", "summary": "fake pass",
+        "kind": kind, "path": "fake.json", "summary": "fake pass",
         "media_type": "application/json", "content": '{"passed": true}',
     }])])).invoke(request(tmp_path))
     assert result.status == ModuleStatus.FAILED

@@ -56,6 +56,6 @@ class AskUserTool:
             )
         return ToolObservation(
             summary=args.assessment.statement,
-            question=QuestionDraft(text=args.text, requested_fields=args.requested_fields),
+            question=QuestionDraft(text=args.text, requested_fields=args.requested_fields, options=args.options),
             memory_updates={"latest_assessment": args.assessment.model_dump(mode="json")},
         )

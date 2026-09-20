@@ -55,6 +55,10 @@ class NativeExperimentAgent:
         )
 
     def invoke(self, request: AgentRequest) -> AgentResult:
+        try:
+            request = AgentRequest.model_validate(request)
+        except ValueError as error:
+            return self._failure(str(error))
         if request.agent != AgentOwner.EXPERIMENT:
             return self._failure("NativeExperimentAgent received a non-Experiment request")
         if request.workspace is None:
@@ -138,7 +142,7 @@ class NativeExperimentAgent:
                 request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
             ),
             permission_policy=AllowListPermissionPolicy(allowed),
-            completion_check=ExperimentCompletionCheck(observer),
+            completion_check=ExperimentCompletionCheck(observer, output_dir=request.output_dir),
             action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
         )
         initial_memory = {"command_count": 0, "experiment_success_count": 0}

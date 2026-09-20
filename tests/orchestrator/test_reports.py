@@ -2,14 +2,14 @@ from datetime import UTC, datetime
 
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    ExperimentRunInput,
-    ModuleResult,
+    AgentResult,
+    ArtifactCandidate,
     ModuleStatus,
     ResearchRequest,
     RunBudget,
     RunStatus,
     TaskProposal,
+    WorkflowAgentKind,
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
@@ -23,7 +23,7 @@ from resagent2_orchestrator import (
 
 def request() -> ResearchRequest:
     return ResearchRequest(
-        goal="Record a payload",
+        goal="Record a report and metrics",
         budget=RunBudget(
             max_tasks=5,
             max_attempts_per_task=2,
@@ -40,9 +40,9 @@ def proposal() -> WorkflowProposal:
             TaskProposal(
                 id="task_experiment",
                 work_request_id="work_legacy_initial",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Produce metrics",
-                inputs=ExperimentRunInput(instructions="Run once"),
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Produce metrics",
+
             )
         ],
     )
@@ -62,24 +62,27 @@ def _create_run(engine, run_id, request, proposal):
     return engine.accept_proposal(run_id, proposal)
 
 
-def test_attempt_persists_module_payload() -> None:
-    result = ModuleResult(
+def test_attempt_persists_report_and_registered_artifact() -> None:
+    result = AgentResult(
         status=ModuleStatus.COMPLETED,
-        summary="done",
-        payload={"env_id": "resenv_test", "metrics": {"accuracy": 0.9}},
+        report="Measured accuracy",
+        artifacts=[ArtifactCandidate(kind="metrics", path="metrics.json", media_type="application/json", summary="Measured metric", content='{"accuracy": 0.9}')],
+
     )
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([result]),
             )
         },
         store=InMemoryRunStore(),
     )
-    _create_run(engine, "run_payload", request(), proposal())
-    run = engine.run_until_stable("run_payload")
+    _create_run(engine, "run_report", request(), proposal())
+    run = engine.run_until_stable("run_report")
 
     attempt = run.workflow.tasks[0].attempts[0]
-    assert attempt.payload["metrics"] == {"accuracy": 0.9}
-    assert attempt.payload["env_id"] == "resenv_test"
+    from resagent2_orchestrator.handoffs import read_json
+    assert attempt.report == "Measured accuracy"
+    assert read_json(run.artifacts[attempt.artifact_ids[0]]) == {"accuracy": 0.9}
+    assert "payload" not in type(attempt).model_fields

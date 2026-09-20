@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from resagent2_contracts import SCHEMA_VERSION, ResearchRequest, RunBudget, RunStatus
+from resagent2_contracts import (
+    ResearchRequest,
+    RunBudget,
+    RunStatus,
+    SCHEMA_VERSION,
+)
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 
 

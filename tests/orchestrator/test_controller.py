@@ -7,31 +7,32 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner,
-    ArtifactRef,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
+    AgentResult,
+    ArtifactCandidate,
+    ConclusionRequirements,
+    ControlSignal,
     DatasetRef,
     ErrorCode,
-    ExperimentRunInput,
     ModuleError,
-    ModuleResult,
     ModuleStatus,
     QuestionDraft,
     RecordedAnswer,
     ResearchRequest,
     RunBudget,
     RunStatus,
-    ScientificCompletedResult,
     ScientificOpinion,
     ScientificVerdict,
     SessionRef,
     SessionStatus,
     TaskProposal,
     UserAnswer,
+    WorkFeedback,
     WorkRequest,
     WorkRequestDraft,
     WorkRequestStatus,
+    WorkflowAgentDefinition,
+    WorkflowAgentKind,
+    WorkflowAgentRegistry,
     WorkflowPatch,
     WorkflowProposal,
 )
@@ -49,8 +50,19 @@ from resagent2_orchestrator import (
 )
 from resagent2_runtime import InMemorySessionStore, JsonSessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
+from resagent2_orchestrator.handoffs import read_json, system_artifact
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
+
+
+def _context_material(context, ref):
+    name = f"material_{ref.id}"
+    assert context.included_sections.count(name) == 1
+    lines = context.text.splitlines()
+    payload = json.loads(lines[lines.index(f"## {name}") + 1])
+    assert payload["artifact_id"] == ref.id
+    assert payload["kind"] == ref.kind
+    return payload["content"]
 
 
 @pytest.fixture
@@ -81,11 +93,7 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
 
     ask = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "Need user-provisioned resources"},
-            "text": "Prepare the resources, then confirm.",
-            "requested_fields": ["ready"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Prepare the resources, then confirm.', 'requested_fields': ['ready']},
     }
 
     class TimedClient(ScriptedLLMClient):
@@ -109,7 +117,7 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
 
     second = rebuild([ask])
     budgets = []
-    original_run = second.scientific_port.run
+    original_run = second.scientific_port.invoke
 
     def capture(request):
         budgets.append((
@@ -118,7 +126,7 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
         ))
         return original_run(request)
 
-    second.scientific_port.run = capture
+    second.scientific_port.invoke = capture
     answer = UserAnswer(
         question_id=paused.pending_question.id, values={"ready": "yes"},
         answered_at=run_clock.now() + timedelta(days=100),  # Not the trusted clock.
@@ -159,7 +167,7 @@ def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
         actions=[request_work_action(), finish_action()], dataset_ref_source=source,
     )
     port = ScriptedModulePort([_task_question_result(), completed_result()])
-    controller.scheduler.bindings[Capability.EXPERIMENT_RUN] = ModuleBinding(
+    controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT] = ModuleBinding(
         owner=AgentOwner.EXPERIMENT, port=port,
     )
     paused = controller.create_run("run_task_wait", research_request())
@@ -175,7 +183,9 @@ def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
     assert completed.user_wait_seconds == 86400
     assert port.requests[-1].budget.max_llm_calls == 49
     assert port.requests[-1].budget.timeout_seconds == 60
-    assert port.requests[-1].dataset_refs == source.refs
+    from resagent2_orchestrator.handoffs import read_json
+    catalog = next(ref for ref in port.requests[-1].input_artifacts if ref.kind == "dataset_catalog")
+    assert read_json(catalog)["datasets"] == [ref.model_dump(mode="json") for ref in source.refs]
     assert port.requests[-1].parent_session_id == attempt.session.id
     assert port.requests[-1].attempt_number == attempt.number
     assert port.requests[-1].output_dir == port.requests[0].output_dir
@@ -223,12 +233,12 @@ def research_request() -> ResearchRequest:
     )
 
 
-def registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
+def registry() -> WorkflowAgentRegistry:
+    return WorkflowAgentRegistry(
         definitions=[
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+
             )
         ]
     )
@@ -241,16 +251,16 @@ def proposal(work_request_id: str) -> WorkflowProposal:
             TaskProposal(
                 id="task_experiment",
                 work_request_id=work_request_id,
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run the experiment",
-                inputs=ExperimentRunInput(instructions="Run once"),
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run the experiment",
+
             )
         ],
     )
 
 
-def completed_result() -> ModuleResult:
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"})
+def completed_result() -> AgentResult:
+    return AgentResult(status=ModuleStatus.COMPLETED, report="done", session=SessionRef(id="session_task_child", module=AgentOwner.EXPERIMENT, state_uri="memory://session_task_child", status=SessionStatus.COMPLETED, created_at=NOW, updated_at=NOW))
 
 
 def build_controller(
@@ -261,7 +271,7 @@ def build_controller(
 ) -> ResearchController:
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -299,12 +309,7 @@ def finish_action(verdict=ScientificVerdict.INCONCLUSIVE, limitations=()) -> dic
     opinion = {"verdict": verdict.value, "statement": "done"}
     if limitations:
         opinion["limitations"] = list(limitations)
-    return {
-        "tool": "finish",
-        "arguments": {
-            "opinion": opinion,
-        },
-    }
+    return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [ArtifactCandidate(kind="scientific_opinion", path="scientific_opinion.json", media_type="application/json", summary="Scientific conclusion", content=json.dumps(opinion)).model_dump(mode="json")]}}
 
 
 def test_direct_conclusion_without_work() -> None:
@@ -312,7 +317,7 @@ def test_direct_conclusion_without_work() -> None:
 
     run = controller.create_run("run_direct", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.final_opinion is not None
     assert run.work_requests == []
     assert run.final_report_artifact_id == "artifact_final_report"
@@ -332,8 +337,8 @@ def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
     class _CrashAfterScientificCheckpoint:
         calls = 0
 
-        def run(self, request):
-            result = scientific.run(request)
+        def invoke(self, request):
+            result = scientific.invoke(request)
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("simulated controller crash")
@@ -362,25 +367,9 @@ def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
 
 
 def test_completion_gate_violations_are_persisted() -> None:
-    invalid_session = SessionRef(
-        id="session_wrong_owner",
-        module=AgentOwner.EXPERIMENT,
-        state_uri="memory://session_wrong_owner",
-        status=SessionStatus.COMPLETED,
-        created_at=NOW,
-        updated_at=NOW,
-    )
-
     class _InvalidCompletionPort:
-        def run(self, request):
-            return ScientificCompletedResult(
-                status="completed",
-                opinion=ScientificOpinion(
-                    verdict=ScientificVerdict.INCONCLUSIVE,
-                    statement="No decisive evidence.",
-                ),
-                session=invalid_session,
-            )
+        def invoke(self, request):
+            return AgentResult(status="completed", report="Conclusion without its session or evidence")
 
     scheduler = WorkflowScheduler(bindings={}, store=InMemoryRunStore())
     controller = ResearchController(
@@ -393,8 +382,8 @@ def test_completion_gate_violations_are_persisted() -> None:
     run = controller.create_run("run_invalid_gate", research_request())
 
     assert run.status == RunStatus.FAILED
-    assert all(item.code.value == "invalid_session" for item in run.completion_violations)
-    assert len(run.completion_violations) >= 1
+    assert any(item.code.value == "invalid_session" for item in run.completion_violations)
+    assert scheduler.store.load(run.run_id).completion_violations == run.completion_violations
 
 
 def test_single_work_cycle_completes() -> None:
@@ -404,7 +393,7 @@ def test_single_work_cycle_completes() -> None:
 
     run = controller.create_run("run_cycle", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.final_opinion is not None
     assert len(run.work_requests) == 1
     assert run.work_requests[0].status.value == "consumed"
@@ -429,9 +418,9 @@ def _cycle_compiler():
                         TaskProposal(
                             id=f"task_{request.id}",
                             work_request_id=request.id,
-                            capability=Capability.EXPERIMENT_RUN,
-                            goal=f"Run for {request.id}",
-                            inputs=ExperimentRunInput(instructions="Run once"),
+                            workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                            instruction=f"Run for {request.id}",
+
                         )
                     ],
                 )
@@ -448,7 +437,7 @@ def test_multiple_serial_work_cycles(tmp_path) -> None:
     ]
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result(), completed_result()]),
             )
@@ -465,15 +454,15 @@ def test_multiple_serial_work_cycles(tmp_path) -> None:
 
     run = controller.create_run("run_multi", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert len(run.work_requests) == 2
     assert [item.status.value for item in run.work_requests] == ["consumed", "consumed"]
 
 
 def test_task_failure_then_request_alternative_work(tmp_path) -> None:
-    failed = ModuleResult(
+    failed = AgentResult(
         status=ModuleStatus.FAILED,
-        summary="crashed",
+        report="crashed",
         error=ModuleError(
             code=ErrorCode.TOOL_FAILED,
             message="crashed",
@@ -482,7 +471,7 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
     )
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([failed, completed_result()]),
             )
@@ -504,18 +493,14 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
 
     run = controller.create_run("run_failure", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert len(run.work_requests) == 2
 
 
 def test_paused_question_then_answer_resumes() -> None:
     ask_action = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "need dataset"},
-            "text": "Which dataset?",
-            "requested_fields": ["dataset"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Which dataset?', 'requested_fields': ['dataset']},
     }
     controller = build_controller(
         actions=[ask_action, finish_action()],
@@ -532,7 +517,7 @@ def test_paused_question_then_answer_resumes() -> None:
     )
     run = controller.answer_question("run_paused", answer)
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
 
 
 def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
@@ -545,11 +530,7 @@ def test_newly_registered_dataset_is_added_when_answer_resumes_run() -> None:
     source = _DatasetSource()
     ask_action = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "cifar10 is unavailable"},
-            "text": "Provision cifar10 and confirm when it is ready.",
-            "requested_fields": ["dataset_ready"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Provision cifar10 and confirm when it is ready.', 'requested_fields': ['dataset_ready']},
     }
     controller = build_controller(
         actions=[ask_action, finish_action()],
@@ -587,11 +568,7 @@ def test_catalog_refresh_survives_controller_restart_and_verbal_confirmation(tmp
     layout.dataset_root.mkdir(parents=True)
     ask = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "Need demo data"},
-            "text": "Place and register demo, then confirm",
-            "requested_fields": ["dataset_ready"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Place and register demo, then confirm', 'requested_fields': ['dataset_ready']},
     }
 
     def rebuild(actions):
@@ -648,18 +625,15 @@ def test_dataset_binding_cannot_be_remapped_during_run() -> None:
         dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar10")],
         status=RunStatus.RUNNING, created_at=now, updated_at=now,
     ))
-    with pytest.raises(ValueError, match="remapped during the Run"):
+    with pytest.raises(ValueError, match="remapped during Run"):
         controller.run_until_stable("run_dataset_remap")
 
 
-def _task_question_result() -> ModuleResult:
-    return ModuleResult(
+def _task_question_result() -> AgentResult:
+    return AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
-        summary="Which dataset?",
-        question=QuestionDraft(
-            text="Which dataset?",
-            requested_fields=["dataset"],
-        ),
+        report="Which dataset?",
+        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='Which dataset?', requested_fields=['dataset']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
         session=SessionRef(
             id="session_task_child",
             module=AgentOwner.EXPERIMENT,
@@ -680,7 +654,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
     """
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([_task_question_result(), completed_result()]),
             )
@@ -715,19 +689,22 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
     )
     run = controller.answer_question("run_task_question", answer)
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     task = run.workflow.tasks[0]
     # The same Attempt resumed, not a new one.
     assert [attempt.number for attempt in task.attempts] == [1]
     assert task.attempts[0].status.value == "completed"
     assert run.work_requests[0].status.value == "consumed"
-    resumed_request = scheduler.bindings[Capability.EXPERIMENT_RUN].port.requests[-1]
-    assert resumed_request.answers == run.answers
-    assert resumed_request.answers[0].question_text == paused.pending_question.text
-    assert resumed_request.answers[0].values == answer.values
+    resumed_request = scheduler.bindings[WorkflowAgentKind.EXPERIMENT].port.requests[-1]
+    from resagent2_orchestrator.handoffs import read_json
+    answers = [read_json(ref, RecordedAnswer) for ref in resumed_request.input_artifacts if ref.kind == "answer"]
+    assert answers == run.answers
+    assert answers[0].question_text == paused.pending_question.text
+    assert answers[0].values == answer.values
     final_context = scientific.llm_client.contexts[-1]
-    scientific_answers = final_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
-    assert json.loads(scientific_answers) == []  # A child task's reply is not broadcast.
+    task_answer_ids = [ref.id for ref in resumed_request.input_artifacts if ref.kind == "answer"]
+    assert all(f"material_{key}" not in final_context.included_sections for key in task_answer_ids)
+    assert all(key not in final_context.text for key in task_answer_ids)
 
 
 def test_task_question_resume_does_not_consume_attempt_budget() -> None:
@@ -743,7 +720,7 @@ def test_task_question_resume_does_not_consume_attempt_budget() -> None:
     )
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([_task_question_result(), completed_result()]),
             )
@@ -771,7 +748,7 @@ def test_task_question_resume_does_not_consume_attempt_budget() -> None:
     )
     run = controller.answer_question("run_task_question_1", answer)
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert [attempt.number for attempt in run.workflow.tasks[0].attempts] == [1]
 
 
@@ -832,22 +809,19 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
     )
 
     class _FinishingPort:
-        def run(self, request):
-            assert request.work_outcome is not None
-            return ScientificCompletedResult(
-                status="completed",
-                opinion=ScientificOpinion(
-                    verdict=ScientificVerdict.INCONCLUSIVE,
-                    statement="Execution completed without decisive evidence.",
-                ),
-                session=completed_session,
-                llm_calls=1,
-            )
+        def invoke(self, request):
+            feedback_ref = next(ref for ref in request.input_artifacts if ref.kind == "work_feedback")
+            feedback = read_json(feedback_ref, WorkFeedback)
+            assert feedback.work_request_id == "work_1"
+            assert feedback.session_id == completed_session.id
+            assert feedback.work_outcome.tasks[0].task_id == "task_experiment"
+            assert feedback_ref.id in request.resume_artifact_ids
+            return AgentResult(status='completed', session=completed_session, llm_calls=1, report="Scientific conclusion", artifacts=[ArtifactCandidate(kind="scientific_opinion", path="opinion.json", media_type="application/json", summary="Conclusion", content=ScientificOpinion(verdict=ScientificVerdict.INCONCLUSIVE, statement='Execution completed without decisive evidence.').model_dump_json()), ArtifactCandidate(kind="observation_trace", path="observations.json", media_type="application/json", summary="Observed", content=json.dumps({"observed_artifact_ids": []}))])
 
     store = InMemoryRunStore()
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -874,11 +848,17 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
             run_id="run_accept_recovery",
             request=request,
             status=RunStatus.RUNNING,
+            scientific_session=completed_session.model_copy(update={"status": SessionStatus.PAUSED}),
             work_requests=[compiling],
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
     )
+    recovered_state = store.load("run_accept_recovery")
+    recovered_state.conclusion_requirements_ref = system_artifact(
+        scheduler.artifact_registry, recovered_state, "conclusion_requirements", ConclusionRequirements(),
+    )
+    store.save(recovered_state)
     # Simulate the crash: scheduler acceptance is durable, but the controller
     # has not yet persisted compiling -> executing.
     scheduler.accept_proposal(
@@ -899,7 +879,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
 
     run = controller.run_until_stable("run_accept_recovery")
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
     assert run.workflow.revision == 1
 
@@ -915,14 +895,14 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
             return CompilationResult(proposal(request.id))
 
     first_result = (
-        ModuleResult(
-            status=ModuleStatus.FAILED, summary="Execution failed",
+        AgentResult(
+            status=ModuleStatus.FAILED, report="Execution failed",
             error=ModuleError(code=ErrorCode.TOOL_FAILED, message="Original failure", retryable=False),
         )
         if previous_failed else completed_result()
     )
     scheduler = WorkflowScheduler(
-        bindings={Capability.EXPERIMENT_RUN: ModuleBinding(
+        bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
             owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([first_result]),
         )},
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
@@ -977,7 +957,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
     ]
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result(), completed_result()]),
             )
@@ -994,7 +974,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
 
     run = controller.create_run("run_outcome_isolate", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     first = run.work_requests[0]
     second = run.work_requests[1]
     assert first.outcome.work_request_id == first.id
@@ -1004,16 +984,16 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
 
 
 def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
-    failed = ModuleResult(
+    failed = AgentResult(
         status=ModuleStatus.FAILED,
-        summary="crashed",
+        report="crashed",
         error=ModuleError(
             code=ErrorCode.TOOL_FAILED, message="crashed", retryable=False
         ),
     )
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([failed, completed_result()]),
             )
@@ -1035,7 +1015,7 @@ def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
 
     run = controller.create_run("run_unresolved", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     first_outcome = run.work_requests[0].outcome
     assert [t.task_id for t in first_outcome.tasks] == ["task_experiment"]
     assert first_outcome.tasks[0].status == "failed"
@@ -1053,16 +1033,17 @@ def test_forged_observed_artifact_is_rejected() -> None:
                 store=InMemorySessionStore(),
             )
 
-        def run(self, request):
-            result = self.agent.run(request)
+        def invoke(self, request):
+            result = self.agent.invoke(request)
             # Forge an extra observed id into the result.
-            return result.model_copy(
-                update={"observed_artifact_ids": ["artifact_fake"]}
-            )
+            for artifact in result.artifacts:
+                if artifact.kind == "observation_trace":
+                    artifact.content = json.dumps({"observed_artifact_ids": ["artifact_fake"]})
+            return result
 
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1096,7 +1077,7 @@ def test_run_total_llm_budget_exhaustion() -> None:
     actions = [request_work_action(), request_work_action()]
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result(), completed_result()]),
             )
@@ -1119,16 +1100,12 @@ def test_run_total_llm_budget_exhaustion() -> None:
 def test_answer_then_request_work_then_outcome_completes() -> None:
     ask_action = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "need dataset"},
-            "text": "Which dataset?",
-            "requested_fields": ["dataset"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Which dataset?', 'requested_fields': ['dataset']},
     }
     actions = [ask_action, request_work_action(), finish_action()]
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1153,7 +1130,7 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
     )
     run = controller.answer_question("run_answer_work", answer)
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.final_opinion is not None
 
 
@@ -1162,7 +1139,7 @@ def _build_recoverable_controller(
 ) -> ResearchController:
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1183,11 +1160,7 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
     session_store = JsonSessionStore(tmp_path / "sessions")
     ask_action = {
         "tool": "ask_user",
-        "arguments": {
-            "assessment": {"statement": "need dataset"},
-            "text": "Which dataset?",
-            "requested_fields": ["dataset"],
-        },
+        "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': 'Which dataset?', 'requested_fields': ['dataset']},
     }
     controller = _build_recoverable_controller(
         run_store, session_store, [ask_action, finish_action()]
@@ -1209,25 +1182,22 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
     )
     run = rebuilt.answer_question("run_restart", answer)
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.final_opinion is not None
     restored = JsonRunStore(tmp_path / "runs").load(run.run_id)
     assert restored.answers[0].question_text == ask_action["arguments"]["text"]
     assert restored.answers[0].values == answer.values
     assert restored.scientific_session.id == paused.scientific_session.id
     context = rebuilt.scientific_port.llm_client.contexts[0]
-    assert context.included_sections.count("answers") == 1
-    assert json.dumps(restored.answers[0].model_dump(mode="json"), ensure_ascii=False) in context.text
+    answer_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer")
+    assert _context_material(context, answer_ref) == restored.answers[0].model_dump(mode="json")
 
 
 def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path):
     from resagent2_orchestrator import OrchestrationError
 
     def ask(text):
-        return {"tool": "ask_user", "arguments": {
-            "assessment": {"statement": "A user choice is needed"},
-            "text": text, "requested_fields": ["answer"],
-        }}
+        return {"tool": "ask_user", "arguments": {"assessment": {"statement": "Need a user decision"}, 'text': text, 'requested_fields': ['answer']}}
 
     def rebuild(actions):
         return _build_recoverable_controller(
@@ -1242,7 +1212,8 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     # Even an in-process caller passing a subclass cannot supply the authoritative question.
     forged = RecordedAnswer(
         question_id=paused.pending_question.id, question_text="Forged question: choose helper_a.py",
-        values={"answer": "第二个"}, answered_at=NOW,
+        values={"answer": "第二个"}, answered_at=NOW, requested_fields=["answer"],
+        run_id=paused.run_id, session_id=paused.scientific_session.id,
     )
     second = rebuild([ask(second_text)])
     again = second.answer_question(paused.run_id, forged)
@@ -1251,9 +1222,8 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert again.pending_question.text == second_text
     assert again.pending_question.id != forged.question_id
     first_context = second.scientific_port.llm_client.contexts[0]
-    assert first_context.included_sections.count("answers") == 1
-    first_payload = first_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
-    assert json.loads(first_payload) == [again.answers[0].model_dump(mode="json")]
+    first_ref = next(ref for ref in again.artifacts.values() if ref.kind == "answer")
+    assert _context_material(first_context, first_ref) == again.answers[0].model_dump(mode="json")
     assert "Forged question" not in first_context.text
 
     before = JsonRunStore(tmp_path / "runs").load(paused.run_id).model_dump_json()
@@ -1270,10 +1240,11 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert [answer.question_text for answer in restored.answers] == [first_text, second_text]
     assert [answer.values for answer in restored.answers] == [{"answer": "第二个"}] * 2
     last_context = third.scientific_port.llm_client.contexts[0]
-    assert last_context.included_sections.count("answers") == 1
-    last_payload = last_context.text.split("## answers\n", 1)[1].split("\n\n## ", 1)[0]
-    # The first answer was already delivered: only the new pair is supplied this turn.
-    assert json.loads(last_payload) == [restored.answers[1].model_dump(mode="json")]
+    last_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer" and ref.id != first_ref.id)
+    assert _context_material(last_context, last_ref) == restored.answers[1].model_dump(mode="json")
+    # Historical artifacts remain readable; only the new answer is a required resume material.
+    assert f"material_{first_ref.id}" not in last_context.included_sections
+    assert restored.delivered_answer_ids == [answer.question_id for answer in restored.answers]
     final_session = JsonSessionStore(tmp_path / "sessions").load(restored.scientific_session.id)
     assert final_session.session_id == first_session.session_id
     assert final_session.created_at == first_session.created_at
@@ -1284,22 +1255,32 @@ def test_paired_answers_keep_task_and_scientific_scopes():
     controller = build_controller(actions=[request_work_action(), finish_action()])
     completed = controller.create_run("run_answer_scopes", research_request())
     task = completed.workflow.tasks[0]
+    scopes = [
+        {"session_id": completed.scientific_session.id},
+        {"task_id": task.id, "attempt_number": 1},
+        {"task_id": "task_other", "attempt_number": 1},
+    ]
     answers = [RecordedAnswer(
         question_id=f"question_{name}", question_text=f"Question for {name}?",
-        values={"answer": "second"}, answered_at=NOW,
-    ) for name in ("scientific", "experiment", "other")]
+        requested_fields=["answer"], run_id=completed.run_id,
+        values={"answer": "second"}, answered_at=NOW, **scope,
+    ) for name, scope in zip(("scientific", "experiment", "other"), scopes)]
     completed.answers = answers
-    completed.answer_task_ids = {
-        answers[1].question_id: task.id,
-        answers[2].question_id: "task_other",
-    }
-    request = controller.scheduler._module_request(completed, task, 1, parent_session_id=None)
-    assert request.answers == [answers[1]]
+    refs = [system_artifact(controller.scheduler.artifact_registry, completed, "answer", answer, **scope)
+            for answer, scope in zip(answers, scopes)]
+    request = controller.scheduler._module_request(completed, task, 1, parent_session_id="session_task_child")
+    assert [read_json(ref, RecordedAnswer) for ref in request.input_artifacts if ref.kind == "answer"] == [answers[1]]
+    assert request.resume_artifact_ids == [refs[1].id]
     assert controller._pending_answers(completed) == [answers[0]]
-    controller._mark_answers_delivered(completed)
+    scientific_request = controller._scientific_request(completed)
+    assert scientific_request.resume_artifact_ids == [refs[0].id]
+    assert refs[1] not in scientific_request.input_artifacts
+    assert refs[2] not in scientific_request.input_artifacts
+    completed.delivered_answer_ids = [answers[0].question_id]
     assert controller._pending_answers(completed) == []
-    assert controller.scheduler._module_request(completed, task, 1, parent_session_id=None).answers == [answers[1]]
-    assert "Question for other" not in request.model_dump_json()
+    assert controller._scientific_request(completed).resume_artifact_ids == []
+    assert controller.scheduler._module_request(completed, task, 1, parent_session_id="session_task_child").resume_artifact_ids == [refs[1].id]
+    assert refs[2] not in request.input_artifacts
 
 
 def test_budget_overrun_does_not_complete(tmp_path) -> None:
@@ -1317,7 +1298,7 @@ def test_budget_overrun_does_not_complete(tmp_path) -> None:
     actions = [request_work_action(), finish_action()]
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1345,7 +1326,7 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
     store = InMemoryRunStore()
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1362,16 +1343,8 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
     )
 
     class _FinishingPort:
-        def run(self, request):
-            return ScientificCompletedResult(
-                status="completed",
-                opinion=ScientificOpinion(
-                    verdict=ScientificVerdict.INCONCLUSIVE,
-                    statement="Execution completed without decisive evidence.",
-                ),
-                session=completed_session,
-                llm_calls=1,
-            )
+        def invoke(self, request):
+            return AgentResult(status='completed', session=completed_session, llm_calls=1, report="Scientific conclusion", artifacts=[ArtifactCandidate(kind="scientific_opinion", path="opinion.json", media_type="application/json", summary="Conclusion", content=ScientificOpinion(verdict=ScientificVerdict.INCONCLUSIVE, statement='Execution completed without decisive evidence.').model_dump_json()), ArtifactCandidate(kind="observation_trace", path="observations.json", media_type="application/json", summary="Observed", content=json.dumps({"observed_artifact_ids": []}))])
 
     compiling = WorkRequest(
         id="work_1",
@@ -1390,11 +1363,17 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
             run_id="run_compile_restart",
             request=research_request(),
             status=RunStatus.RUNNING,
+            scientific_session=completed_session.model_copy(update={"status": SessionStatus.PAUSED}),
             work_requests=[compiling],
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
     )
+    recovered_state = store.load("run_compile_restart")
+    recovered_state.conclusion_requirements_ref = system_artifact(
+        scheduler.artifact_registry, recovered_state, "conclusion_requirements", ConclusionRequirements(),
+    )
+    store.save(recovered_state)
     controller = ResearchController(
         scientific_port=_FinishingPort(),
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
@@ -1404,7 +1383,7 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
 
     run = controller.run_until_stable("run_compile_restart")
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
 
 
 def test_compiler_llm_calls_enter_the_run_ledger() -> None:
@@ -1414,7 +1393,7 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
 
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([completed_result()]),
             )
@@ -1433,7 +1412,7 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
 
     run = controller.create_run("run_compiler_calls", research_request())
 
-    assert run.status == RunStatus.COMPLETED
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
     # 7 compiler calls + 2 Scientific calls (request_work + finish).
     assert run.llm_calls_used == 9
 

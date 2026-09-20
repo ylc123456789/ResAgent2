@@ -1,48 +1,21 @@
-"""Deterministic scientific completion validation and final-report rendering."""
-
-from __future__ import annotations
+"""Check final artifact evidence and render the accepted research report."""
 
 from dataclasses import dataclass
-from typing import Annotated
-
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
-
+from pydantic import BaseModel, ConfigDict, Field
 from resagent2_contracts import (
-    AgentOwner,
-    ArtifactCandidate,
-    ArtifactRef,
-    AttemptStatus,
-    CapabilityRegistry,
-    RunId,
-    ScientificCompletedResult,
-    ScientificOpinion,
-    ScientificTurnResult,
-    SessionStatus,
-    TaskStatus,
-    WorkRequestStatus,
-    WorkTaskOutcome,
-    missing_required_evidence_kinds,
+    AgentOwner, ArtifactCandidate, ArtifactRef, AttemptStatus, ConclusionRequirements,
+    ModuleStatus, ObservationTrace, ScientificOpinion, SessionStatus, TaskStatus,
+    WorkRequestStatus, WorkTaskOutcome, missing_required_evidence_kinds,
 )
-
-from .models import (
-    CompletionViolation,
-    CompletionViolationCode,
-    ResearchRun,
-)
+from .handoffs import read_json, check_acceptance
+from .models import CompletionViolation, CompletionViolationCode
 
 
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
-class _CompletionModel(BaseModel):
+class FinalReportData(BaseModel):
+    """Validated inputs to deterministic final-report rendering."""
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class FinalReportData(_CompletionModel):
-    """Only facts the deterministic final-report renderer may consume."""
-
-    run_id: RunId
-    goal: NonEmptyText
+    run_id: str
+    goal: str
     opinion: ScientificOpinion
     evidence: list[ArtifactRef]
     execution_issues: list[WorkTaskOutcome] = Field(default_factory=list)
@@ -50,407 +23,117 @@ class FinalReportData(_CompletionModel):
 
 @dataclass(frozen=True)
 class CompletionValidation:
-    """One validation result: either violations or typed report data."""
-
+    """Completion violations or the accepted report data."""
     violations: tuple[CompletionViolation, ...] = ()
     report: FinalReportData | None = None
 
     @property
-    def ok(self) -> bool:
+    def ok(self):
         return not self.violations and self.report is not None
 
 
 @dataclass(frozen=True)
 class RenderedFinalReport:
-    """A validated candidate paired with its deterministic UTF-8 content."""
-
+    """Rendered report bytes and registration metadata."""
     candidate: ArtifactCandidate
     content: str
 
 
-def scientific_turn_violations(
-    run: ResearchRun, result: ScientificTurnResult,
-) -> list[CompletionViolation]:
-    """Check the receiving boundary before consuming a delivered turn.
-
-    This checks references and protocol state, not scientific truth. The same
-    rule also protects the standalone final gate from alternate Port callers.
-    """
-    violations: list[CompletionViolation] = []
-
-    def reject(code: CompletionViolationCode, message: str, *ids: str) -> None:
-        violations.append(CompletionViolation(code=code, message=message, related_ids=list(ids)))
-
-    session = result.session
-    expected_status = {
-        "request_work": SessionStatus.PAUSED,
-        "needs_user_input": SessionStatus.PAUSED,
-        "completed": SessionStatus.COMPLETED,
-        "failed": SessionStatus.FAILED,
-    }[result.status]
-    if session is not None:
-        if session.module != AgentOwner.SCIENTIFIC or session.status != expected_status:
-            reject(CompletionViolationCode.INVALID_SESSION,
-                   f"{result.status} requires a scientific {expected_status.value} session", session.id)
-        if run.scientific_session is not None and session.id != run.scientific_session.id:
-            reject(CompletionViolationCode.INVALID_SESSION,
-                   "result does not belong to the run's bound scientific session", session.id)
-
-    observed = set(result.observed_artifact_ids)
-    assessment = getattr(result, "assessment", None)
-    opinion = getattr(result, "opinion", None)
-    cited = set((assessment or opinion).evidence_artifact_ids) if assessment or opinion else set()
-    for artifact_id in sorted(observed | cited):
-        artifact = run.artifacts.get(artifact_id)
-        if artifact is None or artifact.id != artifact_id or artifact.run_id != run.run_id:
-            reject(CompletionViolationCode.UNKNOWN_EVIDENCE,
-                   "turn evidence is not a registered artifact of this run", artifact_id)
-        elif artifact_id in cited and artifact_id not in observed:
-            reject(CompletionViolationCode.UNOBSERVED_EVIDENCE,
-                   "turn citations must be present in its observed trace", artifact_id)
-    return violations
-
-
 class ScientificCompletionValidator:
-    """Validate closure consistency without judging scientific truth."""
+    """Check evidence provenance and terminal execution state."""
+    def __init__(self, registry):
+        self._kinds = {item.workflow_agent_kind for item in registry.definitions}
 
-    def __init__(self, registry: CapabilityRegistry) -> None:
-        self._owners = {
-            definition.capability: definition.owner
-            for definition in registry.definitions
-        }
+    def validate(self, run, result, refs):
+        violations = []
 
-    def validate(
-        self,
-        run: ResearchRun,
-        result: ScientificCompletedResult,
-    ) -> CompletionValidation:
-        # This gate is also callable without Controller. Revalidate the entire
-        # completed response, including status/session, not just its opinion.
+        def reject(code, message, ids=()):
+            violations.append(CompletionViolation(code=code, message=message, related_ids=list(ids)))
+
+        if result.status not in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
+            reject(CompletionViolationCode.INVALID_OPINION, "Scientific has not completed")
+        session = result.session
+        if (session is None or session.module != AgentOwner.SCIENTIFIC or session.status != SessionStatus.COMPLETED
+                or run.scientific_session is None or session.id != run.scientific_session.id):
+            reject(CompletionViolationCode.INVALID_SESSION, "completed result requires its bound Scientific session")
+        if run.pending_question or any(work.status not in {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED} for work in run.work_requests):
+            reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "active control state prevents completion")
+        if any(task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT} for task in (run.workflow.tasks if run.workflow else [])):
+            reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "non-terminal tasks prevent completion")
         try:
-            result = ScientificCompletedResult.model_validate(
-                result.model_dump() if isinstance(result, BaseModel) else result
-            )
-        except ValidationError as error:
-            return CompletionValidation(violations=(CompletionViolation(
-                code=CompletionViolationCode.INVALID_OPINION,
-                message=f"Invalid completed Scientific response: {error}",
-            ),))
-        # Work on a validated deep copy so this pure validator cannot mutate the
-        # controller's live object through nested Pydantic models.
-        snapshot = ResearchRun.model_validate(run.model_dump())
-        violations = scientific_turn_violations(snapshot, result)
-        self._validate_control_state(snapshot, violations)
-        evidence = self._validate_evidence(snapshot, result, violations)
-        issues = self._validate_unresolved_tasks(snapshot, result.opinion, violations)
-        self._validate_completed_tasks(snapshot, violations)
-        self._validate_ids(snapshot, result, violations)
-
-        if violations:
-            return CompletionValidation(violations=tuple(violations))
-        return CompletionValidation(
-            report=FinalReportData(
-                run_id=snapshot.run_id,
-                goal=snapshot.request.goal,
-                opinion=result.opinion,
-                evidence=evidence,
-                execution_issues=issues,
-            )
-        )
-
-    @staticmethod
-    def _add(
-        violations: list[CompletionViolation],
-        code: CompletionViolationCode,
-        message: str,
-        *related_ids: str,
-    ) -> None:
-        violations.append(
-            CompletionViolation(
-                code=code,
-                message=message,
-                related_ids=list(related_ids),
-            )
-        )
-
-    def _validate_control_state(
-        self,
-        run: ResearchRun,
-        violations: list[CompletionViolation],
-    ) -> None:
-        active = [
-            item.id
-            for item in run.work_requests
-            if item.status
-            in {
-                WorkRequestStatus.REQUESTED,
-                WorkRequestStatus.COMPILING,
-                WorkRequestStatus.EXECUTING,
-                WorkRequestStatus.STABLE,
-            }
-        ]
-        if active:
-            self._add(
-                violations,
-                CompletionViolationCode.ACTIVE_CONTROL_STATE,
-                "active work requests prevent completion",
-                *active,
-            )
-        if run.pending_question is not None:
-            self._add(
-                violations,
-                CompletionViolationCode.ACTIVE_CONTROL_STATE,
-                "a pending user question prevents completion",
-                run.pending_question.id,
-            )
-        nonterminal = [] if run.workflow is None else [
-            task.id
-            for task in run.workflow.tasks
-            if task.status
-            in {
-                TaskStatus.PENDING,
-                TaskStatus.RUNNING,
-                TaskStatus.NEEDS_USER_INPUT,
-            }
-        ]
-        if nonterminal:
-            self._add(
-                violations,
-                CompletionViolationCode.ACTIVE_CONTROL_STATE,
-                "non-terminal tasks prevent completion",
-                *nonterminal,
-            )
-
-    def _validate_evidence(
-        self,
-        run: ResearchRun,
-        result: ScientificCompletedResult,
-        violations: list[CompletionViolation],
-    ) -> list[ArtifactRef]:
-        evidence: list[ArtifactRef] = []
-        turn_observed = set(result.observed_artifact_ids)
-        run_observed = set(run.scientific_observed_artifact_ids)
-        for artifact_id in result.opinion.evidence_artifact_ids:
-            artifact = run.artifacts.get(artifact_id)
-            # The shared turn boundary already rejects missing/foreign refs
-            # and unobserved turn citations. The final gate additionally checks
-            # the Run's durable observed ledger and its required evidence kinds.
-            if artifact is None or artifact.id != artifact_id or artifact.run_id != run.run_id:
-                continue
-            evidence.append(artifact)
-            if artifact_id not in run_observed:
-                self._add(
-                    violations,
-                    CompletionViolationCode.UNOBSERVED_EVIDENCE,
-                    "opinion evidence must be present in both observed traces",
-                    artifact_id,
-                )
-        missing = missing_required_evidence_kinds(
-            run.request.required_evidence_kinds,
-            run_id=run.run_id,
-            artifacts=run.artifacts.values(),
-            observed_artifact_ids=turn_observed & run_observed,
-            cited_artifact_ids=result.opinion.evidence_artifact_ids,
-        )
-        if missing:
-            self._add(violations, CompletionViolationCode.MISSING_EVIDENCE_KIND,
-                      "opinion must cite observed artifacts of required kinds: " + ", ".join(missing))
-        return evidence
-
-    def _validate_unresolved_tasks(
-        self,
-        run: ResearchRun,
-        opinion: ScientificOpinion,
-        violations: list[CompletionViolation],
-    ) -> list[WorkTaskOutcome]:
-        tasks = [] if run.workflow is None else run.workflow.tasks
-        unresolved = [
-            task for task in tasks if task.status in {TaskStatus.FAILED, TaskStatus.BLOCKED}
-        ]
-        if unresolved and not opinion.limitations:
-            self._add(
-                violations,
-                CompletionViolationCode.MISSING_LIMITATIONS,
-                "failed or blocked tasks require explicit limitations",
-                *(task.id for task in unresolved),
-            )
-
-        issues: list[WorkTaskOutcome] = []
-        for task in unresolved:
-            attempt = task.attempts[-1] if task.attempts else None
-            if attempt is None or attempt.error is None:
-                self._add(
-                    violations,
-                    CompletionViolationCode.INCONSISTENT_TASK_RESULT,
-                    "failed or blocked task lacks a terminal error",
-                    task.id,
-                )
-                continue
-            issues.append(
-                WorkTaskOutcome(
-                    task_id=task.id,
-                    status=task.status.value,
-                    summary=task.goal,
-                    error=attempt.error,
-                    warnings=list(task.warnings),
-                )
-            )
-        return issues
-
-    def _validate_completed_tasks(
-        self,
-        run: ResearchRun,
-        violations: list[CompletionViolation],
-    ) -> None:
-        if run.workflow is None:
-            return
-        for task in run.workflow.tasks:
+            opinions = [ref for ref in refs if ref.kind == "scientific_opinion"]
+            traces = [ref for ref in refs if ref.kind == "observation_trace"]
+            if len(opinions) != 1 or len(traces) != 1:
+                raise ValueError("completion requires one opinion and one execution observation trace")
+            for ref in [*opinions, *traces]:
+                if run.artifacts.get(ref.id) != ref or ref.producer != AgentOwner.SCIENTIFIC or not session or ref.session_id != session.id:
+                    raise ValueError("Scientific completion artifact has invalid ownership")
+            opinion = read_json(opinions[0], ScientificOpinion)
+            observed = set(read_json(traces[0], ObservationTrace).observed_artifact_ids)
+            cited = set(opinion.evidence_artifact_ids)
+            if len(cited) != len(opinion.evidence_artifact_ids):
+                raise ValueError("duplicate opinion citations")
+            if not observed <= set(run.artifacts):
+                raise ValueError("observation trace contains unknown evidence")
+            if any(run.artifacts[key].run_id != run.run_id for key in observed | cited):
+                raise ValueError("evidence belongs to another Run")
+            valid = observed & set(run.scientific_observed_artifact_ids)
+            if not cited <= valid:
+                reject(CompletionViolationCode.UNOBSERVED_EVIDENCE, "opinion cites unobserved evidence", cited-valid)
+            requirement = run.conclusion_requirements_ref
+            if requirement is None or run.artifacts.get(requirement.id) != requirement or requirement.kind != "conclusion_requirements" or requirement.run_id != run.run_id:
+                raise ValueError("Run conclusion requirement binding missing or invalid")
+            required = read_json(requirement, ConclusionRequirements).required_evidence_kinds
+            missing = missing_required_evidence_kinds(required, run_id=run.run_id, artifacts=run.artifacts.values(),
+                                                      observed_artifact_ids=valid, cited_artifact_ids=cited)
+            if missing:
+                reject(CompletionViolationCode.MISSING_EVIDENCE_KIND, "missing observed and cited evidence kinds", missing)
+        except (ValueError, OSError, KeyError) as error:
+            reject(CompletionViolationCode.INVALID_OPINION, str(error))
+            return CompletionValidation(tuple(violations))
+        for task in run.workflow.tasks if run.workflow else []:
             if task.status != TaskStatus.COMPLETED:
                 continue
-            attempt = task.attempts[-1] if task.attempts else None
-            if (
-                attempt is None
-                or attempt.status
-                not in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
-                or attempt.error is not None
-                or attempt.finished_at is None
-            ):
-                self._add(
-                    violations,
-                    CompletionViolationCode.INCONSISTENT_TASK_RESULT,
-                    "completed task lacks a valid terminal attempt",
-                    task.id,
-                )
+            last = task.attempts[-1] if task.attempts else None
+            if task.workflow_agent_kind not in self._kinds or last is None or last.status not in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS} or last.finished_at is None or last.error:
+                reject(CompletionViolationCode.INCONSISTENT_TASK_RESULT, "completed task lacks valid execution history", [task.id])
                 continue
-
-            owner = self._owners.get(task.capability)
-            if owner is None:
-                self._add(
-                    violations,
-                    CompletionViolationCode.INCONSISTENT_TASK_RESULT,
-                    "completed task capability has no registered owner",
-                    task.id,
-                    task.capability.value,
-                )
-                continue
-            for artifact_id in attempt.artifact_ids:
-                artifact = run.artifacts.get(artifact_id)
-                if (
-                    artifact is None
-                    or artifact.run_id != run.run_id
-                    or artifact.task_id != task.id
-                    or artifact.attempt_number != attempt.number
-                    or artifact.producer != owner
-                ):
-                    self._add(
-                        violations,
-                        CompletionViolationCode.INCONSISTENT_TASK_RESULT,
-                        "completed task artifact has invalid provenance or owner",
-                        task.id,
-                        artifact_id,
-                    )
-
-    def _validate_ids(
-        self,
-        run: ResearchRun,
-        result: ScientificCompletedResult,
-        violations: list[CompletionViolation],
-    ) -> None:
-        # Duplicate detection applies only to evidence ids the LLM authors
-        # directly. Observed traces are deduplicated upstream (set semantics),
-        # so they cannot contain duplicates here.
-        groups = {"opinion evidence": result.opinion.evidence_artifact_ids}
-        for label, values in groups.items():
-            duplicates = sorted({value for value in values if values.count(value) > 1})
-            if duplicates:
-                self._add(
-                    violations,
-                    CompletionViolationCode.INVALID_OPINION,
-                    f"{label} contains duplicate ids",
-                    *duplicates,
-                )
-
-        for label, values in (
-            ("turn observed trace", result.observed_artifact_ids),
-            ("run observed trace", run.scientific_observed_artifact_ids),
-        ):
-            invalid = [
-                artifact_id
-                for artifact_id in values
-                if artifact_id not in run.artifacts
-                or run.artifacts[artifact_id].run_id != run.run_id
-            ]
-            if invalid:
-                self._add(
-                    violations,
-                    CompletionViolationCode.UNKNOWN_EVIDENCE,
-                    f"{label} contains unknown or cross-run ids",
-                    *invalid,
-                )
+            try:
+                outputs = [run.artifacts[key] for key in last.artifact_ids]
+                if any(ref.run_id != run.run_id or ref.task_id != task.id or ref.attempt_number != last.number
+                       or ref.producer.value != task.workflow_agent_kind.value for ref in outputs
+                       if ref.kind != "question"):
+                    raise ValueError("completed task has foreign output artifacts")
+                check_acceptance(run, task, last, outputs)
+            except (ValueError, OSError, KeyError) as error:
+                reject(CompletionViolationCode.INCONSISTENT_TASK_RESULT, str(error), [task.id])
+        issues = [item for work in run.work_requests if work.outcome for item in work.outcome.tasks if item.status != "completed"]
+        if issues and not opinion.limitations:
+            reject(CompletionViolationCode.MISSING_LIMITATIONS, "failed execution work requires stated limitations")
+        if violations:
+            return CompletionValidation(tuple(violations))
+        return CompletionValidation(report=FinalReportData(run_id=run.run_id, goal=run.request.goal, opinion=opinion,
+                                                          evidence=[run.artifacts[key] for key in opinion.evidence_artifact_ids], execution_issues=issues))
 
 
 class FinalReportRenderer:
-    """Render typed completion facts without another LLM call."""
-
-    def render(self, data: FinalReportData) -> RenderedFinalReport:
+    """Render an accepted opinion and its provenance as Markdown."""
+    def render(self, data):
         opinion = data.opinion
-        lines = [
-            "# Research Run Final Report",
-            "",
-            f"- Run: `{data.run_id}`",
-            f"- Verdict: `{opinion.verdict.value}`",
-            "",
-            "## Goal",
-            "",
-            data.goal,
-            "",
-            "## Scientific opinion",
-            "",
-            opinion.statement,
-            "",
-            "## Evidence",
-            "",
-        ]
-        if data.evidence:
-            for artifact in data.evidence:
-                lines.extend(
-                    [
-                        f"- `{artifact.id}` — {artifact.summary}",
-                        f"  - kind: `{artifact.kind}`",
-                        f"  - producer: `{artifact.producer.value}`",
-                        f"  - sha256: `{artifact.sha256}`",
-                        f"  - uri: `{artifact.uri}`",
-                    ]
-                )
-        else:
+        lines = ["# Research Run Final Report", "", f"- Run: `{data.run_id}`", f"- Verdict: `{opinion.verdict.value}`",
+                 "", "## Goal", "", data.goal, "", "## Scientific opinion", "", opinion.statement, "", "## Evidence", ""]
+        for ref in data.evidence:
+            lines.extend([f"- `{ref.id}`: {ref.summary}", f"  kind: `{ref.kind}`; producer: `{ref.producer.value}`",
+                          f"  sha256: `{ref.sha256}`", f"  uri: `{ref.uri}`"])
+        if not data.evidence:
             lines.append("- No evidence artifacts cited.")
-
-        self._section(lines, "Limitations", opinion.limitations)
-        self._section(lines, "Unresolved questions", opinion.unresolved_questions)
-        self._section(lines, "Recommended next steps", opinion.recommended_next_steps)
-
+        for title, values in [("Limitations", opinion.limitations), ("Unresolved questions", opinion.unresolved_questions),
+                              ("Recommended next steps", opinion.recommended_next_steps)]:
+            lines.extend(["", "## " + title, "", *["- " + item for item in values or ["None."]]])
         lines.extend(["", "## Execution issues", ""])
-        if data.execution_issues:
-            for issue in data.execution_issues:
-                lines.append(f"- `{issue.task_id}` ({issue.status}): {issue.summary}")
-        else:
+        lines.extend(f"- `{issue.task_id}` ({issue.status}): {issue.summary}" for issue in data.execution_issues)
+        if not data.execution_issues:
             lines.append("- None.")
-
-        content = "\n".join(lines).rstrip() + "\n"
-        return RenderedFinalReport(
-            candidate=ArtifactCandidate(
-                kind="final_report",
-                path="final_report.md",
-                media_type="text/markdown",
-                summary=f"Deterministic final report for {data.run_id}",
-                metadata={"source_type": "final_report"},
-            ),
-            content=content,
-        )
-
-    @staticmethod
-    def _section(lines: list[str], title: str, values: list[str]) -> None:
-        lines.extend(["", f"## {title}", ""])
-        lines.extend(f"- {value}" for value in values)
-        if not values:
-            lines.append("- None.")
+        content = "\n".join(lines) + "\n"
+        return RenderedFinalReport(ArtifactCandidate(kind="final_report", path="final_report.md", media_type="text/markdown",
+                                                     summary=f"Final report for {data.run_id}", metadata={"source_type": "final_report"}), content)

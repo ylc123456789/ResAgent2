@@ -56,6 +56,10 @@ class NativeCodingAgent:
         )
 
     def invoke(self, request: AgentRequest) -> AgentResult:
+        try:
+            request = AgentRequest.model_validate(request)
+        except ValueError as error:
+            return self._failure(str(error))
         if request.agent != AgentOwner.CODING:
             return self._failure("NativeCodingAgent received a non-Coding request")
         if request.workspace is None:

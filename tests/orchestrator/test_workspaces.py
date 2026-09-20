@@ -6,16 +6,14 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    CodeModifyInput,
-    ExperimentRunInput,
-    ModuleResult,
+    AgentResult,
     ModuleStatus,
     ResearchRequest,
     RunBudget,
     RunStatus,
     TaskProposal,
     TaskStatus,
+    WorkflowAgentKind,
     WorkflowProposal,
     WorkspaceSourceKind,
     WorkspaceSpec,
@@ -46,10 +44,10 @@ def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
             TaskProposal(
                 id="task_exp",
                 work_request_id="work_1",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run",
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run",
                 workspace_id=workspace_id,
-                inputs=ExperimentRunInput(instructions="Run"),
+
             )
         ],
     )
@@ -64,7 +62,7 @@ def _local_spec(location) -> WorkspaceSpec:
 def _scheduler(workspaces, *, data_root=None) -> WorkflowScheduler:
     return WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([])
             )
         },
@@ -129,7 +127,7 @@ def test_multiple_workspaces_require_explicit_id(tmp_path) -> None:
         }
     )
 
-    with pytest.raises(OrchestrationError, match="must declare a workspace_id"):
+    with pytest.raises(OrchestrationError, match="workspace_id"):
         _create_run(engine, "run_x", _request(), _proposal(workspace_id=None))
 
 
@@ -163,24 +161,17 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
     repo = tmp_path / "repo"
     repo.mkdir()
     coding_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="code", payload={
-            "changed_files": ["train.py"], "patch_path": "changes.patch",
-            "verification_passed": True, "verification_results": [{
-                "command": "python -m pytest", "exit_code": 0,
-                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
-                "duration_seconds": 0.0,
-            }],
-        })]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="code")]
     )
     experiment_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="exp", payload={"env_id": "resenv_test"})]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="exp")]
     )
     engine = WorkflowScheduler(
         bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING, port=coding_port
             ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT, port=experiment_port
             ),
         },
@@ -200,19 +191,19 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
             TaskProposal(
                 id="task_code",
                 work_request_id="work_1",
-                capability=Capability.CODE_MODIFY,
-                goal="Code",
+                workflow_agent_kind=WorkflowAgentKind.CODING,
+                instruction="Code",
                 workspace_id="ws_main",
-                inputs=CodeModifyInput(instructions="i"),
+
             ),
             TaskProposal(
                 id="task_exp",
                 work_request_id="work_1",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Exp",
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Exp",
                 workspace_id="ws_main",
                 depends_on=["task_code"],
-                inputs=ExperimentRunInput(instructions="i"),
+
             ),
         ],
     )
@@ -258,14 +249,14 @@ def test_managed_workspace_root_is_under_data_root(tmp_path) -> None:
 
 
 def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -> None:
-    from resagent2_contracts import DatasetRef, EnvironmentSpec
+    from resagent2_contracts import (DatasetRef, EnvironmentSpec, ArtifactCandidate, ControlSignal)
 
     port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="ok", payload={"env_id": "resenv_test"})]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="ok")]
     )
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT, port=port
             )
         },
@@ -291,19 +282,24 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
             TaskProposal(
                 id="task_exp",
                 work_request_id="work_1",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run",
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run",
                 workspace_id="ws_main",
-                inputs=ExperimentRunInput(instructions="Run"),
+
             )
         ],
     )
     _create_run(engine, "run_env", request, proposal)
     run = engine.store.load("run_env")
     run.dataset_refs = [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]
+    from resagent2_orchestrator.handoffs import read_json, system_artifact
+    run.dataset_catalog_ref = system_artifact(engine.artifact_registry, run, "dataset_catalog", {
+        "datasets": [ref.model_dump(mode="json") for ref in run.dataset_refs],
+    })
     engine.store.save(run)
     engine.run_until_stable("run_env")
 
     req = port.requests[0]
     assert req.environment_spec.python_version == "3.10"
-    assert req.dataset_refs == [DatasetRef(dataset_id="cifar10", relative_path="cifar10")]
+    catalog = next(ref for ref in req.input_artifacts if ref.kind == "dataset_catalog")
+    assert read_json(catalog)["datasets"][0]["dataset_id"] == "cifar10"

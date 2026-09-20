@@ -9,18 +9,15 @@ Verifies two things:
 
 from __future__ import annotations
 
+import json
 import pytest
 
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
-    CodeModifyInput,
+    AgentResult,
+    ArtifactCandidate,
     ErrorCode,
-    ExperimentRunInput,
     ModuleError,
-    ModuleResult,
     ModuleStatus,
     ResearchRequest,
     RunBudget,
@@ -28,6 +25,9 @@ from resagent2_contracts import (
     ScientificVerdict,
     TaskProposal,
     TaskStatus,
+    WorkflowAgentDefinition,
+    WorkflowAgentKind,
+    WorkflowAgentRegistry,
     WorkflowPatch,
     WorkflowProposal,
 )
@@ -44,39 +44,29 @@ from resagent2_runtime import InMemorySessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
 
 
-def _registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
+def _registry() -> WorkflowAgentRegistry:
+    return WorkflowAgentRegistry(
         definitions=[
-            CapabilityDefinition(
-                capability=Capability.CODE_MODIFY,
-                owner=AgentOwner.CODING,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.CODING,
+
             ),
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+
             ),
         ]
     )
 
 
-def _completed(capability=Capability.EXPERIMENT_RUN) -> ModuleResult:
-    payload = {"env_id": "resenv_test"}
-    if capability == Capability.CODE_MODIFY:
-        payload = {
-            "changed_files": ["train.py"], "patch_path": "changes.patch",
-            "verification_passed": True, "verification_results": [{
-                "command": "python -m pytest", "exit_code": 0,
-                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
-                "duration_seconds": 0.0,
-            }],
-        }
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload=payload)
+def _completed() -> AgentResult:
+    return AgentResult(status=ModuleStatus.COMPLETED, report="done")
 
 
-def _failed() -> ModuleResult:
-    return ModuleResult(
+def _failed() -> AgentResult:
+    return AgentResult(
         status=ModuleStatus.FAILED,
-        summary="boom",
+        report="boom",
         error=ModuleError(code=ErrorCode.TOOL_FAILED, message="boom", retryable=False),
     )
 
@@ -95,16 +85,7 @@ def _request_work() -> dict:
 
 
 def _finish() -> dict:
-    return {
-        "tool": "finish",
-        "arguments": {
-            "opinion": {
-                "verdict": ScientificVerdict.INCONCLUSIVE.value,
-                "statement": "the first run failed, then a fix restored it",
-                "limitations": ["the first run failed before the fix"],
-            },
-        },
-    }
+    return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [ArtifactCandidate(kind="scientific_opinion", path="scientific_opinion.json", media_type="application/json", summary="Scientific conclusion", content=json.dumps({'verdict': ScientificVerdict.INCONCLUSIVE.value, 'statement': 'the first run failed, then a fix restored it', 'limitations': ['the first run failed before the fix']})).model_dump(mode="json")]}}
 
 
 def test_candidate_rejects_empty_graph() -> None:
@@ -128,10 +109,10 @@ def test_candidate_rejects_cross_request_dependency() -> None:
             TaskProposal(
                 id="task_exp2",
                 work_request_id="work_2",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Rerun",
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Rerun",
                 depends_on=["task_exp"],  # a prior work request's failed task
-                inputs=ExperimentRunInput(instructions="Rerun"),
+
             )
         ],
     )
@@ -147,9 +128,9 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
             TaskProposal(
                 id="task_exp",
                 work_request_id="work_1",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run the experiment",
-                inputs=ExperimentRunInput(instructions="Run the experiment"),
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run the experiment",
+
             )
         ],
     )
@@ -161,27 +142,27 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
             TaskProposal(
                 id="task_fix",
                 work_request_id="work_2",
-                capability=Capability.CODE_MODIFY,
-                goal="Fix the bug",
-                inputs=CodeModifyInput(instructions="Fix the bug"),
+                workflow_agent_kind=WorkflowAgentKind.CODING,
+                instruction="Fix the bug",
+
             ),
             TaskProposal(
                 id="task_exp2",
                 work_request_id="work_2",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Rerun the experiment",
-                inputs=ExperimentRunInput(instructions="Rerun"),
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Rerun the experiment",
+
             ),
         ],
     )
 
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=ScriptedModulePort([_completed(Capability.CODE_MODIFY)]),
+                port=ScriptedModulePort([_completed()]),
             ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([_failed(), _completed()]),
             ),
@@ -227,10 +208,6 @@ class _ScriptedCompilerLLM:
         self._drafts = list(drafts)
 
     def next_action(self, prompt, action_type):
-        from resagent2_orchestrator.compiler import CompilationReview
-
-        if action_type is CompilationReview:
-            return {"accepted": True}
         if not self._drafts:
             raise AssertionError("no more scripted drafts")
         return self._drafts.pop(0)
@@ -239,12 +216,7 @@ class _ScriptedCompilerLLM:
 def _proposal_draft() -> dict:
     return {
         "tasks": [
-            {
-                "key": "run_initial",
-                "capability": "experiment_run",
-                "goal": "Run the experiment",
-                "inputs": {"capability": "experiment_run", "instructions": "Run the experiment"},
-            }
+            {'key': 'run_initial', "workflow_agent_kind": 'experiment', 'instruction': 'Run the experiment'}
         ],
     }
 
@@ -252,34 +224,14 @@ def _proposal_draft() -> dict:
 def _repair_draft() -> dict:
     return {
         "tasks": [
-            {
-                "key": "fix",
-                "capability": "code_modify",
-                "goal": "Fix the bug",
-                "inputs": {"capability": "code_modify", "instructions": "Fix the bug"},
-            },
-            {
-                "key": "rerun",
-                "capability": "experiment_run",
-                "goal": "Rerun the experiment",
-                "depends_on": ["fix"],
-                "inputs": {"capability": "experiment_run", "instructions": "Rerun"},
-            },
+            {'key': 'fix', "workflow_agent_kind": 'coding', 'instruction': 'Fix the bug'},
+            {'key': 'rerun', "workflow_agent_kind": 'experiment', 'instruction': 'Rerun the experiment', 'depends_on': ['fix']},
         ],
     }
 
 
 def _finish_after_repair() -> dict:
-    return {
-        "tool": "finish",
-        "arguments": {
-            "opinion": {
-                "verdict": ScientificVerdict.INCONCLUSIVE.value,
-                "statement": "the first run failed, then a fix restored it",
-                "limitations": ["the first run failed before the fix"],
-            },
-        },
-    }
+    return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [ArtifactCandidate(kind="scientific_opinion", path="scientific_opinion.json", media_type="application/json", summary="Scientific conclusion", content=json.dumps({'verdict': ScientificVerdict.INCONCLUSIVE.value, 'statement': 'the first run failed, then a fix restored it', 'limitations': ['the first run failed before the fix']})).model_dump(mode="json")]}}
 
 
 def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
@@ -291,11 +243,11 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
     """
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
-                port=ScriptedModulePort([_completed(Capability.CODE_MODIFY)]),
+                port=ScriptedModulePort([_completed()]),
             ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([_failed(), _completed()]),
             ),

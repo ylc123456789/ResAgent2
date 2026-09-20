@@ -1,149 +1,52 @@
-"""Deterministic Workflow scheduler and state transitions."""
+"""Deterministic scheduling of single-mode Agent invocations."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
-
-from pydantic import ValidationError
-
+from uuid import uuid4
+from pydantic import BaseModel
 from resagent2_contracts import (
-    AgentOwner,
-    TaskAcceptanceSpec,
-    Attempt,
-    AttemptStatus,
-    Capability,
-    CodeModifyResult,
-    CodeUnderstandResult,
-    EnvironmentSpec,
-    ErrorCode,
-    ExperimentResult,
-    ModuleError,
-    ModuleResult,
-    ModuleStatus,
-    ModuleTaskRequest,
-    PendingQuestion,
-    RunStatus,
-    TaskBudget,
-    TaskProposal,
-    TaskStatus,
-    UserAnswer,
-    Workflow,
-    WorkflowPatch,
-    WorkflowProposal,
-    WorkflowTask,
-    WorkOutcome,
-    WorkRequestStatus,
-    WorkTaskOutcome,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceRecord,
-    WorkspaceSourceKind,
-    WorkspaceSpec,
+    AgentOwner, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
+    ErrorCode, ModuleError, ModuleStatus, PendingQuestion, QuestionDraft, RunStatus,
+    TaskAcceptanceSpec, TaskBudget, TaskStatus, Workflow, WorkflowAgentKind,
+    WorkflowPatch, WorkflowProposal, WorkflowTask, WorkOutcome, WorkRequestStatus,
+    WorkTaskOutcome, WorkspaceGrant, WorkspaceMode, WorkspaceRecord, WorkspaceSourceKind,
 )
-
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
+from .handoffs import check_acceptance, read_json, receive_artifacts, system_artifact
 from .layout import RunLayout
-from .models import ResearchRun
-from .ports import ModuleBinding
-from .store import InMemoryRunStore, RunStore
+from .store import InMemoryRunStore
 from .workflow_validation import validate_workflow_candidate
 
 
 class OrchestrationError(ValueError):
-    """Raised when a requested orchestration transition is invalid."""
+    """A workflow transition or Agent result violates an execution invariant."""
 
 
-def _module_instruction(task: WorkflowTask) -> str:
-    """Render one stable semantic instruction at the execution boundary."""
-    values = task.inputs.model_dump(mode="json")
-    sections = [("Goal", task.goal)]
-    for key, title in (("question", "Task"), ("instructions", "Task")):
-        if values.get(key):
-            sections.append((title, values[key]))
-            break
-    if task.constraints:
-        sections.append(("Constraints", "\n".join(f"- {item}" for item in task.constraints)))
-    for key, title in (("paths", "Path hints"), ("suggested_paths", "Path hints")):
-        if values.get(key):
-            sections.append((title, "\n".join(f"- {item}" for item in values[key])))
-            break
-    if values.get("parameters"):
-        sections.append(
-            (
-                "Parameters",
-                json.dumps(values["parameters"], ensure_ascii=False, sort_keys=True, indent=2),
-            )
-        )
-    return "\n\n".join(f"{title}:\n{content}" for title, content in sections)
-
-
-def _validate_answer(question: PendingQuestion | None, answer: UserAnswer) -> None:
-    """Validate one answer against the pending question (shared by both layers)."""
+def _validate_answer(question, answer):
     if question is None or answer.question_id != question.id:
         raise OrchestrationError("answer does not match pending question")
-    missing = set(question.requested_fields) - set(answer.values)
-    if missing:
-        raise OrchestrationError(f"answer is missing fields: {sorted(missing)}")
+    if set(question.requested_fields) != set(answer.values):
+        raise OrchestrationError("answer is missing requested fields")
 
 
-def _question_id(task_id: str, attempt_number: int) -> str:
-    """Identify a new question, not its Attempt (which can ask more than once).
-
-    The generated id is persisted with PendingQuestion and reused only for
-    that question. Keep short task names readable; hash overlong identities.
-    """
-    nonce = uuid4().hex
-    candidate = f"question_{task_id.removeprefix('task_')}_{attempt_number}_{nonce}"
-    if len(candidate.removeprefix("question_")) <= 128:
-        return candidate
-    digest = hashlib.sha256(
-        f"{task_id}:{attempt_number}:{nonce}".encode("utf-8")
-    ).hexdigest()[:24]
-    return f"question_{digest}"
+def _question_id(task_id=None, attempt_number=None):
+    return f"question_{uuid4().hex}"
 
 
-_WORK_REQUEST_TRANSITIONS: dict[WorkRequestStatus, frozenset[WorkRequestStatus]] = {
-    WorkRequestStatus.REQUESTED: frozenset(
-        {WorkRequestStatus.COMPILING, WorkRequestStatus.FAILED}
-    ),
-    WorkRequestStatus.COMPILING: frozenset(
-        {WorkRequestStatus.EXECUTING, WorkRequestStatus.FAILED}
-    ),
-    WorkRequestStatus.EXECUTING: frozenset(
-        {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}
-    ),
-    WorkRequestStatus.STABLE: frozenset(
-        {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED}
-    ),
-    WorkRequestStatus.CONSUMED: frozenset(),
-    WorkRequestStatus.FAILED: frozenset(),
+_WORK_REQUEST_TRANSITIONS = {
+    WorkRequestStatus.REQUESTED: {WorkRequestStatus.COMPILING, WorkRequestStatus.FAILED},
+    WorkRequestStatus.COMPILING: {WorkRequestStatus.EXECUTING, WorkRequestStatus.FAILED},
+    WorkRequestStatus.EXECUTING: {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED},
+    WorkRequestStatus.STABLE: {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED},
+    WorkRequestStatus.CONSUMED: set(), WorkRequestStatus.FAILED: set(),
 }
 
 
-def _transition_work_request(
-    work_request: WorkRequest,
-    status: WorkRequestStatus,
-    *,
-    workflow_revision: int | None = None,
-    outcome: WorkOutcome | None = None,
-    error: ModuleError | None = None,
-) -> None:
-    """Centralize the legal WorkRequest transitions and the ``updated_at`` stamp.
-
-    The only legal path is ``requested → compiling → executing → stable →
-    consumed``, with ``failed`` reachable from any non-terminal state. Each
-    transition also stamps ``updated_at`` (ADR-0011 §1).
-    """
-    allowed = _WORK_REQUEST_TRANSITIONS.get(work_request.status, frozenset())
-    if status not in allowed:
-        raise OrchestrationError(
-            f"illegal work request transition: "
-            f"{work_request.status.value} -> {status.value}"
-        )
+def _transition_work_request(work_request, status, *, workflow_revision=None, outcome=None, error=None):
+    if status not in _WORK_REQUEST_TRANSITIONS[work_request.status]:
+        raise OrchestrationError(f"illegal work request transition: {work_request.status} -> {status}")
     work_request.status = status
     work_request.updated_at = datetime.now(UTC)
     if workflow_revision is not None:
@@ -155,532 +58,254 @@ def _transition_work_request(
 
 
 class WorkflowScheduler:
-    """Deterministically execute accepted WorkflowTasks through ModulePorts."""
-
-    def __init__(
-        self,
-        *,
-        bindings: dict[Capability, ModuleBinding],
-        store: RunStore | None = None,
-        artifact_root: str | Path = ".resagent2/artifacts",
-        data_root: str | Path | None = None,
-        workspaces: dict[str, WorkspaceSpec] | None = None,
-    ) -> None:
+    """Dispatch ready tasks and persist attempts, requirements and outputs."""
+    def __init__(self, *, bindings, store=None, artifact_root=".resagent2/artifacts", data_root=None, workspaces=None):
         self.bindings = dict(bindings)
         self.store = store or InMemoryRunStore()
         self.artifact_registry = ArtifactRegistry(artifact_root)
         self.run_layout = RunLayout(data_root) if data_root else RunLayout.from_env()
         self.workspace_specs = dict(workspaces or {})
 
-    def accept_proposal(
-        self,
-        run_id: str,
-        proposal: WorkflowProposal,
-    ) -> ResearchRun:
-        """Attach a compiled proposal as the initial workflow of an existing run."""
+    def accept_proposal(self, run_id, proposal):
         run = self.store.load(run_id)
         if run.workflow is not None:
             raise OrchestrationError("run already has an accepted workflow")
-        try:
-            validate_workflow_candidate(proposal)
-        except ValueError as error:
-            raise OrchestrationError(str(error)) from error
+        proposal = WorkflowProposal.model_validate(proposal.model_dump())
+        validate_workflow_candidate(proposal)
         if len(proposal.tasks) > run.request.budget.max_tasks:
             raise OrchestrationError("workflow exceeds run max_tasks budget")
-        self._require_bindings(task.capability for task in proposal.tasks)
         run.workspaces = self._resolve_workspaces(run_id)
-        run.workflow = Workflow(
-            run_id=run_id,
-            revision=1,
-            tasks=self._tasks_from_proposal(proposal),
-            created_from=proposal.work_request_id,
-        )
+        tasks = self._tasks_from_proposal(run, proposal.tasks)
+        run.workflow = Workflow(run_id=run_id, revision=1, tasks=tasks, created_from=proposal.work_request_id)
         self._save(run)
         return run.model_copy(deep=True)
 
-    def _tasks_from_proposal(self, proposal: WorkflowProposal) -> list[WorkflowTask]:
-        return [
-            WorkflowTask(
-                id=item.id,
-                work_request_id=item.work_request_id,
-                capability=item.capability,
-                goal=item.goal,
-                inputs=item.inputs,
-                depends_on=item.depends_on,
-                workspace_id=self._resolve_workspace_id(item),
-                constraints=list(item.constraints),
-                acceptance_spec=item.acceptance_spec,
-                acceptance_ref=item.acceptance_ref,
-                input_artifact_bindings=list(item.input_artifact_bindings),
-            )
-            for item in proposal.tasks
-        ]
+    def _tasks_from_proposal(self, run, proposals):
+        self._require_bindings(item.workflow_agent_kind for item in proposals)
+        tasks = []
+        for item in proposals:
+            if not set(item.input_artifacts) <= set(run.artifacts):
+                raise OrchestrationError("task input references unknown artifacts")
+            spec = item.acceptance_spec or TaskAcceptanceSpec()
+            spec = spec.model_copy(update={"required_output_names": list(dict.fromkeys([*spec.required_output_names, *item.output_names]))})
+            ref = None
+            if any(spec.model_dump(exclude={"schema_version"}).values()):
+                ref = system_artifact(self.artifact_registry, run, "acceptance_requirements", spec, task_id=item.id)
+            tasks.append(WorkflowTask(
+                id=item.id, work_request_id=item.work_request_id,
+                workflow_agent_kind=item.workflow_agent_kind, instruction=item.instruction,
+                depends_on=item.depends_on, workspace_id=self._resolve_workspace_id(item),
+                input_artifacts=item.input_artifacts, input_artifact_bindings=item.input_artifact_bindings,
+                acceptance_ref=ref,
+                confirm_before_experiment=item.confirm_before_experiment,
+            ))
+        return tasks
 
-    def _resolve_workspace_id(self, task: TaskProposal) -> str | None:
-        """Fill or validate one task's workspace_id against declared workspaces.
-
-        A single declared workspace is filled in automatically; a compiler that
-        invents an undeclared id is rejected.
-        """
-        ids = list(self.workspace_specs.keys())
+    def _resolve_workspace_id(self, task):
+        ids = list(self.workspace_specs)
         if task.workspace_id is not None:
             if task.workspace_id not in ids:
-                raise OrchestrationError(
-                    f"task {task.id} references unknown workspace_id "
-                    f"{task.workspace_id!r}"
-                )
+                raise OrchestrationError("task references unknown workspace_id")
             return task.workspace_id
         if len(ids) == 1:
             return ids[0]
         if ids:
-            raise OrchestrationError(
-                f"task {task.id} must declare a workspace_id (multiple workspaces exist)"
-            )
+            raise OrchestrationError("workspace_id required with multiple workspaces")
         return None
 
-    def _resolve_workspaces(self, run_id: str) -> dict[str, WorkspaceRecord]:
-        """Resolve declared workspace specs into physical records for one run."""
-        records: dict[str, WorkspaceRecord] = {}
-        for workspace_id, spec in self.workspace_specs.items():
-            if spec.workspace_id != workspace_id:
-                raise OrchestrationError(
-                    f"workspace spec id {spec.workspace_id!r} does not match key "
-                    f"{workspace_id!r}"
-                )
-            if spec.source_kind == WorkspaceSourceKind.LOCAL:
-                if spec.location is None:
-                    raise OrchestrationError(
-                        f"LOCAL workspace {workspace_id!r} requires a location"
-                    )
-                root = str(Path(spec.location).expanduser().resolve())
-                managed = False
-            else:
-                root = str(self.run_layout.workspace_repo_dir(run_id, workspace_id))
-                managed = True
-            records[workspace_id] = WorkspaceRecord(
-                workspace_id=workspace_id,
-                root=root,
-                source=spec,
-                managed=managed,
-            )
+    def _resolve_workspaces(self, run_id):
+        records = {}
+        for key, spec in self.workspace_specs.items():
+            if key != spec.workspace_id:
+                raise OrchestrationError("workspace key does not match its specification")
+            local = spec.source_kind == WorkspaceSourceKind.LOCAL
+            root = Path(spec.location).expanduser().resolve() if local else self.run_layout.workspace_repo_dir(run_id, key)
+            records[key] = WorkspaceRecord(workspace_id=key, root=str(root), source=spec, managed=not local)
         return records
 
     @staticmethod
-    def _grant(record: WorkspaceRecord, capability: Capability) -> WorkspaceGrant:
-        """Derive the per-attempt boundary from a resolved workspace record."""
-        writable = capability in {Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN}
-        return WorkspaceGrant(
-            root=record.root,
-            mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
-            source=record.source.source_kind,
-        )
+    def _grant(record):
+        return WorkspaceGrant(root=record.root, mode=record.source.mode, source=record.source.source_kind)
 
-    def load(self, run_id: str) -> ResearchRun:
-        """Load the current validated run state."""
-
+    def load(self, run_id):
         return self.store.load(run_id)
 
-    def ready_task_ids(self, run_id: str) -> list[str]:
-        """Return pending tasks whose dependencies are all completed, in graph order."""
-
+    def ready_task_ids(self, run_id):
         return self._ready_task_ids(self.store.load(run_id))
 
-    def _ready_task_ids(self, run: ResearchRun) -> list[str]:
-        status = {task.id: task.status for task in run.workflow.tasks}
-        return [
-            task.id
-            for task in run.workflow.tasks
-            if task.status == TaskStatus.PENDING
-            and all(status[dependency] == TaskStatus.COMPLETED for dependency in task.depends_on)
-        ]
+    def _ready_task_ids(self, run):
+        if run.workflow is None:
+            return []
+        statuses = {task.id: task.status for task in run.workflow.tasks}
+        return [task.id for task in run.workflow.tasks if task.status == TaskStatus.PENDING
+                and all(statuses[dep] == TaskStatus.COMPLETED for dep in task.depends_on)]
 
-    def execute_task(self, run_id: str, task_id: str) -> ResearchRun:
-        """Execute or resume one ready task and persist every transition.
+    def _resolve_future_artifact_bindings(self, run, task):
+        ids = []
+        for binding in task.input_artifact_bindings:
+            if binding.source_task not in task.depends_on:
+                raise OrchestrationError("future binding requires a direct dependency")
+            source = self._task(run, binding.source_task)
+            if source.status != TaskStatus.COMPLETED or not source.attempts:
+                raise OrchestrationError("future artifact source task is not complete")
+            latest = source.attempts[-1]
+            matches = [key for key in latest.artifact_ids if key in run.artifacts
+                       and run.artifacts[key].output_name == binding.output_selector]
+            if len(matches) != 1:
+                raise OrchestrationError("future artifact selector is missing or ambiguous")
+            ids.extend(matches)
+        return list(dict.fromkeys(ids))
 
-        A task whose last Attempt is paused for user input is resumed on the
-        same Attempt (number, Session, output_dir, baseline); any other ready
-        task starts a fresh Attempt (ADR-0011 §2).
-        """
-
+    def execute_task(self, run_id, task_id):
         run = self.store.load(run_id)
-        if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED}:
-            raise OrchestrationError(f"run is not executable: {run.status.value}")
+        if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.FAILED}:
+            raise OrchestrationError(f"run is not executable: {run.status}")
         if task_id not in self._ready_task_ids(run):
-            raise OrchestrationError(f"task is not ready: {task_id}")
+            raise OrchestrationError("task is not ready")
         task = self._task(run, task_id)
+        self._require_remaining_llm_budget(run)
         last = task.attempts[-1] if task.attempts else None
         if last is not None and last.status == AttemptStatus.NEEDS_USER_INPUT:
-            return self._resume_task(run, task, last)
-        return self._start_task(run, task)
-
-    def _resolve_future_artifact_bindings(
-        self, run: ResearchRun, task: WorkflowTask
-    ) -> list[str]:
-        """Resolve logical outputs only after each direct dependency succeeded."""
-        resolved: list[str] = []
-        for binding in task.input_artifact_bindings:
-            source = self._task(run, binding.source_task)
-            successful = [
-                attempt
-                for attempt in source.attempts
-                if attempt.status
-                in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
-            ]
-            if not successful:
-                raise OrchestrationError(
-                    f"future artifact source task is not complete: {binding.source_task}"
-                )
-            attempt = successful[-1]
-            candidates = [
-                artifact_id
-                for artifact_id in attempt.artifact_ids
-                if artifact_id in run.artifacts
-                and (
-                    run.artifacts[artifact_id].output_name == binding.output_selector
-                    or run.artifacts[artifact_id].metadata.get("output_name")
-                    == binding.output_selector
-                )
-            ]
-            if not candidates:
-                raise OrchestrationError(
-                    f"future artifact selector {binding.output_selector!r} "
-                    f"was not produced by {binding.source_task}"
-                )
-            if len(candidates) > 1:
-                raise OrchestrationError(
-                    f"future artifact selector {binding.output_selector!r} "
-                    f"is ambiguous for {binding.source_task}"
-                )
-            resolved.append(candidates[0])
-        return resolved
-
-    def _start_task(self, run: ResearchRun, task: WorkflowTask) -> ResearchRun:
-        """Start a new Attempt for a fresh or retried task."""
-        attempt_number = len(task.attempts) + 1
-        if attempt_number > run.request.budget.max_attempts_per_task:
-            raise OrchestrationError("task attempt budget is exhausted")
-        self._require_remaining_llm_budget(run)
-        import_artifacts = [
-            artifact_id
-            for artifact_id, artifact in run.artifacts.items()
-            if artifact.producer == AgentOwner.ORCHESTRATOR
-            and artifact.metadata.get("source_type") == "import"
-        ]
-        inherited_artifacts = [
-            artifact_id
-            for dependency_id in task.depends_on
-            for dependency_attempt in self._task(run, dependency_id).attempts
-            if dependency_attempt.status
-            in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
-            for artifact_id in dependency_attempt.artifact_ids
-        ]
-        bound_artifacts = self._resolve_future_artifact_bindings(run, task)
-        # Imported and legacy inherited inputs remain authorized during this
-        # migration; explicit future bindings are resolved to formal Refs here.
-        task.input_artifacts = list(
-            dict.fromkeys(
-                [*task.input_artifacts, *import_artifacts, *inherited_artifacts, *bound_artifacts]
-            )
-        )
-        started = datetime.now(UTC)
+            if last.session is None:
+                raise OrchestrationError("paused attempt has no session")
+            attempt = last
+            parent = last.session.id
+        else:
+            number = len(task.attempts) + 1
+            if number > run.request.budget.max_attempts_per_task:
+                raise OrchestrationError("task attempt budget is exhausted")
+            task.input_artifacts = list(dict.fromkeys([
+                *task.input_artifacts, *self._resolve_future_artifact_bindings(run, task),
+            ]))
+            attempt = Attempt(number=number, status=AttemptStatus.RUNNING,
+                              started_at=datetime.now(UTC), acceptance_ref=task.acceptance_ref)
+            task.attempts.append(attempt)
+            parent = None
         task.status = TaskStatus.RUNNING
-        attempt = Attempt(
-            number=attempt_number,
-            status=AttemptStatus.RUNNING,
-            started_at=started,
-        )
-        task.attempts.append(attempt)
-        run.status = RunStatus.RUNNING
-        self._save(run)
-        module_request = self._module_request(
-            run, task, attempt_number, parent_session_id=None
-        )
-        return self._invoke(run, task, attempt, module_request)
-
-    def _resume_task(
-        self, run: ResearchRun, task: WorkflowTask, attempt: Attempt
-    ) -> ResearchRun:
-        """Resume a paused Attempt on the same number, Session and output_dir."""
-        if attempt.session is None:
-            raise OrchestrationError("paused attempt has no session to resume")
         attempt.status = AttemptStatus.RUNNING
-        task.status = TaskStatus.RUNNING
         run.status = RunStatus.RUNNING
         self._save(run)
-        module_request = self._module_request(
-            run, task, attempt.number, parent_session_id=attempt.session.id
-        )
-        return self._invoke(run, task, attempt, module_request)
-
-    def _module_request(
-        self,
-        run: ResearchRun,
-        task: WorkflowTask,
-        attempt_number: int,
-        *,
-        parent_session_id: str | None,
-    ) -> ModuleTaskRequest:
-        record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
-        grant = self._grant(record, task.capability) if record is not None else None
-        output_dir = str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number))
-        environment_spec = (
-            record.source.environment
-            if record is not None and record.source.environment is not None
-            else EnvironmentSpec()
-        )
-        remaining_calls = run.request.budget.max_llm_calls - run.llm_calls_used
-        if remaining_calls <= 0:
-            raise OrchestrationError("run LLM-call budget is exhausted")
-        return ModuleTaskRequest(
-            run_id=run.run_id,
-            task_id=task.id,
-            attempt_number=attempt_number,
-            capability=task.capability,
-            instruction=_module_instruction(task),
-            input_artifacts=[run.artifacts[item] for item in task.input_artifacts],
-            dataset_refs=list(run.dataset_refs),
-            answers=[
-                answer
-                for answer in run.answers
-                if run.answer_task_ids.get(answer.question_id) == task.id
-            ],
-            budget=TaskBudget(
-                max_llm_calls=remaining_calls,
-                timeout_seconds=max(
-                    1,
-                    int(run.remaining_timeout_seconds(datetime.now(UTC))),
-                ),
-            ),
-            acceptance=TaskAcceptanceSpec(
-                required_metric_keys=(
-                    list(task.inputs.expected_metrics)
-                    if task.capability == Capability.EXPERIMENT_RUN
-                    else []
-                ),
-                required_artifact_paths=(
-                    list(task.inputs.expected_artifacts)
-                    if task.capability == Capability.EXPERIMENT_RUN
-                    else []
-                ),
-            ),
-            confirm_before_experiment=(
-                bool(task.inputs.confirm_before_experiment)
-                if task.capability == Capability.EXPERIMENT_RUN
-                else False
-            ),
-            workspace=grant,
-            workspace_id=task.workspace_id,
-            workspace_spec=record.source if record is not None else None,
-            environment_spec=environment_spec,
-            output_dir=output_dir,
-            parent_session_id=parent_session_id,
-        )
-
-    def _invoke(
-        self,
-        run: ResearchRun,
-        task: WorkflowTask,
-        attempt: Attempt,
-        module_request: ModuleTaskRequest,
-    ) -> ResearchRun:
-        """Invoke the bound port, register artifacts and finalize the Attempt."""
-        binding = self.bindings[task.capability]
-        record = run.workspaces.get(task.workspace_id) if task.workspace_id else None
-        grant = self._grant(record, task.capability) if record is not None else None
         try:
-            raw_result = binding.port.invoke(module_request)
-            # Revalidate model instances too: model_construct/model_copy can
-            # bypass their validators before crossing this external boundary.
-            result = ModuleResult.model_validate(
-                raw_result.model_dump(mode="python")
-                if isinstance(raw_result, ModuleResult)
-                else raw_result
-            )
-        except ValidationError as error:
-            result = ModuleResult(
-                status=ModuleStatus.FAILED,
-                summary="ModulePort returned an invalid contract",
-                error=ModuleError(
-                    code=ErrorCode.CONTRACT_ERROR,
-                    message="ModulePort result failed schema validation",
-                    retryable=False,
-                    details={
-                        "validation_errors": [
-                            {
-                                "type": item["type"],
-                                "loc": list(item["loc"]),
-                                "message": item["msg"],
-                            }
-                            for item in error.errors(include_url=False)
-                        ]
-                    },
-                ),
-            )
+            request = self._module_request(run, task, attempt.number, parent_session_id=parent)
         except Exception as error:
-            result = ModuleResult(
-                status=ModuleStatus.FAILED,
-                summary="ModulePort invocation failed",
-                error=ModuleError(
-                    code=ErrorCode.TOOL_FAILED,
-                    message=str(error) or type(error).__name__,
-                    retryable=True,
-                    details={"component": "module_port"},
-                ),
-            )
-
-        artifact_ids: list[str] = []
-        if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
-            payload_model = {
-                Capability.CODE_UNDERSTAND: CodeUnderstandResult,
-                Capability.CODE_MODIFY: CodeModifyResult,
-                Capability.EXPERIMENT_RUN: ExperimentResult,
-            }[task.capability]
-            try:
-                payload = payload_model.model_validate(result.payload)
-            except ValidationError as error:
-                # The envelope is valid: these calls and this Session already
-                # happened even though the claimed successful payload is invalid.
-                result = ModuleResult(
-                    status=ModuleStatus.FAILED,
-                    summary="ModulePort returned an invalid capability payload",
-                    artifacts=result.artifacts,
-                    session=result.session,
-                    warnings=result.warnings,
-                    llm_calls=result.llm_calls,
-                    error=ModuleError(
-                        code=ErrorCode.CONTRACT_ERROR,
-                        message=f"{task.capability.value} payload failed schema validation",
-                        retryable=False,
-                        details={"validation_errors": [
-                            {"type": item["type"], "loc": list(item["loc"]), "message": item["msg"]}
-                            for item in error.errors(include_url=False)
-                        ]},
-                    ),
-                )
-            else:
-                result = result.model_copy(update={"payload": payload.model_dump(mode="json")})
-
-        try:
-            for index, candidate in enumerate(result.artifacts, start=1):
-                artifact = self.artifact_registry.register(
-                    candidate,
-                    grant=grant,
-                    producer=binding.owner,
-                    run_id=run.run_id,
-                    task_id=task.id,
-                    attempt_number=attempt.number,
-                    index=index,
-                    existing_ids=set(run.artifacts),
-                )
-                run.artifacts[artifact.id] = artifact
-                artifact_ids.append(artifact.id)
-        except (ArtifactRegistrationError, OSError) as error:
-            registration_error = str(error)
-            failure = (
-                result.error.model_copy(update={
-                    "retryable": False,
-                    "details": {
-                        **result.error.details,
-                        "artifact_registration_error": registration_error,
-                    },
-                })
-                if result.error is not None
-                else ModuleError(
-                    code=ErrorCode.ARTIFACT_MISSING,
-                    message=registration_error,
-                    retryable=False,
-                )
-            )
-            result = ModuleResult(
-                status=ModuleStatus.FAILED,
-                summary=f"{result.summary}; artifact registration failed",
-                payload=result.payload,
-                session=result.session,
-                warnings=result.warnings,
-                llm_calls=result.llm_calls,
-                error=failure,
-            )
-
-        finished = datetime.now(UTC)
-        # Accumulate this attempt's real LLM calls into the run ledger (ADR-0011 §7).
-        run.llm_calls_used += result.llm_calls
-        attempt.session = result.session
-        attempt.artifact_ids = artifact_ids
-        attempt.payload = result.payload
-        attempt.summary = result.summary
-        task.warnings.extend(result.warnings)
-
-        if result.status in {
-            ModuleStatus.COMPLETED,
-            ModuleStatus.COMPLETED_WITH_WARNINGS,
-        }:
-            attempt.finished_at = finished
-            attempt.status = (
-                AttemptStatus.COMPLETED_WITH_WARNINGS
-                if result.status == ModuleStatus.COMPLETED_WITH_WARNINGS
-                else AttemptStatus.COMPLETED
-            )
-            task.status = TaskStatus.COMPLETED
-        elif result.status == ModuleStatus.FAILED:
-            attempt.finished_at = finished
             attempt.status = AttemptStatus.FAILED
-            attempt.error = result.error
-            can_retry = (
-                result.error is not None
-                and result.error.retryable
-                and attempt.number < run.request.budget.max_attempts_per_task
-            )
-            task.status = TaskStatus.PENDING if can_retry else TaskStatus.FAILED
-        elif result.status == ModuleStatus.BLOCKED:
-            attempt.finished_at = finished
-            attempt.status = AttemptStatus.BLOCKED
-            attempt.error = result.error
-            task.status = TaskStatus.BLOCKED
-        elif result.status == ModuleStatus.NEEDS_USER_INPUT:
-            attempt.finished_at = None
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error), retryable=False)
+            attempt.report = str(error)
+            task.status = TaskStatus.FAILED
+            self._evaluate_run(run)
+            self._save(run)
+            return run
+        return self._invoke(run, task, attempt, request)
+
+    def _module_request(self, run, task, attempt_number, *, parent_session_id):
+        record = run.workspaces.get(task.workspace_id)
+        refs = [run.artifacts[key] for key in task.input_artifacts]
+        if task.acceptance_ref:
+            refs.append(task.acceptance_ref)
+        if run.dataset_catalog_ref:
+            refs.append(run.dataset_catalog_ref)
+        answers = [ref for ref in run.artifacts.values() if ref.kind == "answer"
+                   and ref.task_id == task.id and ref.attempt_number == attempt_number]
+        refs.extend(answers)
+        fresh_answers = [ref for ref in answers
+                         if read_json(ref)["question_id"] not in run.delivered_answer_ids]
+        return AgentRequest(
+            run_id=run.run_id, task_id=task.id, attempt_number=attempt_number,
+            agent=AgentOwner(task.workflow_agent_kind.value), instruction=task.instruction,
+            input_artifacts=list({ref.id: ref for ref in refs}.values()),
+            budget=TaskBudget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
+                              timeout_seconds=max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))),
+            workspace=self._grant(record) if record else None, workspace_id=task.workspace_id,
+            workspace_spec=record.source if record else None,
+            environment_spec=record.source.environment or EnvironmentSpec() if record else EnvironmentSpec(),
+            output_dir=str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number)),
+            confirm_before_experiment=task.confirm_before_experiment,
+            parent_session_id=parent_session_id,
+            resume_artifact_ids=[ref.id for ref in fresh_answers] if parent_session_id else [],
+        )
+
+    def _invoke(self, run, task, attempt, request):
+        binding = self.bindings[task.workflow_agent_kind]
+        before = set(run.artifacts)
+        calls = 0
+        try:
+            raw = binding.port.invoke(request)
+            value = raw.model_dump() if isinstance(raw, BaseModel) else raw
+            claimed = value.get("llm_calls", 0) if isinstance(value, dict) else 0
+            if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed >= 0:
+                calls = claimed
+            result = AgentResult.model_validate(value)
+        except Exception as error:
+            result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {error}",
+                                 llm_calls=calls, error=ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error), retryable=False))
+        run.llm_calls_used += result.llm_calls
+        attempt.report = result.report
+        attempt.session = result.session
+        task.warnings.extend(result.warnings)
+        control_ref = None
+        try:
+            if result.session is not None and result.session.module != binding.owner:
+                raise OrchestrationError("result session owner mismatch")
+            if request.parent_session_id and (result.session is None or result.session.id != request.parent_session_id):
+                raise OrchestrationError("result does not resume the bound session")
+            if result.status == ModuleStatus.REQUEST_WORK:
+                raise OrchestrationError("task Agent cannot request work")
+            refs, control_ref = receive_artifacts(self.artifact_registry, run, request, result, previous_ids=attempt.artifact_ids)
+            run.delivered_answer_ids = list(dict.fromkeys([
+                *run.delivered_answer_ids,
+                *[read_json(ref)["question_id"] for ref in request.input_artifacts
+                  if ref.id in request.resume_artifact_ids and ref.kind == "answer"],
+            ]))
+            attempt.artifact_ids = list(dict.fromkeys([*attempt.artifact_ids, *[ref.id for ref in refs]]))
+            if run.llm_calls_used > run.request.budget.max_llm_calls:
+                raise OrchestrationError("run LLM-call budget exhausted")
+            if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
+                check_acceptance(run, task, attempt, [run.artifacts[key] for key in attempt.artifact_ids])
+            if result.status == ModuleStatus.NEEDS_USER_INPUT:
+                draft = read_json(control_ref, QuestionDraft)
+        except Exception as error:
+            attempt.artifact_ids = list(dict.fromkeys([*attempt.artifact_ids, *(set(run.artifacts)-before)]))
+            failure = (result.error.model_copy(update={
+                "retryable": False,
+                "details": {**result.error.details, "artifact_registration_error": str(error)},
+            }) if result.error is not None else ModuleError(
+                code=ErrorCode.ARTIFACT_MISSING if isinstance(error, (ArtifactRegistrationError, OSError)) else ErrorCode.CONTRACT_ERROR,
+                message=str(error), retryable=False,
+            ))
+            result = AgentResult(status=ModuleStatus.FAILED, report=f"{attempt.report}; reception failed: {error}",
+                                 error=failure)
+        attempt.report = result.report
+        if result.status == ModuleStatus.NEEDS_USER_INPUT:
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
-            question_id = _question_id(task.id, attempt.number)
-            draft = result.question
-            if draft is None:
-                raise OrchestrationError("needs_user_input result has no question")
             run.pending_question = PendingQuestion(
-                id=question_id,
-                run_id=run.run_id,
-                task_id=task.id,
-                text=draft.text,
-                requested_fields=draft.requested_fields,
-                created_at=finished,
+                id=_question_id(), run_id=run.run_id, task_id=task.id, attempt_number=attempt.number,
+                text=draft.text, requested_fields=draft.requested_fields,
+                options=draft.options, created_at=datetime.now(UTC),
             )
+            run.pending_question_ref = control_ref
         else:
-            # request_work belongs only to the ScientificPort boundary. A task
-            # module returning it is an invalid contract, never an implicit
-            # request for user input.
-            attempt.finished_at = finished
-            attempt.status = AttemptStatus.FAILED
-            attempt.error = ModuleError(
-                code=ErrorCode.CONTRACT_ERROR,
-                message="task module returned request_work",
-                retryable=False,
-            )
-            task.status = TaskStatus.FAILED
-
+            attempt.finished_at = datetime.now(UTC)
+            attempt.status = AttemptStatus(result.status.value)
+            attempt.error = result.error
+            if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
+                task.status = TaskStatus.COMPLETED
+            elif result.status == ModuleStatus.BLOCKED:
+                task.status = TaskStatus.BLOCKED
+            else:
+                retry = result.error and result.error.retryable and attempt.number < run.request.budget.max_attempts_per_task
+                task.status = TaskStatus.PENDING if retry else TaskStatus.FAILED
         self._evaluate_run(run)
         self._save(run)
         return run.model_copy(deep=True)
 
-    def run_until_stable(self, run_id: str) -> ResearchRun:
-        """Execute ready tasks in stable order until complete, paused, or stuck."""
-
+    def run_until_stable(self, run_id):
         while True:
             run = self.store.load(run_id)
-            if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED}:
+            if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.FAILED}:
                 return run
-            # Stop executing tasks once the run budget is spent; the controller
-            # decides the run has failed (ADR-0011 §7).
-            if run.llm_calls_used >= run.request.budget.max_llm_calls:
-                return run
-            if run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
+            if run.llm_calls_used >= run.request.budget.max_llm_calls or run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
                 return run
             ready = self._ready_task_ids(run)
             if not ready:
@@ -689,205 +314,105 @@ class WorkflowScheduler:
                 return run
             self.execute_task(run_id, ready[0])
 
-    def resume_task_in_place(self, run: ResearchRun, task_id: str) -> None:
-        """Resume a paused task by mutating ``run`` in place (no reload/save).
-
-        Called by ``ResearchController.answer_question`` so the answer and the
-        task transition are persisted atomically in one ResearchRun snapshot;
-        a crash between the two can never leave a question cleared while its
-        task stays paused (ADR-0011 §1).
-        """
-
+    def resume_task_in_place(self, run, task_id):
         task = self._task(run, task_id)
         if task.status != TaskStatus.NEEDS_USER_INPUT:
             raise OrchestrationError("question task is not awaiting user input")
         task.status = TaskStatus.PENDING
 
-    def _recover_interrupted_attempts_in_place(self, run: ResearchRun) -> bool:
-        """Apply interrupted-Attempt recovery to one Controller-loaded Run.
-
-        ``RUNNING`` records intent to invoke a module; it does not prove that a
-        process still exists after restart. Recovery preserves that historical
-        Attempt as a retryable interrupted failure, then returns the Task to
-        PENDING only when its ordinary retry budget permits another Attempt.
-        This stays private because only ResearchController owns Run recovery.
-        """
-        if run.workflow is None:
-            return False
+    def _recover_interrupted_attempts_in_place(self, run):
         changed = False
-        now = datetime.now(UTC)
-        for task in run.workflow.tasks:
+        for task in run.workflow.tasks if run.workflow else []:
             if task.status != TaskStatus.RUNNING:
                 continue
-            attempt = task.attempts[-1] if task.attempts else None
-            if attempt is None or attempt.status != AttemptStatus.RUNNING:
-                raise OrchestrationError(
-                    f"running task {task.id} has no running latest attempt"
-                )
+            attempt = task.attempts[-1]
             attempt.status = AttemptStatus.FAILED
-            attempt.finished_at = now
-            attempt.error = ModuleError(
-                code=ErrorCode.INTERRUPTED,
-                message="attempt interrupted before its module result was persisted",
-                retryable=True,
-            )
-            task.status = (
-                TaskStatus.PENDING
-                if attempt.number < run.request.budget.max_attempts_per_task
-                else TaskStatus.FAILED
-            )
+            attempt.finished_at = datetime.now(UTC)
+            attempt.error = ModuleError(code=ErrorCode.INTERRUPTED, message="attempt interrupted before result persistence", retryable=True)
+            task.status = TaskStatus.PENDING if attempt.number < run.request.budget.max_attempts_per_task else TaskStatus.FAILED
             changed = True
         if changed:
             self._evaluate_run(run)
         return changed
 
-    def retry_task(self, run_id: str, task_id: str) -> ResearchRun:
-        """Explicitly retry a failed or blocked task after external recovery."""
-
+    def retry_task(self, run_id, task_id):
         run = self.store.load(run_id)
         task = self._task(run, task_id)
-        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED}:
-            raise OrchestrationError("only failed or blocked tasks can be retried")
-        if len(task.attempts) >= run.request.budget.max_attempts_per_task:
-            raise OrchestrationError("task attempt budget is exhausted")
+        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED} or len(task.attempts) >= run.request.budget.max_attempts_per_task:
+            raise OrchestrationError("task cannot be retried")
         task.status = TaskStatus.PENDING
         run.status = RunStatus.RUNNING
         self._save(run)
         return run.model_copy(deep=True)
 
-    def apply_patch(self, run_id: str, patch: WorkflowPatch) -> ResearchRun:
-        """Apply a revision-bound patch without changing executed task history."""
-
+    def apply_patch(self, run_id, patch):
         run = self.store.load(run_id)
-        if run.status == RunStatus.COMPLETED:
-            raise OrchestrationError("completed workflow cannot be patched")
-        if run.workflow is None:
-            raise OrchestrationError("run has no accepted workflow to patch")
+        patch = WorkflowPatch.model_validate(patch.model_dump())
+        if run.status == RunStatus.COMPLETED or run.workflow is None:
+            raise OrchestrationError("workflow cannot be patched")
         if patch.based_on_revision != run.workflow.revision:
             raise OrchestrationError("patch is based on a stale workflow revision")
-        try:
-            validate_workflow_candidate(patch)
-        except ValueError as error:
-            raise OrchestrationError(str(error)) from error
+        validate_workflow_candidate(patch)
         if len(run.workflow.tasks) + len(patch.add_tasks) > run.request.budget.max_tasks:
             raise OrchestrationError("patched workflow exceeds max_tasks budget")
-        self._require_bindings(task.capability for task in patch.add_tasks)
-        tasks = [task.model_copy(deep=True) for task in run.workflow.tasks]
-        for item in patch.add_tasks:
-            tasks.append(
-                WorkflowTask(
-                    id=item.id,
-                    work_request_id=item.work_request_id,
-                    capability=item.capability,
-                    goal=item.goal,
-                    inputs=item.inputs,
-                    depends_on=item.depends_on,
-                    workspace_id=self._resolve_workspace_id(item),
-                    constraints=list(item.constraints),
-                )
-            )
-        try:
-            revised = Workflow(
-                run_id=run.run_id,
-                revision=run.workflow.revision + 1,
-                tasks=tasks,
-                created_from=patch.work_request_id,
-            )
-        except ValidationError as error:
-            raise OrchestrationError(f"invalid patched workflow: {error}") from error
+        tasks = [*run.workflow.tasks, *self._tasks_from_proposal(run, patch.add_tasks)]
+        revised = Workflow(run_id=run_id, revision=run.workflow.revision+1, tasks=tasks, created_from=patch.work_request_id)
         run.workflow_history.append(run.workflow.model_copy(deep=True))
         run.workflow = revised
         self._evaluate_run(run)
         self._save(run)
         return run.model_copy(deep=True)
 
-    def _evaluate_run(self, run: ResearchRun) -> None:
+    def _evaluate_run(self, run):
         if run.pending_question is not None:
             run.status = RunStatus.PAUSED
             return
-        if run.workflow is None:
-            run.status = RunStatus.RUNNING
-            return
-        if self._ready_task_ids(run) or any(
-            task.status == TaskStatus.RUNNING for task in run.workflow.tasks
-        ):
-            run.status = RunStatus.RUNNING
-            return
-
-        # The execution graph is stable. The scheduler never decides that a
-        # ResearchRun has completed: that is the controller's job (ADR-0011 §1).
-        # With an active executing work request, freeze a WorkOutcome and mark it
-        # stable so the controller can resume the Scientific Session. Otherwise
-        # there is nothing left for the scheduler to do, and the run stays
-        # running until the controller decides the next step.
-        active = self._active_work_request(run)
-        if active is not None and active.status == WorkRequestStatus.EXECUTING:
-            _transition_work_request(
-                active,
-                WorkRequestStatus.STABLE,
-                workflow_revision=run.workflow.revision,
-                outcome=self._build_work_outcome(run, active.id),
-            )
+        if run.workflow is not None:
+            for task in run.workflow.tasks:
+                failed = [self._task(run, key) for key in task.depends_on if self._task(run, key).status in {TaskStatus.FAILED, TaskStatus.BLOCKED}]
+                if task.status == TaskStatus.PENDING and failed:
+                    task.status = TaskStatus.BLOCKED
+            active = self._active_work_request(run)
+            if active and not self._ready_task_ids(run) and not any(task.status == TaskStatus.RUNNING for task in run.workflow.tasks):
+                _transition_work_request(active, WorkRequestStatus.STABLE, workflow_revision=run.workflow.revision,
+                                         outcome=self._build_work_outcome(run, active.id))
         run.status = RunStatus.RUNNING
 
     @staticmethod
-    def _active_work_request(run: ResearchRun):
-        for work_request in run.work_requests:
-            if work_request.status in {
-                WorkRequestStatus.EXECUTING,
-                WorkRequestStatus.STABLE,
-            }:
-                return work_request
-        return None
+    def _active_work_request(run):
+        return next((item for item in run.work_requests if item.status == WorkRequestStatus.EXECUTING), None)
 
     @staticmethod
-    def _build_work_outcome(run: ResearchRun, work_request_id: str) -> WorkOutcome:
-        status_by_task = {
-            TaskStatus.COMPLETED: "completed",
-            TaskStatus.FAILED: "failed",
-            TaskStatus.BLOCKED: "blocked",
-        }
-        tasks: list[WorkTaskOutcome] = []
+    def _build_work_outcome(run, work_request_id):
+        tasks = []
         for task in run.workflow.tasks:
             if task.work_request_id != work_request_id:
                 continue
-            outcome_status = status_by_task.get(task.status)
-            if outcome_status is None:
-                continue
             last = task.attempts[-1] if task.attempts else None
-            tasks.append(
-                WorkTaskOutcome(
-                    task_id=task.id,
-                    status=outcome_status,
-                    summary=(last.summary if last and last.summary else task.goal),
-                    artifact_ids=list(last.artifact_ids) if last else [],
-                    error=last.error if last else None,
-                    warnings=list(task.warnings),
-                )
-            )
-        return WorkOutcome(
-            work_request_id=work_request_id,
-            workflow_revision=run.workflow.revision,
-            summary="execution stable",
-            tasks=tasks,
-        )
+            status = task.status.value if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED} else "blocked"
+            error = last.error if last else None
+            if status != "completed" and error is None:
+                error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message="dependency did not complete", retryable=False)
+            tasks.append(WorkTaskOutcome(task_id=task.id, status=status, summary=last.report if last and last.report else task.instruction,
+                                         artifact_ids=last.artifact_ids if last else [], error=error, warnings=task.warnings))
+        return WorkOutcome(work_request_id=work_request_id, workflow_revision=run.workflow.revision, summary="execution stable", tasks=tasks)
 
-    def _save(self, run: ResearchRun) -> None:
+    def _save(self, run):
         run.updated_at = datetime.now(UTC)
-        self.store.save(ResearchRun.model_validate(run.model_dump()))
+        self.store.save(type(run).model_validate(run.model_dump()))
 
-    def _require_bindings(self, capabilities) -> None:
-        missing = [item.value for item in capabilities if item not in self.bindings]
-        if missing:
-            raise OrchestrationError(f"no ModulePort binding for: {sorted(set(missing))}")
+    def _require_bindings(self, kinds):
+        for kind in kinds:
+            if kind not in self.bindings or self.bindings[kind].owner.value != kind.value:
+                raise OrchestrationError(f"no matching Agent binding for {kind}")
 
     @staticmethod
-    def _require_remaining_llm_budget(run: ResearchRun) -> None:
+    def _require_remaining_llm_budget(run):
         if run.llm_calls_used >= run.request.budget.max_llm_calls:
-            raise OrchestrationError("run LLM-call budget is exhausted")
+            raise OrchestrationError("run LLM-call budget exhausted")
 
     @staticmethod
-    def _task(run: ResearchRun, task_id: str) -> WorkflowTask:
+    def _task(run, task_id):
         for task in run.workflow.tasks:
             if task.id == task_id:
                 return task

@@ -8,25 +8,23 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
+    AgentResult,
     ArtifactCandidate,
     ArtifactImport,
-    Capability,
     ErrorCode,
-    ExperimentRunInput,
     ModuleError,
-    ModuleResult,
     ModuleStatus,
     ResearchRequest,
     RunBudget,
     RunStatus,
     TaskProposal,
+    WorkflowAgentKind,
     WorkflowPatch,
     WorkflowProposal,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSourceKind,
     WorkspaceSpec,
-    CodeUnderstandInput,
 )
 from resagent2_orchestrator import (
     ArtifactRegistrationError,
@@ -73,9 +71,9 @@ def proposal() -> WorkflowProposal:
             TaskProposal(
                 id="task_experiment",
                 work_request_id="work_legacy_initial",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run a tiny experiment",
-                inputs=ExperimentRunInput(instructions="Run once"),
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run a tiny experiment",
+
             )
         ],
     )
@@ -106,10 +104,10 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    result = ModuleResult(
+    result = AgentResult(
         status=ModuleStatus.COMPLETED,
-        summary="experiment completed",
-        payload={"env_id": "resenv_test"},
+        report="experiment completed",
+
         artifacts=[
             ArtifactCandidate(
                 kind="experiment_result",
@@ -122,7 +120,7 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
     store = JsonRunStore(tmp_path / "state")
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([result]),
             )
@@ -155,41 +153,43 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
     (workspace / "metrics.json").write_text("{}", encoding="utf-8")
     experiment_port = ScriptedModulePort(
         [
-            ModuleResult(
+            AgentResult(
                 status=ModuleStatus.COMPLETED,
-                summary="evidence",
-                payload={"env_id": "resenv_test"},
+                report="evidence",
+
                 artifacts=[
                     ArtifactCandidate(
                         kind="experiment_result",
                         path="metrics.json",
                         media_type="application/json",
-                        summary="metrics",
+                        summary="metrics", output_name="metrics",
                     )
                 ],
             )
         ]
     )
     analyze_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed",
-                      payload={"answer": "Code inspected", "evidence_files": ["train.py"]})]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="analyzed",
+                      )]
     )
     experiment = proposal().tasks[0]
+    experiment.output_names = ["metrics"]
     analyze = TaskProposal(
         id="task_analyze",
         work_request_id="work_legacy_initial",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Analyze evidence",
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Analyze evidence",
         depends_on=["task_experiment"],
-        inputs=CodeUnderstandInput(question="What happened?"),
+        input_artifact_bindings=[dict(source_task="task_experiment", output_selector="metrics")],
+
     )
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=experiment_port,
             ),
-            Capability.CODE_UNDERSTAND: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
                 port=analyze_port,
             ),
@@ -222,9 +222,9 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     (workspace / "metrics.json").write_text("{}", encoding="utf-8")
     experiment_port = ScriptedModulePort(
         [
-            ModuleResult(
+            AgentResult(
                 status=ModuleStatus.FAILED,
-                summary="first attempt crashed",
+                report="first attempt crashed",
                 error=ModuleError(
                     code=ErrorCode.TOOL_FAILED,
                     message="experiment crashed",
@@ -239,41 +239,43 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
                     )
                 ],
             ),
-            ModuleResult(
+            AgentResult(
                 status=ModuleStatus.COMPLETED,
-                summary="evidence",
-                payload={"env_id": "resenv_test"},
+                report="evidence",
+
                 artifacts=[
                     ArtifactCandidate(
                         kind="experiment_result",
                         path="metrics.json",
                         media_type="application/json",
-                        summary="metrics",
+                        summary="metrics", output_name="metrics",
                     )
                 ],
             ),
         ]
     )
     analyze_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="analyzed",
-                      payload={"answer": "Code inspected", "evidence_files": ["train.py"]})]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="analyzed",
+                      )]
     )
     experiment = proposal().tasks[0]
+    experiment.output_names = ["metrics"]
     analyze = TaskProposal(
         id="task_analyze",
         work_request_id="work_legacy_initial",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Analyze evidence",
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Analyze evidence",
         depends_on=["task_experiment"],
-        inputs=CodeUnderstandInput(question="What happened?"),
+        input_artifact_bindings=[dict(source_task="task_experiment", output_selector="metrics")],
+
     )
     engine = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=experiment_port,
             ),
-            Capability.CODE_UNDERSTAND: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
                 port=analyze_port,
             ),
@@ -295,7 +297,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     _create_run(engine, "run_retry", request(), combined)
     run = engine.run_until_stable("run_retry")
 
-    assert len(run.artifacts) == 2
+    assert len([ref for ref in run.artifacts.values() if ref.kind != "acceptance_requirements"]) == 2
     assert len(analyze_port.requests[0].input_artifacts) == 1
     assert analyze_port.requests[0].input_artifacts[0].attempt_number == 2
 
@@ -303,18 +305,18 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
 def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:
     store = JsonRunStore(tmp_path / "state")
     first_port = ScriptedModulePort(
-        [ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload={"env_id": "resenv_test"})]
+        [AgentResult(status=ModuleStatus.COMPLETED, report="done")]
     )
     binding = ModuleBinding(owner=AgentOwner.EXPERIMENT, port=first_port)
     first = WorkflowScheduler(
-        bindings={Capability.EXPERIMENT_RUN: binding},
+        bindings={WorkflowAgentKind.EXPERIMENT: binding},
         store=store,
         artifact_root=tmp_path / "artifacts",
     )
     _create_run(first, "run_restart", request(), proposal())
 
     second = WorkflowScheduler(
-        bindings={Capability.EXPERIMENT_RUN: binding},
+        bindings={WorkflowAgentKind.EXPERIMENT: binding},
         store=JsonRunStore(tmp_path / "state"),
         artifact_root=tmp_path / "artifacts",
     )
@@ -324,18 +326,18 @@ def test_json_store_recovers_after_scheduler_restart(tmp_path: Path) -> None:
     assert recovered.workflow.tasks[0].attempts[0].number == 1
 
 
-def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path) -> None:
+def test_stale_patch_and_missing_agent_binding_are_rejected(tmp_path: Path) -> None:
     engine = WorkflowScheduler(
         bindings={},
         store=JsonRunStore(tmp_path / "state"),
         artifact_root=tmp_path / "artifacts",
     )
-    with pytest.raises(OrchestrationError, match="no ModulePort"):
+    with pytest.raises(OrchestrationError, match="no matching Agent binding"):
         _create_run(engine, "run_invalid", request(), proposal())
 
     valid = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=ScriptedModulePort([]),
             )
@@ -354,12 +356,11 @@ def test_stale_patch_and_missing_capability_binding_are_rejected(tmp_path: Path)
         )
 
 
-def test_unknown_capability_is_rejected_by_the_contract() -> None:
+def test_unknown_agent_kind_is_rejected_by_the_contract() -> None:
     raw = proposal().model_dump(mode="json")
-    raw["tasks"][0]["capability"] = "unknown_capability"
-    raw["tasks"][0]["inputs"]["capability"] = "unknown_capability"
+    raw["tasks"][0]["workflow_agent_kind"] = "scientific"
 
-    with pytest.raises(ValueError, match="unknown_capability"):
+    with pytest.raises(ValueError, match="scientific"):
         WorkflowProposal.model_validate(raw)
 
 
@@ -444,7 +445,7 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
         kind="experiment_result",
         path="metrics.json",
         media_type="application/json",
-        summary="metrics",
+        summary="metrics", output_name="metrics",
     )
     kwargs = dict(
         grant=grant,

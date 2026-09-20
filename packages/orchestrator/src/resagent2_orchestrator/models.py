@@ -68,6 +68,11 @@ class ResearchRun(OrchestratorModel):
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
+    pending_question_ref: ArtifactRef | None = None
+    conclusion_requirements_ref: ArtifactRef | None = None
+    dataset_catalog_ref: ArtifactRef | None = None
+    feedback_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
+    scientific_report: str = ""
     answers: list[RecordedAnswer] = Field(default_factory=list)
     answer_task_ids: dict[QuestionId, TaskId | None] = Field(default_factory=dict)
     workflow_history: list[Workflow] = Field(default_factory=list)

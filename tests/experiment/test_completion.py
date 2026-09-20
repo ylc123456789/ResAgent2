@@ -67,6 +67,23 @@ def test_missing_file_is_not_delivered(tmp_path):
         check(tmp_path).evaluate(state(), FinishCandidate(report="Done", artifacts=[evidence()]))
 
 
+def test_output_directory_file_is_checked_without_requiring_writable_source(tmp_path):
+    workspace = tmp_path / "source"
+    output = tmp_path / "out"
+    workspace.mkdir()
+    output.mkdir()
+    (output / "metrics.json").write_text('{"accuracy": 0.9}')
+    finalizer = check(workspace)
+    finalizer.output_dir = output
+    candidate = FinishCandidate(report="Measured", artifacts=[evidence()])
+    assert finalizer.evaluate(state(), candidate).complete
+    (output / "metrics.json").unlink()
+    (tmp_path / "outside.json").write_text("{}")
+    (output / "metrics.json").symlink_to(tmp_path / "outside.json")
+    with pytest.raises(PermissionError):
+        finalizer.evaluate(state(), candidate)
+
+
 def test_report_does_not_self_certify_command_failure(tmp_path):
     decision = check(tmp_path).evaluate(state(), FinishCandidate(report="It failed"))
     assert decision.complete

@@ -7,7 +7,7 @@ import json
 
 from pydantic import ValidationError
 
-from resagent2_contracts import ArtifactCandidate, VerificationResult
+from resagent2_contracts import ArtifactCandidate, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
 from resagent2_components import EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, media_type_for
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
@@ -29,7 +29,7 @@ class CodingCompletionCheck:
         for path in changed:
             self.boundary.resolve_write_file(path)
         artifacts = list(candidate.artifacts)
-        reserved = {"code_patch", "verification_result", "execution_record"}
+        reserved = SYSTEM_GENERATED_ARTIFACT_KINDS
         if any(item.kind in reserved for item in artifacts):
             return CompletionDecision(
                 complete=False,

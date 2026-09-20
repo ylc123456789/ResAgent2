@@ -1,29 +1,4 @@
-"""WorkflowCompiler: turn a semantic WorkRequest into an executable graph.
-
-The compiler is a stateless orchestrator-internal Port. It never persists, runs
-tools, calls an Agent, or mutates run state; it only turns one persisted
-WorkRequest into a WorkflowProposal (no graph yet) or a WorkflowPatch (an
-existing graph).
-
-The production ``LLMWorkflowCompiler`` follows a "semantic draft + deterministic
-materialization" split (ADR-0010):
-
-1. The LLM returns only a local ``CompilationDraft``: semantic task keys, the
-   relationships between them, and the capability-specific inputs. It never
-   emits a global task id, a work request id, a workflow revision, a status, an
-   attempt, or any reference to a task from a previous work request.
-2. ``_materialize_draft`` deterministically assigns global task ids, binds the
-   work request id, resolves workspaces, converts local dependencies into global
-   ones, and emits a schema-valid Proposal (first round) or an append-only Patch
-   (repair rounds).
-3. If the deterministic validator rejects a draft, exactly one recompilation is
-   attempted with the precise rejection reason as feedback; a second rejection
-   fails the compile.
-
-The materialized candidate passes the same round-boundary predicate used by
-Scheduler acceptance. Compilation uses rejection as feedback; Scheduler also
-checks replacement compilers before accepting any graph mutation.
-"""
+"""Compile a work request into a bounded graph of single-mode Agent calls."""
 
 from __future__ import annotations
 
@@ -31,68 +6,23 @@ import json
 from dataclasses import dataclass
 from typing import Annotated, Protocol
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    ValidationError,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from resagent2_contracts import (
-    Capability,
-    CapabilityInput,
-    CapabilityRegistry,
-    RunBudget,
-    TaskProposal,
-    Workflow,
-    WorkflowPatch,
-    WorkflowProposal,
-    WorkRequest,
-    WorkspaceDescriptor,
-    WorkspaceId,
+    FutureArtifactBinding, RunBudget, TaskProposal, Workflow, WorkflowAgentKind,
+    WorkflowAgentRegistry, WorkflowPatch, WorkflowProposal, WorkRequest,
+    WorkspaceDescriptor, WorkspaceId,
 )
-
-
 from .workflow_validation import validate_workflow_candidate
 
 
 @dataclass(frozen=True)
 class CompilationResult:
-    """A compiled graph plus the exact number of LLM calls the compiler made.
-
-    The Run usage ledger (ADR-0011 §7) counts the compiler's draft/review
-    calls, so the compiler reports them here instead of dropping them.
-    """
-
     output: WorkflowProposal | WorkflowPatch
     llm_calls: int = 0
 
 
-class WorkflowCompiler(Protocol):
-    """Translate one WorkRequest into a Proposal or a Patch."""
-
-    def compile(
-        self,
-        request: WorkRequest,
-        *,
-        current: Workflow | None,
-        registry: CapabilityRegistry,
-        budget: RunBudget,
-        workspaces: list[WorkspaceDescriptor] | None = None,
-        remaining_calls: int | None = None,
-    ) -> CompilationResult:
-        """Return a Proposal when ``current`` is None, else a Patch.
-
-        On failure, raise ``CompilationError`` with this invocation's actual
-        ``llm_calls``, including provider attempts that did not return a result.
-        """
-
-
 class CompilationError(ValueError):
-    """A failed compilation and the LLM calls consumed by that invocation."""
-
     def __init__(self, message: str, *, llm_calls: int = 0) -> None:
         super().__init__(message)
         if isinstance(llm_calls, bool) or not isinstance(llm_calls, int) or llm_calls < 0:
@@ -101,111 +31,56 @@ class CompilationError(ValueError):
 
 
 class CompilerLLM(Protocol):
-    """Provider-neutral seam for one bounded structured call.
-
-    The orchestrator must not import ``resagent2_runtime``, so the composition
-    root adapts a real runtime LLM client to this shape.
-    """
-
-    def next_action(
-        self,
-        prompt: str,
-        action_type: type[BaseModel],
-    ) -> BaseModel | dict:
-        """Return a candidate, or raise JSONDecodeError for malformed output."""
+    def next_action(self, prompt: str, action_type: type[BaseModel]) -> BaseModel | dict: ...
 
 
-# A local draft key must be a valid suffix of a global ``TaskId``
-# (``task_<key>``). It is unique only within the single LLM output it belongs to.
-DraftKey = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=1,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
-    ),
-]
+class WorkflowCompiler(Protocol):
+    def compile(
+        self, request: WorkRequest, *, current: Workflow | None,
+        registry: WorkflowAgentRegistry, budget: RunBudget,
+        workspaces: list[WorkspaceDescriptor] | None = None,
+        remaining_calls: int | None = None,
+    ) -> CompilationResult: ...
+
+
+DraftKey = Annotated[str, StringConstraints(
+    strip_whitespace=True, min_length=1, max_length=80,
+    pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+)]
 NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-class CompilationTaskDraft(BaseModel):
-    """One semantic task as the LLM describes it, before any identity is bound.
-
-    ``key`` is meaningful only inside its ``CompilationDraft``; ``depends_on``
-    may only reference other keys in the same draft and means "the referenced
-    task must complete successfully before this one may run".
-    """
-
+class DraftArtifactBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    source_task: DraftKey
+    output_selector: NonEmpty
 
+
+class CompilationTaskDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     key: DraftKey
-    capability: Capability
-    goal: NonEmpty
+    workflow_agent_kind: WorkflowAgentKind
+    instruction: NonEmpty
     depends_on: list[DraftKey] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
-    constraints: list[NonEmpty] = Field(default_factory=list)
-    inputs: CapabilityInput
+    input_artifacts: list[str] = Field(default_factory=list)
+    input_artifact_bindings: list[DraftArtifactBinding] = Field(default_factory=list)
+    output_names: list[str] = Field(default_factory=list)
 
 
 class CompilationDraft(BaseModel):
-    """The only output the Compiler LLM is asked to produce.
-
-    Deliberately carries no execution-graph identity: no global task ids, no
-    work request id, no revision, no status, no reference to prior work. All of
-    that is assigned by ``_materialize_draft``.
-    """
-
     model_config = ConfigDict(extra="forbid")
-
     tasks: list[CompilationTaskDraft] = Field(min_length=1)
 
 
-class CompilationReview(BaseModel):
-    """Bounded semantic verdict for one immediately executable draft.
-
-    ``accepted=True`` means the draft covers the request's present requirements
-    without pre-compiling work that is conditional on a future failure. Otherwise
-    ``issues`` names the concrete omissions or speculative tasks to correct. This
-    is a short evaluator call inside the compiler, not a new Agent or module
-    (ADR-0010 §5).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    accepted: bool
-    issues: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_verdict(self) -> "CompilationReview":
-        if self.accepted and self.issues:
-            raise ValueError("an accepted review cannot carry issues")
-        if not self.accepted and not self.issues:
-            raise ValueError("a rejected review requires at least one issue")
-        return self
-
-
 class DeterministicWorkflowCompiler:
-    """Test fixture that returns a fixed proposal, and optionally a fixed patch."""
+    """Inject a graph in deterministic tests without an LLM."""
 
-    def __init__(
-        self,
-        proposal: WorkflowProposal,
-        patch: WorkflowPatch | None = None,
-    ) -> None:
+    def __init__(self, proposal: WorkflowProposal, patch: WorkflowPatch | None = None) -> None:
         self._proposal = proposal
         self._patch = patch
 
-    def compile(
-        self,
-        request: WorkRequest,
-        *,
-        current: Workflow | None,
-        registry: CapabilityRegistry,
-        budget: RunBudget,
-        workspaces: list[WorkspaceDescriptor] | None = None,
-        remaining_calls: int | None = None,
-    ) -> CompilationResult:
+    def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
         if current is None:
             return CompilationResult(self._proposal)
         if self._patch is None:
@@ -213,539 +88,141 @@ class DeterministicWorkflowCompiler:
         return CompilationResult(self._patch)
 
 
-def _capability_context(registry: CapabilityRegistry) -> str:
-    """Share capability scope and input-field meanings between draft and review."""
-    lines = ["Available capabilities:"]
-    for item in registry.definitions:
-        suffix = f" — {item.description}" if item.description else ""
-        lines.append(f"- {item.capability.value}{suffix}")
-    lines.append(
-        "Keep each task within its capability's responsibility. code_modify "
-        "changes code and verifies code correctness; experiment_run performs "
-        "the research experiment and delivers measured metrics and artifacts. "
-        "Code-level verification does not replace formal experiment delivery. "
-        "A small task budget does not expand a capability: never pack another "
-        "capability's work into one task merely to fit the budget.\n"
-        "Describe each task's goal and inputs as a semantic objective (what to "
-        "implement, fix or run), not as specific file paths, function "
-        "locations, CLI flags or verification commands: the Coding/Experiment "
-        "Agent inspects the workspace and decides those details itself. "
-        "For code_modify, leave inputs.suggested_paths=[]; locating the code "
-        "is part of the Coding Agent's work.\n"
-        "For experiment_run, put evidence requirements in inputs.instructions, "
-        "preserving their conditions (for example, error logs only if execution "
-        "fails). Set inputs.expected_metrics=[] and inputs.expected_artifacts=[]: "
-        "those fields are exact metric keys and file paths for callers that "
-        "already know them, not places for semantic descriptions or guessed "
-        "output names. Empty arrays do not waive the need to produce evidence.\n"
-        "In this LLM compilation path, these fields are deliberately empty "
-        "in the normalized inputs shown to the reviewer and sent to execution. "
-        "Do not reject a draft solely because expected_metrics, expected_artifacts "
-        "or suggested_paths are empty, or require invented keys or paths to fill "
-        "them. Judge evidence coverage from the goal, inputs.instructions and "
-        "constraints together. Still reject missing evidence requirements, "
-        "wrong capability scope or missing prerequisite tasks."
-    )
-    return "\n".join(lines)
-
-
-def _compile_prompt(
-    request: WorkRequest,
-    current: Workflow | None,
-    registry: CapabilityRegistry,
-    budget: RunBudget,
-    workspaces: list[WorkspaceDescriptor] | None,
-    *,
-    feedback: str | None = None,
-) -> str:
-    """Describe the work request and the draft contract for one LLM call.
-
-    The prompt asks only for a ``CompilationDraft``. It never exposes existing
-    task ids or the workflow revision to the LLM: those are immutable history
-    and are bound by ``_materialize_draft``, not chosen by the model.
-    """
+def _compile_prompt(request, current, registry, budget, workspaces, *, feedback=None):
+    remaining = budget.max_tasks - (len(current.tasks) if current else 0)
     lines = [
-        "Translate this research work request into the MINIMAL executable task graph.",
-        f"Objective: {request.request.objective}",
-        f"Expected evidence: {', '.join(request.request.expected_evidence)}",
-        f"Constraints: {', '.join(request.request.constraints) or '(none)'}",
-        _capability_context(registry),
+        "Compile the smallest currently executable graph for this work request.",
+        request.request.model_dump_json(),
+        "Available execution Agents:",
+        *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
+        "Each Agent has one business mode. Keep its inspection, preparation and execution "
+        "inside the same task where possible. Scientific is never a graph node.",
+        "Return CompilationDraft. Use instruction as the only task text. Do not invent "
+        "metric names, file paths, acceptance policies, permissions or runtime identities.",
+        "Dependencies refer only to keys in this draft and require success. "
+        "Conditional repairs are requested in a later round after an actual failure.",
+        "Future input bindings select a logical output_name declared by a direct dependency. "
+        "Use output_names only when an explicit cross-task handoff needs named outputs. "
+        "Do not guess artifact IDs. Existing input_artifacts must already be supplied materials.",
+        f"Remaining tasks: {remaining}",
+        "Logical workspaces: " + json.dumps([w.model_dump(mode="json") for w in workspaces]),
+        "Draft schema: " + json.dumps(CompilationDraft.model_json_schema()),
     ]
-    lines.extend(
-        [
-            "Use only capabilities from the list above; do not invent new ones.",
-            "Generate the smallest graph that satisfies the request. Do not split "
-            "one agent's internal work into separate tasks: code_modify already "
-            "reads and diagnoses the code before editing, and experiment_run "
-            "already prepares the environment before running.",
-            "This draft is ONE currently executable round. Include prerequisites "
-            "that are already known to be necessary, ordered before their consumers. "
-            "Do not add diagnose/fix/rerun tasks whose need depends on a task in this "
-            "draft failing. A failure is returned to the Scientific Agent, which may "
-            "request a separate repair round. Even when the objective mentions an "
-            "if-failure contingency, compile only the work needed before that failure "
-            "has actually been observed.",
-            "",
-            "Return a JSON draft with this exact shape:",
-            "{",
-            '  "tasks": [',
-            "    {",
-            '      "key": "<short snake_case id, unique within this draft>",',
-            '      "capability": "<one of the capabilities above>",',
-            '      "goal": "<what this task does>",',
-            '      "depends_on": ["<another key in this draft>", ...],',
-            '      "workspace_id": "<only if multiple workspaces; omit for one>",',
-            '      "constraints": ["<task-specific constraint>", ...],',
-            '      "inputs": {"capability": "<same as above>", ...capability-specific fields}',
-            "    }",
-            "  ]",
-            "}",
-            "",
-            "Do NOT emit a global task id, a work request id, a workflow revision, a "
-            "status, an attempt, or any reference to a task from a previous work "
-            "request. The system assigns those.",
-            "Assign each task the constraints that are relevant to THAT task, "
-            "drawn from the request's constraints and objective. Do not include "
-            "control constraints that were already satisfied before this request "
-            "(for example 'ask the user first'): the request already reflects the "
-            "resolved decision.",
-        ]
-    )
-    if current is not None:
-        remaining = max(0, budget.max_tasks - len(current.tasks))
-        lines.append(f"Remaining task budget (new tasks): {remaining}")
-    else:
-        lines.append(f"Max tasks: {budget.max_tasks}")
-    if workspaces:
-        descriptions = "; ".join(
-            f"{item.workspace_id} ({item.source_kind.value}"
-            + (f": {item.description}" if item.description else "")
-            + ")"
-            for item in workspaces
-        )
-        lines.append(f"Available workspaces: {descriptions}")
-        lines.append(
-            "Assign each task a workspace_id from the list above only when more "
-            "than one workspace exists; never invent ids."
-        )
-    if current is not None:
-        lines.append(
-            "The workflow already exists. This is an append-only round: existing "
-            "tasks are immutable history and must not be referenced. Only add NEW "
-            "tasks for this work request; a new task may only depend on other new "
-            "tasks in this same draft."
-        )
-    if feedback is not None:
-        lines.append("")
-        lines.append(feedback)
+    if feedback:
+        lines.append("Previous draft rejected by structural validation: " + feedback)
     return "\n".join(lines)
 
 
-def _sanitize_inputs(capability: Capability, inputs: CapabilityInput) -> CapabilityInput:
-    """Keep semantic intent without granting guessed details hard-gate authority.
-
-    The Compiler has no trusted output-key/path source and has not read the
-    workspace. Public exact-detail fields remain available to direct callers;
-    this LLM path leaves discovery to the execution Agent. Misplaced evidence
-    descriptions are retained only in this task's instructions, not as exact
-    acceptance criteria or as requirements broadcast to other tasks.
-    """
-    if capability == Capability.CODE_MODIFY:
-        return inputs.model_copy(update={"suggested_paths": []})
-    if capability == Capability.EXPERIMENT_RUN:
-        instructions = inputs.instructions
-        descriptions = [*inputs.expected_metrics, *inputs.expected_artifacts]
-        if descriptions:
-            instructions += (
-                "\n\nEvidence descriptions (not exact metric keys or file paths; "
-                "conditional items apply only when their condition holds):\n- "
-                + "\n- ".join(descriptions)
-            )
-        return inputs.model_copy(
-            update={
-                "instructions": instructions,
-                "expected_metrics": [],
-                "expected_artifacts": [],
-            }
-        )
-    return inputs
-
-
-def _review_prompt(
-    request: WorkRequest, draft: CompilationDraft, registry: CapabilityRegistry,
-) -> str:
-    """Review the full task semantics, using the materializer's input projection.
-
-    Local keys preserve dependencies without exposing execution identities.
-    Sanitization is shared with materialization, so the review sees the inputs
-    that will be dispatched, not discarded path guesses or exact criteria.
-    """
-    tasks = [
-        f"- {task.key} [{task.capability.value}]: {task.goal}; "
-        f"depends_on={task.depends_on or []}\n"
-        f"  constraints={json.dumps(task.constraints, ensure_ascii=False)}\n"
-        f"  inputs={_sanitize_inputs(task.capability, task.inputs).model_dump_json()}"
-        for task in draft.tasks
-    ]
-    return (
-        "Review whether this task draft is semantically complete for the work "
-        "request.\n\n"
-        f"Work request objective: {request.request.objective}\n"
-        f"Expected evidence: {', '.join(request.request.expected_evidence)}\n"
-        f"Constraints: {', '.join(request.request.constraints) or '(none)'}\n\n"
-        + _capability_context(registry)
-        + "\n\nDraft tasks:\n"
-        + ("\n".join(tasks) or "(none)")
-        + "\n\n"
-        "Decide whether this is the minimal CURRENTLY EXECUTABLE round. It must "
-        "include every prerequisite already known to be necessary, in the right "
-        "order. It must not include diagnose/fix/rerun work whose need is conditional "
-        "on another task in this same draft failing: failures return to the Scientific "
-        "Agent and repair is compiled as a new WorkRequest. Do not demand unrelated "
-        "extra work.\n"
-        "Read each task's goal, inputs and constraints together. A requirement "
-        "present in inputs or constraints need not be repeated in the goal. "
-        "Check whether the assigned capability can deliver the requested work, "
-        "not merely whether the goal promises it.\n"
-        "Return accepted=true only when completeness, capability scope and the "
-        "one-round rule hold; otherwise accepted=false with issues listing "
-        "concrete omissions, scope violations or speculative tasks."
-    )
-
-
-def _reject_cycle(keys: list[str], dependencies: dict[str, list[str]]) -> None:
-    """Reject a dependency cycle among a draft's local keys."""
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(key: str) -> None:
-        if key in visiting:
-            raise CompilationError("draft dependency cycle detected")
-        if key in visited:
-            return
-        visiting.add(key)
-        for dependency in dependencies[key]:
-            visit(dependency)
-        visiting.remove(key)
-        visited.add(key)
-
-    for key in keys:
-        visit(key)
-
-
-def _materialize_draft(
-    draft: CompilationDraft,
-    *,
-    request: WorkRequest,
-    current: Workflow | None,
-    registry: CapabilityRegistry,
-    budget: RunBudget,
-    workspaces: list[WorkspaceDescriptor],
-) -> WorkflowProposal | WorkflowPatch:
-    """Deterministically bind identity and scope onto a semantic draft.
-
-    The LLM decided *what* to do and *how tasks relate*; this function decides
-    every runtime identity and scope field, and rejects any draft that is not a
-    valid, minimal, self-contained task graph.
-    """
-    # 1. At least one task (the schema already enforces this; kept as a guard).
-    if not draft.tasks:
-        raise CompilationError("draft has no tasks")
-
-    # 2. Task count within the remaining budget.
-    existing = len(current.tasks) if current is not None else 0
-    remaining = budget.max_tasks - existing
-    if len(draft.tasks) > remaining:
-        raise CompilationError(
-            f"draft has {len(draft.tasks)} tasks but only {remaining} remain "
-            "in the task budget"
-        )
-
-    # 3. Local keys are unique.
+def _materialize_draft(draft, *, request, current, registry, budget, workspaces):
+    used = len(current.tasks) if current else 0
+    if not draft.tasks or len(draft.tasks) > budget.max_tasks - used:
+        raise CompilationError("draft exceeds remaining task budget or is empty")
     keys = [task.key for task in draft.tasks]
     if len(keys) != len(set(keys)):
         raise CompilationError("draft has duplicate task keys")
-
-    # 4. Dependencies only reference this draft's keys.
-    key_set = set(keys)
-    for task in draft.tasks:
-        foreign = [dep for dep in task.depends_on if dep not in key_set]
-        if foreign:
-            raise CompilationError(
-                f"task {task.key!r} depends on unknown key(s): {', '.join(foreign)}"
-            )
-
-    # 5. The local dependency graph is acyclic.
-    _reject_cycle(keys, {task.key: task.depends_on for task in draft.tasks})
-
-    # 6. Every capability is declared by the composition root.
-    declared = {definition.capability for definition in registry.definitions}
-    undeclared = sorted(
-        {task.capability.value for task in draft.tasks if task.capability not in declared}
-    )
-    if undeclared:
-        raise CompilationError(
-            "compiler selected undeclared capabilities: " + ", ".join(undeclared)
-        )
-
-    # 7. The capability matches its inputs discriminator.
-    for task in draft.tasks:
-        if task.capability != task.inputs.capability:
-            raise CompilationError(
-                f"task {task.key!r} capability {task.capability.value!r} does not "
-                f"match inputs {task.inputs.capability.value!r}"
-            )
-
-    # 8. Resolve workspaces (auto-fill a single one, require a choice for many).
-    workspace_ids = [item.workspace_id for item in workspaces]
-    resolved: list[str | None] = []
-    for task in draft.tasks:
-        if task.workspace_id is None:
-            if len(workspace_ids) == 1:
-                resolved.append(workspace_ids[0])
-            elif len(workspace_ids) > 1:
-                raise CompilationError(
-                    f"task {task.key!r} must declare a workspace_id "
-                    "(multiple workspaces exist)"
-                )
-            else:
-                resolved.append(None)
-        elif task.workspace_id in workspace_ids:
-            resolved.append(task.workspace_id)
-        else:
-            raise CompilationError(
-                f"task {task.key!r} declares undeclared workspace_id "
-                f"{task.workspace_id!r}"
-            )
-
-    # 9. Assign deterministic global task ids. A key that collides with an
-    # existing workflow task is disambiguated deterministically by scoping it to
-    # this work request, so reusing a key across rounds can never fail the run:
-    # the LLM never sees old task ids (ADR-0010 §4), so it cannot be expected to
-    # avoid their keys.
-    existing_ids = {task.id for task in current.tasks} if current is not None else set()
-    key_to_id: dict[str, str] = {}
-    for task in draft.tasks:
-        base = f"task_{task.key}"
+    declared = {item.workflow_agent_kind for item in registry.definitions}
+    workspace_ids = [w.workspace_id for w in workspaces]
+    existing = {task.id for task in current.tasks} if current else set()
+    mapping = {}
+    for key in keys:
+        base = f"task_{key}"
         candidate = base
-        if candidate in existing_ids:
-            scope = request.id.removeprefix("work_")
-            candidate = f"{base}_{scope}"
-            index = 2
-            while candidate in existing_ids:
-                candidate = f"{base}_{scope}_{index}"
-                index += 1
-        key_to_id[task.key] = candidate
-        existing_ids.add(candidate)
-
-    # 10-12. Convert local dependencies to global ids and emit the contract.
-    proposals = [
-        TaskProposal(
-            id=key_to_id[task.key],
-            work_request_id=request.id,
-            capability=task.capability,
-            goal=task.goal,
-            depends_on=[key_to_id[dep] for dep in task.depends_on],
-            workspace_id=workspace,
-            constraints=list(task.constraints),
-            inputs=_sanitize_inputs(task.capability, task.inputs),
-        )
-        for task, workspace in zip(draft.tasks, resolved)
-    ]
+        counter = 1
+        while candidate in existing:
+            candidate = f"{base}_{request.id.removeprefix('work_')}_{counter}"
+            counter += 1
+        existing.add(candidate)
+        mapping[key] = candidate
+    tasks = []
+    for item in draft.tasks:
+        if item.workflow_agent_kind not in declared:
+            raise CompilationError("compiler selected an undeclared Agent")
+        if not set(item.input_artifacts) <= set(request.request.input_artifact_ids):
+            raise CompilationError("compiler selected an unsupplied input artifact")
+        if any(dep not in mapping for dep in item.depends_on):
+            raise CompilationError("draft dependency references an unknown key")
+        workspace = item.workspace_id
+        if workspace is None and len(workspace_ids) == 1:
+            workspace = workspace_ids[0]
+        elif workspace is None and len(workspace_ids) > 1:
+            raise CompilationError("workspace_id required with multiple workspaces")
+        if workspace is not None and workspace not in workspace_ids:
+            raise CompilationError("draft selected an undeclared workspace")
+        bindings = []
+        for binding in item.input_artifact_bindings:
+            if binding.source_task not in mapping:
+                raise CompilationError("future artifact source is unknown")
+            bindings.append(FutureArtifactBinding(
+                source_task=mapping[binding.source_task], output_selector=binding.output_selector,
+            ))
+        tasks.append(TaskProposal(
+            id=mapping[item.key], work_request_id=request.id,
+            workflow_agent_kind=item.workflow_agent_kind, instruction=item.instruction,
+            depends_on=[mapping[key] for key in item.depends_on], workspace_id=workspace,
+            input_artifacts=item.input_artifacts, input_artifact_bindings=bindings,
+            output_names=item.output_names,
+        ))
     if current is None:
-        return WorkflowProposal(
-            work_request_id=request.id,
-            tasks=proposals,
+        candidate = WorkflowProposal(work_request_id=request.id, tasks=tasks)
+    else:
+        candidate = WorkflowPatch(
+            work_request_id=request.id, based_on_revision=current.revision, add_tasks=tasks,
         )
-    return WorkflowPatch(
-        work_request_id=request.id,
-        based_on_revision=current.revision,
-        add_tasks=proposals,
-    )
-
-
-def _compact_error(error: Exception) -> str:
-    """Render a validator failure as a short, actionable one-liner for feedback."""
-    if isinstance(error, ValidationError):
-        details = [
-            ".".join(str(part) for part in item["loc"]) + ": " + item["msg"]
-            for item in error.errors(include_url=False)
-        ]
-        return "; ".join(details[:5])
-    return str(error)
-
-
-def _rejection_feedback(error: Exception) -> str:
-    """Feedback for a structurally invalid draft."""
-    return (
-        "The previous draft was rejected by the deterministic validator.\n"
-        f"Reason: {_compact_error(error)}\n"
-        "Return a corrected draft."
-    )
-
-
-def _review_feedback(issues: list[str]) -> str:
-    """Feedback for a draft rejected by the bounded semantic review."""
-    return (
-        "The previous draft failed semantic review.\n"
-        "Issues: " + "; ".join(issues) + "\n"
-        "Return a corrected, minimal, currently executable round."
-    )
+    validate_workflow_candidate(candidate)
+    return candidate
 
 
 class LLMWorkflowCompiler:
-    """Compile a WorkRequest through a semantic draft, then materialize it.
-
-    The LLM produces a local ``CompilationDraft``; ``_materialize_draft``
-    deterministically assigns global identity and scope and emits a valid
-    Proposal or append-only Patch. Invalid JSON or an invalid draft is retried once
-    with the validator reason as feedback. A structurally valid but semantically
-    invalid draft (a prerequisite is missing or speculative conditional work was
-    added) is caught by one bounded semantic review and retried once with its
-    issues as feedback (ADR-0010 §5). A second failure of either kind fails.
-    """
+    """One structured draft, with at most one correction for invalid structure."""
 
     def __init__(self, client: CompilerLLM) -> None:
         self._client = client
         self.llm_calls = 0
-        self._remaining_calls: int | None = None
 
-    def compile(
-        self,
-        request: WorkRequest,
-        *,
-        current: Workflow | None,
-        registry: CapabilityRegistry,
-        budget: RunBudget,
-        workspaces: list[WorkspaceDescriptor] | None = None,
-        remaining_calls: int | None = None,
-    ) -> CompilationResult:
+    def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
         self.llm_calls = 0
+        feedback = None
         try:
-            return self._compile(
-                request,
-                current=current,
-                registry=registry,
-                budget=budget,
-                workspaces=workspaces,
-                remaining_calls=remaining_calls,
-            )
-        except Exception as error:
-            raise CompilationError(
-                str(error) or type(error).__name__, llm_calls=self.llm_calls
-            ) from error
-
-    def _compile(
-        self,
-        request: WorkRequest,
-        *,
-        current: Workflow | None,
-        registry: CapabilityRegistry,
-        budget: RunBudget,
-        workspaces: list[WorkspaceDescriptor] | None,
-        remaining_calls: int | None,
-    ) -> CompilationResult:
-        workspaces = workspaces or []
-        self._remaining_calls = remaining_calls
-        feedback: str | None = None
-        for attempt in (0, 1):
-            self._check_budget()
-            self._limit_next_call()
-            prompt = _compile_prompt(
-                request, current, registry, budget, workspaces, feedback=feedback
-            )
-            tracer = getattr(self._client, "set_trace_context", None)
-            if tracer is not None:
-                tracer(
-                    agent="workflow_compiler",
-                    run_id=request.run_id,
-                    work_request_id=request.id,
-                )
-            try:
+            if budget.max_tasks <= (len(current.tasks) if current else 0):
+                raise CompilationError("no remaining task slots")
+            for attempt in range(2):
+                if remaining_calls is not None:
+                    if self.llm_calls >= remaining_calls:
+                        raise CompilationError("compiler LLM budget exhausted")
+                    setter = getattr(self._client, "set_attempt_limit", None)
+                    if setter:
+                        setter(remaining_calls - self.llm_calls)
+                tracer = getattr(self._client, "set_trace_context", None)
+                if tracer:
+                    tracer(agent="workflow_compiler", run_id=request.run_id, work_request_id=request.id)
                 try:
-                    raw = self._client.next_action(prompt, CompilationDraft)
+                    raw = self._client.next_action(
+                        _compile_prompt(request, current, registry, budget, workspaces or [], feedback=feedback),
+                        CompilationDraft,
+                    )
+                except (json.JSONDecodeError, ValidationError) as error:
+                    if attempt:
+                        raise
+                    feedback = str(error)
+                    continue
                 finally:
                     self.llm_calls += getattr(self._client, "last_attempts", 1)
-                # Typed clients are not trusted more than JSON clients: a
-                # model_copy/model_construct instance may bypass field checks.
-                draft = CompilationDraft.model_validate(
-                    raw.model_dump(mode="python", warnings=False)
-                    if isinstance(raw, BaseModel) else raw
-                )
-                compiled = _materialize_draft(
-                    draft,
-                    request=request,
-                    current=current,
-                    registry=registry,
-                    budget=budget,
-                    workspaces=workspaces,
-                )
+                if remaining_calls is not None and self.llm_calls > remaining_calls:
+                    raise CompilationError("compiler exceeded remaining LLM budget")
                 try:
-                    validate_workflow_candidate(compiled)
-                except ValueError as error:
-                    raise CompilationError(str(error)) from error
-                review = self._review_draft(request, draft, registry)
-            except (json.JSONDecodeError, ValidationError, CompilationError) as error:
-                if attempt == 1:
-                    raise CompilationError(
-                        "compiler failed after 2 attempts: " + _compact_error(error)
-                    ) from error
-                feedback = _rejection_feedback(error)
-                continue
-
-            if not review.accepted:
-                if attempt == 1:
-                    raise CompilationError(
-                        "compiler draft rejected after review: "
-                        + "; ".join(review.issues)
+                    draft = CompilationDraft.model_validate(raw.model_dump() if isinstance(raw, BaseModel) else raw)
+                    output = _materialize_draft(
+                        draft, request=request, current=current, registry=registry,
+                        budget=budget, workspaces=workspaces or [],
                     )
-                feedback = _review_feedback(review.issues)
-                continue
-
-            return CompilationResult(compiled, self.llm_calls)
-
-        # Unreachable: attempt 1 always returns or raises.
-        raise CompilationError("compiler failed after 2 attempts")
-
-    def _check_budget(self) -> None:
-        """Fail before the next LLM call once the remaining budget is spent."""
-        if self._remaining_calls is not None and self.llm_calls >= self._remaining_calls:
-            raise CompilationError("compiler LLM budget exhausted")
-
-    def _limit_next_call(self) -> None:
-        """Bound provider retries by the Run's remaining real-call budget."""
-        if self._remaining_calls is None:
-            return
-        setter = getattr(self._client, "set_attempt_limit", None)
-        if setter is not None:
-            setter(self._remaining_calls - self.llm_calls)
-
-    def _review_draft(
-        self, request: WorkRequest, draft: CompilationDraft, registry: CapabilityRegistry,
-    ) -> CompilationReview:
-        """Run one bounded semantic-completeness review of the draft."""
-        tracer = getattr(self._client, "set_trace_context", None)
-        if tracer is not None:
-            tracer(
-                agent="workflow_compiler",
-                run_id=request.run_id,
-                work_request_id=request.id,
-                step="review",
-            )
-        self._check_budget()
-        self._limit_next_call()
-        prompt = _review_prompt(request, draft, registry)
-        try:
-            raw = self._client.next_action(prompt, CompilationReview)
-        finally:
-            self.llm_calls += getattr(self._client, "last_attempts", 1)
-        try:
-            return CompilationReview.model_validate(
-                raw.model_dump(mode="python", warnings=False)
-                if isinstance(raw, BaseModel) else raw
-            )
-        except ValidationError as error:
-            raise CompilationError(
-                f"semantic review returned an invalid result: {_compact_error(error)}"
-            ) from error
+                    return CompilationResult(output, self.llm_calls)
+                except (ValueError, json.JSONDecodeError) as error:
+                    if attempt:
+                        raise CompilationError(f"compiler failed after 2 attempts: {error}") from error
+                    feedback = str(error)
+        except Exception as error:
+            if isinstance(error, CompilationError):
+                error.llm_calls = self.llm_calls
+                raise
+            raise CompilationError(str(error) or type(error).__name__, llm_calls=self.llm_calls) from error
+        raise CompilationError("compiler failed", llm_calls=self.llm_calls)

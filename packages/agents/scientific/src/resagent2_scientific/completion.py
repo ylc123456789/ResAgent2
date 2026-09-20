@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     ArtifactCandidate, ArtifactRef, ScientificOpinion, WorkTaskOutcome,
     missing_required_evidence_kinds,
+    SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
 from resagent2_components import RegisteredArtifactReader, read_artifact_json
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
@@ -47,7 +48,7 @@ class ScientificCompletionCheck:
             return CompletionDecision(
                 complete=False, report="Submit exactly one scientific_opinion JSON artifact",
             )
-        if any(item.kind == "observation_trace" for item in candidate.artifacts):
+        if any(item.kind in SYSTEM_GENERATED_ARTIFACT_KINDS for item in candidate.artifacts):
             return CompletionDecision(
                 complete=False, report="Observation traces are generated from actual tool records",
             )

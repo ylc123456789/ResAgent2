@@ -21,6 +21,8 @@ from resagent2_contracts import (
     SessionId,
     TaskId,
     WorkspaceGrant,
+    SYSTEM_ARTIFACT_KINDS,
+    SCIENTIFIC_ARTIFACT_KINDS,
 )
 
 from .store import RunStore
@@ -28,17 +30,6 @@ from .store import RunStore
 
 class ArtifactRegistrationError(ValueError):
     """Raised when a candidate cannot become a provenance-safe ArtifactRef."""
-
-
-SYSTEM_ARTIFACT_KINDS = frozenset({
-    "literature_search",
-    "work_feedback",
-    "question",
-    "answer",
-    "work_request",
-    "acceptance_requirements",
-    "scientific_opinion",
-})
 
 
 def _sha256(path: Path) -> str:
@@ -77,6 +68,7 @@ class ArtifactRegistry:
         attempt_number: int,
         index: int,
         existing_ids: set[str],
+        output_dir: str | None = None,
     ) -> ArtifactRef:
         suffix = task_id.removeprefix("task_")
         artifact_id = f"artifact_{suffix}_{attempt_number}_{index}"
@@ -87,27 +79,40 @@ class ArtifactRegistry:
         # a rejected candidate cannot leave a residue directory that would break
         # a later retry of the same id (ADR-0011 §5.1).
         source: Path | None = None
+        metadata = dict(candidate.metadata)
+        metadata.pop("source_path", None)
+        metadata.pop("source_root", None)
         if candidate.content is None:
-            if grant is None:
+            if grant is None and output_dir is None:
                 raise ArtifactRegistrationError(
                     "workspace-file ArtifactCandidate requires a workspace grant"
                 )
-            workspace = Path(grant.root).resolve(strict=True)
-            source = (workspace / candidate.path).resolve(strict=True)
+            roots = []
+            if grant is not None:
+                roots.append(("workspace", Path(grant.root).resolve(strict=True)))
+            if output_dir is not None:
+                roots.append(("output_dir", Path(output_dir).resolve()))
+            matches = [(label, root, (root / candidate.path).resolve())
+                       for label, root in roots if (root / candidate.path).is_file()]
+            if len(matches) != 1:
+                raise ArtifactRegistrationError("artifact path is missing or ambiguous across authorized roots")
+            label, workspace, source = matches[0]
             if not source.is_file() or not source.is_relative_to(workspace):
                 raise ArtifactRegistrationError(
                     "artifact path is outside workspace or not a file"
                 )
-            if grant.allowed_paths and not any(
+            if label == "workspace" and grant.allowed_paths and not any(
                 source.is_relative_to((workspace / path).resolve())
                 for path in grant.allowed_paths
             ):
                 raise ArtifactRegistrationError("artifact path is outside allowed_paths")
-            if any(
+            if label == "workspace" and any(
                 source.is_relative_to((workspace / path).resolve())
                 for path in grant.denied_paths
             ):
                 raise ArtifactRegistrationError("artifact path is inside denied_paths")
+            metadata["source_path"] = source.relative_to(workspace).as_posix()
+            metadata["source_root"] = label
 
         destination_dir = self.root / run_id / artifact_id
         filename = (
@@ -133,7 +138,7 @@ class ArtifactRegistry:
                 media_type=candidate.media_type,
                 summary=candidate.summary,
                 output_name=candidate.output_name,
-                metadata=candidate.metadata,
+                metadata=metadata,
             )
 
         # Idempotent recovery: a crash after promoting the staging dir but before
@@ -236,7 +241,7 @@ class ArtifactRegistry:
         atomically. The id is content-derived, so registering the same content
         again is idempotent.
         """
-        if candidate.kind != "literature_search":
+        if candidate.kind not in SCIENTIFIC_ARTIFACT_KINDS:
             raise ArtifactRegistrationError(
                 f"unsupported scientific artifact kind: {candidate.kind}"
             )
@@ -247,11 +252,14 @@ class ArtifactRegistry:
         )
         encoded = text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
-        artifact_id = f"artifact_sci_{digest[:16]}"
+        identity = hashlib.sha256(f"{session_id}:{candidate.kind}:{candidate.path}:{digest}".encode()).hexdigest()
+        artifact_id = f"artifact_sci_{identity[:24]}"
 
         destination_dir = self.root / run_id / artifact_id
-        destination = destination_dir / candidate.path
+        destination = destination_dir / Path(candidate.path).name
         destination_dir.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and _sha256(destination) != digest:
+            raise ArtifactRegistrationError("registered scientific artifact hash changed")
         if not destination.exists():
             temporary: Path | None = None
             try:
@@ -313,7 +321,7 @@ class ArtifactRegistry:
         scope_digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
         artifact_id = f"artifact_system_{candidate.kind}_{digest[:12]}_{scope_digest}"
         destination_dir = self.root / run_id / artifact_id
-        destination = destination_dir / candidate.path
+        destination = destination_dir / Path(candidate.path).name
         if destination.exists():
             if not destination.is_file() or _sha256(destination) != digest:
                 raise ArtifactRegistrationError(

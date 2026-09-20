@@ -33,8 +33,9 @@ should be reported after the actual command failure. The system derives the
 failure status from that execution. Do not substitute a different experiment
 to bypass a code error.
 
-Finish with report and artifacts. File candidates use kind, workspace-relative
-path, media_type, summary and optional output_name. Short structured outputs may
+Finish with report and artifacts. File candidates use kind, a path relative to
+the workspace or supplied output_dir, media_type, summary and optional output_name.
+Paths must identify exactly one file across those roots. Short structured outputs may
 use content. Include the JSON files containing measured results when producing
 new measurements. Fulfil the explicit requirements in input artifacts.
 Existing results may support an analysis without rerunning experiments.
@@ -55,6 +56,7 @@ def build_context(
             content=json.dumps({
                 "instruction": request.instruction,
                 "workspace_mode": request.workspace.mode.value if request.workspace else None,
+                "output_dir": request.output_dir,
                 "permissions": request.permissions.model_dump(mode="json"),
                 "confirm_before_experiment": request.confirm_before_experiment,
                 "experiment_confirmed": request.experiment_confirmed,

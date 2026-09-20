@@ -33,12 +33,16 @@ class PrepareEnvironmentTool:
         *,
         default_python: str = "3.12",
         max_version_switches: int = 2,
+        allowed: bool = True,
     ) -> None:
         self.binding = binding
         self.default_python = default_python
         self.max_version_switches = max_version_switches
+        self.allowed = allowed
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        if not self.allowed:
+            raise PermissionError("Environment preparation is not authorized")
         args = cast(PrepareEnvironmentInput, arguments)
         requested = (args.python_version or "").strip() or None
         hard = self.binding.hard_constraint

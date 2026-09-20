@@ -12,6 +12,7 @@ from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.environment import EnvironmentBinding, SetupCommandPolicy
 from resagent2_components.process import ProcessRunner, UnsafeCommandError, parse_command
+from resagent2_contracts import WorkspaceMode
 
 class RunSetupInput(RuntimeModel):
     """One shell-free dependency-installation command."""
@@ -33,12 +34,14 @@ class RunSetupTool:
         log_dir: str,
         timeout_seconds: int,
         policy: "SetupCommandPolicy | None" = None,
+        allowed: bool = True,
     ) -> None:
         self.runner = runner
         self.binding = binding
         self.log_dir = log_dir
         self.timeout_seconds = timeout_seconds
         self.policy = policy or SetupCommandPolicy()
+        self.allowed = allowed
 
     def _tail(self, path_str: str, *, limit: int = 2000) -> str:
         path = Path(path_str)
@@ -50,6 +53,11 @@ class RunSetupTool:
             return ""
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        if not self.allowed:
+            raise PermissionError("Environment setup is not authorized")
+        boundary = getattr(self.runner, "boundary", None)
+        if boundary is not None and boundary.grant.mode != WorkspaceMode.READ_WRITE:
+            raise PermissionError("Setup processes require a writable workspace")
         args = cast(RunSetupInput, arguments)
         if self.binding.current is None:
             return ToolObservation(

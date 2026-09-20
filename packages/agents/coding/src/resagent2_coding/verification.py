@@ -13,7 +13,7 @@ import hashlib
 from pathlib import Path
 from time import monotonic
 
-from resagent2_contracts import VerificationResult
+from resagent2_contracts import VerificationResult, WorkspaceMode
 from resagent2_components.environment import EnvironmentBinding
 from resagent2_components.git import GitBaseline, GitWorkspace
 from resagent2_components.process import (
@@ -136,6 +136,7 @@ class RunVerificationTool:
         baseline: GitBaseline,
         env_binding: EnvironmentBinding | None = None,
         extra_env: dict[str, str] | None = None,
+        allowed: bool = True,
     ) -> None:
         self.runner = runner
         self.repository = repository
@@ -145,9 +146,14 @@ class RunVerificationTool:
         self.baseline = baseline
         self.env_binding = env_binding
         self.extra_env = dict(extra_env or {})
+        self.allowed = allowed
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(RunVerificationInput, arguments)
+        if not self.allowed:
+            raise PermissionError("Process execution is not authorized")
+        if self.runner.boundary.grant.mode != WorkspaceMode.READ_WRITE:
+            raise PermissionError("Verification processes require a writable workspace")
         decision = self.permission_policy.check(args.commands)
         if not decision.allowed:
             raise ValueError(f"verification commands rejected: {decision.reason}")

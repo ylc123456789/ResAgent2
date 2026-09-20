@@ -1,71 +1,50 @@
-"""Coding prompts and deterministic context sections."""
+"""Coding's single prompt and deterministic context."""
 
 from __future__ import annotations
 
 import json
 
 from resagent2_components import (
-    DatasetAvailability,
-    EnvironmentBinding,
-    dataset_context,
-    workspace_context,
+    DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
+    request_materials_context,
 )
-from resagent2_contracts import ModuleTaskRequest
-from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection, user_answers_section
+from resagent2_contracts import AgentRequest
+from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection,
+)
 
 
-UNDERSTAND_PROMPT = """You are the read-only Coding Agent.
-Inspect only through the provided typed tools. Never claim to have read a file
-unless a tool returned it. Finish with result={answer, evidence_files,
-uncertainty}; every evidence_files entry must have been observed with read_file
-or search_text. Ask the user only when required information cannot be inferred.
+CODING_PROMPT = """You are the Coding Agent. Follow the instruction using authorized
+source files and registered materials. Inspect before making claims or changes.
+Use the same tools and finish protocol for explanation, investigation and edits.
+A writable workspace permits changes; it does not require them.
 
-Tool arguments:
-- list_files: {"path": ".", "max_files": 200}
-- read_file: {"path": "relative/path", "start_line": 1, "end_line": 200}
-- search_text: {"query": "text", "path": ".", "max_results": 50}
-- read_artifact: {"artifact_id": "artifact_..."}
-- git_diff: {"max_chars": 20000}
-- ask_user: {"text": "...", "requested_fields": ["answer"]}
-- finish: {"result": {"answer": "...", "evidence_files": ["..."],
-  "uncertainty": ""}}
-"""
+Use replace_text for existing files and create_file for new files.
+old_text must match exactly once in the current file per call.
+You may make multiple replace_text calls as needed.
+Review the actual diff after edits. Read project dependency requirements before choosing a
+Python version with prepare_environment. Install dependencies with run_setup,
+then audit_env before running verification. Verification commands are shell-free
+test commands such as python -m pytest, unittest, py_compile or compileall.
+For import checks, write a unittest; python -c and arbitrary scripts
+are not allowed verification commands.
+Report the actual verification outcome and any limitations; never claim an
+unexecuted or stale verification passed. Respect the explicit delivery
+requirements in the provided artifacts, including output_name where specified.
 
-
-MODIFY_PROMPT = """You are the Coding Agent for one bounded repository change.
-Use list/read/search before editing. Read the project's Python and dependency
-requirements first (pyproject.toml, requirements.txt, environment.yml, README).
-If no environment is ready, choose a compatible Python version and call
-prepare_environment; do not run conda create/remove yourself. Install missing
-dependencies with run_setup (python -m pip install ..., pip install ..., or
-conda env update -f environment.yml; uv and poetry are not yet supported).
-Re-audit with audit_env after any setup.
-Change existing files with replace_text: old_text must match exactly once in
-the current file per call. You may make multiple replace_text calls as needed;
-create_file is only for new files. Use git_diff to review the actual change.
-After the latest edit, run shell-free verification commands inside the bound
-environment (python -m pytest / unittest / py_compile / compileall). For an
-import smoke check, write a unittest and run it; python -c and arbitrary scripts
-are not allowed verification commands. Fix failures before finishing. Finish with
-result={summary, residual_risks}. Do not report changed files or verification
-status yourself: the deterministic finalizer derives them.
-
-Tool arguments:
-- list_files/read_file/search_text/read_artifact/git_diff: same as read-only profile
-- prepare_environment: {"python_version": "3.10"}
-- run_setup: {"command": "python -m pip install -r requirements.txt"}
-- audit_env: {}
-- create_file: {"path": "new/relative/path", "content": "complete file content"}
-- replace_text: {"path": "relative/path", "old_text": "exact unique text",
-  "new_text": "replacement"}
-- run_verification: {"commands": ["python -m pytest", "python -m py_compile train.py"]}
-- ask_user: {"text": "...", "requested_fields": ["answer"]}
-- finish: {"result": {"summary": "...", "residual_risks": []}}
+Finish with report and artifacts. The report explains findings, changes,
+verification and remaining uncertainty. Each artifact is a candidate with kind,
+path, media_type, summary, optional output_name and optional UTF-8 content.
+Use files for substantive source/results; short structured outputs may use
+content. The system derives changed files, patches and verification records
+from actual execution. Never fabricate those records. Source read-only access
+still permits reporting through this controlled output channel.
+Ask the user only when required information cannot be inferred.
 """
 
 
 def build_context(
-    request: ModuleTaskRequest,
+    request: AgentRequest,
     state: AgentState,
     *,
     control_state: dict | None = None,
@@ -73,59 +52,34 @@ def build_context(
     datasets: DatasetAvailability | None = None,
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
 ) -> list[ContextSection | ContextMaterial]:
-    artifacts = [
-        {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "summary": artifact.summary,
-        }
-        for artifact in request.input_artifacts
-    ]
     sections = [
         ContextSection(
             name="task",
-            content=json.dumps(
-                {
-                    "instruction": request.instruction,
-                    "workspace_mode": (
-                        request.workspace.mode.value if request.workspace else None
-                    ),
-                    "input_artifacts": artifacts,
-                },
-                ensure_ascii=False,
-            ),
-            priority=100,
-            required=True,
+            content=json.dumps({
+                "instruction": request.instruction,
+                "workspace_mode": request.workspace.mode.value if request.workspace else None,
+                "permissions": request.permissions.model_dump(mode="json"),
+                "input_artifacts": [
+                    {"id": item.id, "kind": item.kind, "summary": item.summary}
+                    for item in request.input_artifacts
+                ],
+            }, ensure_ascii=False),
+            priority=100, required=True,
         ),
         ContextSection(
             name="dataset_catalog",
-            content=json.dumps(
-                dataset_context(datasets or DatasetAvailability()),
-                ensure_ascii=False,
-            ),
-            priority=90,
-            required=True,
+            content=json.dumps(dataset_context(datasets or DatasetAvailability())),
+            priority=90, required=True,
         ),
+        *request_materials_context(request),
     ]
-    answers = user_answers_section(request.answers)
-    if answers is not None:
-        sections.append(answers)
-    sections.extend(workspace_context(state, binding=binding, max_context_tokens=max_context_tokens))
     if control_state is not None:
-        sections.insert(
-            0,
-            ContextSection(
-                name="control_state",
-                content=(
-                    "Current coding control state (deterministic — do not "
-                    "invent your own):\n"
-                    "edited_since_verification only compares recorded edit and "
-                    "verification revisions; false does not mean no patch exists. "
-                    "Follow required_next_action; completion still checks the Git diff.\n"
-                    + json.dumps(control_state, ensure_ascii=False)
-                ),
-                priority=1000,
-                required=True,
-            ),
-        )
+        sections.append(ContextSection(
+            name="verification_state",
+            content=json.dumps(control_state),
+            priority=95, required=True,
+        ))
+    sections.extend(workspace_context(
+        state, binding=binding, max_context_tokens=max_context_tokens,
+    ))
     return sections

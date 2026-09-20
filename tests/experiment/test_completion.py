@@ -1,452 +1,100 @@
+"""Experiment completion accepts analysis and preserves actual failure evidence.
+
+Exact metric/path requirements are checked at Scheduler artifact acceptance.
+"""
+
 from datetime import UTC, datetime
-import json
-from pathlib import Path
 
 import pytest
 
-from resagent2_contracts import (
-    AgentOwner,
-    ErrorCode,
-    ExperimentResult,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceSourceKind,
-)
-from resagent2_components import (
-    WorkspaceBoundary,
-    WorkspaceObserver,
-    snapshot_workspace,
-)
+from resagent2_contracts import AgentOwner, ArtifactCandidate, ErrorCode, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind
+from resagent2_components import WorkspaceBoundary, WorkspaceObserver
 from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
-
 from resagent2_experiment.completion import ExperimentCompletionCheck
 
 
-def _state(memory=None) -> AgentState:
+def state():
     now = datetime.now(UTC)
     return AgentState(
-        session_id="session_test",
-        agent_name="experiment-run",
-        owner=AgentOwner.EXPERIMENT,
-        run_id="run_test",
-        task_id="task_test",
-        attempt_number=1,
-        created_at=now,
-        updated_at=now,
-        memory=memory
-        or {"experiment_success_count": 1, "workspace_snapshot": {"kind": "files", "file_hashes": {}}},
+        session_id="session_test", agent_name="experiment", owner=AgentOwner.EXPERIMENT,
+        run_id="run_test", task_id="task_test", attempt_number=1,
+        created_at=now, updated_at=now,
     )
 
 
-def _boundary(root: Path) -> WorkspaceBoundary:
-    return WorkspaceBoundary(
-        WorkspaceGrant(
-            root=str(root),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
-            source=WorkspaceSourceKind.LOCAL,
-        )
+def check(root):
+    return ExperimentCompletionCheck(WorkspaceObserver(WorkspaceBoundary(WorkspaceGrant(
+        root=str(root), mode=WorkspaceMode.READ_ONLY, allowed_paths=["."],
+        source=WorkspaceSourceKind.LOCAL,
+    ))))
+
+
+def evidence(path="metrics.json", **extra):
+    return ArtifactCandidate(
+        kind="experiment_result", path=path, media_type="application/json",
+        summary="Experimental measurements", **extra,
     )
 
 
-def _check(root: Path, *, expected_metrics=None, expected_artifacts=None) -> ExperimentCompletionCheck:
-    return ExperimentCompletionCheck(
-        WorkspaceObserver(_boundary(root)),
-        expected_metrics=expected_metrics or [],
-        expected_artifacts=expected_artifacts or [],
-        env_id="resenv_x",
-        repo_url="https://example.com/repo.git",
-        commit="abc",
-    )
-
-
-def _finish(*, evidence_files=None) -> FinishCandidate:
-    return FinishCandidate(
-        result={"summary": "done", "evidence_files": evidence_files or []}
-    )
-
-
-@pytest.mark.parametrize("risks", [[], ["Only one seed was measured"]])
-def test_module_report_preserves_risks_without_changing_measured_evidence(tmp_path, risks) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    candidate = FinishCandidate(result={
-        "summary": "Finished; an explanatory mention of accuracy=1.0 is not a measurement",
-        "evidence_files": ["metrics.json"],
-        "residual_risks": risks,
-    })
-
-    decision = _check(
-        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
-    ).evaluate(_state(), candidate)
-
+def test_analysis_does_not_require_execution_or_new_evidence(tmp_path):
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(report="Existing results are inconclusive"))
     assert decision.complete
-    assert decision.warnings == []
-    assert decision.payload["metrics"] == {"accuracy": 0.9}
-    assert decision.payload["evidence_files"] == ["metrics.json"]
-    assert decision.payload["delivery_issues"] == []
-    assert decision.payload["residual_risks"] == risks
-    reports = [item for item in decision.artifacts if item.kind == "module_report"]
-    assert len(reports) == bool(risks)
-    if risks:
-        assert risks[0] not in decision.summary
-        assert "## summary\n\n" + candidate.result["summary"] in reports[0].content
-        assert "## residual_risks\n\n- " + risks[0] in reports[0].content
-    assert not (tmp_path / "module_report.md").exists()
-
-
-@pytest.mark.parametrize("successful_command", [False, True])
-def test_module_report_cannot_replace_real_experiment_evidence(tmp_path, successful_command) -> None:
-    state = _state({
-        "experiment_success_count": int(successful_command),
-        "workspace_snapshot": {"kind": "files", "file_hashes": {}},
-    })
-    candidate = FinishCandidate(result={
-        "summary": "accuracy=0.9, metrics.json should be enough",
-        "evidence_files": [],
-        "residual_risks": ["No real result file is available"],
-    })
-
-    decision = _check(
-        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
-    ).evaluate(state, candidate)
-
-    assert not decision.complete
-    assert decision.payload is None
     assert decision.artifacts == []
 
 
-def test_golden_case_new_evidence_completes(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-
-    decision = check.evaluate(
-        _state(), _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is True
-    assert decision.warnings == []
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.evidence_files == ["metrics.json"]
-    assert payload.delivery_issues == []
-    assert {artifact.kind for artifact in decision.artifacts} == {"experiment_result"}
+@pytest.mark.parametrize("filename", ["metrics.json", "./metrics.json"])
+def test_authorized_preexisting_file_can_be_analyzed(tmp_path, filename):
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}')
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(
+        report="Analyzed the existing measurement", artifacts=[evidence(filename)],
+    ))
+    assert decision.complete
+    assert decision.artifacts[0].path == filename
 
 
-def test_missing_all_evidence_is_rejected(tmp_path) -> None:
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-
-    decision = check.evaluate(_state(), _finish())
-
-    # No metric and no artifact at all: reject instead of completing with
-    # warnings that would mask a total failure.
-    assert decision.complete is False
-    assert "No required metric or artifact" in decision.summary
-
-
-@pytest.mark.parametrize("leftover", [False, True])
-def test_semantic_request_still_needs_new_attempt_evidence(tmp_path, leftover):
-    if leftover:
-        (tmp_path / "metrics.json").write_text('{"accuracy": 0.8}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
-    decision = _check(tmp_path).evaluate(state, _finish(evidence_files=["metrics.json"]))
-    assert decision.complete is False
-    assert decision.payload is None
-    assert "actual new/changed evidence" in decision.summary
+def test_report_preserves_limits_without_claiming_measurement(tmp_path):
+    report = "Prior result lacks repeated seeds, so uncertainty is unknown."
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(
+        report=report, artifacts=[evidence(content='{"analysis": "uncertainty unknown"}')],
+    ))
+    assert decision.complete
+    assert decision.report == report
+    assert decision.artifacts[0].content == '{"analysis": "uncertainty unknown"}'
 
 
-def test_semantic_request_can_deliver_actual_key_without_guessed_names(tmp_path):
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.8}', encoding="utf-8")
-    decision = _check(tmp_path).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
-    assert decision.complete is True
-    assert decision.warnings == []
-    assert ExperimentResult.model_validate(decision.payload).metrics == {"accuracy": 0.8}
+def test_missing_file_is_not_delivered(tmp_path):
+    with pytest.raises((OSError, PermissionError)):
+        check(tmp_path).evaluate(state(), FinishCandidate(report="Done", artifacts=[evidence()]))
 
 
-def test_partial_delivery_downgrades_to_warnings(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    # This attempt changes metrics.json (so the metric is derivable from
-    # evidence) but never produces the second required artifact.
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.95}', encoding="utf-8")
-    check = _check(
-        tmp_path,
-        expected_metrics=["accuracy"],
-        expected_artifacts=["metrics.json", "report.json"],
-    )
-    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
-
-    decision = check.evaluate(state, _finish(evidence_files=["metrics.json"]))
-
-    assert decision.complete is True
-    assert len(decision.warnings) == 1
-    assert "report.json" in decision.warnings[0].message
-
-
-def test_expected_artifact_is_added_to_evidence(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-
-    decision = check.evaluate(
-        _state(), _finish(evidence_files=[])
-    )
-
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.evidence_files == ["metrics.json"]
-    # The auto-appended required artifact also feeds the typed metrics, so a
-    # produced-but-unlisted metrics.json is not silently dropped.
-    assert payload.metrics == {"accuracy": 0.9}
-    assert payload.delivery_issues == []
-
-
-@pytest.mark.parametrize(
-    ("expected", "actual"),
-    [
-        ("balanced_accuracy", "accuracy"),
-        ("baseline_accuracy", "accuracy"),
-        ("accuracy", "balanced_accuracy"),
-        ("accuracy", "baseline_accuracy"),
-    ],
-)
-def test_metric_substrings_do_not_satisfy_different_metrics(tmp_path, expected, actual) -> None:
-    (tmp_path / "metrics.json").write_text(json.dumps({actual: 0.9}), encoding="utf-8")
-
-    decision = _check(tmp_path, expected_metrics=[expected]).evaluate(
-        _state(), _finish(evidence_files=["metrics.json"])
-    )
-
-    # A real artifact is still partial delivery, but cannot certify a different
-    # required metric just because their names share a substring.
-    assert decision.complete is True
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.delivery_issues == [f"Missing required metric: {expected}"]
-    assert decision.warnings[0].code == "delivery_not_met"
-
-
-def test_metric_normalization_preserves_case_and_separator_aliases(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"Balanced Accuracy": 0.9}', encoding="utf-8")
-
-    decision = _check(tmp_path, expected_metrics=["balanced_accuracy"]).evaluate(
-        _state(), _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is True
-    assert decision.warnings == []
-    payload = ExperimentResult.model_validate(decision.payload)
-    assert payload.metrics == {"balancedaccuracy": 0.9}
-    assert payload.delivery_issues == []
-
-
-@pytest.mark.parametrize("reverse", [False, True])
-def test_conflicting_metric_values_reject_finish_in_any_evidence_order(tmp_path, reverse) -> None:
-    (tmp_path / "first.json").write_text('{"accuracy": 0.4}', encoding="utf-8")
-    (tmp_path / "second.json").write_text('{"Accuracy": 0.9}', encoding="utf-8")
-    evidence = ["first.json", "second.json"]
-    if reverse:
-        evidence.reverse()
-
-    decision = _check(tmp_path, expected_metrics=["accuracy"]).evaluate(
-        _state(), _finish(evidence_files=evidence)
-    )
-
-    assert decision.complete is False
+def test_report_does_not_self_certify_command_failure(tmp_path):
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(report="It failed"))
+    assert decision.complete
     assert decision.failure is None
-    assert decision.payload is None
-    assert decision.artifacts == []
-    assert "Conflicting values for normalized metrics: accuracy" in decision.summary
-    assert "distinct metric names" in decision.summary
 
 
-def test_required_artifact_participates_in_metric_conflict_detection(tmp_path) -> None:
-    (tmp_path / "first.json").write_text('{"accuracy": 0.4}', encoding="utf-8")
-    (tmp_path / "required.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-
-    decision = _check(tmp_path, expected_artifacts=["required.json"]).evaluate(
-        _state(), _finish(evidence_files=["first.json"])
-    )
-
-    assert decision.complete is False
-    assert "Conflicting values for normalized metrics: accuracy" in decision.summary
-
-
-def test_normalized_metric_collision_within_one_file_rejects_finish(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text(
-        '{"baseline_accuracy": 0.4, "Baseline Accuracy": 0.9}', encoding="utf-8"
-    )
-
-    decision = _check(tmp_path).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
-
-    assert decision.complete is False
-    assert "Conflicting values for normalized metrics: baselineaccuracy" in decision.summary
-
-
-def test_duplicate_equal_metric_values_are_accepted(tmp_path) -> None:
-    (tmp_path / "first.json").write_text('{"accuracy": 1}', encoding="utf-8")
-    (tmp_path / "second.json").write_text('{"Accuracy": 1.0}', encoding="utf-8")
-
-    decision = _check(tmp_path, expected_metrics=["accuracy"]).evaluate(
-        _state(), _finish(evidence_files=["first.json", "second.json"])
-    )
-
-    assert decision.complete is True
-    assert decision.warnings == []
-    assert ExperimentResult.model_validate(decision.payload).metrics == {"accuracy": 1.0}
-
-
-def test_distinct_baseline_and_candidate_metrics_remain_independent(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text(
-        '{"baseline_accuracy": 0.4, "candidate_accuracy": 0.9}', encoding="utf-8"
-    )
-
-    decision = _check(
-        tmp_path, expected_metrics=["baseline_accuracy", "candidate_accuracy"]
-    ).evaluate(_state(), _finish(evidence_files=["metrics.json"]))
-
-    assert decision.complete is True
-    assert decision.warnings == []
-    assert ExperimentResult.model_validate(decision.payload).metrics == {
-        "baselineaccuracy": 0.4, "candidateaccuracy": 0.9
-    }
-
-
-def test_no_experiment_run_cannot_complete(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is False
-    assert "experiment command" in decision.summary
-
-
-def test_preexisting_unchanged_evidence_is_not_claimable(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["metrics.json"])
-    )
-
-    # Unchanged evidence yields no derivable metric, so it cannot be claimed;
-    # the run is rejected rather than completed with an empty claim.
-    assert decision.complete is False
-    assert "No required metric or artifact" in decision.summary
-
-
-def test_changed_evidence_file_completes(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.5}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    # The current attempt updates the file.
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is True
-    assert decision.warnings == []
-    assert {artifact.kind for artifact in decision.artifacts} == {"experiment_result"}
-
-
-def test_leftover_from_previous_attempt_is_not_claimable(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 0, "workspace_snapshot": baseline.to_memory()})
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is False
-
-
-def test_preexisting_evidence_cannot_be_claimed_via_path_alias(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    baseline = snapshot_workspace(_boundary(tmp_path))
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1, "workspace_snapshot": baseline.to_memory()})
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["./metrics.json"])
-    )
-
-    assert decision.complete is False
-    assert "No required metric or artifact" in decision.summary
-
-
-def test_missing_baseline_cannot_verify_evidence(tmp_path) -> None:
-    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    check = _check(tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"])
-    state = _state({"experiment_success_count": 1})  # no workspace_snapshot key
-
-    decision = check.evaluate(
-        state, _finish(evidence_files=["metrics.json"])
-    )
-
-    assert decision.complete is False
-    assert "baseline" in decision.summary
-
-
-def _failed_command_event() -> AgentEvent:
-    return AgentEvent(
-        sequence=1,
-        step=1,
-        type="observation",
-        tool="run_command",
-        data={
-            "summary": "Command exited with code 1",
-            "ok": False,
-            "value": {
-                "command": "python train.py",
-                "exit_code": 1,
-                "timed_out": False,
-                "stdout_path": ".resagent2/experiment/commands/1.stdout.log",
-                "stderr_path": ".resagent2/experiment/commands/1.stderr.log",
-                "stderr_tail": "NameError: name 'totla' is not defined",
-            },
-        },
-        created_at=datetime.now(UTC),
-    )
-
-
-def test_failed_finish_with_verified_command_returns_failure(tmp_path) -> None:
-    check = _check(
-        tmp_path, expected_metrics=["accuracy"], expected_artifacts=["metrics.json"]
-    )
-    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
-    state.events.append(_failed_command_event())
-
-    decision = check.evaluate(
-        state,
-        FinishCandidate(proposed_status="failed", result={"summary": "train.py failed"}),
-    )
-
-    assert decision.complete is False
-    assert decision.failure is not None
+@pytest.mark.parametrize("exit_code,timed_out", [(1, False), (-9, True)])
+def test_failed_finish_preserves_verified_execution_error(tmp_path, exit_code, timed_out):
+    current = state()
+    current.events.append(AgentEvent(
+        sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
+        data={"ok": False, "value": {
+            "command": "python train.py", "exit_code": exit_code, "timed_out": timed_out,
+            "stdout_path": "out.stdout", "stderr_path": "out.stderr", "stderr_tail": "real error",
+        }},
+    ))
+    candidate = FinishCandidate(report="Training failed")
+    decision = check(tmp_path).evaluate(current, candidate)
     assert decision.failure.code == ErrorCode.TOOL_FAILED
-    assert decision.failure.retryable is False
-    assert decision.failure.details["command"] == "python train.py"
-    assert decision.failure.details["exit_code"] == 1
-    assert decision.failure.details["stderr_path"].endswith("1.stderr.log")
-    assert decision.failure.details["stderr_tail"] == "NameError: name 'totla' is not defined"
+    assert decision.failure.details["stderr_tail"] == "real error"
+    assert decision.failure.details["exit_code"] == exit_code
+    assert not decision.complete
 
 
-def test_failed_finish_without_evidence_is_rejected(tmp_path) -> None:
-    check = _check(tmp_path)
-    state = _state({"experiment_success_count": 0, "workspace_snapshot": {"kind": "files", "file_hashes": {}}})
-
-    decision = check.evaluate(
-        state,
-        FinishCandidate(proposed_status="failed", result={"summary": "I think it failed"}),
-    )
-
-    assert decision.complete is False
-    assert decision.failure is None
-    assert "no failed experiment command" in decision.summary
+def test_unexecuted_failure_text_is_not_command_evidence(tmp_path):
+    current = state()
+    current.events.append(AgentEvent(
+        sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
+        data={"ok": False, "value": {"blocked": True, "reason": "No environment"}},
+    ))
+    assert check(tmp_path)._last_failed_command(current) is None

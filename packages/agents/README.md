@@ -1,13 +1,16 @@
 # agents
 
-三个专业 Agent 使用相同 runtime/AgentLoop，但拥有独立职责、工具集合、权限、状态和结果模型。
+三个专业 Agent 共同使用 `invoke(AgentRequest) -> AgentResult` 和 runtime/AgentLoop。
+任务语义只有 `instruction + input_artifacts`，业务结果只有 `report + artifacts`。
+每个 Agent 只有一套提示词、动作 schema 和完成协议；授权控制具体操作，不选择业务模式。
 
-```text
-scientific = 科学顾问
-coding     = 程序员
-experiment = 实验员/操作员
-```
+- Scientific：阅读证据、检索文献、形成科研判断，必要时提问或请求执行工作。
+- Coding：理解、解释和修改代码，按需执行验证。
+- Experiment：分析已有结果、准备环境并执行实验。
 
-子 Agent 之间禁止直接调用。Scientific 通过 ScientificTurnResult 提出 WorkRequestDraft；Controller 接收后交 Compiler 编译，再由 Scheduler 执行。Coding/Experiment 通过 ModuleResult 返回任务结果或问题，不自行创建下一轮研究任务。
+所有 Agent 使用 `finish(report, artifacts)`。问题和工作请求由工具产生内容，Runtime
+将内容封装为候选 artifact，控制信号只引用该候选。Controller/Scheduler 登记后，
+下游只接收正式 ArtifactRef。原生 Agent 不相互调用。
 
-当前三个原生 Agent 均已实现；模块输入、返回分支及替代实现要求见 [模块接口与契约](../../docs/current/CONTRACTS.md)。
+Scientific 的 Session 属于 Run；Coding/Experiment 的 Session 属于 Task/Attempt。
+恢复仍走 invoke，回答和工作反馈从系统指定的 artifact 投影到必需上下文。

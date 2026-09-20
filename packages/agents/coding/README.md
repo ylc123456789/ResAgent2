@@ -1,17 +1,16 @@
 # Coding Agent
 
-程序员。
+`NativeCodingAgent.invoke(AgentRequest) -> AgentResult` 使用一套 CodingAction、
+CODING_PROMPT 和 CodingCompletionCheck。解释、调查、修改均由 instruction 表达。
 
-输入：`ModuleTaskRequest.instruction`（本次代码任务语义）、WorkspaceGrant、资源/答案/工件等结构化控制字段。
-输出：完整代码变化、验证结果、风险和 ArtifactCandidate。
+读写权限由 WorkspaceGrant 约束；只读源码仍可以通过受控输出通道提交报告。
+可写不表示必须修改，无修改也可结束本次调用。
 
-复用 runtime 的 permission、context 和 AgentLoop，装配 capabilities 的文件、Git 和工件 Tool；准备/完成检查直接使用 components 的 workspace、process、Git 与 Artifact 操作。代码策略、验证策略和 patch finalizer 属于本模块。
+共享 capabilities 提供文件、Git、artifact 和环境工具。
+[verification.py](src/resagent2_coding/verification.py) 保留 shell-free 验证命令策略：
+测试进程需要执行授权、可写工作区和已认证环境。环境发生变化后，旧验证不会被
+表示为覆盖当前环境；后续编辑或 Git diff 变化也会使记录失效。
 
-原生实现提供两个 profile：
-
-- `code_understand`：只读 list/read/search/Artifact/Git 工具，输出有证据路径的解释；
-- `code_modify`：准备/复用仓库后在 WorkspaceGrant 内进行精确替换或创建文件，根据项目实际自主选择 shell-free 验证命令（经 `VerificationCommandPolicy` 约束），并由 finalizer 生成真实变化和 ArtifactCandidate。
-
-模块不接受 LLM 自报的 changed files、verification status 或 Artifact 路径作为最终事实。
-
-验证工具、命令规则与编辑 revision 配对集中在 [verification.py](src/resagent2_coding/verification.py)；进程执行本身仍复用 Components。
+完成时从实际 Git 增量生成 code_patch/code_change，从真实验证记录生成
+verification_result，记录其是否覆盖当前工作区。模型不能提交伪造的执行记录。
+失败仍保留真实诊断 patch。显式交付要求由 Scheduler 对登记后的 artifact 检查。

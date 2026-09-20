@@ -1,6 +1,6 @@
 """Public API for the native ResAgent2 Coding Agent."""
 
 from .agent import NativeCodingAgent
-from .models import CodeModifyAction, CodeUnderstandAction
+from .models import CodingAction
 
-__all__ = ["CodeModifyAction", "CodeUnderstandAction", "NativeCodingAgent"]
+__all__ = ["CodingAction", "NativeCodingAgent"]

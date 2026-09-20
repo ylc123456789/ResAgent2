@@ -20,10 +20,13 @@ class AuditEnvTool:
     name = "audit_env"
     input_model = AuditEnvInput
 
-    def __init__(self, binding: EnvironmentBinding) -> None:
+    def __init__(self, binding: EnvironmentBinding, *, allowed: bool = True) -> None:
         self.binding = binding
+        self.allowed = allowed
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        if not self.allowed:
+            raise PermissionError("Environment audit execution is not authorized")
         if self.binding.current is None:
             return ToolObservation(
                 summary="No environment prepared; call prepare_environment first",

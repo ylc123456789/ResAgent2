@@ -1,82 +1,42 @@
-"""Native Coding Agent ModulePort built on the shared AgentLoop."""
+"""Native Coding Agent using one request, action and completion protocol."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from resagent2_contracts import (
-    AgentOwner,
-    ArtifactCandidate,
-    Capability,
-    CodeModifyResult,
-    CodeUnderstandResult,
-    ErrorCode,
-    ModuleError,
-    ModuleResult,
-    ModuleStatus,
-    ModuleTaskRequest,
-    WorkspaceMode,
-    task_session_id,
+    AgentOwner, AgentRequest, AgentResult, ArtifactCandidate, ErrorCode,
+    ModuleError, ModuleStatus, WorkspaceMode, task_session_id,
 )
 from resagent2_capabilities import (
-    AuditEnvTool,
-    CreateFileTool,
-    GitDiffTool,
-    ListFilesTool,
-    PrepareEnvironmentTool,
-    ReadArtifactTool,
-    ReadFileTool,
-    ReplaceTextTool,
-    RunSetupTool,
-    SearchTextTool,
+    AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
+    PrepareEnvironmentTool, ReadArtifactTool, ReadFileTool, ReplaceTextTool,
+    RunSetupTool, SearchTextTool,
 )
-from .verification import RunVerificationTool
 from resagent2_components import (
-    DatasetResolutionError,
-    EnvironmentBinding,
-    EnvironmentManager,
-    GitWorkspace,
-    GitWorkspaceError,
-    ProcessRunner,
-    RegisteredArtifactReader,
-    RepoMaterializer,
-    RepoMaterializerError,
-    ResourceLayout,
-    WorkspaceBoundary,
-    WorkspacePermissionError,
-    WorkspaceSnapshot,
-    dataset_env_overrides,
-    resolve_dataset_refs,
+    ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
+    EnvironmentManager, GitWorkspace, GitWorkspaceError, ProcessRunner,
+    RegisteredArtifactReader, RepoMaterializer, RepoMaterializerError,
+    ResourceLayout, WorkspaceBoundary, WorkspacePermissionError,
+    WorkspaceSnapshot, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS,
-    AgentDefinition,
-    AgentLoop,
-    AllowListPermissionPolicy,
-    AskUserTool,
-    FinishTool,
-    InMemorySessionStore,
-    LLMClient,
-    SessionStore,
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
+    AllowListPermissionPolicy, AskUserTool, FinishTool,
+    InMemorySessionStore, LLMClient, SessionStore,
 )
 
-from .completion import (
-    CodeModifyCompletionCheck,
-    CodeUnderstandCompletionCheck,
-    derive_control_state,
-)
-from .context import MODIFY_PROMPT, UNDERSTAND_PROMPT, build_context
-from .models import CodeModifyAction, CodeUnderstandAction
+from .completion import CodingCompletionCheck, derive_control_state
+from .context import CODING_PROMPT, build_context
+from .models import CodingAction
+from .verification import RunVerificationTool
 
 
 class NativeCodingAgent:
-    """Implement code_understand and code_modify without legacy code."""
+    """Inspect and edit authorized code through a single Agent protocol."""
 
     def __init__(
-        self,
-        llm_client: LLMClient,
-        *,
-        store: SessionStore | None = None,
+        self, llm_client: LLMClient, *, store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
         max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
     ) -> None:
@@ -88,221 +48,108 @@ class NativeCodingAgent:
         self.max_context_tokens = max_context_tokens
 
     @staticmethod
-    def _failure(message: str, *, blocked: bool = False) -> ModuleResult:
-        error = ModuleError(
-            code=ErrorCode.INVALID_INPUT,
-            message=message,
-            retryable=False,
-        )
-        return ModuleResult(
+    def _failure(message: str, *, blocked: bool = False) -> AgentResult:
+        return AgentResult(
             status=ModuleStatus.BLOCKED if blocked else ModuleStatus.FAILED,
-            summary=message,
-            error=error,
+            report=message,
+            error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
         )
 
-    def invoke(self, request: ModuleTaskRequest) -> ModuleResult:
-        if request.capability not in {
-            Capability.CODE_UNDERSTAND,
-            Capability.CODE_MODIFY,
-        }:
-            return self._failure("NativeCodingAgent received a non-Coding capability")
+    def invoke(self, request: AgentRequest) -> AgentResult:
+        if request.agent != AgentOwner.CODING:
+            return self._failure("NativeCodingAgent received a non-Coding request")
         if request.workspace is None:
-            return self._failure("NativeCodingAgent requires a WorkspaceGrant", blocked=True)
-        if (
-            request.capability == Capability.CODE_MODIFY
-            and request.workspace.mode != WorkspaceMode.READ_WRITE
-        ):
-            return self._failure("code_modify requires a read_write workspace", blocked=True)
-
-        # Deterministically prepare/reuse the repository before the loop.
-        if request.workspace_spec is not None:
-            try:
-                materialized = RepoMaterializer().materialize(
-                    workspace=Path(request.workspace.root),
-                    source=request.workspace_spec,
-                )
-            except RepoMaterializerError as error:
-                return self._failure(str(error), blocked=True)
-            if materialized.repo_path.resolve() != Path(request.workspace.root).resolve():
-                return self._failure(
-                    "materialized repository is not the granted workspace root",
-                    blocked=True,
-                )
-
+            return self._failure("Coding requires a WorkspaceGrant", blocked=True)
         try:
+            if request.workspace_spec is not None:
+                materialized = RepoMaterializer().materialize(
+                    workspace=Path(request.workspace.root), source=request.workspace_spec,
+                )
+                if materialized.repo_path.resolve() != Path(request.workspace.root).resolve():
+                    return self._failure("Materialized repository is outside the granted root", blocked=True)
             boundary = WorkspaceBoundary(request.workspace)
             repository = GitWorkspace(boundary)
-        except (OSError, GitWorkspaceError, WorkspacePermissionError) as error:
+            datasets = resolve_dataset_refs(self.resource_layout.dataset_root, request_dataset_refs(request))
+        except (OSError, ValueError, GitWorkspaceError, WorkspacePermissionError,
+                RepoMaterializerError, DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
 
-        try:
-            datasets = resolve_dataset_refs(
-                self.resource_layout.dataset_root,
-                list(request.dataset_refs),
-            )
-        except DatasetResolutionError as error:
-            return self._failure(str(error), blocked=True)
-        dataset_env = dataset_env_overrides(
-            self.resource_layout.dataset_root,
-            datasets,
-        )
-
-        # Capture this Attempt's baseline: previous tasks' accepted changes are
-        # the starting state, and only this Attempt's increment counts. On
-        # resume the baseline is restored from persisted Session memory, never
-        # re-snapshotted, so edits made before the pause are not mistaken for
-        # the Attempt's starting state (ADR-0011 §2).
         baseline = repository.snapshot()
         initial_memory: dict = {"edit_revision": 0}
         if request.parent_session_id is not None:
-            prior = None
             try:
                 prior = self.loop.store.load(request.parent_session_id)
-            except Exception:
-                prior = None
-            raw = prior.memory.get("workspace_snapshot") if prior is not None else None
-            try:
-                snapshot = WorkspaceSnapshot.from_memory(raw)
-            except ValueError:
+                snapshot = WorkspaceSnapshot.from_memory(prior.memory.get("workspace_snapshot"))
+            except (OSError, ValueError, KeyError):
                 snapshot = None
             if snapshot is None or snapshot.git_baseline is None:
-                return self._failure(
-                    "resumed Coding Attempt has no persisted Git baseline",
-                    blocked=True,
-                )
+                return self._failure("Resumed Coding attempt has no persisted Git baseline", blocked=True)
             baseline = snapshot.git_baseline
         else:
-            initial_memory["workspace_snapshot"] = WorkspaceSnapshot(
-                tree_hash=baseline.tree_hash
-            ).to_memory()
+            initial_memory["workspace_snapshot"] = WorkspaceSnapshot(tree_hash=baseline.tree_hash).to_memory()
 
-        common_tools = (
-            ListFilesTool(boundary),
-            ReadFileTool(boundary),
-            SearchTextTool(boundary),
-            ReadArtifactTool(
-                RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
-            ),
-            GitDiffTool(repository, baseline=baseline),
-            AskUserTool(),
-            FinishTool(),
+        workspace_id = request.workspace_id or (
+            request.workspace_spec.workspace_id if request.workspace_spec else "workspace"
         )
-        if request.capability == Capability.CODE_UNDERSTAND:
-            definition = AgentDefinition(
-                name="coding-understand",
-                owner=AgentOwner.CODING,
-                system_prompt=UNDERSTAND_PROMPT,
-                tools=common_tools,
-                llm_client=self.llm_client,
-                context_builder=lambda request, state, limit: build_context(
-                    request, state, datasets=datasets, max_context_tokens=limit,
-                ),
-                permission_policy=AllowListPermissionPolicy(
-                    {tool.name for tool in common_tools}
-                ),
-                completion_check=CodeUnderstandCompletionCheck(repository, baseline),
-                action_type=CodeUnderstandAction,
-                result_type=CodeUnderstandResult,
-                max_context_tokens=self.max_context_tokens,
-            )
-        else:
-            if request.output_dir is None:
-                return self._failure("CodingAgent requires an output_dir", blocked=True)
-            output_root = Path(request.output_dir)
-            workspace_id = request.workspace_id or (
-                request.workspace_spec.workspace_id if request.workspace_spec else None
-            )
-            if workspace_id is None:
-                return self._failure("code_modify requires a workspace_id", blocked=True)
-            manager = EnvironmentManager(env_root=self.resource_layout.env_root)
-            binding = EnvironmentBinding(
-                manager,
-                run_id=request.run_id,
-                workspace_id=workspace_id,
-                hard_constraint=request.environment_spec.python_version,
-            )
-            runner = ProcessRunner(boundary)
-            write_tools = (
-                CreateFileTool(boundary),
-                ReplaceTextTool(boundary),
-                PrepareEnvironmentTool(binding),
-                RunSetupTool(
-                    runner,
-                    binding,
-                    log_dir=f"{output_root}/setup",
-                    timeout_seconds=request.budget.timeout_seconds,
-                ),
-                AuditEnvTool(binding),
-                RunVerificationTool(
-                    runner,
-                    repository,
-                    log_root=f"{output_root}/verification",
-                    timeout_seconds=request.budget.timeout_seconds,
-                    baseline=baseline,
-                    env_binding=binding,
-                    extra_env=dataset_env,
-                ),
-            )
-            tools = (*common_tools, *write_tools)
-
-            def context_builder(request, state, limit):
-                return build_context(
-                    request, state, control_state=derive_control_state(state, binding),
-                    binding=binding, datasets=datasets, max_context_tokens=limit,
-                )
-
-            definition = AgentDefinition(
-                name="coding-modify",
-                owner=AgentOwner.CODING,
-                system_prompt=MODIFY_PROMPT,
-                tools=tools,
-                llm_client=self.llm_client,
-                context_builder=context_builder,
-                permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
-                completion_check=CodeModifyCompletionCheck(
-                    repository,
-                    boundary,
-                    output_root=str(output_root),
-                    baseline=baseline,
-                    env_binding=binding,
-                ),
-                action_type=CodeModifyAction,
-                result_type=CodeModifyResult,
-                max_context_tokens=self.max_context_tokens,
-            )
-
-        result = self.loop.run(
-            definition,
-            request,
-            session_id=task_session_id(
-                request.run_id, request.task_id, request.attempt_number
+        binding = EnvironmentBinding(
+            EnvironmentManager(env_root=self.resource_layout.env_root),
+            run_id=request.run_id, workspace_id=workspace_id,
+            hard_constraint=request.environment_spec.python_version,
+        )
+        output_root = request.output_dir or str(boundary.root / ".resagent2" / request.task_id)
+        runner = ProcessRunner(boundary)
+        tools = (
+            ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
+            ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
+            GitDiffTool(repository, baseline=baseline),
+            CreateFileTool(boundary), ReplaceTextTool(boundary),
+            PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
+            RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
+                         timeout_seconds=request.budget.timeout_seconds,
+                         allowed=request.permissions.execute_commands and request.permissions.prepare_environment),
+            AuditEnvTool(binding, allowed=request.permissions.execute_commands),
+            RunVerificationTool(
+                runner, repository, log_root=f"{output_root}/verification",
+                timeout_seconds=request.budget.timeout_seconds,
+                baseline=baseline, env_binding=binding,
+                extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
+                allowed=request.permissions.execute_commands,
             ),
+            AskUserTool(), FinishTool(),
+        )
+        allowed = {tool.name for tool in tools}
+        if not request.permissions.execute_commands:
+            allowed -= {"run_setup", "audit_env", "run_verification"}
+        if not request.permissions.prepare_environment:
+            allowed -= {"prepare_environment", "run_setup"}
+        if request.workspace.mode != WorkspaceMode.READ_WRITE:
+            allowed -= {"run_setup", "run_verification"}
+        definition = AgentDefinition(
+            name="coding", owner=AgentOwner.CODING, system_prompt=CODING_PROMPT,
+            tools=tools, llm_client=self.llm_client,
+            context_builder=lambda request, state, limit: build_context(
+                request, state, binding=binding, datasets=datasets,
+                control_state=derive_control_state(state, binding), max_context_tokens=limit,
+            ),
+            permission_policy=AllowListPermissionPolicy(allowed),
+            completion_check=CodingCompletionCheck(
+                repository, boundary, baseline=baseline, env_binding=binding,
+            ),
+            action_type=CodingAction, max_context_tokens=self.max_context_tokens,
+        )
+        result = self.loop.run(
+            definition, request,
+            session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory=initial_memory,
         )
-        if (
-            request.capability == Capability.CODE_MODIFY
-            and result.status == ModuleStatus.FAILED
-            and repository.changed_paths_since(baseline)
-        ):
-            patch_path = repository.write_patch_since(
-                baseline, output_root / "failed_changes.patch"
-            )
-            error = result.error
-            if error is not None:
-                error = error.model_copy(update={"retryable": False})
-            return result.model_copy(
-                update={
-                    "artifacts": [
-                        ArtifactCandidate(
-                            kind="code_patch",
-                            path="failed_changes.patch",
-                            media_type="text/x-diff",
-                            summary="Diagnostic patch from failed Coding Attempt",
-                            metadata={"diagnostic": True},
-                            content=repository.diff_since(baseline),
-                        )
-                    ],
-                    "error": error,
-                }
-            )
+        if result.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED} and repository.changed_paths_since(baseline):
+            error = result.error.model_copy(update={"retryable": False}) if result.error else None
+            return result.model_copy(update={
+                "artifacts": [*result.artifacts, ArtifactCandidate(
+                    kind="code_patch", path="failed_changes.patch", media_type="text/x-diff",
+                    summary="Diagnostic patch from failed Coding attempt",
+                    metadata={"diagnostic": True}, content=repository.diff_since(baseline),
+                )],
+                "error": error,
+            })
         return result

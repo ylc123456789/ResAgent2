@@ -19,10 +19,10 @@ from resagent2_components import (
 )
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS
 from resagent2_contracts import (
-    AgentOwner, Capability, CodeModifyInput, ExperimentRunInput, ModuleTaskRequest, TaskBudget,
+    AgentOwner, AgentRequest, TaskBudget,
 )
 from resagent2_runtime import AgentEvent, AgentState, ContextComposer, ContextSection
-from resagent2_coding.context import build_context as coding_context, MODIFY_PROMPT
+from resagent2_coding.context import build_context as coding_context, CODING_PROMPT
 from resagent2_experiment.context import build_context as experiment_context, EXPERIMENT_PROMPT
 
 
@@ -172,18 +172,18 @@ def test_each_kind_retains_a_share_when_both_exceed_the_total_allowance():
         assert (snippet["start_line"], snippet["end_line"]) == (10, 80)
     assert abs(len(reads["file_snippets"][0]["content"]) - len(reads["artifact_snippets"][0]["content"])) < 20
 
-@pytest.mark.parametrize("builder,capability,inputs,prompt", [
-    (coding_context, Capability.CODE_MODIFY, CodeModifyInput(instructions="Make a bounded change"), MODIFY_PROMPT),
-    (experiment_context, Capability.EXPERIMENT_RUN, ExperimentRunInput(instructions="Run the script"), EXPERIMENT_PROMPT),
+@pytest.mark.parametrize("builder,agent,prompt", [
+    (coding_context, AgentOwner.CODING, CODING_PROMPT),
+    (experiment_context, AgentOwner.EXPERIMENT, EXPERIMENT_PROMPT),
 ], ids=["coding", "experiment"])
-def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder, capability, inputs, prompt):
+def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder, agent, prompt):
     state = _state()
     binding = _binding(tmp_path)
     _observe(state, "read_file", {"path": "train.py", "content": "X" * 6000})
     _observe(state, "read_artifact", {"artifact_id": "artifact_patch", "content": "Y" * 6000})
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_context", task_id="task_context", attempt_number=1,
-        capability=capability, instruction="Bounded task",
+        agent=agent, instruction="Bounded task",
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     sections = builder(request, state, binding=binding, max_context_tokens=8192)

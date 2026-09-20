@@ -1,10 +1,11 @@
 """Deterministic ScientificCompletionCheck evidence-kind requirements."""
 
 from datetime import UTC, datetime
+import json
 
 import pytest
 
-from resagent2_contracts import AgentOwner, ArtifactRef, missing_required_evidence_kinds
+from resagent2_contracts import AgentOwner, ArtifactCandidate, ArtifactRef, missing_required_evidence_kinds
 from resagent2_runtime import AgentState, FinishCandidate
 from resagent2_scientific.completion import ScientificCompletionCheck
 
@@ -24,16 +25,18 @@ def _state(memory: dict) -> AgentState:
 
 def _finish(evidence: list[str]) -> FinishCandidate:
     return FinishCandidate(
-        result={
-            "opinion": {
+        report="supported",
+        artifacts=[ArtifactCandidate(
+            kind="scientific_opinion", path="opinion.json", media_type="application/json",
+            summary="Conclusion", content=json.dumps({
                 "verdict": "supports",
                 "statement": "supported",
                 "evidence_artifact_ids": evidence,
                 "limitations": [],
                 "unresolved_questions": [],
                 "recommended_next_steps": [],
-            },
-        }
+            }),
+        )],
     )
 
 
@@ -42,7 +45,7 @@ def test_required_literature_evidence_blocks_completion() -> None:
     state = _state({"read_artifact_ids": ["artifact_other_1"]})
     decision = check.evaluate(state, _finish(["artifact_other_1"]))
     assert decision.complete is False
-    assert "literature_search" in decision.summary
+    assert "literature_search" in decision.report
 
 
 def _registered_artifact(*, kind="literature_search", run_id="run_r") -> ArtifactRef:
@@ -63,15 +66,17 @@ def test_required_literature_evidence_is_satisfied_by_citation(observation_key) 
     state = _state({observation_key: ["artifact_lit_1"]})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert decision.complete is True
-    assert decision.summary == decision.payload["opinion"]["statement"] == "supported"
+    assert decision.report == json.loads(decision.artifacts[0].content)["statement"] == "supported"
 
 
 def test_scientific_finish_rejects_a_second_model_written_summary() -> None:
     candidate = _finish(["artifact_lit_1"])
-    candidate.result["summary"] = "A competing account of the conclusion"
+    body = json.loads(candidate.artifacts[0].content)
+    body["summary"] = "A competing account of the conclusion"
+    candidate.artifacts[0].content = json.dumps(body)
     decision = ScientificCompletionCheck([]).evaluate(_state({}), candidate)
     assert not decision.complete
-    assert "Extra inputs" in decision.summary
+    assert "Extra inputs" in decision.report
 
 
 def test_search_history_cannot_self_certify_an_unregistered_artifact() -> None:
@@ -79,7 +84,7 @@ def test_search_history_cannot_self_certify_an_unregistered_artifact() -> None:
     state = _state({"literature_artifact_ids": ["artifact_lit_1"]})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert not decision.complete
-    assert "literature_search" in decision.summary
+    assert "literature_search" in decision.report
 
 
 def test_required_kind_comes_from_registry_not_search_memory() -> None:
@@ -101,7 +106,7 @@ def test_module_report_cannot_satisfy_required_literature() -> None:
     decision = check.evaluate(state, _finish([artifact.id]))
 
     assert not decision.complete
-    assert "literature_search" in decision.summary
+    assert "literature_search" in decision.report
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,8 @@ from resagent2_contracts import (
     ModuleError,
     ResearchRequest,
     RunBudget,
-    ScientificTurnRequest,
+    AgentRequest,
+    WorkFeedback,
     TaskBudget,
     WarningRecord,
     WorkOutcome,
@@ -434,11 +435,10 @@ def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
     from resagent2_components import resolve_dataset_refs
 
     (tmp_path / "cifar-10").mkdir()
-    turn = ScientificTurnRequest(
+    feedback = WorkFeedback(
         run_id="run_example",
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
-        instruction="Evaluate the method",
-        authorized_artifacts=[],
+        session_id="session_x",
+        work_request_id="work_1",
         work_outcome=WorkOutcome(
             work_request_id="work_1",
             workflow_revision=1,
@@ -447,11 +447,24 @@ def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
         ),
         previous_work_request=_draft(),
         unresolved_task_outcomes=[],
+    )
+    path = tmp_path / "feedback.json"
+    path.write_text(feedback.model_dump_json())
+    ref = ArtifactRef(
+        id="artifact_feedback", kind="work_feedback", producer=AgentOwner.ORCHESTRATOR,
+        run_id="run_example", session_id="session_x", uri=path.as_uri(),
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(), media_type="application/json",
+        summary="Work feedback", metadata={"source_type": "controller_feedback"},
+    )
+    turn = AgentRequest(
+        run_id="run_example", agent=AgentOwner.SCIENTIFIC, instruction="Evaluate the method",
+        input_artifacts=[ref], resume_artifact_ids=[ref.id], parent_session_id="session_x",
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
-        parent_session_id="session_x",
     )
     sections = build_context(
-        turn, _state(), datasets=resolve_dataset_refs(tmp_path, turn.dataset_refs)
+        turn, _state(), datasets=resolve_dataset_refs(tmp_path, [
+            DatasetRef(dataset_id="cifar10", relative_path="cifar-10"),
+        ])
     )
 
     names = [section.name for section in sections]

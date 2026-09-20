@@ -1,256 +1,76 @@
-import json
-from datetime import UTC, datetime
+"""The same Experiment entry supports analysis, execution and reporting."""
+
 from pathlib import Path
 
+import pytest
+
 from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    DatasetRef,
-    TaskAcceptanceSpec,
-    ModuleStatus,
-    ModuleTaskRequest,
-    TaskBudget,
-    VerificationResult,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceSourceKind,
+    AgentOwner, AgentPermissions, AgentRequest, ModuleStatus, TaskBudget,
+    WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
 )
-from resagent2_capabilities import (
-    AuditEnvTool,
-    PrepareEnvironmentTool,
-)
-from resagent2_components import (
-    EnvironmentBinding,
-    PreparedEnvironment,
-    WorkspaceBoundary,
-    WorkspaceObserver,
-)
-from resagent2_runtime import (
-    AgentDefinition,
-    AgentState,
-    AgentLoop,
-    AllowListPermissionPolicy,
-    FinishTool,
-    InMemorySessionStore,
-    ScriptedLLMClient,
-)
-
-from resagent2_experiment.completion import ExperimentCompletionCheck
-from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
-from resagent2_experiment.models import ExperimentAction
-from resagent2_experiment.tools import RunCommandTool
+from resagent2_experiment import NativeExperimentAgent
+from resagent2_runtime import ScriptedLLMClient
 
 
-def test_experiment_context_uses_shared_dataset_catalog(tmp_path) -> None:
-    from resagent2_components import resolve_dataset_refs
-
-    (tmp_path / "cifar-10").mkdir()
-    request = ModuleTaskRequest(
-        run_id="run_test",
-        task_id="task_experiment",
-        attempt_number=1,
-        capability=Capability.EXPERIMENT_RUN,
-        instruction="Run with CIFAR-10",
-        dataset_refs=[DatasetRef(dataset_id="cifar10", relative_path="cifar-10")],
-        budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
-    )
-    now = datetime.now(UTC)
-    state = AgentState(
-        session_id="session_dataset",
-        agent_name="experiment-run",
-        owner=AgentOwner.EXPERIMENT,
-        run_id=request.run_id,
-        task_id=request.task_id,
-        created_at=now,
-        updated_at=now,
-    )
-
-    binding = EnvironmentBinding(_FakeManager(tmp_path), run_id=request.run_id, workspace_id="ws_test")
-    sections = build_context(
-        request, state, binding=binding,
-        datasets=resolve_dataset_refs(tmp_path, request.dataset_refs),
-    )
-    section = next(item for item in sections if item.name == "datasets")
-
-    assert json.loads(section.content)["available_dataset_ids"] == ["cifar10"]
-
-
-class _FakeManager:
-    """Duck-typed manager that binds a base env without shelling to conda."""
-
-    def __init__(self, root: Path) -> None:
-        self.env_root = root
-        self.conda_exe = "conda"
-
-    def env_id(self, *, run_id: str, workspace_id: str) -> str:
-        return "resenv_x"
-
-    def inspect(self, *, run_id: str, workspace_id: str):
-        return None
-
-    def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
-        prefix = self.env_root / "resenv_x"
-        prefix.mkdir(parents=True, exist_ok=True)
-        return PreparedEnvironment(
-            env_id="resenv_x", prefix=prefix, python_version=python_version
-        )
-
-    def audit(self, environment):
-        return {
-            "success": True,
-            "sys_prefix": str(environment.prefix),
-            "python_version": environment.python_version,
-            "pip_available": True,
-            "prefix_match": True,
-            "stderr_tail": "",
-        }
-
-
-class _FakeRunner:
-    def __init__(self, boundary: WorkspaceBoundary, *, fail: bool = False) -> None:
-        self.boundary = boundary
-        self.fail = fail
-
-    def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
-        stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
-        stderr_rel = f"{log_dir}/command_{index:02d}.stderr"
-        stdout = self.boundary.resolve_system_write(stdout_rel)
-        stderr = self.boundary.resolve_system_write(stderr_rel)
-        stdout.parent.mkdir(parents=True, exist_ok=True)
-        stderr.parent.mkdir(parents=True, exist_ok=True)
-        exit_code = 0
-        if self.fail:
-            stderr.write_text("boom", encoding="utf-8")
-            exit_code = 1
-        else:
-            (self.boundary.root / "metrics.json").write_text(
-                '{"accuracy": 0.9}', encoding="utf-8"
-            )
-            stdout.write_text("accuracy=0.9", encoding="utf-8")
-        if exit_code == 0:
-            stderr.write_text("", encoding="utf-8")
-        return VerificationResult(
-            command=command,
-            exit_code=exit_code,
-            timed_out=False,
-            stdout_path=stdout_rel,
-            stderr_path=stderr_rel,
-            duration_seconds=0.0,
-        )
-
-
-def _run(tmp_path: Path, actions: list, *, fail: bool = False):
-    boundary = WorkspaceBoundary(
-        WorkspaceGrant(
-            root=str(tmp_path),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
-            source=WorkspaceSourceKind.LOCAL,
-        )
-    )
-    manager = _FakeManager(tmp_path / "envs")
-    binding = EnvironmentBinding(manager, run_id="run_test", workspace_id="ws_test")
-    runner = _FakeRunner(boundary, fail=fail)
-    tools = (
-        PrepareEnvironmentTool(binding),
-        AuditEnvTool(binding),
-        RunCommandTool(
-            runner,
-            binding,
-            confirm_before_experiment=False,
-            confirmed=True,
-            timeout_seconds=30,
-        ),
-        FinishTool(),
-    )
-    definition = AgentDefinition(
-        name="experiment-run",
-        owner=AgentOwner.EXPERIMENT,
-        system_prompt=EXPERIMENT_PROMPT,
-        tools=tools,
-        llm_client=ScriptedLLMClient(actions),
-        context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
-        permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
-        completion_check=ExperimentCompletionCheck(
-            WorkspaceObserver(boundary),
-            expected_metrics=["accuracy"],
-            expected_artifacts=["metrics.json"],
-            env_id="resenv_x",
-            repo_url="https://example.com/repo.git",
-            commit="abc",
-        ),
-        action_type=ExperimentAction,
-    )
-    request = ModuleTaskRequest(
-        run_id="run_test",
-        task_id="task_experiment",
-        attempt_number=1,
-        capability=Capability.EXPERIMENT_RUN,
-        instruction="Run train.py and record accuracy",
-        acceptance=TaskAcceptanceSpec(
-            required_metric_keys=["accuracy"],
-            required_artifact_paths=["metrics.json"],
-        ),
+def request(root, *, writable=False, **updates):
+    values = dict(
+        run_id="run_experiment", task_id="task_experiment", attempt_number=1,
+        agent=AgentOwner.EXPERIMENT, instruction="Analyze the existing results",
         budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
+        workspace=WorkspaceGrant(
+            root=str(root), mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
+            allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
+        ),
+        workspace_id="ws_test", output_dir=str(root.parent / "out"),
     )
-    return AgentLoop(store=InMemorySessionStore()).run(
-        definition,
-        request,
-        session_id="session_experiment",
-        initial_memory={
-            "hardware": "",
-            "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
-            "command_count": 0,
-            "experiment_success_count": 0,
-            "workspace_snapshot": {"kind": "files", "file_hashes": {}},
-        },
-    )
+    values.update(updates)
+    return AgentRequest(**values)
 
 
-_GOLDEN_ACTIONS = [
-    {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
-    {"tool": "audit_env", "arguments": {}},
-    {"tool": "run_command", "arguments": {"command": "python train.py --epochs 2"}},
-    {
-        "tool": "finish",
-        "arguments": {
-            "result": {
-                "summary": "trained and evaluated",
-                "evidence_files": ["metrics.json"],
-            }
-        },
-    },
-]
+@pytest.mark.parametrize("writable", [False, True])
+def test_existing_result_analysis_finishes_without_new_execution(tmp_path, writable):
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}')
+    client = ScriptedLLMClient([
+        {"tool": "read_file", "arguments": {"path": "metrics.json"}},
+        {"tool": "finish", "arguments": {"report": "The recorded accuracy is 0.9."}},
+    ])
+    agent = NativeExperimentAgent(client)
+    result = agent.invoke(request(tmp_path, writable=writable, confirm_before_experiment=True))
+    assert result.status == ModuleStatus.COMPLETED, result.report
+    persisted = agent.loop.store.load(result.session.id)
+    assert persisted.memory["command_count"] == 0
+    assert persisted.memory["experiment_success_count"] == 0
 
 
-def test_golden_case_flows_through_the_loop(tmp_path) -> None:
-    result = _run(tmp_path, _GOLDEN_ACTIONS)
+def test_generic_finish_delivers_named_file(tmp_path):
+    (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}')
+    result = NativeExperimentAgent(ScriptedLLMClient([{
+        "tool": "finish", "arguments": {"report": "Result ready", "artifacts": [{
+            "kind": "experiment_result", "path": "metrics.json", "media_type": "application/json",
+            "summary": "Accuracy", "output_name": "metrics",
+        }]},
+    }])).invoke(request(tmp_path))
+    assert result.status == ModuleStatus.COMPLETED, result.report
+    assert result.artifacts[0].output_name == "metrics"
 
-    assert result.status == ModuleStatus.COMPLETED, result.model_dump(mode="json")
-    assert result.payload["metrics"] == {"accuracy": 0.9}
-    assert {artifact.kind for artifact in result.artifacts} == {"experiment_result"}
 
-
-def test_failed_experiment_command_cannot_complete(tmp_path) -> None:
-    result = _run(tmp_path, _GOLDEN_ACTIONS, fail=True)
-
+def test_command_permission_denied_before_environment_access(tmp_path):
+    result = NativeExperimentAgent(ScriptedLLMClient([{
+        "tool": "run_command", "arguments": {"command": "python train.py"},
+    }])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False)))
     assert result.status == ModuleStatus.FAILED
 
 
-def test_direct_finish_without_experiment_cannot_complete(tmp_path) -> None:
-    result = _run(
-        tmp_path,
-        [
-            {
-                "tool": "finish",
-                "arguments": {
-                    "result": {
-                        "summary": "done without running",
-                        "evidence_files": ["metrics.json"],
-                    }
-                },
-            }
-        ],
-    )
-
+def test_missing_result_path_cannot_be_claimed(tmp_path):
+    result = NativeExperimentAgent(ScriptedLLMClient([{
+        "tool": "finish", "arguments": {"report": "Done", "artifacts": [{
+            "kind": "experiment_result", "path": "missing.json", "media_type": "application/json",
+            "summary": "Missing",
+        }]},
+    }])).invoke(request(tmp_path))
     assert result.status == ModuleStatus.FAILED
+
+
+def test_missing_workspace_is_blocked(tmp_path):
+    result = NativeExperimentAgent(ScriptedLLMClient([])).invoke(request(tmp_path, workspace=None))
+    assert result.status == ModuleStatus.BLOCKED

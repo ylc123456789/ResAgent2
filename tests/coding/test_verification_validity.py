@@ -1,5 +1,6 @@
 """One environment-generation validity rule drives guidance and completion."""
 
+import json
 from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
@@ -22,7 +23,7 @@ from resagent2_components import (
 from resagent2_contracts import (
     AgentOwner, VerificationResult, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
 )
-from resagent2_coding.completion import CodeModifyCompletionCheck, derive_control_state
+from resagent2_coding.completion import CodingCompletionCheck, derive_control_state
 from resagent2_runtime import AgentState, FinishCandidate
 
 
@@ -82,14 +83,14 @@ def setup(tmp_path):
         deleted_paths_since=lambda baseline: [],
     )
     baseline = object()
-    check = CodeModifyCompletionCheck(
-        repository, boundary, output_root=str(tmp_path / "output"),
+    check = CodingCompletionCheck(
+        repository, boundary,
         baseline=baseline, env_binding=binding,
     )
     now = datetime.now(UTC)
     result = Runner(boundary).run("python -m pytest")
     state = AgentState(
-        session_id="session_test", agent_name="coding-modify", owner=AgentOwner.CODING,
+        session_id="session_test", agent_name="coding", owner=AgentOwner.CODING,
         run_id="run_test", task_id="task_test", attempt_number=1,
         created_at=now, updated_at=now,
         memory={
@@ -106,7 +107,9 @@ def setup(tmp_path):
 
 
 def finish(check, state):
-    return check.evaluate(state, FinishCandidate(result={"summary": "done"}))
+    decision = check.evaluate(state, FinishCandidate(report="done"))
+    records = [json.loads(item.content) for item in decision.artifacts if item.kind == "verification_result"]
+    return records[0] if records else {"covers_current_workspace": False, "issue": derive_control_state(state, check.env_binding)["verification_issue"]}
 
 
 def reaudit(binding, state):
@@ -129,7 +132,7 @@ def reverify(setup, *, exit_code=0):
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_setup_then_audit_cannot_revive_prior_verification(setup, exit_code):
-    assert finish(setup.check, setup.state).complete
+    assert finish(setup.check, setup.state)["covers_current_workspace"]
     generation = setup.binding.generation
     tool = RunSetupTool(
         Runner(setup.boundary, exit_code=exit_code), setup.binding,
@@ -141,17 +144,17 @@ def test_setup_then_audit_cannot_revive_prior_verification(setup, exit_code):
     assert observation.ok is (exit_code == 0)
     assert setup.binding.generation != generation
     assert setup.binding.certified is False
-    assert not finish(setup.check, setup.state).complete
-    assert derive_control_state(setup.state, setup.binding)["required_next_action"] == "audit_env"
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
+    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "audit_env"
     generation = setup.binding.generation
     assert reaudit(setup.binding, setup.state).ok
     assert setup.binding.generation == generation
-    assert not finish(setup.check, setup.state).complete
-    assert derive_control_state(setup.state, setup.binding)["required_next_action"] == "run_verification"
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
+    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
     assert reverify(setup).ok
     assert setup.state.memory["verification_environment_generation"] == generation
-    assert finish(setup.check, setup.state).complete
-    assert derive_control_state(setup.state, setup.binding)["required_next_action"] == "finish"
+    assert finish(setup.check, setup.state)["covers_current_workspace"]
+    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "finish"
 
 
 def test_setup_exception_invalidates_before_runner_raises(setup):
@@ -167,7 +170,7 @@ def test_setup_exception_invalidates_before_runner_raises(setup):
     assert setup.binding.generation != generation
     assert not setup.binding.certified
     assert reaudit(setup.binding, setup.state).ok
-    assert not finish(setup.check, setup.state).complete
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
 
 
 @pytest.mark.parametrize("error", [None, EnvironmentManagerError("failed"), RuntimeError("interrupted")])
@@ -185,7 +188,7 @@ def test_actual_prepare_invalidates_even_on_failure(setup, error):
 
     assert setup.binding.generation != generation
     assert not setup.binding.certified
-    assert not finish(setup.check, setup.state).complete
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
 
 
 @pytest.mark.parametrize("kind", ["policy", "version", "constraint", "switch_limit"])
@@ -207,7 +210,7 @@ def test_rejected_setup_or_prepare_does_not_invalidate(setup, kind):
     assert observation.ok is False
     assert setup.binding.generation == generation
     assert setup.binding.certified
-    assert finish(setup.check, setup.state).complete
+    assert finish(setup.check, setup.state)["covers_current_workspace"]
 
 
 def test_new_binding_and_reaudit_require_new_verification(setup):
@@ -219,10 +222,10 @@ def test_new_binding_and_reaudit_require_new_verification(setup):
     setup.check.env_binding = restored
     assert reaudit(restored, setup.state).ok
 
-    assert not finish(setup.check, setup.state).complete
-    assert derive_control_state(setup.state, restored)["required_next_action"] == "run_verification"
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
+    assert derive_control_state(setup.state, restored)["suggested_next_action"] == "run_verification"
     assert reverify(setup).ok
-    assert finish(setup.check, setup.state).complete
+    assert finish(setup.check, setup.state)["covers_current_workspace"]
 
 
 @pytest.mark.parametrize("exit_code", [1, 2])
@@ -232,25 +235,25 @@ def test_failed_verification_never_guides_finish(setup, exit_code):
     assert observation.ok is False
     assert setup.state.memory["verification_revision"] == setup.state.memory["edit_revision"]
     control = derive_control_state(setup.state, setup.binding)
-    assert control["verification_required"]
-    assert control["required_next_action"] == "inspect_and_fix_verification"
-    assert not finish(setup.check, setup.state).complete
+    assert control["verification_stale"]
+    assert control["suggested_next_action"] == "inspect_and_fix_verification"
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
 
 
 @pytest.mark.parametrize("results", [[], None, ["invalid"], [{"exit_code": 0}]])
 def test_missing_or_invalid_results_cannot_satisfy_verification(setup, results):
     setup.state.memory["verification_results"] = results
 
-    assert derive_control_state(setup.state, setup.binding)["required_next_action"] == "run_verification"
+    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
     decision = finish(setup.check, setup.state)
-    assert not decision.complete
-    assert decision.summary == derive_control_state(setup.state, setup.binding)["verification_issue"]
+    assert not decision["covers_current_workspace"]
+    assert decision["issue"] == derive_control_state(setup.state, setup.binding)["verification_issue"]
 
 
 def test_latest_edit_and_workspace_digest_still_enforced(setup):
     setup.state.memory["edit_revision"] = 2
-    assert not finish(setup.check, setup.state).complete
-    assert derive_control_state(setup.state, setup.binding)["verification_required"]
+    assert not finish(setup.check, setup.state)["covers_current_workspace"]
+    assert derive_control_state(setup.state, setup.binding)["verification_stale"]
     setup.state.memory["edit_revision"] = 1
     setup.state.memory["verification_diff_sha256"] = "outdated"
-    assert "Workspace changed" in finish(setup.check, setup.state).summary
+    assert "Workspace changed" in finish(setup.check, setup.state)["issue"]

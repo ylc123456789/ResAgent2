@@ -1,95 +1,35 @@
-"""Native Scientific Agent: the scientific brain of one research run.
-
-It implements the ScientificPort boundary (CONTRACTS §20.7): one
-``run(ScientificTurnRequest)`` returns a ``ScientificTurnResult`` in one of four
-statuses. It reuses the shared AgentLoop; the loop only needs a run-scoped
-request surface, so the Scientific Agent adapts the turn into a minimal
-``LoopRequest`` and captures the real turn in the context builder closure.
-"""
+"""Scientific reasoning through the common Agent invocation protocol."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
-
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from resagent2_contracts import (
-    AgentOwner,
-    ErrorCode,
-    ModuleError,
-    ModuleResult,
-    ModuleStatus,
-    RunId,
-    ScientificAssessment,
-    ScientificCompletedResult,
-    ScientificFailedResult,
-    ScientificOpinion,
-    ScientificQuestionResult,
-    ScientificTurnRequest,
-    ScientificTurnResult,
-    ScientificWorkRequestResult,
-    SessionId,
-    SessionRef,
-    SessionStatus,
-    TaskBudget,
-    WorkRequestDraft,
+    AgentOwner, AgentRequest, AgentResult, ArtifactCandidate, ConclusionRequirements,
+    ErrorCode, ModuleError, ModuleStatus, ObservationTrace, ScientificAssessment, WorkFeedback,
     scientific_session_id,
 )
 from resagent2_components import (
-    ArtifactRegistrationPort,
-    LiteratureSearchBackend,
+    ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader,
+    ResourceLayout, read_artifact_json, request_dataset_refs, resolve_dataset_refs,
 )
-from resagent2_capabilities import (
-    LiteratureSearchTool,
-    ReadArtifactTool,
-)
-from resagent2_components import (
-    DatasetResolutionError,
-    RegisteredArtifactReader,
-    ResourceLayout,
-    resolve_dataset_refs,
-)
+from resagent2_capabilities import LiteratureSearchTool, ReadArtifactTool
 from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS,
-    AgentDefinition,
-    AgentEvent,
-    AgentState,
-    AgentLoop,
-    AllowListPermissionPolicy,
-    InMemorySessionStore,
-    LLMClient,
-    SessionStore,
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, AgentState,
+    AllowListPermissionPolicy, InMemorySessionStore, LLMClient, SessionStore,
 )
 
-from .completion import (
-    ScientificCompletionCheck,
-    _observed_artifact_ids,
-    unobserved_artifact_ids,
-)
+from .completion import ScientificCompletionCheck, _observed_artifact_ids
 from .context import SCIENTIFIC_PROMPT, build_context
 from .models import ScientificAction
 from .tools import AskUserTool, FinishTool, RequestWorkTool
 
 
-@dataclass(frozen=True, slots=True)
-class _LoopRequest:
-    """Run-scoped request surface the AgentLoop reads directly."""
-
-    run_id: RunId
-    budget: TaskBudget
-    parent_session_id: SessionId | None = None
-    task_id: None = None
-    attempt_number: None = None
-
-
 class ScientificAgent:
-    """Implement the ScientificPort boundary on top of the shared AgentLoop."""
+    """Produce scientific judgments and control requests from registered evidence."""
 
     def __init__(
-        self,
-        llm_client: LLMClient,
-        *,
+        self, llm_client: LLMClient, *,
         literature_backend: LiteratureSearchBackend | None = None,
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
@@ -106,331 +46,113 @@ class ScientificAgent:
         self.resource_layout = resource_layout or ResourceLayout.from_env()
         self.loop = AgentLoop(store=self.store)
 
-    def run(self, request: ScientificTurnRequest) -> ScientificTurnResult:
-        try:
-            datasets = resolve_dataset_refs(
-                self.resource_layout.dataset_root, list(request.dataset_refs)
-            )
-        except DatasetResolutionError as error:
-            return ScientificFailedResult(
-                status="failed",
-                error=ModuleError(
-                    code=ErrorCode.INVALID_INPUT, message=str(error), retryable=False,
-                ),
-            )
+    @staticmethod
+    def _failure(message: str) -> AgentResult:
+        return AgentResult(
+            status=ModuleStatus.FAILED, report=message,
+            error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
+        )
+
+    def invoke(self, request: AgentRequest) -> AgentResult:
+        if request.agent != AgentOwner.SCIENTIFIC:
+            return self._failure("ScientificAgent received a non-Scientific request")
         resolve = getattr(self.registration_port, "resolve", None)
         reader = RegisteredArtifactReader(
-            request.authorized_artifacts,
-            run_id=request.run_id,
-            resolve=(
-                lambda artifact_id: resolve(artifact_id, run_id=request.run_id)
-            ) if resolve is not None else None,
+            request.input_artifacts, run_id=request.run_id,
+            resolve=(lambda artifact_id: resolve(artifact_id, run_id=request.run_id)) if resolve else None,
         )
-        tools: list = [
-            ReadArtifactTool(reader),
-            RequestWorkTool(),
-            AskUserTool(),
-            FinishTool(),
-        ]
-        if self.literature_backend is not None and self.registration_port is not None:
-            tools.append(
-                LiteratureSearchTool(self.literature_backend, self.registration_port)
+        session_id = request.parent_session_id or scientific_session_id(request.run_id)
+        try:
+            datasets = resolve_dataset_refs(
+                self.resource_layout.dataset_root, request_dataset_refs(request),
             )
-        tools = tuple(tools)
-
+            requirements = []
+            unresolved = []
+            for ref in request.input_artifacts:
+                if ref.kind == "conclusion_requirements":
+                    requirements.extend(
+                        read_artifact_json(reader, ref.id, ConclusionRequirements).required_evidence_kinds
+                    )
+                elif ref.kind == "work_feedback" and ref.id in request.resume_artifact_ids:
+                    feedback = read_artifact_json(reader, ref.id, WorkFeedback)
+                    if feedback.run_id != request.run_id or feedback.session_id != session_id:
+                        raise ValueError("Work feedback does not belong to this invocation")
+                    unresolved = feedback.unresolved_task_outcomes
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return self._failure(str(error))
+        key = self._idempotency_key(request)
+        owned = self._owned_session(session_id, request.run_id)
+        if owned is not None:
+            cached = owned.memory.get("_invocation_results", {}).get(key)
+            if cached is not None:
+                try:
+                    return AgentResult.model_validate(cached).model_copy(update={"llm_calls": 0})
+                except ValidationError:
+                    return self._failure("Stored Scientific result is invalid")
+        tools = [ReadArtifactTool(reader),
+                 RequestWorkTool(allowed=request.permissions.request_work),
+                 AskUserTool(), FinishTool()]
+        if self.literature_backend is not None and self.registration_port is not None:
+            tools.append(LiteratureSearchTool(self.literature_backend, self.registration_port))
         definition = AgentDefinition(
-            name="scientific",
-            owner=AgentOwner.SCIENTIFIC,
-            system_prompt=SCIENTIFIC_PROMPT,
-            tools=tools,
-            llm_client=self.llm_client,
-            context_builder=lambda _loop_request, state, limit: build_context(
+            name="scientific", owner=AgentOwner.SCIENTIFIC,
+            system_prompt=SCIENTIFIC_PROMPT, tools=tuple(tools), llm_client=self.llm_client,
+            context_builder=lambda request, state, limit: build_context(
                 request, state, datasets=datasets, max_context_tokens=limit,
             ),
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(
-                list(request.unresolved_task_outcomes),
-                list(request.required_evidence_kinds),
-                resolve_artifact=reader.resolve_ref,
+                unresolved, list(dict.fromkeys(requirements)),
+                resolve_artifact=reader.resolve_ref, reader=reader,
             ),
-            action_type=ScientificAction,
-            max_context_tokens=self.max_context_tokens,
+            action_type=ScientificAction, max_context_tokens=self.max_context_tokens,
         )
-
-        session_id = request.parent_session_id or scientific_session_id(request.run_id)
-
-        # Idempotency: repeated delivery of the same work_outcome or the same
-        # answers returns the persisted result instead of re-running the loop
-        # (CONTRACTS §20.7: work_outcome keyed by work_request_id, answers keyed
-        # by question_id).
-        idem_key = self._idempotency_key(request)
-        cached = self._cached_turn_result(session_id, idem_key, run_id=request.run_id)
-        if cached is not None:
-            return cached
-
-        # The controller durably binds the deterministic scientific session id
-        # before its first turn. A crash can therefore leave an ACTIVE session
-        # on disk while no ScientificTurnResult reached the controller yet.
-        # Re-open that stable checkpoint rather than trying to create the same
-        # deterministic id again. A normal first turn still creates a session.
-        resume_id = request.parent_session_id
-        if resume_id is None and self.store.exists(session_id):
-            resume_id = session_id
-
-        loop_request = _LoopRequest(
-            run_id=request.run_id,
-            budget=request.budget,
-            parent_session_id=resume_id,
-        )
-        result = self.loop.run(
-            definition,
-            loop_request,
-            session_id=session_id,
-            initial_memory={},
-        )
-        llm_calls = result.llm_calls
-        turn_result = self._to_turn_result(request, result, session_id, llm_calls)
-        self._cache_turn_result(session_id, idem_key, turn_result, run_id=request.run_id)
-        return turn_result
-
-    @staticmethod
-    def _idempotency_key(request: ScientificTurnRequest) -> tuple:
-        if request.work_outcome is not None:
-            return ("work", request.work_outcome.work_request_id)
-        if request.answers:
-            return ("answers", tuple(sorted(a.question_id for a in request.answers)))
-        if request.parent_session_id is None:
-            return ("first",)
-        return ("resume",)
-
-    def _to_turn_result(
-        self,
-        request: ScientificTurnRequest,
-        result: ModuleResult,
-        session_id: str,
-        llm_calls: int,
-    ) -> ScientificTurnResult:
-        observed = self._observed(session_id)
-
-        if result.status == ModuleStatus.COMPLETED:
-            opinion = self._validated_opinion(result.payload)
-            if opinion is None:
-                return self._translation_failure(
-                    request, result, session_id,
-                    message="completion payload did not contain a valid opinion",
-                    llm_calls=llm_calls,
-                )
-            return ScientificCompletedResult(
-                status="completed",
-                opinion=opinion,
-                session=result.session,
-                observed_artifact_ids=observed,
-                llm_calls=llm_calls,
-            )
-
-        if result.status == ModuleStatus.REQUEST_WORK:
-            assessment = self._assessment_from_signal(result.request_work)
-            work_request = self._work_request_from_signal(result.request_work)
-            if assessment is None or work_request is None:
-                return self._translation_failure(
-                    request, result, session_id,
-                    message="request_work signal did not carry a valid assessment/work_request",
-                    llm_calls=llm_calls,
-                )
-            if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
-                return self._translation_failure(
-                    request, result, session_id,
-                    message="assessment cites evidence not observed by any Tool",
-                    llm_calls=llm_calls,
-                )
-            return ScientificWorkRequestResult(
-                status="request_work",
-                assessment=assessment,
-                work_request=work_request,
-                session=result.session,
-                observed_artifact_ids=observed,
-                llm_calls=llm_calls,
-            )
-
-        if result.status == ModuleStatus.NEEDS_USER_INPUT:
-            if result.question is None:
-                return self._translation_failure(
-                    request, result, session_id,
-                    message="needs_user_input signal did not carry a question",
-                    llm_calls=llm_calls,
-                )
-            assessment = self._latest_assessment(session_id)
-            if self._unobserved_evidence(assessment.evidence_artifact_ids, observed):
-                return self._translation_failure(
-                    request, result, session_id,
-                    message="assessment cites evidence not observed by any Tool",
-                    llm_calls=llm_calls,
-                )
-            return ScientificQuestionResult(
-                status="needs_user_input",
-                assessment=assessment,
-                question=result.question,
-                session=result.session,
-                observed_artifact_ids=observed,
-                llm_calls=llm_calls,
-            )
-
-        error = result.error or ModuleError(
-            code=ErrorCode.TOOL_FAILED,
-            message=result.summary,
-            retryable=False,
-        )
-        return ScientificFailedResult(
-            status="failed",
-            error=error,
-            session=result.session,
-            observed_artifact_ids=observed if result.session is not None else [],
-            llm_calls=llm_calls,
-        )
-
-    def _translation_failure(
-        self,
-        request: ScientificTurnRequest,
-        result: ModuleResult,
-        session_id: SessionId,
-        *,
-        message: str,
-        llm_calls: int,
-    ) -> ScientificFailedResult:
-        """Settle this Agent's Session when the outer scientific signal fails.
-
-        The shared loop may already have paused or completed successfully, but
-        its signal still has to satisfy the Scientific boundary. Never relabel
-        a foreign or missing Session merely because its id was supplied.
-        """
-        error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False)
-        session = None
-        observed = []
-        state = self._owned_session(session_id, request.run_id)
-        if (
-            state is not None
-            and result.session is not None
-            and result.session.id == session_id
-            and result.session.module == AgentOwner.SCIENTIFIC
-        ):
-            now = datetime.now(UTC)
-            state.status = SessionStatus.FAILED
-            state.updated_at = now
-            state.events.append(AgentEvent(
-                sequence=len(state.events) + 1, step=state.step, type="error",
-                data=error.model_dump(mode="json"), created_at=now,
+        if request.parent_session_id is None and self.store.exists(session_id):
+            request = request.model_copy(update={"parent_session_id": session_id})
+        result = self.loop.run(definition, request, session_id=session_id, initial_memory={})
+        owned = self._owned_session(session_id, request.run_id)
+        if owned is not None and result.session is not None and result.session.id == session_id:
+            artifacts = list(result.artifacts)
+            if result.status == ModuleStatus.NEEDS_USER_INPUT and owned.memory.get("latest_assessment"):
+                assessment = ScientificAssessment.model_validate(owned.memory["latest_assessment"])
+                artifacts.append(ArtifactCandidate(
+                    kind="scientific_assessment", path="scientific_assessment.json",
+                    media_type="application/json", summary=assessment.statement,
+                    content=assessment.model_dump_json(),
+                ))
+            delivered = {item.id for item in artifacts if hasattr(item, "id")}
+            delivered.update(item.id for item in request.input_artifacts)
+            for artifact_id in owned.memory.get("literature_artifact_ids", []):
+                ref = reader.resolve_ref(artifact_id)
+                if ref is not None and ref.id not in delivered:
+                    artifacts.append(ref)
+            artifacts.append(ArtifactCandidate(
+                kind="observation_trace", path="observation_trace.json",
+                media_type="application/json", summary="Evidence observed by Scientific tools",
+                content=ObservationTrace(observed_artifact_ids=_observed_artifact_ids(owned)).model_dump_json(),
             ))
-            self.store.save(state)
-            session = SessionRef(
-                id=state.session_id, module=state.owner, status=state.status,
-                state_uri=f"session://{state.session_id}",
-                created_at=state.created_at, updated_at=state.updated_at,
-            )
-            observed = _observed_artifact_ids(state)
-        return ScientificFailedResult(
-            status="failed", error=error, session=session,
-            observed_artifact_ids=observed, llm_calls=llm_calls,
-        )
-
-    def _observed(self, session_id: str) -> list[str]:
-        try:
-            state = self.store.load(session_id)
-        except Exception:
-            return []
-        return _observed_artifact_ids(state)
-
-    _turn_result_adapter = TypeAdapter(ScientificTurnResult)
+            result = result.model_copy(update={"artifacts": artifacts})
+            cached = dict(owned.memory.get("_invocation_results", {}))
+            cached[key] = result.model_dump(mode="json")
+            owned.memory["_invocation_results"] = cached
+            self.store.save(owned)
+        return result
 
     @staticmethod
-    def _idem_key_label(key: tuple) -> str:
-        return "/".join(str(part) for part in key)
+    def _idempotency_key(request: AgentRequest) -> str:
+        if request.resume_artifact_ids:
+            return "materials:" + ",".join(sorted(request.resume_artifact_ids))
+        return "first" if request.parent_session_id is None else "resume"
 
-    def _owned_session(self, session_id: SessionId, run_id: RunId) -> AgentState | None:
-        """A cache or failure translation must not bypass Session ownership."""
+    def _owned_session(self, session_id: str, run_id: str) -> AgentState | None:
         try:
             state = self.store.load(session_id)
         except Exception:
             return None
         if (
-            state.session_id != session_id
-            or state.run_id != run_id
-            or state.owner != AgentOwner.SCIENTIFIC
-            or state.agent_name != "scientific"
-            or state.task_id is not None
-            or state.attempt_number is not None
+            state.session_id != session_id or state.run_id != run_id
+            or state.owner != AgentOwner.SCIENTIFIC or state.agent_name != "scientific"
+            or state.task_id is not None or state.attempt_number is not None
         ):
             return None
         return state
-
-    def _cached_turn_result(
-        self, session_id: str, key: tuple, *, run_id: RunId,
-    ) -> ScientificTurnResult | None:
-        state = self._owned_session(session_id, run_id)
-        if state is None:
-            return None
-        raw = state.memory.get("_turn_results", {}).get(self._idem_key_label(key))
-        if raw is None:
-            return None
-        try:
-            return self._turn_result_adapter.validate_python(raw)
-        except ValidationError:
-            return None
-
-    def _cache_turn_result(
-        self, session_id: str, key: tuple, turn_result: ScientificTurnResult, *, run_id: RunId,
-    ) -> None:
-        state = self._owned_session(session_id, run_id)
-        if state is None:
-            return
-        results = dict(state.memory.get("_turn_results", {}))
-        results[self._idem_key_label(key)] = turn_result.model_dump(mode="json")
-        state.memory["_turn_results"] = results
-        self.store.save(state)
-
-    def _latest_assessment(self, session_id: str) -> ScientificAssessment:
-        try:
-            state = self.store.load(session_id)
-        except Exception:
-            return ScientificAssessment(statement="No assessment recorded")
-        raw = state.memory.get("latest_assessment")
-        if raw is None:
-            return ScientificAssessment(statement="No assessment recorded")
-        try:
-            return ScientificAssessment.model_validate(raw)
-        except ValidationError:
-            return ScientificAssessment(statement="No assessment recorded")
-
-    @staticmethod
-    def _unobserved_evidence(cited: list[str], observed: list[str]) -> bool:
-        """Return True when an assessment cites evidence no Tool observed."""
-        return bool(unobserved_artifact_ids(cited, observed))
-
-    @staticmethod
-    def _validated_opinion(payload) -> ScientificOpinion | None:
-        if not isinstance(payload, dict):
-            return None
-        raw = payload.get("opinion")
-        if raw is None:
-            return None
-        try:
-            return ScientificOpinion.model_validate(raw)
-        except ValidationError:
-            return None
-
-    @staticmethod
-    def _assessment_from_signal(signal) -> ScientificAssessment | None:
-        if not isinstance(signal, dict):
-            return None
-        try:
-            return ScientificAssessment.model_validate(signal["assessment"])
-        except (KeyError, ValidationError):
-            return None
-
-    @staticmethod
-    def _work_request_from_signal(signal) -> WorkRequestDraft | None:
-        if not isinstance(signal, dict):
-            return None
-        try:
-            return WorkRequestDraft.model_validate(signal["work_request"])
-        except (KeyError, ValidationError):
-            return None

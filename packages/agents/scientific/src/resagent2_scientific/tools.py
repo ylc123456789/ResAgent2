@@ -1,4 +1,4 @@
-"""Scientific-only Tools that produce control signals."""
+"""Scientific control tools; the runtime packages their content as artifacts."""
 
 from __future__ import annotations
 
@@ -7,120 +7,55 @@ from typing import cast
 from pydantic import BaseModel
 
 from resagent2_contracts import QuestionDraft
-from resagent2_runtime import AgentState, FinishCandidate, ToolObservation
+from resagent2_runtime import AgentState, ToolObservation
+from resagent2_runtime.tools import FinishTool
 
 from .completion import _observed_artifact_ids, unobserved_artifact_ids
-from .models import AskUserInput, RequestWorkInput, ScientificFinish
+from .models import AskUserInput, RequestWorkInput
 
 
 def _unobserved_evidence(state: AgentState, cited_ids: list[str]) -> list[str]:
-    """Return the cited artifact ids that were not observed by any Tool."""
     return unobserved_artifact_ids(cited_ids, _observed_artifact_ids(state))
 
 
-class FinishTool:
-    """Create a Scientific finish candidate, rejecting unread evidence first.
-
-    RequestWorkTool/AskUserTool already refuse an assessment that cites unread
-    artifacts; finish now applies the same rule at submit time, so the model is
-    told immediately which artifacts it must read (or drop) instead of only
-    discovering it at the deterministic completion gate.
-    """
-
-    name = "finish"
-    input_model = ScientificFinish
-
-    def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
-        args = cast(ScientificFinish, arguments)
-        unobserved = _unobserved_evidence(state, args.opinion.evidence_artifact_ids)
-        if unobserved:
-            return ToolObservation(
-                summary=(
-                    "Cannot finish yet: the opinion cites evidence artifacts not "
-                    "observed by any Tool: " + ", ".join(unobserved)
-                    + ". Call read_artifact first, or remove these ids if the "
-                    "judgment does not rely on their contents."
-                ),
-                ok=False,
-                value={"unobserved_artifact_ids": unobserved},
-                memory_updates={"pending_citation_artifact_ids": unobserved},
-            )
-        return ToolObservation(
-            summary="Produced a scientific finish candidate",
-            finish_candidate=FinishCandidate(
-                proposed_status="completed",
-                result=args.model_dump(mode="json"),
-            ),
-            memory_updates={"pending_citation_artifact_ids": []},
-        )
-
-
 class RequestWorkTool:
-    """Validate a request for more work and pause the Session for execution.
-
-    The assessment and work request draft are schema-validated by the input
-    model; the loop pauses the session and the ScientificPort turns the
-    ``request_work`` signal into a ScientificWorkRequestResult.
-    """
-
     name = "request_work"
     input_model = RequestWorkInput
 
+    def __init__(self, *, allowed: bool = True) -> None:
+        self.allowed = allowed
+
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
+        if not self.allowed:
+            raise PermissionError("Requesting execution work is not authorized")
         args = cast(RequestWorkInput, arguments)
-        unobserved = _unobserved_evidence(
-            state, args.assessment.evidence_artifact_ids
-        )
+        unobserved = _unobserved_evidence(state, args.assessment.evidence_artifact_ids)
         if unobserved:
             return ToolObservation(
-                summary=(
-                    "Cannot submit this WorkRequest yet. The following evidence "
-                    "artifacts have not been observed: " + ", ".join(unobserved)
-                    + ". Call read_artifact first, or remove these ids if the "
-                    "assessment does not rely on their contents."
-                ),
-                ok=False,
-                value={"unobserved_artifact_ids": unobserved},
+                summary="Read the cited evidence before requesting work: " + ", ".join(unobserved),
+                ok=False, value={"unobserved_artifact_ids": unobserved},
             )
         return ToolObservation(
-            summary="Requesting more execution work",
-            request_work={
-                "assessment": args.assessment.model_dump(mode="json"),
-                "work_request": args.work_request.model_dump(mode="json"),
-            },
-            memory_updates={
-                "latest_assessment": args.assessment.model_dump(mode="json"),
-            },
+            summary=args.assessment.statement,
+            request_work=args.model_dump(mode="json"),
+            memory_updates={"latest_assessment": args.assessment.model_dump(mode="json")},
         )
 
 
 class AskUserTool:
-    """Ask the user while carrying the current scientific assessment."""
-
     name = "ask_user"
     input_model = AskUserInput
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(AskUserInput, arguments)
-        unobserved = _unobserved_evidence(
-            state, args.assessment.evidence_artifact_ids
-        )
+        unobserved = _unobserved_evidence(state, args.assessment.evidence_artifact_ids)
         if unobserved:
             return ToolObservation(
-                summary=(
-                    "Cannot ask the user yet: the assessment cites evidence not "
-                    "observed by any Tool: " + ", ".join(unobserved)
-                ),
-                ok=False,
-                value={"unobserved_artifact_ids": unobserved},
+                summary="Read the cited evidence before asking the user: " + ", ".join(unobserved),
+                ok=False, value={"unobserved_artifact_ids": unobserved},
             )
         return ToolObservation(
-            summary="User input is required",
-            question=QuestionDraft(
-                text=args.text,
-                requested_fields=args.requested_fields,
-            ),
-            memory_updates={
-                "latest_assessment": args.assessment.model_dump(mode="json"),
-            },
+            summary=args.assessment.statement,
+            question=QuestionDraft(text=args.text, requested_fields=args.requested_fields),
+            memory_updates={"latest_assessment": args.assessment.model_dump(mode="json")},
         )

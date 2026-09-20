@@ -7,10 +7,7 @@ from urllib.error import URLError
 
 import pytest
 
-from resagent2_contracts import (
-    AgentOwner, Capability, CodeUnderstandInput, ErrorCode, ModuleStatus,
-    ModuleTaskRequest, SessionStatus, TaskBudget,
-)
+from resagent2_contracts import (AgentOwner, AgentPermissions, ErrorCode, ModuleStatus, AgentRequest, SessionStatus, TaskBudget)
 from resagent2_runtime import (
     AgentDefinition, AgentLoop, AllowListPermissionPolicy, AskUserTool,
     CompletionDecision, ContextSection, FinishTool, InMemorySessionStore,
@@ -26,7 +23,7 @@ from resagent2_runtime.tool_calling import (
 def _call(name="finish", arguments=None, *, call_id="call_finish"):
     return {"id": call_id, "type": "function", "function": {
         "name": name,
-        "arguments": json.dumps({"result": {}} if arguments is None else arguments),
+        "arguments": json.dumps({'report': '{}'} if arguments is None else arguments),
     }}
 
 
@@ -41,8 +38,8 @@ class _Completion:
     def evaluate(self, state, candidate):
         return CompletionDecision(
             complete=candidate is not None,
-            summary="accepted" if candidate is not None else "",
-            payload=candidate.result if candidate is not None else None,
+            report="accepted" if candidate is not None else "",
+
         )
 
 
@@ -51,9 +48,9 @@ def _context(request, state, limit):
 
 
 def _request(*, parent=None, calls=10, goal="current task"):
-    return ModuleTaskRequest(
+    return AgentRequest(
         run_id="run_native", task_id="task_native", attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND, instruction=goal, parent_session_id=parent,
+        agent=AgentOwner.CODING, instruction=goal, parent_session_id=parent,
         budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60),
     )
 
@@ -145,7 +142,7 @@ def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
         assert record["request_text"] == wire
         assert record["estimated_tokens"] == ContextComposer.estimate_tokens(wire)
         assert "native_tools" in record["included_sections"]
-    assert records[-1]["parsed_action"] == {"tool": "finish", "arguments": {"result": {}}}
+    assert records[-1]["parsed_action"] == {"tool": "finish", "arguments": {'report': '{}'}}
     assert "tool_history" in records[-1]["included_sections"]
 
 
@@ -198,8 +195,9 @@ def test_invalid_question_key_recovers_before_pause_in_same_session(setup):
     ])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
-    assert first.question.text == text
-    assert first.question.requested_fields == ["mode"]
+    question = json.loads(first.artifacts[first.control.candidate_index].content)
+    assert question["text"] == text
+    assert question["requested_fields"] == ["mode"]
     assert first.llm_calls == 2
     state = store.load("session_native")
     assert not json.loads(state.tool_turns[0].tool_results["call_bad_key"])["ok"]
@@ -383,18 +381,23 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
         name = "request_work"
 
         def execute(self, state, arguments):
-            return ToolObservation(summary="Requested work", request_work=arguments.result)
+            return ToolObservation(summary="Requested work", request_work=json.loads(arguments.report))
 
     definition = replace(
-        definition, tools=(WorkTool(), FinishTool()),
+        definition, owner=AgentOwner.SCIENTIFIC, tools=(WorkTool(), FinishTool()),
         permission_policy=AllowListPermissionPolicy({"request_work", "finish"}),
     )
-    install([_reply([_call("request_work", {"result": {"objective": "measure"}}, call_id="call_work")]), _reply()])
-    first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    install([_reply([_call("request_work", {'report': '{"objective": "measure"}'}, call_id="call_work")]), _reply()])
+    request = _request().model_copy(update={
+        "agent": AgentOwner.SCIENTIFIC, "task_id": None, "attempt_number": None,
+        "permissions": AgentPermissions(request_work=True),
+    })
+    first = AgentLoop(store=store).run(definition, request, session_id="session_native")
     assert first.status == ModuleStatus.REQUEST_WORK
-    assert first.request_work == {"objective": "measure"}
+    assert first.control.action == "request_work"
+    assert json.loads(first.artifacts[first.control.candidate_index].content) == {"objective": "measure"}
     second = AgentLoop(store=store).run(
-        definition, _request(parent="session_native", goal="Fresh work outcome"), session_id="session_native",
+        definition, request.model_copy(update={"parent_session_id": "session_native", "instruction": "Fresh work outcome"}), session_id="session_native",
     )
     assert second.status == ModuleStatus.COMPLETED
     receipt = next(m for m in requests[1]["messages"] if m.get("tool_call_id") == "call_work")
@@ -408,7 +411,7 @@ def test_finish_rejection_remains_visible_until_real_completion(setup):
     class VerifiedCompletion(_Completion):
         def evaluate(self, state, candidate):
             if candidate is not None and state.memory.get("verified") is not True:
-                return CompletionDecision(complete=False, summary="Verify before finish")
+                return CompletionDecision(complete=False, report="Verify before finish")
             return super().evaluate(state, candidate)
 
     definition = replace(definition, completion_check=VerifiedCompletion())

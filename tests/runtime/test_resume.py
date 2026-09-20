@@ -1,14 +1,6 @@
 from datetime import UTC, datetime
 
-from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    CodeUnderstandInput,
-    ModuleStatus,
-    ModuleTaskRequest,
-    TaskBudget,
-    SessionStatus,
-)
+from resagent2_contracts import (AgentOwner, ModuleStatus, AgentRequest, TaskBudget, SessionStatus)
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -34,17 +26,17 @@ class _AcceptFinish:
     def evaluate(self, state, candidate) -> CompletionDecision:
         return CompletionDecision(
             complete=True,
-            summary="done",
-            payload=candidate.result if candidate else None,
+            report="done",
+
         )
 
 
-def _request(*, attempt: int, parent: str | None = None) -> ModuleTaskRequest:
-    return ModuleTaskRequest(
+def _request(*, attempt: int, parent: str | None = None) -> AgentRequest:
+    return AgentRequest(
         run_id="run_resume",
         task_id="task_experiment",
         attempt_number=attempt,
-        capability=Capability.CODE_UNDERSTAND,
+        agent=AgentOwner.CODING,
         instruction="Which dataset?",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id=parent,
@@ -68,7 +60,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
                         "requested_fields": ["dataset"],
                     },
                 ),
-                AgentAction(tool="finish", arguments={"result": {"dataset": "demo"}}),
+                AgentAction(tool="finish", arguments={'report': '{"dataset": "demo"}'}),
             ]
         ),
         context_builder=_context,
@@ -88,7 +80,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
 
     assert resumed.status == ModuleStatus.COMPLETED
     assert resumed.session is not None and resumed.session.id == "session_child"
-    assert resumed.payload == {"dataset": "demo"}
+    assert resumed.report == "done"
 
     state = store.load("session_child")
     assert state.attempt_number == 1
@@ -160,7 +152,7 @@ def test_resume_rejects_non_paused_session() -> None:
         owner=AgentOwner.SCIENTIFIC,
         system_prompt="finish only",
         tools=(FinishTool(),),
-        llm_client=ScriptedLLMClient([AgentAction(tool="finish", arguments={"result": {}})]),
+        llm_client=ScriptedLLMClient([AgentAction(tool="finish", arguments={'report': '{}'})]),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"finish"}),
         completion_check=_AcceptFinish(),
@@ -204,7 +196,7 @@ def test_resume_recovers_active_session_after_interruption() -> None:
         system_prompt="finish only",
         tools=(FinishTool(),),
         llm_client=ScriptedLLMClient(
-            [AgentAction(tool="finish", arguments={"result": {}})]
+            [AgentAction(tool="finish", arguments={'report': '{}'})]
         ),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"finish"}),
@@ -235,7 +227,7 @@ def test_resume_rejects_mismatched_task() -> None:
                     tool="ask_user",
                     arguments={"text": "Which?", "requested_fields": ["x"]},
                 ),
-                AgentAction(tool="finish", arguments={"result": {}}),
+                AgentAction(tool="finish", arguments={'report': '{}'}),
             ]
         ),
         context_builder=_context,
@@ -246,11 +238,11 @@ def test_resume_rejects_mismatched_task() -> None:
     first = loop.run(definition, _request(attempt=1), session_id="session_child")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
 
-    other = ModuleTaskRequest(
+    other = AgentRequest(
         run_id="run_resume",
         task_id="task_other",
         attempt_number=2,
-        capability=Capability.CODE_UNDERSTAND,
+        agent=AgentOwner.CODING,
         instruction="Which dataset?",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
         parent_session_id="session_child",

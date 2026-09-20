@@ -1,25 +1,23 @@
 # contracts
 
-跨模块稳定类型和接口。
+跨模块稳定类型和接口。当前 wire schema 为 `12.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
 
-当前已实现：
+三个 Agent 共同使用 `invoke(AgentRequest) -> AgentResult`。任务内容只有 `instruction` 和 `input_artifacts`；预算、权限、工作区和恢复定位保留明确控制字段。结果业务内容只有 `report + artifacts`，状态、控制动作、Session、错误和实际调用计量独立保存。
 
-- Workflow、WorkflowTask、WorkflowPatch；
-- ModuleTaskRequest、TaskAcceptanceSpec、ModuleResult；
-- Attempt；
-- ArtifactRef、ArtifactCandidate；
-- QuestionDraft、PendingQuestion、UserAnswer 与系统配对的 RecordedAnswer；
-- Capability；
-- CodeUnderstandResult、CodeModifyResult、VerificationResult；
-- 公共 status 和 error code。
+主要契约：
 
-本包只表达语义，不执行 LLM、文件、进程、Git 或工作流。它不得依赖 runtime、orchestrator 或任何具体 Agent。
+- `AgentRequest`、`AgentResult`、`ControlSignal`；
+- `WorkflowAgentKind`、`WorkflowAgentRegistry`、`WorkflowTask`、`TaskProposal`、`WorkflowPatch`；
+- `ArtifactCandidate`、`ArtifactRef`、`Attempt`；
+- `TaskAcceptanceSpec`、`ConclusionRequirements`；
+- `QuestionDraft`、`PendingQuestion`、`UserAnswer`、`RecordedAnswer`；
+- `WorkFeedback`、`ScientificOpinion`、`ObservationTrace` 等结构化 artifact 内容。
 
-方法、字段和接收规则见 [模块接口与契约](../../docs/current/CONTRACTS.md)。
+图节点只允许 Coding 和 Experiment，Scientific 由 Controller 调用。任务提交阶段的验收要求及逻辑输出名称登记为一份 `acceptance_requirements`，已接受任务和 Attempt 只保存同一正式引用。
 
-## 安装与测试
+问题和工作请求以 artifact 传递，`control` 仅引用正式 artifact ID 或本次结果中的候选下标。回答内容保存问题快照、请求字段、可选选项和准确的 Run/Task/Attempt/Session 归属。回答键使用 `AnswerFieldName`：ASCII 字母开头，后续为字母、数字或下划线，总长 1-64。
 
-从仓库根目录执行：
+本包只定义数据形状与不变量，不执行 LLM、文件、进程、Git 或工作流，也不依赖其他项目包。
 
 ```bash
 conda activate ResAgent2
@@ -27,8 +25,4 @@ python -m pip install -e 'packages/contracts[test]'
 python -m pytest tests/contracts
 ```
 
-稳定导入路径是 `resagent2_contracts`。包版本为 `0.1.0`，当前 wire schema 版本为 `11.0`。ResearchRequest 不含部署资源；dataset_refs 只在系统状态和内部调用中传递。ModuleTaskRequest 与 ScientificTurnRequest 都用单一 `instruction` 表达本次语义任务；预算、工作区、Session、资源、答案等仍使用结构化字段。Experiment 的精确交付要求使用 TaskAcceptanceSpec，确认行为使用 confirm_before_experiment。UserAnswer 仍是调用方提交的答案；RecordedAnswer 由 Controller 配上已持久化的 question_text，供 Run 和内部调用保存、传递。旧 10.0 及更早 Run 不支持恢复，原件保留、不迁移。
-
-问题背景写进 QuestionDraft.text，不另填 reason。WorkflowProposal/WorkflowPatch 只携带任务图与身份/修订，不另填图级 summary/rationale/reason；任务图内部仍保留目标、约束及 typed inputs，Scheduler 执行时将其物化为 ModuleTaskRequest.instruction。完整边界见 [接口与契约](../../docs/current/CONTRACTS.md)。
-
-提问的 requested_fields 与回答的 values 键共用 AnswerFieldName：ASCII 字母开头，后续为字母、数字或下划线，总长 1–64。它是问题内的机器键，不是自然语言说明或全局身份；问题正文与答案值仍可用自然语言。Runtime 提问工具直接复用该类型，没有每个 Agent 各自维护的规则。
+稳定导入路径为 `resagent2_contracts`。完整规则见[模块接口与契约](../../docs/current/CONTRACTS.md)。

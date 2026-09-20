@@ -123,14 +123,8 @@ class WriteValueTool:
         )
 
 
-class FinishInput(RuntimeModel):
+class FinishInput(FinishCandidate):
     """Input schema for FinishTool."""
-
-    proposed_status: NonEmptyStr = "completed"
-    result: JsonValue
-    artifact_paths: list[NonEmptyStr] = Field(default_factory=list)
-    unresolved_items: list[NonEmptyStr] = Field(default_factory=list)
-
 
 class FinishTool:
     """Create a finish candidate without deciding the actual ModuleStatus."""
@@ -154,6 +148,7 @@ class AskUserToolInput(RuntimeModel):
         "background needed to answer in this text."
     )
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
+    options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
 
 
 class AskUserTool:

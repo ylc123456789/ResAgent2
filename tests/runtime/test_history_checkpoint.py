@@ -8,7 +8,7 @@ from urllib.error import URLError
 import pytest
 from pydantic import ValidationError
 
-from resagent2_contracts import AgentOwner, ErrorCode, ModuleStatus, SessionStatus
+from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, SessionStatus)
 from resagent2_runtime import AgentLoop, JsonSessionStore, ModelProfile, OpenAICompatibleClient
 from resagent2_runtime.context import ContextComposer
 from resagent2_runtime.models import (

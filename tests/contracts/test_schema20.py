@@ -5,37 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from resagent2_contracts import (
-    AgentOwner,
-    ArtifactId,
-    ArtifactRef,
-    ModuleError,
-    ModuleResult,
-    ModuleStatus,
-    ErrorCode,
-    ResearchRequest,
-    RunBudget,
-    RunId,
-    ScientificAssessment,
-    ScientificCompletedResult,
-    ScientificFailedResult,
-    ScientificOpinion,
-    ScientificQuestionResult,
-    ScientificTurnRequest,
-    ScientificTurnResult,
-    ScientificVerdict,
-    ScientificWorkRequestResult,
-    SessionRef,
-    SessionStatus,
-    TaskBudget,
-    WorkOutcome,
-    WorkRequest,
-    WorkRequestDraft,
-    WorkRequestStatus,
-    WorkTaskOutcome,
-    QuestionDraft,
-    RecordedAnswer,
-)
+from resagent2_contracts import (AgentOwner, ArtifactId, ArtifactRef, ModuleError, ModuleStatus, ErrorCode, ResearchRequest, RunBudget, RunId, ScientificAssessment, ScientificOpinion, ScientificVerdict, SessionRef, SessionStatus, TaskBudget, WorkOutcome, WorkRequest, WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, QuestionDraft, RecordedAnswer)
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
@@ -150,62 +120,6 @@ def test_work_request_draft_requires_expected_evidence() -> None:
         WorkRequestDraft(objective="Measure")
 
 
-def test_scientific_turn_result_discriminates_all_statuses() -> None:
-    adapter = TypeAdapter(ScientificTurnResult)
-
-    cases = [
-        ScientificWorkRequestResult(
-            status="request_work",
-            assessment=ScientificAssessment(statement="need more evidence"),
-            work_request=WorkRequestDraft(
-                objective="Run experiment",
-                expected_evidence=["accuracy"],
-            ),
-            session=session_ref(),
-        ),
-        ScientificQuestionResult(
-            status="needs_user_input",
-            assessment=ScientificAssessment(statement="need a dataset"),
-            question=QuestionDraft(
-                text="Which dataset?", requested_fields=["answer"]
-            ),
-            session=session_ref(),
-        ),
-        ScientificCompletedResult(
-            status="completed",
-            opinion=ScientificOpinion(
-                verdict=ScientificVerdict.INCONCLUSIVE,
-                statement="cannot conclude yet",
-            ),
-            session=session_ref(status=SessionStatus.COMPLETED),
-        ),
-        ScientificFailedResult(
-            status="failed",
-            error=ModuleError(
-                code=ErrorCode.TOOL_FAILED,
-                message="loop failed",
-                retryable=False,
-            ),
-        ),
-    ]
-
-    for case in cases:
-        dumped = case.model_dump()
-        validated = adapter.validate_python(dumped)
-        assert validated.status == case.status
-
-
-def test_scientific_turn_result_rejects_unknown_status() -> None:
-    adapter = TypeAdapter(ScientificTurnResult)
-    with pytest.raises(ValidationError):
-        adapter.validate_python(
-            {
-                "status": "analyze",
-                "opinion": {"verdict": "supports", "statement": "x"},
-            }
-        )
-
-
 def test_supports_opinion_requires_evidence() -> None:
     with pytest.raises(ValidationError, match="evidence"):
         ScientificOpinion(verdict=ScientificVerdict.SUPPORTS, statement="it works")
@@ -217,57 +131,6 @@ def test_inconclusive_opinion_allows_empty_evidence() -> None:
         statement="not enough evidence",
     )
     assert opinion.evidence_artifact_ids == []
-
-
-def test_scientific_turn_request_first_call_rejects_outcome() -> None:
-    with pytest.raises(ValidationError, match="first call"):
-        ScientificTurnRequest(
-            run_id="run_example",
-            instruction="Evaluate the method",
-            work_outcome=WorkOutcome(
-                work_request_id="work_round1",
-                workflow_revision=1,
-                summary="done",
-                tasks=[
-                    WorkTaskOutcome(
-                        task_id="task_experiment",
-                        status="completed",
-                        summary="ran",
-                    )
-                ],
-            ),
-            budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
-        )
-
-
-def test_scientific_turn_request_resume_rejects_outcome_and_answers() -> None:
-    with pytest.raises(ValidationError, match="cannot carry both"):
-        ScientificTurnRequest(
-            run_id="run_example",
-            instruction="Evaluate the method",
-            work_outcome=WorkOutcome(
-                work_request_id="work_round1",
-                workflow_revision=1,
-                summary="done",
-                tasks=[
-                    WorkTaskOutcome(
-                        task_id="task_experiment",
-                        status="completed",
-                        summary="ran",
-                    )
-                ],
-            ),
-            answers=[
-                RecordedAnswer(
-                    question_id="question_x",
-                    question_text="Which dataset should be used?",
-                    values={"dataset": "demo"},
-                    answered_at=NOW,
-                )
-            ],
-            parent_session_id="session_sci",
-            budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
-        )
 
 
 def _execution_artifact() -> ArtifactRef:
@@ -310,7 +173,7 @@ def test_artifact_ref_rejects_half_task_attempt() -> None:
 def test_artifact_ref_accepts_scientific_session_provenance() -> None:
     artifact = ArtifactRef(
         id="artifact_lit",
-        kind="literature",
+        kind="literature_search",
         producer=AgentOwner.SCIENTIFIC,
         run_id="run_example",
         session_id="session_sci",
@@ -327,7 +190,7 @@ def test_artifact_ref_rejects_session_with_task() -> None:
     with pytest.raises(ValidationError, match="session-bound"):
         ArtifactRef(
             id="artifact_lit",
-            kind="literature",
+            kind="literature_search",
             producer=AgentOwner.SCIENTIFIC,
             run_id="run_example",
             session_id="session_sci",
@@ -412,7 +275,7 @@ def test_schema_1_1_object_is_rejected_as_2_0() -> None:
 
 
 def test_orchestrator_artifact_cannot_pose_as_execution() -> None:
-    with pytest.raises(ValidationError, match="orchestrator artifact cannot"):
+    with pytest.raises(ValidationError, match="orchestrator artifact kind cannot"):
         ArtifactRef(
             id="artifact_x",
             kind="input",
@@ -425,66 +288,4 @@ def test_orchestrator_artifact_cannot_pose_as_execution() -> None:
             media_type="application/json",
             summary="imported input",
             metadata={"source_type": "import"},
-        )
-
-
-def test_scientific_turn_rejects_cross_run_artifact() -> None:
-    artifact = ArtifactRef(
-        id="artifact_other",
-        kind="experiment_result",
-        producer=AgentOwner.EXPERIMENT,
-        run_id="run_other",
-        task_id="task_x",
-        attempt_number=1,
-        uri="file:///artifacts/x.json",
-        sha256="0" * 64,
-        media_type="application/json",
-        summary="evidence",
-    )
-    with pytest.raises(ValidationError, match="same run"):
-        ScientificTurnRequest(
-            run_id="run_example",
-            instruction="Evaluate the method",
-            authorized_artifacts=[artifact],
-            budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
-        )
-
-
-def test_scientific_turn_rejects_duplicate_authorized_artifact() -> None:
-    artifact = ArtifactRef(
-        id="artifact_x",
-        kind="experiment_result",
-        producer=AgentOwner.EXPERIMENT,
-        run_id="run_example",
-        task_id="task_x",
-        attempt_number=1,
-        uri="file:///artifacts/x.json",
-        sha256="0" * 64,
-        media_type="application/json",
-        summary="evidence",
-    )
-    with pytest.raises(ValidationError, match="unique"):
-        ScientificTurnRequest(
-            run_id="run_example",
-            instruction="Evaluate the method",
-            authorized_artifacts=[artifact, artifact],
-            budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
-        )
-
-
-def test_module_result_completed_cannot_carry_request_work() -> None:
-    with pytest.raises(ValidationError, match="completed result cannot"):
-        ModuleResult(
-            status=ModuleStatus.COMPLETED,
-            summary="done",
-            request_work={"assessment": {}},
-        )
-
-
-def test_module_result_request_work_requires_paused_session() -> None:
-    with pytest.raises(ValidationError, match="paused session"):
-        ModuleResult(
-            status=ModuleStatus.REQUEST_WORK,
-            summary="more work",
-            request_work={"assessment": {"statement": "need"}, "work_request": {}},
         )

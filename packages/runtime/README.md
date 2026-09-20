@@ -65,7 +65,9 @@ Session 创建时固定 `tool_protocol_key`：正文 JSON 为 `None`；OpenAICom
 
 模型正文解析失败以标准 `json.JSONDecodeError` 交还调用方，不在客户端原样重试。AgentLoop 把解析原因送入现有 required `runtime_feedback`，同 Session/Attempt 纠正；与 schema 错误共用连续失败上限、调用预算和超时，不执行非法 JSON 中看似正确的动作前缀。只把简短原因送回模型；正文 JSON 的原始坏正文只在 full trace 保留，原生回复则按上述协议边界进入 Session。网络/响应封装故障仍按原有策略有界重试，每次实际尝试都入账。非循环调用方经 PromptLLMClient 收到相同异常，自行使用其既有纠错边界；适配器不增加隐藏重试。
 
-Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果，由 AgentLoop 统一应用。`FinishTool` 只能产生 FinishCandidate，最终 ModuleStatus 由 CompletionCheck 决定。CompletionCheck 的 `CompletionDecision` 支持三种结果：`complete=True` 得 completed；`failure` 非空得 failed（确定性失败出口，由 finalizer 用真实 Tool observation 验证，LLM 不能自证失败）；两者皆否时继续循环。
+Tool 不直接修改 AgentState，只返回 `memory_updates` 等结构化结果，由 AgentLoop 统一应用。所有 Agent 共用 `FinishTool`，提交 `FinishCandidate(report, artifacts)`，不再选择模式专用结果 schema。最终 ModuleStatus 由 CompletionCheck 决定。`CompletionDecision` 支持三种结果：`complete=True` 得 completed；`failure` 非空得 failed（由 finalizer 用真实 Tool observation 验证，保留 report 和部分 artifacts）；两者皆否时继续循环。
+
+AgentLoop 统一返回 `AgentResult`。提问和工作请求被转换成 JSON artifact 候选，控制信号只记录 `action` 和 `candidate_index`；正式登记与 ID 解析由系统接收边界完成。只有获得 `permissions.request_work` 的 Scientific 调用可以派工，其他 Agent 不因共享结果类型而获得此权限。
 
 `full` trace 还会保存 provider 明确返回的 `raw_reasoning_text` 与 `raw_tool_calls`（若有）；`metadata` 对请求、响应、动作和 tool calls 的内容只保存 hash。metadata 不保存这些原文，不代表 Session 不保存续传所需的 `tool_turns`；Session 与 trace 是两个独立持久化边界。
 

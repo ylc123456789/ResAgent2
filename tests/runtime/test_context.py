@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from resagent2_contracts import AgentOwner, RecordedAnswer
+from resagent2_contracts import (AgentOwner, RecordedAnswer)
 from resagent2_runtime import (
     AgentEvent,
     AgentState,
@@ -25,8 +25,8 @@ def test_user_answers_section_is_absent_without_supplied_answers():
 def test_user_answers_section_preserves_supplied_replies_and_order():
     now = datetime.now(UTC)
     answers = [
-        RecordedAnswer(question_id="question_first", question_text="第一个用甲，第二个用乙？", values={"choice": "第二个"}, answered_at=now),
-        RecordedAnswer(question_id="question_second", question_text="第一个用训练集，第二个用验证集？", values={"choice": "第二个"}, answered_at=now),
+        RecordedAnswer(run_id="run_test", session_id="session_test", requested_fields=["choice"], question_id="question_first", question_text="第一个用甲，第二个用乙？", values={"choice": "第二个"}, answered_at=now),
+        RecordedAnswer(run_id="run_test", session_id="session_test", requested_fields=["choice"], question_id="question_second", question_text="第一个用训练集，第二个用验证集？", values={"choice": "第二个"}, answered_at=now),
     ]
     before = [answer.model_dump(mode="json") for answer in answers]
 
@@ -48,7 +48,7 @@ def test_user_answers_section_preserves_supplied_replies_and_order():
 
 
 def test_user_answers_share_composer_budget_and_are_not_optional():
-    answer = RecordedAnswer(
+    answer = RecordedAnswer(run_id="run_test", session_id="session_test", requested_fields=["choice"],
         question_id="question_choice", values={"choice": "keep existing format"},
         question_text="Keep the current format or change it? " + "context " * 200,
         answered_at=datetime.now(UTC),

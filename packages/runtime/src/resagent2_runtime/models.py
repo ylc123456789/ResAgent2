@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints,
 
 from resagent2_contracts import (
     AgentOwner,
-    ArtifactCandidate,
+    ArtifactOutput,
     ModuleError,
     QuestionDraft,
     RunId,
@@ -57,10 +57,8 @@ class ComposedContext(RuntimeModel):
 class FinishCandidate(RuntimeModel):
     """LLM-proposed result that still requires deterministic finalization."""
 
-    proposed_status: NonEmptyStr = "completed"
-    result: JsonValue
-    artifact_paths: list[NonEmptyStr] = Field(default_factory=list)
-    unresolved_items: list[NonEmptyStr] = Field(default_factory=list)
+    report: NonEmptyStr
+    artifacts: list[ArtifactOutput] = Field(default_factory=list)
 
 
 class ToolObservation(RuntimeModel):
@@ -98,8 +96,8 @@ class CompletionDecision(RuntimeModel):
 
     - ``complete=True``: the task succeeded; the loop returns a completed result;
     - ``failure`` non-None: the task is deterministically verified to have
-      failed; the loop returns ``ModuleResult.failed`` immediately;
-    - neither: keep working (optionally with an actionable ``summary``).
+      failed; the loop returns ``AgentResult.failed`` immediately;
+    - neither: keep working (optionally with an actionable ``report``).
 
     ``failure`` is always a finalizer-built ``ModuleError`` (never taken from the
     LLM verbatim), so a verified failure exit is a deterministic code decision,
@@ -108,9 +106,8 @@ class CompletionDecision(RuntimeModel):
     """
 
     complete: bool
-    summary: str = ""
-    payload: JsonValue | None = None
-    artifacts: list[ArtifactCandidate] = Field(default_factory=list)
+    report: str = ""
+    artifacts: list[ArtifactOutput] = Field(default_factory=list)
     warnings: list[WarningRecord] = Field(default_factory=list)
     failure: ModuleError | None = None
 

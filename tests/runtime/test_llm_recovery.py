@@ -7,21 +7,7 @@ from urllib.error import URLError
 
 import pytest
 
-from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    CodeUnderstandInput,
-    ErrorCode,
-    ModuleStatus,
-    ModuleTaskRequest,
-    ResearchRequest,
-    RunBudget,
-    RunStatus,
-    TaskProposal,
-    TaskStatus,
-    TaskBudget,
-    WorkflowProposal,
-)
+from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, AgentRequest, ResearchRequest, RunBudget, RunStatus, TaskProposal, TaskStatus, TaskBudget, WorkflowProposal)
 from resagent2_orchestrator import (
     InMemoryRunStore,
     ModuleBinding,
@@ -66,7 +52,7 @@ class _AcceptFinish:
     def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
-        return CompletionDecision(complete=True, summary="done", payload=candidate.result)
+        return CompletionDecision(complete=True, report="done")
 
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:
@@ -101,11 +87,11 @@ def test_bad_json_stops_at_existing_limits(
         permission_policy=AllowListPermissionPolicy({"finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_r",
         task_id="task_r",
         attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND,
+        agent=AgentOwner.CODING,
         instruction="q",
         budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60),
     )
@@ -137,9 +123,9 @@ class _LoopPort:
     def __init__(self, definition: AgentDefinition) -> None:
         self.definition = definition
         self.loop = AgentLoop(store=InMemorySessionStore())
-        self.requests: list[ModuleTaskRequest] = []
+        self.requests: list[AgentRequest] = []
 
-    def invoke(self, request: ModuleTaskRequest):
+    def invoke(self, request: AgentRequest):
         self.requests.append(request)
         return self.loop.run(
             self.definition, request, session_id=f"session_{request.attempt_number}"
@@ -175,7 +161,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
     store = InMemoryRunStore()
     engine = WorkflowScheduler(
         bindings={
-            Capability.CODE_UNDERSTAND: ModuleBinding(
+            AgentOwner.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
                 port=port,
             )
@@ -210,9 +196,9 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
                 TaskProposal(
                     id="task_recovery",
                     work_request_id="work_legacy_initial",
-                    capability=Capability.CODE_UNDERSTAND,
-                    goal="Finish after a provider failure",
-                    inputs=CodeUnderstandInput(question="q"),
+                    workflow_agent_kind=AgentOwner.CODING,
+                    instruction="Finish after a provider failure",
+
                 )
             ],
         ),
@@ -226,9 +212,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
                 {
                     "message": {
                         "content": json.dumps(
-                            {"tool": "finish", "arguments": {"result": {
-                                "answer": "Recovered", "evidence_files": ["train.py"],
-                            }}}
+                            {"tool": "finish", "arguments": {'report': '{"answer": "Recovered", "evidence_files": ["train.py"]}'}}
                         )
                     }
                 }
@@ -296,9 +280,9 @@ def recovery(monkeypatch, tmp_path):
         permission_policy=AllowListPermissionPolicy({"write_value", "finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_r", task_id="task_r", attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND, instruction="q",
+        agent=AgentOwner.CODING, instruction="q",
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
     )
     return definition, request, InMemorySessionStore()
@@ -313,7 +297,7 @@ def _response(content):
     })
 
 
-_FINISH = '{"tool":"finish","arguments":{"result":{}}}'
+_FINISH = '{"tool":"finish","arguments":{"report":"Done"}}'
 _WRITE = '{"tool":"write_value","arguments":{"key":"kept","value":7}}'
 
 
@@ -379,7 +363,7 @@ def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
 
 def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
     definition, request, store = recovery
-    bad_schema = '{"tool":"finish","result":{}}'
+    bad_schema = '{"tool":"finish","report":"Done"}'
     with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
         _response("bad JSON"), _response(bad_schema), _response("bad JSON"),
         _response(bad_schema), _response("bad JSON"), _response(_FINISH),

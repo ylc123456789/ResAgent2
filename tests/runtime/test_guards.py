@@ -1,14 +1,6 @@
 import pytest
 
-from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    CodeUnderstandInput,
-    ErrorCode,
-    ModuleStatus,
-    ModuleTaskRequest,
-    TaskBudget,
-)
+from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, AgentRequest, TaskBudget)
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -35,12 +27,12 @@ def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
     return [ContextSection(name="instruction", content=request.instruction, required=True)]
 
 
-def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> ModuleTaskRequest:
-    return ModuleTaskRequest(
+def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> AgentRequest:
+    return AgentRequest(
         run_id="run_guard",
         task_id="task_guard",
         attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND,
+        agent=AgentOwner.CODING,
         instruction="Can the action run?",
         budget=TaskBudget(
             max_llm_calls=max_llm_calls,
@@ -112,7 +104,7 @@ def test_llm_action_must_match_the_typed_action_schema() -> None:
             [
                 {
                     "tool": "finish",
-                    "arguments": {"result": {}},
+                    "arguments": {'report': '{}'},
                     "undocumented_field": True,
                 }
             ],
@@ -137,7 +129,7 @@ def test_rejected_finish_exhausts_budget_instead_of_completing() -> None:
             [
                 AgentAction(
                     tool="finish",
-                    arguments={"proposed_status": "completed", "result": {}},
+                    arguments={'report': '{}'},
                 )
             ],
             allowed_tools={"finish"},
@@ -160,7 +152,7 @@ def test_state_is_saved_incrementally_for_each_step() -> None:
                     tool="write_value",
                     arguments={"key": "saved", "value": True},
                 ),
-                AgentAction(tool="finish", arguments={"result": {}}),
+                AgentAction(tool="finish", arguments={'report': '{}'}),
             ],
             allowed_tools={"write_value", "finish"},
         ),

@@ -5,10 +5,7 @@ from itertools import combinations
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from resagent2_contracts import (
-    AgentOwner, Capability, CodeModifyInput, ErrorCode, ModuleStatus,
-    ModuleTaskRequest, SessionStatus, TaskBudget,
-)
+from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, AgentRequest, SessionStatus, TaskBudget)
 from resagent2_runtime import (
     AgentDefinition, AgentLoop, CompletionDecision, FinishCandidate,
     InMemorySessionStore, PermissionDecision, ToolObservation,
@@ -37,13 +34,13 @@ class RecordingTool:
         self.executions += 1
         return ToolObservation(
             summary="Executed write", memory_updates={"written": True},
-            finish_candidate=FinishCandidate(result={"written": True}),
+            finish_candidate=FinishCandidate(report="Written"),
         )
 
 
 class AcceptCompletion:
     def evaluate(self, state, candidate):
-        return CompletionDecision(complete=candidate is not None, payload={"written": True})
+        return CompletionDecision(complete=candidate is not None)
 
 
 @pytest.mark.parametrize("expired_stage", ["llm", "permission"])
@@ -82,9 +79,9 @@ def _run_dispatch(stage, elapsed, *, should_execute):
         tools=(tool,), llm_client=Client(), context_builder=lambda request, state, limit: [],
         permission_policy=Policy(), completion_check=AcceptCompletion(),
     )
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_deadline", task_id="task_deadline", attempt_number=1,
-        capability=Capability.CODE_MODIFY, instruction="Write once",
+        agent=AgentOwner.CODING, instruction="Write once",
         budget=TaskBudget(max_llm_calls=3, timeout_seconds=10),
     )
 
@@ -109,7 +106,7 @@ def _run_dispatch(stage, elapsed, *, should_execute):
 
 
 CONTROL_SIGNALS = {
-    "finish_candidate": {"result": {"done": True}},
+    "finish_candidate": {'report': '{"done": true}'},
     "question": {"text": "Choose", "requested_fields": ["choice"]},
     # Empty objects are still present control signals, not falsey absence.
     "request_work": {},

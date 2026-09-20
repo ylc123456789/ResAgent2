@@ -24,6 +24,7 @@ def _messages(name: str):
         (RecordedAnswer, dict(
             question_id="question_mode", values={name: value},
             answered_at=now, question_text=text,
+            requested_fields=[name], run_id="run_test", session_id="session_test",
         )),
     ]
 

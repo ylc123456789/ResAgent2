@@ -3,42 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from resagent2_contracts import (
-    ArtifactCandidate,
-    ArtifactRef,
-    AgentOwner,
-    Attempt,
-    AttemptStatus,
-    TaskAcceptanceSpec,
-    Capability,
-    CodeUnderstandInput,
-    ErrorCode,
-    ExperimentRunInput,
-    FutureArtifactBinding,
-    ModuleError,
-    ModuleResult,
-    ModuleStatus,
-    PendingQuestion,
-    QuestionDraft,
-    RecordedAnswer,
-    RunBudget,
-    TaskBudget,
-    TaskProposal,
-    TaskStatus,
-    UserAnswer,
-    Workflow,
-    WorkflowPatch,
-    WorkflowProposal,
-    WorkflowTask,
-    WorkspaceGrant,
-    WorkspaceMode,
-    WorkspaceRecord,
-    WorkspaceSourceKind,
-    WorkspaceSpec,
-    ModuleTaskRequest,
-    ResearchRequest,
-    WarningRecord,
-)
+from resagent2_contracts import (ArtifactCandidate, ArtifactRef, AgentOwner, Attempt, AttemptStatus, TaskAcceptanceSpec, WorkflowAgentKind, ErrorCode, FutureArtifactBinding, ModuleError, AgentResult, ModuleStatus, PendingQuestion, QuestionDraft, RecordedAnswer, RunBudget, TaskBudget, TaskProposal, TaskStatus, UserAnswer, Workflow, WorkflowPatch, WorkflowProposal, WorkflowTask, WorkspaceGrant, WorkspaceMode, WorkspaceRecord, WorkspaceSourceKind, WorkspaceSpec, AgentRequest, ResearchRequest, WarningRecord)
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
@@ -61,9 +26,9 @@ def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
     return WorkflowTask(
         id=task_id,
         work_request_id="work_test",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Inspect the entry point",
-        inputs=CodeUnderstandInput(question="Where is the entry point?"),
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Inspect the entry point",
+
         depends_on=depends_on or [],
     )
 
@@ -74,7 +39,6 @@ def module_error() -> ModuleError:
         message="Tool exited with a non-zero status",
         retryable=True,
     )
-
 
 
 def _artifact_ref(**overrides: object) -> ArtifactRef:
@@ -127,7 +91,7 @@ def test_system_artifact_provenance_rejects_mismatched_kind_scope() -> None:
             metadata={"source_type": "controller_feedback"},
         )
 
-    with pytest.raises(ValidationError, match=r"task\+attempt"):
+    with pytest.raises(ValidationError, match="orchestrator scope"):
         _artifact_ref(
             kind="answer",
             task_id="task_example",
@@ -136,7 +100,7 @@ def test_system_artifact_provenance_rejects_mismatched_kind_scope() -> None:
         )
 
 def test_research_request_does_not_accept_deployment_resources() -> None:
-    from resagent2_contracts import ResearchRequest
+    from resagent2_contracts import (ResearchRequest)
 
     assert "dataset_refs" not in ResearchRequest.model_fields
     with pytest.raises(ValidationError, match="dataset_refs"):
@@ -154,16 +118,17 @@ def test_future_artifact_binding_requires_direct_dependency() -> None:
     first = TaskProposal(
         id="task_first",
         work_request_id="work_test",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Produce an analysis",
-        inputs=CodeUnderstandInput(question="Analyze the entry point"),
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Produce an analysis",
+        output_names=["analysis"],
+
     )
     second = TaskProposal(
         id="task_second",
         work_request_id="work_test",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Use the analysis",
-        inputs=CodeUnderstandInput(question="Summarize the analysis"),
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Use the analysis",
+
         depends_on=["task_first"],
         input_artifact_bindings=[
             FutureArtifactBinding(source_task="task_first", output_selector="analysis")
@@ -180,9 +145,9 @@ def test_future_artifact_binding_rejects_unknown_source() -> None:
     proposal = TaskProposal(
         id="task_second",
         work_request_id="work_test",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Use an output",
-        inputs=CodeUnderstandInput(question="Summarize"),
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Use an output",
+
         input_artifact_bindings=[
             FutureArtifactBinding(source_task="task_missing", output_selector="analysis")
         ],
@@ -199,24 +164,27 @@ def test_task_acceptance_spec_is_task_control_plane_data() -> None:
     task = TaskProposal(
         id="task_experiment",
         work_request_id="work_test",
-        capability=Capability.EXPERIMENT_RUN,
-        goal="Run the experiment",
-        inputs=ExperimentRunInput(instructions="Run the experiment"),
+        workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+        instruction="Run the experiment",
+
         acceptance_spec=spec,
     )
     assert task.acceptance_spec == spec
-    assert task.acceptance_ref is None
+    assert "acceptance_ref" not in TaskProposal.model_fields
 
     materialized = WorkflowTask(
         id=task.id,
         work_request_id=task.work_request_id,
-        capability=task.capability,
-        goal=task.goal,
-        inputs=task.inputs,
-        acceptance_ref="artifact_acceptance_spec",
+        workflow_agent_kind=task.workflow_agent_kind,
+        instruction=task.instruction,
+
+        acceptance_ref=_artifact_ref(
+            kind="acceptance_requirements", session_id=None, task_id=task.id,
+            metadata={"source_type": "task_requirement"},
+        ),
     )
-    assert materialized.acceptance_spec is None
-    assert materialized.acceptance_ref == "artifact_acceptance_spec"
+    assert "acceptance_spec" not in WorkflowTask.model_fields
+    assert materialized.acceptance_ref.kind == "acceptance_requirements"
 
 
 def test_schema_round_trip_preserves_contract() -> None:
@@ -233,7 +201,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     assert restored.schema_version == "12.0"
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -316,9 +284,9 @@ def test_proposal_rejects_duplicate_task_ids() -> None:
     proposal_task = TaskProposal(
         id="task_plan",
         work_request_id="work_test",
-        capability=Capability.CODE_UNDERSTAND,
-        goal="Inspect the entry point",
-        inputs=CodeUnderstandInput(question="Where is the entry point?"),
+        workflow_agent_kind=WorkflowAgentKind.CODING,
+        instruction="Inspect the entry point",
+
     )
 
     with pytest.raises(ValidationError, match="duplicate task"):
@@ -328,65 +296,10 @@ def test_proposal_rejects_duplicate_task_ids() -> None:
         )
 
 
-def test_task_input_must_match_capability() -> None:
-    with pytest.raises(ValidationError, match="does not match"):
-        WorkflowTask(
-            id="task_plan",
-            work_request_id="work_test",
-            capability=Capability.CODE_MODIFY,
-            goal="Modify",
-            inputs=CodeUnderstandInput(question="Where is the entry point?"),
-        )
-
-
-def test_module_request_acceptance_must_match_capability() -> None:
-    with pytest.raises(ValidationError, match="acceptance"):
-        ModuleTaskRequest(
-            run_id="run_example",
-            task_id="task_plan",
-            attempt_number=1,
-            capability=Capability.CODE_MODIFY,
-            instruction="Modify",
-            acceptance=TaskAcceptanceSpec(required_metric_keys=["accuracy"]),
-            budget=TaskBudget(max_llm_calls=5, timeout_seconds=300),
-        )
-
-
-def test_needs_user_input_requires_question() -> None:
-    with pytest.raises(ValidationError, match="question"):
-        ModuleResult[dict[str, str]](
-            status=ModuleStatus.NEEDS_USER_INPUT,
-            summary="A decision is required",
-        )
-
-
-def test_needs_user_input_requires_a_paused_session() -> None:
-    with pytest.raises(ValidationError, match="paused session"):
-        ModuleResult[dict[str, str]](
-            status=ModuleStatus.NEEDS_USER_INPUT,
-            summary="A decision is required",
-            question=QuestionDraft(
-                text="Which?", requested_fields=["answer"]
-            ),
-        )
-
-
 @pytest.mark.parametrize("status", [ModuleStatus.FAILED, ModuleStatus.BLOCKED])
 def test_failed_or_blocked_result_requires_error(status: ModuleStatus) -> None:
     with pytest.raises(ValidationError, match="error"):
-        ModuleResult[dict[str, str]](status=status, summary="Could not continue")
-
-
-def test_completed_result_rejects_error_and_question() -> None:
-    with pytest.raises(ValidationError, match="completed"):
-        ModuleResult[dict[str, str]](
-            status=ModuleStatus.COMPLETED,
-            summary="Done",
-            error=module_error(),
-            question=QuestionDraft(
-                text="Continue?", requested_fields=["answer"]
-            ),
-        )
+        AgentResult(status=status, report="Could not continue")
 
 
 def test_question_draft_requires_at_least_one_field() -> None:
@@ -410,8 +323,8 @@ def test_proposal_rejects_removed_graph_prose(field: str) -> None:
         work_request_id="work_test",
         tasks=[TaskProposal(
             id="task_inspect", work_request_id="work_test",
-            capability=Capability.CODE_UNDERSTAND, goal="Inspect the entry point",
-            inputs=CodeUnderstandInput(question="Where is the entry point?"),
+            workflow_agent_kind=WorkflowAgentKind.CODING, instruction="Inspect the entry point",
+
         )],
     )
     assert WorkflowProposal.model_validate_json(candidate.model_dump_json()) == candidate
@@ -430,15 +343,15 @@ def test_warning_status_and_warning_records_cannot_disagree() -> None:
     warning = WarningRecord(code="unverified", message="One metric was not verified")
 
     with pytest.raises(ValidationError, match="warnings"):
-        ModuleResult[dict[str, str]](
+        AgentResult(
             status=ModuleStatus.COMPLETED_WITH_WARNINGS,
-            summary="Done with a limitation",
+            report="Done with a limitation",
         )
 
     with pytest.raises(ValidationError, match="warnings"):
-        ModuleResult[dict[str, str]](
+        AgentResult(
             status=ModuleStatus.COMPLETED,
-            summary="Done",
+            report="Done",
             warnings=[warning],
         )
 
@@ -470,16 +383,16 @@ def test_attempt_rejects_illegal_terminal_combinations() -> None:
         )
 
 
-def test_attempt_payload_round_trips() -> None:
+def test_attempt_report_round_trips() -> None:
     attempt = Attempt(
         number=1,
         status=AttemptStatus.COMPLETED,
         started_at=NOW,
         finished_at=NOW,
-        payload={"accuracy": 0.9},
+        report="Measured accuracy; numeric result is stored as an artifact",
     )
     restored = Attempt.model_validate_json(attempt.model_dump_json())
-    assert restored.payload == {"accuracy": 0.9}
+    assert restored.report == attempt.report
 
 
 def test_question_and_answer_have_distinct_owners() -> None:
@@ -511,6 +424,7 @@ def test_recorded_answer_requires_question_but_user_input_does_not() -> None:
         RecordedAnswer(**answer.model_dump(), question_text="   ")
     recorded = RecordedAnswer(
         **answer.model_dump(), question_text="First: train. Second: evaluate.",
+        requested_fields=["answer"], run_id="run_example", session_id="session_example",
     )
     assert RecordedAnswer.model_validate_json(recorded.model_dump_json()) == recorded
 

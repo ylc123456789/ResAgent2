@@ -1,16 +1,6 @@
-from pydantic import BaseModel
+from resagent2_contracts import ArtifactCandidate, QuestionDraft
 
-from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    CodeModifyInput,
-    CodeUnderstandInput,
-    ErrorCode,
-    ModuleError,
-    ModuleStatus,
-    ModuleTaskRequest,
-    TaskBudget,
-)
+from resagent2_contracts import (AgentOwner, ErrorCode, ModuleError, ModuleStatus, AgentRequest, TaskBudget)
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -36,8 +26,8 @@ class AcceptFinish:
             return CompletionDecision(complete=False)
         return CompletionDecision(
             complete=True,
-            summary="Deterministic completion check passed",
-            payload=candidate.result,
+            report="Deterministic completion check passed",
+
         )
 
 
@@ -46,10 +36,6 @@ class NeverFinish:
 
     def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
         return CompletionDecision(complete=False)
-
-
-class VerifiedResult(BaseModel):
-    value: int
 
 
 class BudgetedScriptedLLM(ScriptedLLMClient):
@@ -75,17 +61,13 @@ def build_context(request, state, max_context_tokens) -> list[ContextSection]:
     ]
 
 
-def request(capability: Capability) -> ModuleTaskRequest:
-    if capability == Capability.CODE_MODIFY:
-        inputs = CodeModifyInput(instructions="Store the verified value")
-    else:
-        inputs = CodeUnderstandInput(question="Read the reference value")
-    return ModuleTaskRequest(
+def request(agent: AgentOwner) -> AgentRequest:
+    return AgentRequest(
         run_id="run_runtime",
         task_id="task_runtime",
         attempt_number=1,
-        capability=capability,
-        instruction=inputs.instructions if hasattr(inputs, "instructions") else inputs.question,
+        agent=agent,
+        instruction="Read or store the reference value",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
     )
 
@@ -97,7 +79,6 @@ def definition(
     tools: tuple,
     allowed_tools: set[str],
     completion_check=None,
-    result_type=None,
 ) -> AgentDefinition:
     return AgentDefinition(
         name=name,
@@ -108,11 +89,10 @@ def definition(
         context_builder=build_context,
         permission_policy=AllowListPermissionPolicy(allowed_tools),
         completion_check=completion_check or AcceptFinish(),
-        result_type=result_type,
     )
 
 
-def test_same_loop_runs_read_only_and_writable_profiles() -> None:
+def test_same_loop_respects_different_tool_grants() -> None:
     store = InMemorySessionStore()
     loop = AgentLoop(store=store)
     read_definition = definition(
@@ -122,10 +102,7 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
                 AgentAction(tool="read_value", arguments={"key": "answer"}),
                 AgentAction(
                     tool="finish",
-                    arguments={
-                        "proposed_status": "failed",
-                        "result": {"answer": 42},
-                    },
+                    arguments={'report': '{"answer": 42}'},
                 ),
             ]
         ),
@@ -142,7 +119,7 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
                 ),
                 AgentAction(
                     tool="finish",
-                    arguments={"result": {"written": True}},
+                    arguments={'report': '{"written": true}'},
                 ),
             ]
         ),
@@ -152,18 +129,18 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
 
     read_result = loop.run(
         read_definition,
-        request(Capability.CODE_UNDERSTAND),
+        request(AgentOwner.CODING),
         session_id="session_reader",
         initial_memory={"answer": 42},
     )
     write_result = loop.run(
         write_definition,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_writer",
     )
 
     assert read_result.status == ModuleStatus.COMPLETED
-    assert read_result.payload == {"answer": 42}
+    assert read_result.report == "Deterministic completion check passed"
     assert write_result.status == ModuleStatus.COMPLETED
     assert store.load("session_writer").memory["verified"] is True
     assert type(loop) is AgentLoop
@@ -171,7 +148,7 @@ def test_same_loop_runs_read_only_and_writable_profiles() -> None:
 
 def test_loop_injects_tool_contracts_section() -> None:
     client = ScriptedLLMClient(
-        [AgentAction(tool="finish", arguments={"result": {"answer": 42}})]
+        [AgentAction(tool="finish", arguments={'report': '{"answer": 42}'})]
     )
     result = AgentLoop(store=InMemorySessionStore()).run(
         definition(
@@ -180,14 +157,14 @@ def test_loop_injects_tool_contracts_section() -> None:
             tools=(FinishTool(),),
             allowed_tools={"finish"},
         ),
-        request(Capability.CODE_UNDERSTAND),
+        request(AgentOwner.CODING),
         session_id="session_contracts",
     )
 
     assert result.status == ModuleStatus.COMPLETED
     assert client.contexts
     assert "tool_contracts" in client.contexts[0].included_sections
-    assert "finish: result" in client.contexts[0].text
+    assert "finish: report" in client.contexts[0].text
 
 
 def test_loop_tolerates_legacy_reasoning_summary_field() -> None:
@@ -195,7 +172,7 @@ def test_loop_tolerates_legacy_reasoning_summary_field() -> None:
         [
             {
                 "tool": "finish",
-                "arguments": {"result": {"answer": 42}},
+                "arguments": {'report': '{"answer": 42}'},
                 "reasoning_summary": "legacy dead field",
             }
         ]
@@ -207,7 +184,7 @@ def test_loop_tolerates_legacy_reasoning_summary_field() -> None:
             tools=(FinishTool(),),
             allowed_tools={"finish"},
         ),
-        request(Capability.CODE_UNDERSTAND),
+        request(AgentOwner.CODING),
         session_id="session_legacy",
     )
 
@@ -223,7 +200,7 @@ def test_loop_uses_model_aware_context_budget_when_client_provides_it() -> None:
             tools=(FinishTool(),),
             allowed_tools={"finish"},
         ),
-        request(Capability.CODE_UNDERSTAND),
+        request(AgentOwner.CODING),
         session_id="session_budgeted",
     )
 
@@ -256,66 +233,17 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
 
     result = loop.run(
         ask_definition,
-        request(Capability.CODE_UNDERSTAND),
+        request(AgentOwner.CODING),
         session_id="session_question",
     )
 
     assert result.status == ModuleStatus.NEEDS_USER_INPUT
-    assert result.question is not None
-    assert result.question.requested_fields == ["dataset"]
+    assert result.control is not None and result.control.action == "ask_user"
+    assert result.artifacts[result.control.candidate_index].kind == "question"
+    question = QuestionDraft.model_validate_json(result.artifacts[result.control.candidate_index].content)
+    assert question.requested_fields == ["dataset"]
     assert result.session is not None
     assert result.session.status.value == "paused"
-
-
-def test_finalizer_does_not_trust_llm_proposed_status() -> None:
-    loop = AgentLoop(store=InMemorySessionStore())
-    accepted = definition(
-        name="accepted",
-        llm=ScriptedLLMClient(
-            [
-                AgentAction(
-                    tool="finish",
-                    arguments={
-                        "proposed_status": "failed",
-                        "result": {"valid": True},
-                    },
-                )
-            ]
-        ),
-        tools=(FinishTool(),),
-        allowed_tools={"finish"},
-    )
-
-    result = loop.run(
-        accepted,
-        request(Capability.CODE_UNDERSTAND),
-        session_id="session_finalizer",
-    )
-
-    assert result.status == ModuleStatus.COMPLETED
-
-
-def test_final_payload_must_match_profile_result_schema() -> None:
-    loop = AgentLoop(store=InMemorySessionStore())
-    profile = definition(
-        name="typed-result",
-        llm=ScriptedLLMClient(
-            [AgentAction(tool="finish", arguments={"result": {"wrong": True}})]
-        ),
-        tools=(FinishTool(),),
-        allowed_tools={"finish"},
-        result_type=VerifiedResult,
-    )
-
-    result = loop.run(
-        profile,
-        request(Capability.CODE_UNDERSTAND),
-        session_id="session_typed_result",
-    )
-
-    assert result.status == ModuleStatus.FAILED
-    assert result.error is not None
-    assert result.error.code.value == "contract_error"
 
 
 class RequireWriteBeforeFinish:
@@ -327,9 +255,9 @@ class RequireWriteBeforeFinish:
         if not state.memory.get("ready"):
             return CompletionDecision(
                 complete=False,
-                summary="Run the write_value tool before finishing",
+                report="Run the write_value tool before finishing",
             )
-        return CompletionDecision(complete=True, summary="done", payload=candidate.result)
+        return CompletionDecision(complete=True, report="done")
 
 
 def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> None:
@@ -339,9 +267,9 @@ def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> No
         name="recover-finish",
         llm=ScriptedLLMClient(
             [
-                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
                 AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
-                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             ]
         ),
         tools=(WriteValueTool(), FinishTool()),
@@ -351,7 +279,7 @@ def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> No
 
     result = loop.run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_recover_finish",
     )
 
@@ -366,10 +294,10 @@ def test_runtime_feedback_survives_an_intervening_observation() -> None:
     loop = AgentLoop(store=store)
     llm = ScriptedLLMClient(
         [
-            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             AgentAction(tool="read_value", arguments={"key": "missing"}),
             AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
-            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
         ]
     )
     profile = definition(
@@ -382,7 +310,7 @@ def test_runtime_feedback_survives_an_intervening_observation() -> None:
 
     result = loop.run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_feedback_persists",
     )
 
@@ -419,9 +347,9 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
         name="recover-tool",
         llm=ScriptedLLMClient(
             [
-                AgentAction(tool="flaky", arguments={"result": {"ok": True}}),
-                AgentAction(tool="flaky", arguments={"result": {"ok": True}}),
-                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="flaky", arguments={'report': '{"ok": true}'}),
+                AgentAction(tool="flaky", arguments={'report': '{"ok": true}'}),
+                AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             ]
         ),
         tools=(flaky, FinishTool()),
@@ -430,7 +358,7 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
 
     result = loop.run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_recover_tool",
     )
 
@@ -455,16 +383,16 @@ def test_consecutive_failures_stop_before_budget() -> None:
     profile = definition(
         name="always-fail",
         llm=ScriptedLLMClient(
-            [AgentAction(tool="always_fail", arguments={"result": {}})] * 50
+            [AgentAction(tool="always_fail", arguments={'report': '{}'})] * 50
         ),
         tools=(AlwaysFailTool(), FinishTool()),
         allowed_tools={"always_fail", "finish"},
     )
-    req = ModuleTaskRequest(
+    req = AgentRequest(
         run_id="run_x",
         task_id="task_x",
         attempt_number=1,
-        capability=Capability.CODE_MODIFY,
+        agent=AgentOwner.CODING,
         instruction="i",
         budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
@@ -482,7 +410,7 @@ def test_recent_observations_are_injected() -> None:
     llm = ScriptedLLMClient(
         [
             AgentAction(tool="write_value", arguments={"key": "a", "value": 1}),
-            AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+            AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
         ]
     )
     profile = definition(
@@ -491,7 +419,7 @@ def test_recent_observations_are_injected() -> None:
         tools=(WriteValueTool(), FinishTool()),
         allowed_tools={"write_value", "finish"},
     )
-    loop.run(profile, request(Capability.CODE_MODIFY), session_id="session_recent")
+    loop.run(profile, request(AgentOwner.CODING), session_id="session_recent")
 
     # The second turn's context carries the recent tool history.
     assert "recent_observations" in llm.contexts[1].included_sections
@@ -502,7 +430,7 @@ class RejectWithReason:
 
     def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
         return CompletionDecision(
-            complete=False, summary="Missing required evidence; keep working"
+            complete=False, report="Missing required evidence; keep working"
         )
 
 
@@ -514,17 +442,17 @@ def test_completion_rejection_counts_as_failure() -> None:
     profile = definition(
         name="reject-finish",
         llm=ScriptedLLMClient(
-            [AgentAction(tool="finish", arguments={"result": {"ok": True}})] * 50
+            [AgentAction(tool="finish", arguments={'report': '{"ok": true}'})] * 50
         ),
         tools=(FinishTool(),),
         allowed_tools={"finish"},
         completion_check=RejectWithReason(),
     )
-    req = ModuleTaskRequest(
+    req = AgentRequest(
         run_id="run_x",
         task_id="task_x",
         attempt_number=1,
-        capability=Capability.CODE_MODIFY,
+        agent=AgentOwner.CODING,
         instruction="i",
         budget=TaskBudget(max_llm_calls=50, timeout_seconds=60),
     )
@@ -569,9 +497,9 @@ def test_recent_observations_preserve_error_bodies() -> None:
 
     llm = ScriptedLLMClient(
         [
-            AgentAction(tool="flaky", arguments={"result": {}}),
-            AgentAction(tool="flaky", arguments={"result": {}}),
-            AgentAction(tool="flaky", arguments={"result": {}}),
+            AgentAction(tool="flaky", arguments={'report': '{}'}),
+            AgentAction(tool="flaky", arguments={'report': '{}'}),
+            AgentAction(tool="flaky", arguments={'report': '{}'}),
         ]
     )
     profile = definition(
@@ -582,7 +510,7 @@ def test_recent_observations_preserve_error_bodies() -> None:
         completion_check=NeverFinish(),
     )
     loop = AgentLoop(store=InMemorySessionStore())
-    loop.run(profile, request(Capability.CODE_MODIFY), session_id="session_errors")
+    loop.run(profile, request(AgentOwner.CODING), session_id="session_errors")
 
     assert "recent_observations" in llm.contexts[2].included_sections
     assert errors[0] in llm.contexts[2].text
@@ -595,6 +523,11 @@ class VerifiedFailure:
     def evaluate(self, state, candidate: FinishCandidate | None) -> CompletionDecision:
         return CompletionDecision(
             complete=False,
+            report="Experiment failed; retained the execution log",
+            artifacts=[ArtifactCandidate(
+                kind="execution_log", path="run.log", media_type="text/plain",
+                summary="Recorded command failure", content="NameError: totla",
+            )],
             failure=ModuleError(
                 code=ErrorCode.TOOL_FAILED,
                 message="Experiment command failed with exit code 1",
@@ -616,7 +549,7 @@ def test_deterministic_failure_exit_returns_failed() -> None:
             [
                 AgentAction(
                     tool="finish",
-                    arguments={"proposed_status": "failed", "result": {}},
+                    arguments={'report': '{}'},
                 )
             ]
         ),
@@ -627,7 +560,7 @@ def test_deterministic_failure_exit_returns_failed() -> None:
 
     result = AgentLoop(store=store).run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_verified_failure",
     )
 
@@ -636,6 +569,8 @@ def test_deterministic_failure_exit_returns_failed() -> None:
     assert result.error.code == ErrorCode.TOOL_FAILED
     assert result.error.message == "Experiment command failed with exit code 1"
     assert result.error.details["stderr_tail"] == "NameError: totla"
+    assert result.report == "Experiment failed; retained the execution log"
+    assert result.artifacts[0].content == "NameError: totla"
     assert store.load("session_verified_failure").status.value == "failed"
 
 
@@ -684,10 +619,10 @@ def test_malformed_action_is_recoverable() -> None:
             [
                 {
                     "tool": "finish",
-                    "arguments": {"result": {}},
+                    "arguments": {'report': '{}'},
                     "undocumented_field": True,
                 },
-                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             ]
         ),
         tools=(FinishTool(),),
@@ -696,7 +631,7 @@ def test_malformed_action_is_recoverable() -> None:
     )
     result = AgentLoop(store=store).run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_recover_invalid_action",
     )
     assert result.status == ModuleStatus.COMPLETED
@@ -713,10 +648,10 @@ def test_llm_calls_counts_malformed_actions() -> None:
             [
                 {
                     "tool": "finish",
-                    "arguments": {"result": {}},
+                    "arguments": {'report': '{}'},
                     "undocumented_field": True,
                 },
-                AgentAction(tool="finish", arguments={"result": {"ok": True}}),
+                AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             ]
         ),
         tools=(FinishTool(),),
@@ -724,7 +659,7 @@ def test_llm_calls_counts_malformed_actions() -> None:
     )
     result = AgentLoop(store=store).run(
         profile,
-        request(Capability.CODE_MODIFY),
+        request(AgentOwner.CODING),
         session_id="session_count_calls",
     )
 
@@ -736,7 +671,7 @@ def test_llm_calls_counts_malformed_actions() -> None:
 def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
     class BudgetAwareLLM(ScriptedLLMClient):
         def __init__(self) -> None:
-            super().__init__([AgentAction(tool="finish", arguments={"result": {}})])
+            super().__init__([AgentAction(tool="finish", arguments={'report': '{}'})])
             self.attempt_limits: list[int] = []
 
         def set_attempt_limit(self, max_attempts: int) -> None:
@@ -749,7 +684,7 @@ def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
         tools=(FinishTool(),),
         allowed_tools={"finish"},
     )
-    bounded_request = request(Capability.CODE_MODIFY).model_copy(
+    bounded_request = request(AgentOwner.CODING).model_copy(
         update={
             "budget": TaskBudget(
                 max_llm_calls=1, timeout_seconds=60

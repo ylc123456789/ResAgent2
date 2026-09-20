@@ -6,11 +6,11 @@ The declarations are grouped by the boundary they describe:
 2. routing and lifecycle vocabulary;
 3. shared diagnostics, sessions, and artifacts;
 4. run entry, budgets, and user interaction;
-5. capability-specific inputs and results;
+5. resource declarations and execution evidence;
 6. task attempts and workflow graphs;
 7. workspaces and the uniform child-module boundary;
-8. capability registry;
-9. scientific control-loop contracts.
+8. workflow Agent registry;
+9. scientific lifecycle and artifact content.
 
 This file defines valid data shapes and cross-field invariants. State-transition
 policy and execution behavior remain in the orchestrator and Agent packages.
@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated, Generic, Literal, TypeVar, Union
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -80,7 +80,7 @@ OutputName = Annotated[
 class ContractModel(BaseModel):
     """Base for versioned contracts that reject undocumented fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     schema_version: Literal["12.0"] = SCHEMA_VERSION
 
@@ -90,16 +90,15 @@ class ContractModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class Capability(StrEnum):
-    """Stable capability names used for routing, not module names."""
+class WorkflowAgentKind(StrEnum):
+    """Execution modules allowed in a workflow graph."""
 
-    CODE_UNDERSTAND = "code_understand"
-    CODE_MODIFY = "code_modify"
-    EXPERIMENT_RUN = "experiment_run"
+    CODING = "coding"
+    EXPERIMENT = "experiment"
 
 
 class AgentOwner(StrEnum):
-    """Module that owns a capability implementation."""
+    """Trusted producer or session owner."""
 
     SCIENTIFIC = "scientific"
     CODING = "coding"
@@ -244,6 +243,22 @@ class SessionRef(ContractModel):
         return self
 
 
+SYSTEM_ARTIFACT_PROVENANCE = {
+    "acceptance_requirements": ("task_requirement", frozenset({"task"})),
+    "conclusion_requirements": ("conclusion_requirement", frozenset({"run"})),
+    "dataset_catalog": ("dataset_catalog", frozenset({"run"})),
+    "work_feedback": ("controller_feedback", frozenset({"session"})),
+    "work_request": ("controller_work_request", frozenset({"session"})),
+    "answer": ("controller_answer", frozenset({"session", "attempt"})),
+    "question": ("controller_question", frozenset({"session", "attempt"})),
+}
+SYSTEM_ARTIFACT_KINDS = frozenset(SYSTEM_ARTIFACT_PROVENANCE)
+SCIENTIFIC_ARTIFACT_KINDS = frozenset({
+    "literature_search", "scientific_opinion", "scientific_assessment",
+    "observation_trace", "module_report",
+})
+
+
 class ArtifactRef(ContractModel):
     """Immutable, registered output with complete production provenance."""
 
@@ -275,12 +290,16 @@ class ArtifactRef(ContractModel):
         source_type = self.metadata.get("source_type")
 
         if self.producer != AgentOwner.ORCHESTRATOR:
+            if self.kind in SYSTEM_ARTIFACT_KINDS:
+                raise ValueError(f"{self.kind} requires orchestrator producer")
             if has_session:
                 if has_task or has_attempt or self.producer != AgentOwner.SCIENTIFIC:
                     raise ValueError(
                         "session-bound non-orchestrator artifact requires scientific producer "
                         "and no task/attempt"
                     )
+                if self.kind not in SCIENTIFIC_ARTIFACT_KINDS:
+                    raise ValueError(f"unsupported scientific artifact kind: {self.kind}")
                 return self
             if has_task != has_attempt:
                 raise ValueError(
@@ -292,34 +311,15 @@ class ArtifactRef(ContractModel):
                 )
             return self
 
-        # Orchestrator system artifacts have a closed kind/scope matrix.
-        if self.kind == "acceptance_requirements":
-            if not has_task or has_attempt or has_session or source_type != "task_requirement":
-                raise ValueError(
-                    "acceptance_requirements requires orchestrator task scope without attempt "
-                    "and source_type=task_requirement"
-                )
-            return self
-
-        if self.kind in {"work_feedback", "work_request"}:
-            expected = "controller_feedback" if self.kind == "work_feedback" else "controller_work_request"
-            if not has_session or has_task or has_attempt or source_type != expected:
-                raise ValueError(
-                    f"{self.kind} requires orchestrator session scope and source_type={expected}"
-                )
-            return self
-
-        if self.kind in {"answer", "question"}:
-            if source_type not in {"controller_answer", "controller_question"}:
-                raise ValueError(
-                    f"{self.kind} requires a controller source_type"
-                )
-            session_scope = has_session and not has_task and not has_attempt
-            task_scope = has_task and has_attempt and not has_session
-            if not (session_scope or task_scope):
-                raise ValueError(
-                    f"{self.kind} requires either session scope or task+attempt scope"
-                )
+        policy = SYSTEM_ARTIFACT_PROVENANCE.get(self.kind)
+        if policy is not None:
+            expected_source, scopes = policy
+            scope = {
+                (False, False, False): "run", (True, False, False): "task",
+                (True, True, False): "attempt", (False, False, True): "session",
+            }.get((has_task, has_attempt, has_session))
+            if source_type != expected_source or scope not in scopes:
+                raise ValueError(f"{self.kind} requires orchestrator scope {sorted(scopes)} and source_type={expected_source}")
             return self
 
         if has_task or has_attempt or has_session:
@@ -401,6 +401,9 @@ class TaskAcceptanceSpec(ContractModel):
 
     required_metric_keys: list[NonEmptyStr] = Field(default_factory=list)
     required_artifact_paths: list[NonEmptyStr] = Field(default_factory=list)
+    required_artifact_kinds: list[NonEmptyStr] = Field(default_factory=list)
+    required_output_names: list[OutputName] = Field(default_factory=list)
+    require_successful_execution: bool = False
 
     @field_validator("required_artifact_paths")
     @classmethod
@@ -450,6 +453,7 @@ class QuestionDraft(ContractModel):
 
     text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
+    options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
 
 
 class PendingQuestion(ContractModel):
@@ -458,8 +462,10 @@ class PendingQuestion(ContractModel):
     id: QuestionId
     run_id: RunId
     task_id: TaskId | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
     text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
+    options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
     created_at: datetime
 
 
@@ -472,44 +478,30 @@ class UserAnswer(ContractModel):
 
 
 class RecordedAnswer(UserAnswer):
-    """System-paired reply; question_text comes from the persisted question."""
+    """System-paired reply with the immutable question and recovery scope."""
 
     question_text: NonEmptyStr
+    requested_fields: list[AnswerFieldName] = Field(min_length=1)
+    options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
+    run_id: RunId
+    session_id: SessionId | None = None
+    task_id: TaskId | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> RecordedAnswer:
+        if (self.task_id is None) != (self.attempt_number is None):
+            raise ValueError("answer task_id and attempt_number must be paired")
+        if self.task_id is None and self.session_id is None:
+            raise ValueError("answer requires task/attempt or session scope")
+        if set(self.values) != set(self.requested_fields):
+            raise ValueError("answer values must match the recorded requested_fields")
+        return self
 
 
 # ---------------------------------------------------------------------------
-# 5. Capability-specific inputs, outputs, and resource declarations
+# 5. Resource declarations and execution evidence
 # ---------------------------------------------------------------------------
-
-
-class CodeUnderstandInput(ContractModel):
-    """Inputs for read-only code inspection and explanation."""
-
-    capability: Literal[Capability.CODE_UNDERSTAND] = Capability.CODE_UNDERSTAND
-    question: NonEmptyStr
-    paths: list[str] = Field(default_factory=list)
-
-    @field_validator("paths")
-    @classmethod
-    def validate_paths(cls, values: list[str]) -> list[str]:
-        """Keep requested code paths inside the workspace grant."""
-
-        return [_validate_relative_path(value) for value in values]
-
-
-class CodeModifyInput(ContractModel):
-    """Inputs for an authorized code change; the Agent picks its own verification."""
-
-    capability: Literal[Capability.CODE_MODIFY] = Capability.CODE_MODIFY
-    instructions: NonEmptyStr
-    suggested_paths: list[str] = Field(default_factory=list)
-
-    @field_validator("suggested_paths")
-    @classmethod
-    def validate_paths(cls, values: list[str]) -> list[str]:
-        """Keep suggested edit paths relative to the granted workspace (hints only)."""
-
-        return [_validate_relative_path(value) for value in values]
 
 
 class VerificationResult(ContractModel):
@@ -526,49 +518,6 @@ class VerificationResult(ContractModel):
     stdout_path: NonEmptyStr
     stderr_path: NonEmptyStr
     duration_seconds: float = Field(ge=0)
-
-
-class CodeUnderstandResult(ContractModel):
-    """Typed payload returned by the read-only Coding profile."""
-
-    answer: NonEmptyStr
-    evidence_files: list[str] = Field(min_length=1)
-    uncertainty: str = ""
-
-    @field_validator("evidence_files")
-    @classmethod
-    def validate_evidence_paths(cls, values: list[str]) -> list[str]:
-        return [_validate_relative_path(value) for value in values]
-
-
-class CodeModifyResult(ContractModel):
-    """Typed payload derived from Git state and verification evidence."""
-
-    changed_files: list[str]
-    deleted_files: list[str] = Field(default_factory=list)
-    patch_path: NonEmptyStr
-    verification_results: list[VerificationResult] = Field(min_length=1)
-    verification_passed: bool
-    residual_risks: list[NonEmptyStr] = Field(default_factory=list)
-
-    @field_validator("changed_files", "deleted_files")
-    @classmethod
-    def validate_changed_paths(cls, values: list[str]) -> list[str]:
-        return [_validate_relative_path(value) for value in values]
-
-    @model_validator(mode="after")
-    def validate_result(self) -> CodeModifyResult:
-        if not self.changed_files and not self.deleted_files:
-            raise ValueError("code modification result requires a workspace change")
-        if set(self.changed_files) & set(self.deleted_files):
-            raise ValueError("a path cannot be both changed and deleted")
-        passed = all(
-            item.exit_code == 0 and not item.timed_out
-            for item in self.verification_results
-        )
-        if self.verification_passed != passed:
-            raise ValueError("verification_passed must match verification_results")
-        return self
 
 
 class DatasetRef(ContractModel):
@@ -600,68 +549,6 @@ class EnvironmentSpec(ContractModel):
     python_version: str | None = None
 
 
-class ExperimentRunInput(ContractModel):
-    """Inputs for running an experiment and collecting named evidence.
-
-    The repository source comes from the unified workspace context
-    (``ModuleTaskRequest.workspace_spec``), not from this model.
-    Evidence goals and conditional requirements belong in ``instructions``;
-    ``expected_*`` are optional, exact acceptance criteria from a caller that
-    already knows the output keys/paths. Empty criteria do not waive evidence.
-    """
-
-    capability: Literal[Capability.EXPERIMENT_RUN] = Capability.EXPERIMENT_RUN
-    instructions: NonEmptyStr = Field(
-        description="Experiment objective and semantic evidence requirements, "
-        "including when conditional evidence is needed."
-    )
-    parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    expected_metrics: list[NonEmptyStr] = Field(
-        default_factory=list,
-        description="Known exact top-level numeric JSON metric keys required "
-        "from evidence (normalized spelling is accepted). Not descriptions or "
-        "guessed keys; leave empty when unknown and put evidence goals in instructions.",
-    )
-    expected_artifacts: list[NonEmptyStr] = Field(
-        default_factory=list,
-        description="Known exact workspace-relative evidence file paths required "
-        "on successful completion. Not artifact kinds, descriptions, or conditional "
-        "failure logs; leave empty when unknown and put evidence goals in instructions.",
-    )
-    confirm_before_experiment: bool = False
-
-
-class ExperimentResult(ContractModel):
-    """Typed payload returned by the native Experiment Agent.
-
-    ``metrics`` are derived by the deterministic finalizer from JSON evidence
-    files, never taken from the LLM verbatim (ADR-0011 §5.2).
-    """
-
-    metrics: dict[str, JsonValue] = Field(default_factory=dict)
-    evidence_files: list[str] = Field(default_factory=list)
-    repo_url: str = ""
-    commit: str = ""
-    env_id: NonEmptyStr
-    delivery_issues: list[NonEmptyStr] = Field(default_factory=list)
-    residual_risks: list[NonEmptyStr] = Field(default_factory=list)
-
-    @field_validator("evidence_files")
-    @classmethod
-    def validate_evidence_paths(cls, values: list[str]) -> list[str]:
-        return [_validate_relative_path(value) for value in values]
-
-
-CapabilityInput = Annotated[
-    Union[
-        CodeUnderstandInput,
-        CodeModifyInput,
-        ExperimentRunInput,
-    ],
-    Field(discriminator="capability"),
-]
-
-
 # ---------------------------------------------------------------------------
 # 6. Attempt history and revisioned workflow graphs
 # ---------------------------------------------------------------------------
@@ -677,8 +564,8 @@ class Attempt(ContractModel):
     session: SessionRef | None = None
     artifact_ids: list[ArtifactId] = Field(default_factory=list)
     error: ModuleError | None = None
-    payload: JsonValue | None = None
-    summary: NonEmptyStr | None = None
+    report: str = ""
+    acceptance_ref: ArtifactRef | None = None
 
     @model_validator(mode="after")
     def validate_outcome(self) -> Attempt:
@@ -703,32 +590,25 @@ class Attempt(ContractModel):
         return self
 
 
-def _validate_capability_input(capability: Capability, inputs: CapabilityInput) -> None:
-    if capability != inputs.capability:
-        raise ValueError(
-            f"capability {capability.value!r} does not match inputs "
-            f"{inputs.capability.value!r}"
-        )
-
-
 class TaskProposal(ContractModel):
     """Scientific suggestion for one logical task, before scheduler acceptance."""
 
     id: TaskId
     work_request_id: WorkRequestId
-    capability: Capability
-    goal: NonEmptyStr
+    workflow_agent_kind: WorkflowAgentKind
+    instruction: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
-    constraints: list[NonEmptyStr] = Field(default_factory=list)
-    inputs: CapabilityInput
     acceptance_spec: TaskAcceptanceSpec | None = None
-    acceptance_ref: ArtifactId | None = None
+    output_names: list[OutputName] = Field(default_factory=list)
+    confirm_before_experiment: bool = False
+    input_artifacts: list[ArtifactId] = Field(default_factory=list)
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_input_type(self) -> TaskProposal:
-        _validate_capability_input(self.capability, self.inputs)
+    def validate_outputs(self) -> TaskProposal:
+        if len(self.output_names) != len(set(self.output_names)):
+            raise ValueError("output_names must be unique")
         return self
 
 
@@ -737,14 +617,12 @@ class WorkflowTask(ContractModel):
 
     id: TaskId
     work_request_id: WorkRequestId
-    capability: Capability
-    goal: NonEmptyStr
-    inputs: CapabilityInput
+    workflow_agent_kind: WorkflowAgentKind
+    instruction: NonEmptyStr
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
-    constraints: list[NonEmptyStr] = Field(default_factory=list)
-    acceptance_spec: TaskAcceptanceSpec | None = None
-    acceptance_ref: ArtifactId | None = None
+    acceptance_ref: ArtifactRef | None = None
+    confirm_before_experiment: bool = False
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
@@ -753,7 +631,6 @@ class WorkflowTask(ContractModel):
 
     @model_validator(mode="after")
     def validate_task(self) -> WorkflowTask:
-        _validate_capability_input(self.capability, self.inputs)
         numbers = [attempt.number for attempt in self.attempts]
         if numbers != list(range(1, len(numbers) + 1)):
             raise ValueError("attempt numbers must be contiguous and start at 1")
@@ -765,6 +642,7 @@ def _validate_task_graph(tasks: list[TaskProposal] | list[WorkflowTask]) -> None
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate task id")
     known = set(ids)
+    by_id = {task.id: task for task in tasks}
     for task in tasks:
         for dependency in task.depends_on:
             if dependency not in known:
@@ -783,6 +661,9 @@ def _validate_task_graph(tasks: list[TaskProposal] | list[WorkflowTask]) -> None
                     f"task {task.id!r} future artifact binding requires direct dependency "
                     f"on {binding.source_task!r}"
                 )
+            source = by_id[binding.source_task]
+            if isinstance(source, TaskProposal) and binding.output_selector not in source.output_names:
+                raise ValueError("future artifact binding selects an undeclared output name")
 
     dependencies = {task.id: task.depends_on for task in tasks}
     visiting: set[str] = set()
@@ -887,6 +768,7 @@ class WorkspaceSpec(ContractModel):
     source_kind: WorkspaceSourceKind
     location: str | None = None
     environment: EnvironmentSpec | None = None
+    mode: WorkspaceMode = WorkspaceMode.READ_WRITE
 
     @model_validator(mode="after")
     def validate_location(self) -> WorkspaceSpec:
@@ -927,38 +809,67 @@ class WorkspaceDescriptor(ContractModel):
     description: str = ""
 
 
-class ModuleTaskRequest(ContractModel):
-    """One execution interval of a child-module attempt, including pause/resume."""
+class AgentPermissions(ContractModel):
+    """System-granted operations; filesystem writes still require a writable grant."""
+
+    execute_commands: bool = True
+    prepare_environment: bool = True
+    request_work: bool = False
+
+
+class AgentRequest(ContractModel):
+    """One Agent invocation; task content enters only as instruction or artifacts."""
 
     run_id: RunId
-    task_id: TaskId
-    attempt_number: int = Field(ge=1)
-    capability: Capability
+    task_id: TaskId | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
+    agent: Literal[AgentOwner.CODING, AgentOwner.EXPERIMENT, AgentOwner.SCIENTIFIC]
     instruction: NonEmptyStr
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
-    dataset_refs: list[DatasetRef] = Field(default_factory=list)
-    answers: list[RecordedAnswer] = Field(default_factory=list)
     budget: TaskBudget
-    acceptance: TaskAcceptanceSpec = Field(default_factory=TaskAcceptanceSpec)
+    permissions: AgentPermissions = Field(default_factory=AgentPermissions)
     confirm_before_experiment: bool = False
+    experiment_confirmed: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
     environment_spec: EnvironmentSpec = Field(default_factory=EnvironmentSpec)
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
+    resume_artifact_ids: list[ArtifactId] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_acceptance_scope(self) -> ModuleTaskRequest:
-        if self.capability != Capability.EXPERIMENT_RUN:
-            if self.acceptance.required_metric_keys or self.acceptance.required_artifact_paths:
-                raise ValueError("acceptance is only valid for experiment_run")
-            if self.confirm_before_experiment:
-                raise ValueError("confirm_before_experiment is only valid for experiment_run")
+    def validate_invocation(self) -> AgentRequest:
+        if self.agent == AgentOwner.SCIENTIFIC:
+            if self.task_id is not None or self.attempt_number is not None:
+                raise ValueError("Scientific invocation must be run-scoped")
+        elif self.task_id is None or self.attempt_number is None:
+            raise ValueError("execution Agent requires task_id and attempt_number")
+        if self.permissions.request_work and self.agent != AgentOwner.SCIENTIFIC:
+            raise ValueError("only Scientific may request work")
+        ids = [artifact.id for artifact in self.input_artifacts]
+        if len(ids) != len(set(ids)):
+            raise ValueError("input_artifacts must have unique ids")
+        if any(artifact.run_id != self.run_id for artifact in self.input_artifacts):
+            raise ValueError("input_artifacts must belong to the same run")
+        if self.resume_artifact_ids and self.parent_session_id is None:
+            raise ValueError("resume_artifact_ids require a parent session")
+        if len(self.resume_artifact_ids) != len(set(self.resume_artifact_ids)):
+            raise ValueError("resume_artifact_ids must have unique ids")
+        if not set(self.resume_artifact_ids) <= set(ids):
+            raise ValueError("resume_artifact_ids must reference input_artifacts")
+        resume_kinds = {
+            artifact.kind for artifact in self.input_artifacts
+            if artifact.id in self.resume_artifact_ids
+        }
+        if not resume_kinds <= {"answer", "work_feedback"}:
+            raise ValueError("resume materials must be answer or work_feedback")
+        if len(resume_kinds) > 1:
+            raise ValueError("answer and work_feedback cannot resume the same invocation")
         return self
 
     @model_validator(mode="after")
-    def validate_workspace(self) -> ModuleTaskRequest:
+    def validate_workspace(self) -> AgentRequest:
         """Keep the grant, logical id and declared source mutually consistent."""
         if self.workspace_spec is not None:
             if self.workspace is None:
@@ -973,54 +884,69 @@ class ModuleTaskRequest(ContractModel):
         return self
 
 
-PayloadT = TypeVar("PayloadT")
+ArtifactOutput = ArtifactCandidate | ArtifactRef
 
 
-class ModuleResult(ContractModel, Generic[PayloadT]):
-    """Uniform child-module result envelope with a capability-specific payload."""
+class ControlSignal(ContractModel):
+    """A control action referring to one result artifact, never task content."""
+
+    action: Literal["ask_user", "request_work"]
+    artifact_id: ArtifactId | None = None
+    candidate_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> ControlSignal:
+        if (self.artifact_id is None) == (self.candidate_index is None):
+            raise ValueError("control requires exactly one artifact_id or candidate_index")
+        return self
+
+
+class AgentResult(ContractModel):
+    """Common result; report and artifacts are the only business outputs."""
 
     status: ModuleStatus
-    summary: NonEmptyStr
-    payload: PayloadT | None = None
-    artifacts: list[ArtifactCandidate] = Field(default_factory=list)
+    report: NonEmptyStr
+    artifacts: list[ArtifactOutput] = Field(default_factory=list)
     session: SessionRef | None = None
-    question: QuestionDraft | None = None
-    request_work: JsonValue | None = None
+    control: ControlSignal | None = None
     error: ModuleError | None = None
     warnings: list[WarningRecord] = Field(default_factory=list)
     llm_calls: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def validate_status_fields(self) -> ModuleResult[PayloadT]:
-        if self.status == ModuleStatus.NEEDS_USER_INPUT:
-            if (
-                self.question is None
-                or self.error is not None
-                or self.request_work is not None
-            ):
-                raise ValueError(
-                    "needs_user_input result requires question, no error, no request_work"
-                )
+    def validate_status_fields(self) -> AgentResult:
+        actions = {
+            ModuleStatus.NEEDS_USER_INPUT: "ask_user",
+            ModuleStatus.REQUEST_WORK: "request_work",
+        }
+        if self.status in actions:
+            if self.control is None or self.control.action != actions[self.status] or self.error is not None:
+                raise ValueError(f"{self.status.value} requires matching control and no error")
             if self.session is None or self.session.status != SessionStatus.PAUSED:
-                raise ValueError("needs_user_input result requires a paused session")
-        elif self.status == ModuleStatus.REQUEST_WORK:
-            if self.request_work is None or self.error is not None or self.question is not None:
-                raise ValueError(
-                    "request_work result requires request_work, no error, no question"
-                )
-            if self.session is None or self.session.status != SessionStatus.PAUSED:
-                raise ValueError("request_work result requires a paused session")
+                raise ValueError(f"{self.status.value} result requires a paused session")
+            if self.status == ModuleStatus.REQUEST_WORK and self.session.module != AgentOwner.SCIENTIFIC:
+                raise ValueError("only Scientific may return request_work")
         elif self.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
-            if (
-                self.error is None
-                or self.question is not None
-                or self.request_work is not None
-            ):
-                raise ValueError(
-                    "failed or blocked result requires error, no question, no request_work"
-                )
-        elif self.error is not None or self.question is not None or self.request_work is not None:
-            raise ValueError("completed result cannot have error, question, or request_work")
+            if self.error is None or self.control is not None:
+                raise ValueError("failed or blocked result requires error and no control")
+        elif self.error is not None or self.control is not None:
+            raise ValueError("completed result cannot have error or control")
+        if self.control is not None:
+            control = self.control
+            if control.candidate_index is not None:
+                if control.candidate_index >= len(self.artifacts):
+                    raise ValueError("control candidate_index is outside artifacts")
+                artifact = self.artifacts[control.candidate_index]
+                if not isinstance(artifact, ArtifactCandidate):
+                    raise ValueError("control candidate_index must identify a candidate")
+            else:
+                matches = [a for a in self.artifacts if isinstance(a, ArtifactRef) and a.id == control.artifact_id]
+                if len(matches) != 1:
+                    raise ValueError("control artifact_id must identify one returned ArtifactRef")
+                artifact = matches[0]
+            expected_kind = "question" if control.action == "ask_user" else "work_request"
+            if artifact.kind != expected_kind:
+                raise ValueError(f"{control.action} control requires a {expected_kind} artifact")
         if (
             self.status == ModuleStatus.COMPLETED_WITH_WARNINGS
             and not self.warnings
@@ -1032,28 +958,27 @@ class ModuleResult(ContractModel, Generic[PayloadT]):
 
 
 # ---------------------------------------------------------------------------
-# 8. Capability registry
+# 8. Workflow Agent registry
 # ---------------------------------------------------------------------------
 
 
-class CapabilityDefinition(ContractModel):
-    """Public registry entry describing a capability and its owner."""
+class WorkflowAgentDefinition(ContractModel):
+    """Execution module available to the Compiler and Scheduler."""
 
-    capability: Capability
-    owner: AgentOwner
+    workflow_agent_kind: WorkflowAgentKind
     description: str = ""
 
 
-class CapabilityRegistry(ContractModel):
-    """Validated capability table with exactly one owner per capability."""
+class WorkflowAgentRegistry(ContractModel):
+    """Validated table with exactly one entry per execution module."""
 
-    definitions: list[CapabilityDefinition]
+    definitions: list[WorkflowAgentDefinition]
 
     @model_validator(mode="after")
-    def reject_duplicate_capabilities(self) -> CapabilityRegistry:
-        capabilities = [item.capability for item in self.definitions]
-        if len(capabilities) != len(set(capabilities)):
-            raise ValueError("duplicate capability definition")
+    def reject_duplicates(self) -> WorkflowAgentRegistry:
+        kinds = [item.workflow_agent_kind for item in self.definitions]
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("duplicate workflow Agent definition")
         return self
 
 
@@ -1088,6 +1013,7 @@ class WorkRequestDraft(ContractModel):
     objective: NonEmptyStr
     expected_evidence: list[NonEmptyStr] = Field(min_length=1)
     constraints: list[NonEmptyStr] = Field(default_factory=list)
+    input_artifact_ids: list[ArtifactId] = Field(default_factory=list)
 
 
 class WorkRequest(ContractModel):
@@ -1195,85 +1121,30 @@ class ScientificOpinion(ContractModel):
         return self
 
 
-class ScientificTurnRequest(ContractModel):
-    """One Orchestrator-to-Scientific call with one semantic instruction."""
+class WorkFeedback(ContractModel):
+    """One system-paired work request and outcome, stored as artifact content."""
 
     run_id: RunId
-    instruction: NonEmptyStr
-    required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
-    dataset_refs: list[DatasetRef] = Field(default_factory=list)
-    authorized_artifacts: list[ArtifactRef] = Field(default_factory=list)
-    work_outcome: WorkOutcome | None = None
-    previous_work_request: WorkRequestDraft | None = None
+    work_request_id: WorkRequestId
+    session_id: SessionId
+    previous_work_request: WorkRequestDraft
+    work_outcome: WorkOutcome
     unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
-    answers: list[RecordedAnswer] = Field(default_factory=list)
-    budget: TaskBudget
-    parent_session_id: SessionId | None = None
 
     @model_validator(mode="after")
-    def validate_turn(self) -> ScientificTurnRequest:
-        if self.parent_session_id is None:
-            if self.work_outcome is not None or self.answers:
-                raise ValueError("first call cannot carry work_outcome or answers")
-        elif self.work_outcome is not None and self.answers:
-            raise ValueError("resume cannot carry both work_outcome and answers")
-        if (self.previous_work_request is None) != (self.work_outcome is None):
-            raise ValueError("previous_work_request and work_outcome must be paired")
-        artifact_ids = [artifact.id for artifact in self.authorized_artifacts]
-        if len(artifact_ids) != len(set(artifact_ids)):
-            raise ValueError("authorized_artifacts must have unique ids")
-        for artifact in self.authorized_artifacts:
-            if artifact.run_id != self.run_id:
-                raise ValueError("authorized_artifacts must belong to the same run")
+    def validate_pair(self) -> WorkFeedback:
+        if self.work_request_id != self.work_outcome.work_request_id:
+            raise ValueError("work_feedback work_request_id must match work_outcome")
         return self
 
 
-class ScientificWorkRequestResult(ContractModel):
-    status: Literal["request_work"]
-    assessment: ScientificAssessment
-    work_request: WorkRequestDraft
-    session: SessionRef
+class ConclusionRequirements(ContractModel):
+    """Run-bound final citation requirements, stored as artifact content."""
+
+    required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
+
+
+class ObservationTrace(ContractModel):
+    """Observed evidence IDs projected from persisted tool events."""
+
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    llm_calls: int = Field(default=0, ge=0)
-
-
-class ScientificQuestionResult(ContractModel):
-    status: Literal["needs_user_input"]
-    assessment: ScientificAssessment
-    question: QuestionDraft
-    session: SessionRef
-    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    llm_calls: int = Field(default=0, ge=0)
-
-
-class ScientificCompletedResult(ContractModel):
-    status: Literal["completed"]
-    opinion: ScientificOpinion
-    session: SessionRef
-    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    llm_calls: int = Field(default=0, ge=0)
-
-
-class ScientificFailedResult(ContractModel):
-    status: Literal["failed"]
-    error: ModuleError
-    session: SessionRef | None = None
-    observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    llm_calls: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def validate_failed(self) -> ScientificFailedResult:
-        if self.session is None and self.observed_artifact_ids:
-            raise ValueError("failed without session cannot carry observed artifacts")
-        return self
-
-
-ScientificTurnResult = Annotated[
-    Union[
-        ScientificWorkRequestResult,
-        ScientificQuestionResult,
-        ScientificCompletedResult,
-        ScientificFailedResult,
-    ],
-    Field(discriminator="status"),
-]

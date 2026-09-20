@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from resagent2_contracts import AgentOwner
+from resagent2_contracts import (AgentOwner)
 from resagent2_runtime import AgentEvent, AgentLoop, AgentState
 
 

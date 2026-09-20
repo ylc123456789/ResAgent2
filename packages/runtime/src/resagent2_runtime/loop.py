@@ -12,11 +12,15 @@ from pydantic import BaseModel, ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
+    AgentPermissions,
+    ArtifactCandidate,
+    ArtifactOutput,
+    ControlSignal,
     ErrorCode,
     ModuleError,
-    ModuleResult,
+    AgentResult,
     ModuleStatus,
-    ModuleTaskRequest,
+    AgentRequest,
     RunId,
     SessionId,
     SessionRef,
@@ -82,10 +86,9 @@ class ContextBuilder(Protocol):
 class LoopRequest(Protocol):
     """The request surface the AgentLoop reads directly.
 
-    ModuleTaskRequest satisfies this for task-scoped Agents; the run-scoped
-    Scientific Agent supplies its own adapter with ``task_id``/``attempt_number``
-    left ``None``. The loop never inspects capability-specific fields (goal,
-    inputs, workspace); those stay the injected context builder's concern.
+    AgentRequest supplies this surface for task-scoped and run-scoped Agents.
+    The loop leaves materials and operation grants to the injected context
+    builder and permission policy.
     """
 
     run_id: RunId
@@ -93,6 +96,7 @@ class LoopRequest(Protocol):
     attempt_number: int | None
     budget: TaskBudget
     parent_session_id: SessionId | None
+    permissions: AgentPermissions
 
 
 class CompletionCheck(Protocol):
@@ -128,7 +132,7 @@ class AllowListPermissionPolicy:
         self,
         action: AgentAction,
         state: AgentState,
-        request: ModuleTaskRequest,
+        request: AgentRequest,
     ) -> PermissionDecision:
         if action.tool in self._allowed_tools:
             return PermissionDecision(allowed=True)
@@ -151,7 +155,6 @@ class AgentDefinition:
     permission_policy: PermissionPolicy
     completion_check: CompletionCheck
     action_type: type[AgentAction] = AgentAction
-    result_type: type[BaseModel] | None = None
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS
 
 
@@ -178,7 +181,7 @@ class AgentLoop:
         *,
         session_id: str,
         initial_memory: dict | None = None,
-    ) -> ModuleResult:
+    ) -> AgentResult:
         """Run one new Agent session until completion, pause, or structured failure."""
 
         self._run_llm_calls = 0
@@ -190,9 +193,9 @@ class AgentLoop:
             if native_call is not None else None
         )
         if native_call is not None and (not isinstance(protocol_key, str) or not protocol_key.strip()):
-            return ModuleResult(
+            return AgentResult(
                 status=ModuleStatus.FAILED,
-                summary="native client must provide a stable tool_session_key",
+                report="native client must provide a stable tool_session_key",
                 error=ModuleError(
                     code=ErrorCode.CONTRACT_ERROR,
                     message="native client must provide a stable tool_session_key",
@@ -207,9 +210,9 @@ class AgentLoop:
                     message="cannot resume unknown session",
                     retryable=False,
                 )
-                return ModuleResult(
+                return AgentResult(
                     status=ModuleStatus.FAILED,
-                    summary=error.message,
+                    report=error.message,
                     error=error,
                 )
             state = self.store.load(resume_id)
@@ -230,9 +233,9 @@ class AgentLoop:
                     ),
                     retryable=False,
                 )
-                return ModuleResult(
+                return AgentResult(
                     status=ModuleStatus.FAILED,
-                    summary=error.message,
+                    report=error.message,
                     error=error,
                 )
             state.status = SessionStatus.ACTIVE
@@ -256,9 +259,9 @@ class AgentLoop:
                     message="session_id already exists",
                     retryable=False,
                 )
-                return ModuleResult(
+                return AgentResult(
                     status=ModuleStatus.FAILED,
-                    summary=error.message,
+                    report=error.message,
                     error=error,
                 )
             self._save(state)
@@ -617,22 +620,37 @@ class AgentLoop:
                     self._cancel_pending_calls(state)
                     state.status = SessionStatus.PAUSED
                     self._save(state)
-                    return ModuleResult(
+                    return AgentResult(
                         status=ModuleStatus.NEEDS_USER_INPUT,
-                        summary=observation.summary,
-                        question=observation.question,
+                        report=observation.summary,
+                        artifacts=[ArtifactCandidate(
+                            kind="question", path="question.json",
+                            media_type="application/json", summary=observation.question.text,
+                            content=observation.question.model_dump_json(),
+                        )],
+                        control=ControlSignal(action="ask_user", candidate_index=0),
                         session=self._session_ref(state),
                         llm_calls=self._run_llm_calls,
                     )
 
                 if observation.request_work is not None:
+                    if definition.owner != AgentOwner.SCIENTIFIC or not request.permissions.request_work:
+                        return self._failure(
+                            state, ErrorCode.PERMISSION_DENIED,
+                            "this invocation is not permitted to request work", retryable=False,
+                        )
                     self._cancel_pending_calls(state)
                     state.status = SessionStatus.PAUSED
                     self._save(state)
-                    return ModuleResult(
+                    return AgentResult(
                         status=ModuleStatus.REQUEST_WORK,
-                        summary=observation.summary,
-                        request_work=observation.request_work,
+                        report=observation.summary,
+                        artifacts=[ArtifactCandidate(
+                            kind="work_request", path="work_request.json",
+                            media_type="application/json", summary=observation.summary,
+                            content=json.dumps(observation.request_work),
+                        )],
+                        control=ControlSignal(action="request_work", candidate_index=0),
                         session=self._session_ref(state),
                         llm_calls=self._run_llm_calls,
                     )
@@ -657,23 +675,11 @@ class AgentLoop:
                         decision.failure.message,
                         retryable=decision.failure.retryable,
                         details=decision.failure.details,
+                        artifacts=decision.artifacts,
+                        report=decision.report or decision.failure.message,
                     )
 
                 if decision.complete:
-                    payload = decision.payload
-                    if definition.result_type is not None:
-                        try:
-                            payload = definition.result_type.model_validate(payload).model_dump(
-                                mode="json"
-                            )
-                        except ValidationError as error:
-                            return self._failure(
-                                state,
-                                ErrorCode.CONTRACT_ERROR,
-                                "completion payload did not match result schema",
-                                retryable=False,
-                                details=self._validation_details(error),
-                            )
                     self._cancel_pending_calls(state)
                     state.status = SessionStatus.COMPLETED
                     state.runtime_feedback = None
@@ -684,19 +690,18 @@ class AgentLoop:
                         if decision.warnings
                         else ModuleStatus.COMPLETED
                     )
-                    return ModuleResult(
+                    return AgentResult(
                         status=status,
-                        summary=decision.summary or "Completion check passed",
-                        payload=payload,
+                        report=decision.report or "Completion check passed",
                         artifacts=decision.artifacts,
                         warnings=decision.warnings,
                         session=self._session_ref(state),
                         llm_calls=self._run_llm_calls,
                     )
-                if decision.summary:
+                if decision.report:
                     self._feedback(
                         state,
-                        decision.summary,
+                        decision.report,
                         tool="completion_check",
                         value={"completion_check": "rejected"},
                         source="completion_check",
@@ -789,7 +794,7 @@ class AgentLoop:
             **compose_options,
         )
 
-    def _compact_history(self, definition, request, state, schemas, context_limit, plan) -> ModuleResult | None:
+    def _compact_history(self, definition, request, state, schemas, context_limit, plan) -> AgentResult | None:
         """Charge one bounded summary request and atomically publish a usable checkpoint."""
         client = definition.llm_client
         remaining = request.budget.max_llm_calls - self._run_llm_calls
@@ -858,7 +863,7 @@ class AgentLoop:
             )
         )
 
-    def _charge_calls(self, state: AgentState, client, *, response_received: bool) -> ModuleResult | None:
+    def _charge_calls(self, state: AgentState, client, *, response_received: bool) -> AgentResult | None:
         """Use the same attempt ledger for actions, errors and compaction calls."""
         attempts = getattr(client, "last_attempts", 1)
         if type(attempts) is not int or attempts < 0 or (response_received and attempts == 0):
@@ -871,7 +876,7 @@ class AgentLoop:
         state.llm_calls_used += attempts
         return None
 
-    def _preflight_batch(self, definition, registry, request, state, actions) -> ModuleResult | None:
+    def _preflight_batch(self, definition, registry, request, state, actions) -> AgentResult | None:
         """Validate the whole batch before its first side effect; recheck at dispatch."""
         for action in actions:
             if not registry.contains(action.tool):
@@ -901,7 +906,7 @@ class AgentLoop:
 
     def _note_failure(
         self, state: AgentState, count: int
-    ) -> ModuleResult | None:
+    ) -> AgentResult | None:
         """Return a failure result once the recoverable-failure limit is hit."""
         if count + 1 < _CONSECUTIVE_FAILURE_LIMIT:
             return None
@@ -1004,7 +1009,9 @@ class AgentLoop:
         *,
         retryable: bool,
         details: dict | None = None,
-    ) -> ModuleResult:
+        artifacts: list[ArtifactOutput] | None = None,
+        report: str | None = None,
+    ) -> AgentResult:
         error = ModuleError(
             code=code,
             message=message,
@@ -1020,9 +1027,10 @@ class AgentLoop:
         )
         state.status = SessionStatus.FAILED
         self._save(state)
-        return ModuleResult(
+        return AgentResult(
             status=ModuleStatus.FAILED,
-            summary=message,
+            report=report or message,
+            artifacts=artifacts or [],
             error=error,
             session=self._session_ref(state),
             llm_calls=self._run_llm_calls,

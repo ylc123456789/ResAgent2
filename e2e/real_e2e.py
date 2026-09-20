@@ -6,13 +6,16 @@ RESAGENT2_ENV_ROOT to a stable directory to reuse conda envs across runs
 (RESAGENT2_CONDA_EXE overrides conda, RESAGENT2_DATASET_ROOT points at datasets).
 
 Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-resume|literature``
-(``full`` and ``code`` are legacy aliases for ``code-experiment``).
+(``full`` aliases ``code-experiment``; ``code`` and ``experiment`` invoke one agent).
 """
 
 from __future__ import annotations
 
 import os
 import json
+import math
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -21,6 +24,7 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
+    AttemptStatus,
     ArtifactCandidate,
     WorkflowAgentKind,
     WorkflowAgentDefinition,
@@ -35,6 +39,8 @@ from resagent2_contracts import (
     TaskBudget,
     TaskStatus,
     UserAnswer,
+    VerificationResult,
+    latest_command_results,
     WorkspaceGrant,
     WorkspaceMode,
     WorkspaceSourceKind,
@@ -48,6 +54,8 @@ from resagent2_components import (
 from resagent2_components import (
     DatasetCatalog,
     ResourceLayout,
+    RegisteredArtifactReader,
+    read_artifact_json,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
@@ -258,6 +266,7 @@ def train(epochs, seed):
         "candidate_accuracy": candidate,
         "epochs": epochs,
         "seed": seed,
+        "device": device,
     }
     json.dump(metrics, open("metrics.json", "w"))
     print(f"baseline={baseline} candidate={candidate}")
@@ -471,37 +480,114 @@ def _repair_repo(workdir: Path) -> Path:
 
 
 def _real_e2e_succeeded(run) -> bool:
-    """Require completed tasks, task-owned evidence and a final scientific opinion."""
+    """Accept any valid task decomposition, but require frozen GPU training evidence."""
     if run.status != RunStatus.COMPLETED or run.final_opinion is None:
         return False
-    if run.final_report_artifact_id is None:
+    if run.final_report_artifact_id not in run.artifacts:
         return False
     if run.workflow is None:
         return False
-    tasks = {task.workflow_agent_kind: task for task in run.workflow.tasks}
-    if (
-        len(run.workflow.tasks) != len(_EXPECTED_TASK_CAPABILITIES)
-        or set(tasks) != _EXPECTED_TASK_CAPABILITIES
-    ):
+    tasks = run.workflow.tasks
+    if {task.workflow_agent_kind for task in tasks} != _EXPECTED_TASK_CAPABILITIES:
         return False
     if any(
         task.status != TaskStatus.COMPLETED or not task.attempts
-        for task in tasks.values()
+        for task in tasks
     ):
         return False
-
-    artifacts = list(run.artifacts.values())
-
-    def has_artifact(capability: WorkflowAgentKind, kind: str) -> bool:
-        task_id = tasks[capability].id
-        return any(
-            artifact.kind == kind and artifact.task_id == task_id
-            for artifact in artifacts
-        )
-
-    if not has_artifact(WorkflowAgentKind.EXPERIMENT, "experiment_result"):
+    if not _has_training_patch(run):
         return False
-    return has_artifact(WorkflowAgentKind.CODING, "code_change")
+    return any(
+        all(_accuracy(metrics.get(key)) for key in ("baseline_accuracy", "candidate_accuracy"))
+        and type(metrics.get("epochs")) is int and metrics["epochs"] == 1
+        and type(metrics.get("seed")) is int and metrics["seed"] == 0
+        and metrics.get("device") == "cuda"
+        for metrics in _training_metrics(run)
+    )
+
+
+def _accuracy(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0 <= value <= 1)
+
+
+def _attempt_artifacts(run, task, attempt):
+    return [
+        run.artifacts[key] for key in attempt.artifact_ids
+        if key in run.artifacts
+        and run.artifacts[key].run_id == run.run_id
+        and run.artifacts[key].task_id == task.id
+        and run.artifacts[key].attempt_number == attempt.number
+        and run.artifacts[key].producer.value == task.workflow_agent_kind.value
+    ]
+
+
+def _has_training_patch(run) -> bool:
+    reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
+    for task in run.workflow.tasks:
+        if (task.workflow_agent_kind != WorkflowAgentKind.CODING
+                or task.status != TaskStatus.COMPLETED or not task.attempts
+                or task.attempts[-1].status != AttemptStatus.COMPLETED):
+            continue
+        for ref in _attempt_artifacts(run, task, task.attempts[-1]):
+            if ref.kind != "code_patch":
+                continue
+            try:
+                patch = reader.read_text(ref.id, max_chars=16_000_000)["content"]
+            except (ValueError, OSError):
+                continue
+            if "+++ b/train.py" in patch and "\n@@ " in patch:
+                return True
+    return False
+
+
+def _training_commands(run, refs):
+    reader = RegisteredArtifactReader(refs, run_id=run.run_id)
+    for ref in refs:
+        if ref.kind != "execution_record":
+            continue
+        try:
+            data = read_artifact_json(reader, ref.id)
+            rows = [VerificationResult.model_validate(row) for row in data["results"]]
+            for row in rows:
+                words = shlex.split(row.command)
+                if not words or not re.fullmatch(r"python(?:\d+(?:\.\d+)?)?", Path(words[0]).name):
+                    continue
+                arguments = words[1:]
+                while arguments and arguments[0] in {"-u", "-B", "-s", "-E", "-I", "-O", "-OO"}:
+                    arguments = arguments[1:]
+                if arguments and Path(arguments[0]).name == "train.py":
+                    yield row
+        except (ValueError, OSError, TypeError, KeyError):
+            continue
+
+
+def _training_metrics(run):
+    """Require cited workspace metrics and a successful train command from the same attempt."""
+    reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
+    for task in run.workflow.tasks:
+        if (task.workflow_agent_kind != WorkflowAgentKind.EXPERIMENT
+                or task.status != TaskStatus.COMPLETED or not task.attempts
+                or task.attempts[-1].status != AttemptStatus.COMPLETED):
+            continue
+        refs = _attempt_artifacts(run, task, task.attempts[-1])
+        commands = list(_training_commands(run, refs))
+        if not commands or any(row.exit_code != 0 or row.timed_out
+                               for row in latest_command_results(commands)):
+            continue
+        for ref in refs:
+            if (ref.media_type != "application/json"
+                    or ref.metadata.get("source_path") != "metrics.json"
+                    or ref.metadata.get("source_root") != "workspace"
+                    or ref.id not in run.scientific_observed_artifact_ids
+                    or ref.id not in run.final_opinion.evidence_artifact_ids):
+                continue
+            try:
+                metrics = read_artifact_json(reader, ref.id)
+            except (ValueError, OSError):
+                continue
+            if isinstance(metrics, dict):
+                yield metrics
 
 
 def _dataset_materials(workdir: Path, layout: ResourceLayout, run_id: str):
@@ -578,13 +664,14 @@ def run_full(workdir: Path) -> bool:
             "train.py currently raises NotImplementedError and must be "
             "implemented (the SE arm crashes until it is). train.py already "
             "runs both arms (baseline and SE) and "
-            "writes metrics.json with baseline_accuracy and candidate_accuracy; "
-            "the training protocol (SGD, epochs, seed=0) is fixed and must not "
+            "writes metrics.json with baseline_accuracy, candidate_accuracy, and device; "
+            "run both arms on CUDA and preserve the original metrics.json as evidence. "
+            "The training protocol (SGD, epochs=1, seed=0) is fixed and must not "
             "be changed. Conclude whether the SE block improves accuracy over "
             "the baseline."
         ),
         budget=RunBudget(
-            max_tasks=2, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
+            max_tasks=4, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
         ),
     )
     controller, _ = _build_controller(workdir, repo)
@@ -609,17 +696,22 @@ def _direct_succeeded(run) -> bool:
 
 
 def _repair_succeeded(run) -> bool:
-    """Scenario 3 acceptance: completed with a preserved failed attempt + recovery."""
+    """Require a failed training attempt, a code patch and measured recovery."""
     tasks = run.workflow.tasks if run.workflow is not None else []
     had_failure = any(
-        any(a.status.value == "failed" for a in task.attempts) for task in tasks
+        row.exit_code != 0 or row.timed_out
+        for task in tasks if task.workflow_agent_kind == WorkflowAgentKind.EXPERIMENT
+        for attempt in task.attempts if attempt.status == AttemptStatus.FAILED
+        for row in _training_commands(run, _attempt_artifacts(run, task, attempt))
     )
     return (
         run.status == RunStatus.COMPLETED
         and run.final_opinion is not None
-        and run.final_report_artifact_id is not None
+        and run.final_report_artifact_id in run.artifacts
         and had_failure
-        and len(run.work_requests) >= 2
+        and _has_training_patch(run)
+        and any(_accuracy(metrics.get("accuracy")) and metrics["accuracy"] == 0.8
+                for metrics in _training_metrics(run))
     )
 
 

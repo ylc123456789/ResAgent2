@@ -13,6 +13,7 @@ from resagent2_contracts import (
     Capability,
     CodeUnderstandInput,
     ErrorCode,
+    FutureArtifactBinding,
     ModuleError,
     ModuleResult,
     ModuleStatus,
@@ -146,6 +147,47 @@ def test_research_request_does_not_accept_deployment_resources() -> None:
             ),
             dataset_refs=[],
         )
+
+
+def test_future_artifact_binding_requires_direct_dependency() -> None:
+    first = TaskProposal(
+        id="task_first",
+        work_request_id="work_test",
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Produce an analysis",
+        inputs=CodeUnderstandInput(question="Analyze the entry point"),
+    )
+    second = TaskProposal(
+        id="task_second",
+        work_request_id="work_test",
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Use the analysis",
+        inputs=CodeUnderstandInput(question="Summarize the analysis"),
+        depends_on=["task_first"],
+        input_artifact_bindings=[
+            FutureArtifactBinding(source_task="task_first", output_selector="analysis")
+        ],
+    )
+    assert WorkflowProposal(work_request_id="work_test", tasks=[first, second])
+
+    missing_dependency = second.model_copy(update={"depends_on": []})
+    with pytest.raises(ValidationError, match="requires direct dependency"):
+        WorkflowProposal(work_request_id="work_test", tasks=[first, missing_dependency])
+
+
+def test_future_artifact_binding_rejects_unknown_source() -> None:
+    proposal = TaskProposal(
+        id="task_second",
+        work_request_id="work_test",
+        capability=Capability.CODE_UNDERSTAND,
+        goal="Use an output",
+        inputs=CodeUnderstandInput(question="Summarize"),
+        input_artifact_bindings=[
+            FutureArtifactBinding(source_task="task_missing", output_selector="analysis")
+        ],
+    )
+    with pytest.raises(ValidationError, match="unknown task"):
+        WorkflowProposal(work_request_id="work_test", tasks=[proposal])
 
 
 def test_schema_round_trip_preserves_contract() -> None:

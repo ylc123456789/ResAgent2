@@ -408,6 +408,13 @@ class AcceptanceSpec(ContractModel):
         return [_validate_relative_path(value) for value in values]
 
 
+class FutureArtifactBinding(ContractModel):
+    """Logical reference to one output of a direct dependency task."""
+
+    source_task: TaskId
+    output_selector: OutputName
+
+
 class ArtifactImport(ContractModel):
     """Minimal caller-supplied input that becomes a frozen orchestrator Artifact.
 
@@ -715,6 +722,7 @@ class TaskProposal(ContractModel):
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     inputs: CapabilityInput
+    input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_input_type(self) -> TaskProposal:
@@ -735,6 +743,7 @@ class WorkflowTask(ContractModel):
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
+    input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
     attempts: list[Attempt] = Field(default_factory=list)
     warnings: list[WarningRecord] = Field(default_factory=list)
 
@@ -757,6 +766,18 @@ def _validate_task_graph(tasks: list[TaskProposal] | list[WorkflowTask]) -> None
             if dependency not in known:
                 raise ValueError(
                     f"task {task.id!r} depends on unknown task {dependency!r}"
+                )
+        for binding in task.input_artifact_bindings:
+            if binding.source_task not in known:
+                raise ValueError(
+                    f"task {task.id!r} binds output of unknown task {binding.source_task!r}"
+                )
+            if binding.source_task == task.id:
+                raise ValueError(f"task {task.id!r} cannot bind its own future output")
+            if binding.source_task not in task.depends_on:
+                raise ValueError(
+                    f"task {task.id!r} future artifact binding requires direct dependency "
+                    f"on {binding.source_task!r}"
                 )
 
     dependencies = {task.id: task.depends_on for task in tasks}

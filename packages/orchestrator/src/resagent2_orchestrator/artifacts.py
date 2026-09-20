@@ -30,6 +30,17 @@ class ArtifactRegistrationError(ValueError):
     """Raised when a candidate cannot become a provenance-safe ArtifactRef."""
 
 
+SYSTEM_ARTIFACT_KINDS = frozenset({
+    "literature_search",
+    "work_feedback",
+    "question",
+    "answer",
+    "work_request",
+    "acceptance_requirements",
+    "scientific_opinion",
+})
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -121,6 +132,7 @@ class ArtifactRegistry:
                 sha256=digest,
                 media_type=candidate.media_type,
                 summary=candidate.summary,
+                output_name=candidate.output_name,
                 metadata=candidate.metadata,
             )
 
@@ -224,7 +236,7 @@ class ArtifactRegistry:
         atomically. The id is content-derived, so registering the same content
         again is idempotent.
         """
-        if candidate.kind != "literature_search":
+        if candidate.kind not in SYSTEM_ARTIFACT_KINDS:
             raise ArtifactRegistrationError(
                 f"unsupported scientific artifact kind: {candidate.kind}"
             )
@@ -262,7 +274,79 @@ class ArtifactRegistry:
             sha256=digest,
             media_type=candidate.media_type,
             summary=candidate.summary,
+            output_name=candidate.output_name,
             metadata=candidate.metadata,
+        )
+
+    def register_system_artifact(
+        self,
+        candidate: ArtifactCandidate,
+        *,
+        run_id: RunId,
+        source_type: str,
+        session_id: SessionId | None = None,
+        task_id: TaskId | None = None,
+        attempt_number: int | None = None,
+    ) -> ArtifactRef:
+        """Register a Controller/Scheduler-owned structured artifact.
+
+        System artifacts are content snapshots, but their scope is supplied by
+        the trusted caller and checked again by ``ArtifactRef`` provenance.
+        Candidate metadata cannot override the source type chosen here.
+        """
+        if candidate.kind not in SYSTEM_ARTIFACT_KINDS:
+            raise ArtifactRegistrationError(
+                f"unsupported system artifact kind: {candidate.kind}"
+            )
+        if candidate.kind == "literature_search":
+            raise ArtifactRegistrationError(
+                "literature_search must use the Scientific session registration path"
+            )
+        text = candidate.content if candidate.content is not None else json.dumps(
+            candidate.metadata, sort_keys=True, ensure_ascii=False, indent=2
+        )
+        encoded = text.encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        scope = "|".join(
+            str(item) for item in (run_id, session_id or "", task_id or "", attempt_number or "")
+        )
+        scope_digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
+        artifact_id = f"artifact_system_{candidate.kind}_{digest[:12]}_{scope_digest}"
+        destination_dir = self.root / run_id / artifact_id
+        destination = destination_dir / candidate.path
+        if destination.exists():
+            if not destination.is_file() or _sha256(destination) != digest:
+                raise ArtifactRegistrationError(
+                    f"system artifact already exists with different content: {artifact_id}"
+                )
+        else:
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            temporary: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(encoded)
+                os.replace(temporary, destination)
+            except Exception:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+                raise
+        metadata = dict(candidate.metadata)
+        metadata["source_type"] = source_type
+        return ArtifactRef(
+            id=artifact_id,
+            kind=candidate.kind,
+            producer=AgentOwner.ORCHESTRATOR,
+            run_id=run_id,
+            task_id=task_id,
+            attempt_number=attempt_number,
+            session_id=session_id,
+            uri=destination.as_uri(),
+            sha256=digest,
+            media_type=candidate.media_type,
+            summary=candidate.summary,
+            output_name=candidate.output_name,
+            metadata=metadata,
         )
 
     def register_final_report(
@@ -316,6 +400,7 @@ class ArtifactRegistry:
             sha256=expected_digest,
             media_type=candidate.media_type,
             summary=candidate.summary,
+            output_name=candidate.output_name,
             metadata=candidate.metadata,
         )
         return artifact

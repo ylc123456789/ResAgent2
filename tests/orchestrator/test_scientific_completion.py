@@ -445,3 +445,54 @@ def test_register_scientific_freezes_with_session_provenance(tmp_path) -> None:
         candidate, run_id="run_gate", session_id="session_scientific"
     )
     assert retried == first
+
+
+
+def test_register_system_artifact_supports_task_and_session_scopes(tmp_path) -> None:
+    artifact_registry = ArtifactRegistry(tmp_path / "artifacts")
+
+    acceptance = artifact_registry.register_system_artifact(
+        ArtifactCandidate(
+            kind="acceptance_requirements",
+            path="acceptance.json",
+            media_type="application/json",
+            summary="task acceptance",
+            content='{"required_artifact_paths": ["results.json"]}',
+        ),
+        run_id="run_gate",
+        task_id="task_experiment",
+        source_type="task_requirement",
+    )
+    assert acceptance.producer == AgentOwner.ORCHESTRATOR
+    assert acceptance.task_id == "task_experiment"
+    assert acceptance.attempt_number is None
+
+    answer = artifact_registry.register_system_artifact(
+        ArtifactCandidate(
+            kind="answer",
+            path="answer.json",
+            media_type="application/json",
+            summary="task answer",
+            content='{"question_id": "question_x", "answer": "yes"}',
+        ),
+        run_id="run_gate",
+        task_id="task_experiment",
+        attempt_number=1,
+        source_type="controller_answer",
+    )
+    assert answer.task_id == "task_experiment"
+    assert answer.attempt_number == 1
+
+    with pytest.raises(ValueError, match="source_type"):
+        artifact_registry.register_system_artifact(
+            ArtifactCandidate(
+                kind="acceptance_requirements",
+                path="acceptance.json",
+                media_type="application/json",
+                summary="task acceptance",
+                content="{}",
+            ),
+            run_id="run_gate",
+            task_id="task_experiment",
+            source_type="controller_answer",
+        )

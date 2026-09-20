@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "11.0"
+SCHEMA_VERSION = "12.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -72,6 +72,9 @@ WorkRequestId = Annotated[
 WorkspaceId = Annotated[
     str, StringConstraints(pattern=r"^ws_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ]
+OutputName = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
+]
 
 
 class ContractModel(BaseModel):
@@ -79,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["11.0"] = SCHEMA_VERSION
+    schema_version: Literal["12.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -255,49 +258,77 @@ class ArtifactRef(ContractModel):
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     media_type: NonEmptyStr
     summary: NonEmptyStr
+    output_name: OutputName | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_provenance(self) -> ArtifactRef:
-        """Reject mixed execution/session/orchestrator provenance.
+        """Validate kind-specific producer and ownership shapes.
 
-        Three mutually exclusive shapes are legal:
-
-        - execution artifact: task_id and attempt_number both present, no session;
-        - scientific tool artifact: session_id present, no task/attempt, scientific;
-        - orchestrator artifact: none of the three, orchestrator + source_type.
-
-        The execution shape does not whitelist the producer: during the Phase 7
-        migration ``scientific_analyze`` is still a task capability, so legacy
-        scientific evidence is registered as an execution artifact.
+        Runtime artifacts still use task+attempt or Scientific session scope.
+        System artifacts use explicit, kind-scoped orchestrator shapes so that
+        the registry and contract layer cannot disagree about provenance.
         """
         has_task = self.task_id is not None
         has_attempt = self.attempt_number is not None
         has_session = self.session_id is not None
-
-        if has_session:
-            if has_task or has_attempt or self.producer != AgentOwner.SCIENTIFIC:
-                raise ValueError(
-                    "session-bound artifact requires scientific producer and no task/attempt"
-                )
-            return self
-
-        if has_task != has_attempt:
-            raise ValueError(
-                "execution artifact requires both task_id and attempt_number"
-            )
-        if has_task:
-            if self.producer == AgentOwner.ORCHESTRATOR:
-                raise ValueError(
-                    "orchestrator artifact cannot have task_id or attempt_number"
-                )
-            return self
+        source_type = self.metadata.get("source_type")
 
         if self.producer != AgentOwner.ORCHESTRATOR:
-            raise ValueError("orchestrator artifact requires orchestrator producer")
-        if self.metadata.get("source_type") not in {"import", "final_report"}:
+            if has_session:
+                if has_task or has_attempt or self.producer != AgentOwner.SCIENTIFIC:
+                    raise ValueError(
+                        "session-bound non-orchestrator artifact requires scientific producer "
+                        "and no task/attempt"
+                    )
+                return self
+            if has_task != has_attempt:
+                raise ValueError(
+                    "execution artifact requires both task_id and attempt_number"
+                )
+            if not has_task:
+                raise ValueError(
+                    "non-orchestrator artifact requires task/attempt or scientific session scope"
+                )
+            return self
+
+        # Orchestrator system artifacts have a closed kind/scope matrix.
+        if self.kind == "acceptance_requirements":
+            if not has_task or has_attempt or has_session or source_type != "task_requirement":
+                raise ValueError(
+                    "acceptance_requirements requires orchestrator task scope without attempt "
+                    "and source_type=task_requirement"
+                )
+            return self
+
+        if self.kind in {"work_feedback", "work_request"}:
+            expected = "controller_feedback" if self.kind == "work_feedback" else "controller_work_request"
+            if not has_session or has_task or has_attempt or source_type != expected:
+                raise ValueError(
+                    f"{self.kind} requires orchestrator session scope and source_type={expected}"
+                )
+            return self
+
+        if self.kind in {"answer", "question"}:
+            if source_type not in {"controller_answer", "controller_question"}:
+                raise ValueError(
+                    f"{self.kind} requires a controller source_type"
+                )
+            session_scope = has_session and not has_task and not has_attempt
+            task_scope = has_task and has_attempt and not has_session
+            if not (session_scope or task_scope):
+                raise ValueError(
+                    f"{self.kind} requires either session scope or task+attempt scope"
+                )
+            return self
+
+        if has_task or has_attempt or has_session:
             raise ValueError(
-                "orchestrator artifact requires metadata.source_type "
+                "unknown orchestrator artifact kind cannot carry task, attempt, or session scope"
+            )
+        if source_type not in {"import", "final_report"}:
+            raise ValueError(
+                "run-only orchestrator artifact requires metadata.source_type "
                 "in {import, final_report}"
             )
         return self
@@ -332,6 +363,7 @@ class ArtifactCandidate(ContractModel):
     path: str
     media_type: NonEmptyStr
     summary: NonEmptyStr
+    output_name: OutputName | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     content: str | None = None
 

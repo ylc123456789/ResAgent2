@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     ArtifactCandidate,
     ArtifactRef,
+    AgentOwner,
     Attempt,
     AttemptStatus,
     AcceptanceSpec,
@@ -73,6 +74,65 @@ def module_error() -> ModuleError:
     )
 
 
+
+def _artifact_ref(**overrides: object) -> ArtifactRef:
+    values: dict[str, object] = {
+        "id": "artifact_contract",
+        "kind": "work_feedback",
+        "producer": AgentOwner.ORCHESTRATOR,
+        "run_id": "run_example",
+        "session_id": "session_example",
+        "uri": "file:///tmp/work-feedback.json",
+        "sha256": "0" * 64,
+        "media_type": "application/json",
+        "summary": "contract test artifact",
+        "metadata": {"source_type": "controller_feedback"},
+    }
+    values.update(overrides)
+    return ArtifactRef(**values)
+
+
+def test_system_artifact_provenance_shapes_are_explicit() -> None:
+    feedback = _artifact_ref()
+    assert feedback.session_id == "session_example"
+
+    acceptance = _artifact_ref(
+        id="artifact_acceptance",
+        kind="acceptance_requirements",
+        session_id=None,
+        task_id="task_example",
+        metadata={"source_type": "task_requirement"},
+    )
+    assert acceptance.task_id == "task_example"
+
+    task_answer = _artifact_ref(
+        id="artifact_answer",
+        kind="answer",
+        session_id=None,
+        task_id="task_example",
+        attempt_number=1,
+        metadata={"source_type": "controller_answer"},
+    )
+    assert task_answer.attempt_number == 1
+
+
+def test_system_artifact_provenance_rejects_mismatched_kind_scope() -> None:
+    with pytest.raises(ValidationError, match="acceptance_requirements"):
+        _artifact_ref(
+            kind="acceptance_requirements",
+            task_id="task_example",
+            session_id=None,
+            metadata={"source_type": "controller_feedback"},
+        )
+
+    with pytest.raises(ValidationError, match=r"task\+attempt"):
+        _artifact_ref(
+            kind="answer",
+            task_id="task_example",
+            session_id=None,
+            metadata={"source_type": "controller_answer"},
+        )
+
 def test_research_request_does_not_accept_deployment_resources() -> None:
     from resagent2_contracts import ResearchRequest
 
@@ -99,7 +159,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "11.0"
+    assert restored.schema_version == "12.0"
 
 
 @pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0"])

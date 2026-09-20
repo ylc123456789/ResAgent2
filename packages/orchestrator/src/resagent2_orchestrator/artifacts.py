@@ -236,7 +236,7 @@ class ArtifactRegistry:
         atomically. The id is content-derived, so registering the same content
         again is idempotent.
         """
-        if candidate.kind not in SYSTEM_ARTIFACT_KINDS:
+        if candidate.kind != "literature_search":
             raise ArtifactRegistrationError(
                 f"unsupported scientific artifact kind: {candidate.kind}"
             )

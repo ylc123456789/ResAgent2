@@ -32,6 +32,7 @@ from resagent2_contracts import (
     WorkRequestStatus,
 )
 from resagent2_orchestrator import (
+    ArtifactRegistrationError,
     ArtifactRegistry,
     CompletionViolationCode,
     FinalReportRenderer,
@@ -446,6 +447,22 @@ def test_register_scientific_freezes_with_session_provenance(tmp_path) -> None:
     )
     assert retried == first
 
+
+
+def test_scientific_registry_rejects_controller_artifacts(tmp_path) -> None:
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    with pytest.raises(ArtifactRegistrationError, match="unsupported scientific artifact kind"):
+        registry.register_scientific(
+            ArtifactCandidate(
+                kind="answer",
+                path="answer.json",
+                media_type="application/json",
+                summary="controller answer",
+                content="{}",
+            ),
+            run_id="run_gate",
+            session_id="session_scientific",
+        )
 
 
 def test_register_system_artifact_supports_task_and_session_scopes(tmp_path) -> None:

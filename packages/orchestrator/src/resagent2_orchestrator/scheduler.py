@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
-    AcceptanceSpec,
+    TaskAcceptanceSpec,
     Attempt,
     AttemptStatus,
     Capability,
@@ -448,7 +448,7 @@ class WorkflowScheduler:
                     int(run.remaining_timeout_seconds(datetime.now(UTC))),
                 ),
             ),
-            acceptance=AcceptanceSpec(
+            acceptance=TaskAcceptanceSpec(
                 required_metric_keys=(
                     list(task.inputs.expected_metrics)
                     if task.capability == Capability.EXPERIMENT_RUN

@@ -337,10 +337,10 @@ Compiler 保留非空图、依赖存在、无环、允许模块、revision 和�
 
 ```text
 TaskProposal / WorkflowTask
-  acceptance_spec: TaskAcceptanceSpec | null
+  acceptance_spec: TaskTaskAcceptanceSpec | null
 ```
 
-`TaskAcceptanceSpec` 只允许直接调用方、Controller 或 Compiler 的系统入口创建。直接调用方如果要求“必须有 accuracy 指标、必须有 results.json”，就在创建任务时填写这个槽位；Compiler 只有在上游已经给出明确、可机器检查的要求时才能转交，不能自行猜测。Compiler 的 LLM 草案即使包含验收文字，也必须由 Orchestrator 接收边界按显式来源和 capability registry 的允许谓词确定性归一化；没有明确来源就丢弃，不能让模型自证验收规则。没有验收要求时槽位为空，表示该 task 没有额外的 task-level acceptance 门槛。
+`TaskTaskAcceptanceSpec` 只允许直接调用方、Controller 或 Compiler 的系统入口创建。直接调用方如果要求“必须有 accuracy 指标、必须有 results.json”，就在创建任务时填写这个槽位；Compiler 只有在上游已经给出明确、可机器检查的要求时才能转交，不能自行猜测。Compiler 的 LLM 草案即使包含验收文字，也必须由 Orchestrator 接收边界按显式来源和 capability registry 的允许谓词确定性归一化；没有明确来源就丢弃，不能让模型自证验收规则。没有验收要求时槽位为空，表示该 task 没有额外的 task-level acceptance 门槛。
 
 任务接收时，系统把这个槽位物化成不可变的 `acceptance_requirements` artifact，并将正式 `acceptance_ref` 绑定到该 Task。Proposal、WorkflowTask、ModuleTaskRequest 和 Attempt 持有同一份快照；Scheduler 只读取这份系统绑定的 artifact 检查本 task 的正式产物。Agent 如需知道交付要求，也只能通过只读的要求 artifact 读取；Agent 的结果、报告或新 artifact 不能回写或放宽它。这样“谁填”的答案是明确的：直接调用方提出要求，Orchestrator 负责登记、归一化和绑定，Scheduler 负责执行检查。
 
@@ -414,7 +414,7 @@ Registry 放开后，`ArtifactRef.validate_provenance` 也必须同步改成按�
 
 新版验收必须额外覆盖：
 
-- 直接调用方填写 `TaskAcceptanceSpec` 后，系统确实生成并绑定 `acceptance_requirements` artifact；缺少绑定时 Scheduler 拒绝执行 task-level acceptance，而不是静默通过。
+- 直接调用方填写 `TaskTaskAcceptanceSpec` 后，系统确实生成并绑定 `acceptance_requirements` artifact；缺少绑定时 Scheduler 拒绝执行 task-level acceptance，而不是静默通过。
 - Agent 不能通过输出新的要求 artifact、修改 instruction 或修改 input_artifacts 覆盖已绑定验收要求；无验收要求的 task 不被强行猜测出要求。
 - 未来产物绑定但未列入 `depends_on`、列入但任务未知、源任务失败或产物未登记时均拒绝或保持不可运行；合法绑定按依赖完成后再解析。
 - 每一种系统 artifact kind 都能登记、读取、做归属检查和幂等重放；`literature_search` 不再是唯一允许值，`ArtifactRef` provenance 校验与 Registry 使用同一集中策略。

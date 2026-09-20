@@ -6,7 +6,7 @@ from resagent2_contracts import (
     AgentOwner,
     Capability,
     DatasetRef,
-    AcceptanceSpec,
+    TaskAcceptanceSpec,
     ModuleStatus,
     ModuleTaskRequest,
     TaskBudget,
@@ -187,7 +187,7 @@ def _run(tmp_path: Path, actions: list, *, fail: bool = False):
         attempt_number=1,
         capability=Capability.EXPERIMENT_RUN,
         instruction="Run train.py and record accuracy",
-        acceptance=AcceptanceSpec(
+        acceptance=TaskAcceptanceSpec(
             required_metric_keys=["accuracy"],
             required_artifact_paths=["metrics.json"],
         ),

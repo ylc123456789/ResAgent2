@@ -9,10 +9,11 @@ from resagent2_contracts import (
     AgentOwner,
     Attempt,
     AttemptStatus,
-    AcceptanceSpec,
+    TaskAcceptanceSpec,
     Capability,
     CodeUnderstandInput,
     ErrorCode,
+    ExperimentRunInput,
     FutureArtifactBinding,
     ModuleError,
     ModuleResult,
@@ -190,6 +191,34 @@ def test_future_artifact_binding_rejects_unknown_source() -> None:
         WorkflowProposal(work_request_id="work_test", tasks=[proposal])
 
 
+def test_task_acceptance_spec_is_task_control_plane_data() -> None:
+    spec = TaskAcceptanceSpec(
+        required_metric_keys=["accuracy"],
+        required_artifact_paths=["results.json"],
+    )
+    task = TaskProposal(
+        id="task_experiment",
+        work_request_id="work_test",
+        capability=Capability.EXPERIMENT_RUN,
+        goal="Run the experiment",
+        inputs=ExperimentRunInput(instructions="Run the experiment"),
+        acceptance_spec=spec,
+    )
+    assert task.acceptance_spec == spec
+    assert task.acceptance_ref is None
+
+    materialized = WorkflowTask(
+        id=task.id,
+        work_request_id=task.work_request_id,
+        capability=task.capability,
+        goal=task.goal,
+        inputs=task.inputs,
+        acceptance_ref="artifact_acceptance_spec",
+    )
+    assert materialized.acceptance_spec is None
+    assert materialized.acceptance_ref == "artifact_acceptance_spec"
+
+
 def test_schema_round_trip_preserves_contract() -> None:
     workflow = Workflow(
         run_id="run_example",
@@ -318,7 +347,7 @@ def test_module_request_acceptance_must_match_capability() -> None:
             attempt_number=1,
             capability=Capability.CODE_MODIFY,
             instruction="Modify",
-            acceptance=AcceptanceSpec(required_metric_keys=["accuracy"]),
+            acceptance=TaskAcceptanceSpec(required_metric_keys=["accuracy"]),
             budget=TaskBudget(max_llm_calls=5, timeout_seconds=300),
         )
 

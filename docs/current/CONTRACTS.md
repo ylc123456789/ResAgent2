@@ -313,7 +313,7 @@ output 是 WorkflowProposal（新图）或 WorkflowPatch（只追加），llm_ca
 
 **接收**：workflow_validation.validate_workflow_candidate 是 Compiler/Scheduler 共用的非空及本轮依赖纯判据。Scheduler 持久化前另查 binding、workspace、预算与 revision；返回候选不等于已接受。“Workflow Validator”不是额外独立服务。
 
-**职责**：Compiler 不扫描代码或执行。LLMCompiler 清空猜测的 suggested_paths、expected_metrics/expected_artifacts，将实验语义留在本 Task.instructions；公开精确字段服务可信调用方。Scheduler 执行时把这些图级语义渲染为 `ModuleTaskRequest.instruction`，把可信的 Experiment 交付要求渲染为 `AcceptanceSpec`。不能为任务名额让 code_modify 承担正式训练。成功依赖不是失败分支，条件修复等真实失败后由 Scientific 发新工作请求。
+**职责**：Compiler 不扫描代码或执行。LLMCompiler 清空猜测的 suggested_paths、expected_metrics/expected_artifacts，将实验语义留在本 Task.instructions；公开精确字段服务可信调用方。Scheduler 执行时把这些图级语义渲染为 `ModuleTaskRequest.instruction`，把可信的 Experiment 交付要求渲染为 `TaskAcceptanceSpec`。不能为任务名额让 code_modify 承担正式训练。成功依赖不是失败分支，条件修复等真实失败后由 Scientific 发新工作请求。
 
 生成与评审通过同一 `_capability_context` 获取上述字段语义：这些数组在本 LLM 编译路径的规范化输入中有意留空，不能仅以空数组为拒绝理由，也不能要求模型编造名称补齐。评审从 goal、inputs.instructions、constraints 合起来判断证据覆盖；真正缺少证据要求、能力分工错误或遗漏前置任务仍须拒绝。该说明不改变 `_sanitize_inputs`、公开字段或可信直接调用方的精确标准，也不覆盖模型返回的拒绝结果。
 
@@ -436,7 +436,7 @@ class ModuleTaskRequest:
     dataset_refs: list[DatasetRef] = []
     answers: list[RecordedAnswer] = []
     budget: TaskBudget
-    acceptance: AcceptanceSpec = AcceptanceSpec()
+    acceptance: TaskAcceptanceSpec = TaskAcceptanceSpec()
     confirm_before_experiment: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
@@ -963,7 +963,7 @@ Controller 经 ScientificTurnRequest、Scheduler 经 ModuleTaskRequest 传递这
 
 历史字段增删记录见 [开发历程](../history/DEVELOPMENT_PLAN.md) 和 [schema 3.0 矩阵](../history/reviews/SCHEMA_3_DELTA.md)；当前接口不要求同时维护旧 schema 路径。
 
-当前 schema 11.0 在保留 AnswerFieldName 约束和 schema 9.0 字段精简的基础上，统一执行 Agent 入口：ModuleTaskRequest 使用 `instruction`，并用 AcceptanceSpec/confirm_before_experiment 表达 Experiment 的确定性控制要求；ScientificTurnRequest 也使用 `instruction`，所需证据种类保持独立字段。Compiler 内部 Workflow 图仍保留 typed goal/inputs/constraints，Scheduler 负责在执行边界物化，不新增兼容运行路径。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 10.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
+当前 schema 11.0 在保留 AnswerFieldName 约束和 schema 9.0 字段精简的基础上，统一执行 Agent 入口：ModuleTaskRequest 使用 `instruction`，并用 TaskAcceptanceSpec/confirm_before_experiment 表达 Experiment 的确定性控制要求；ScientificTurnRequest 也使用 `instruction`，所需证据种类保持独立字段。Compiler 内部 Workflow 图仍保留 typed goal/inputs/constraints，Scheduler 负责在执行边界物化，不新增兼容运行路径。`ResearchRun` 顶层没有 schema_version，但必填 request 等公共契约带版本；JsonRunStore.load 重新校验整个 Run，正常保存的 10.0 及更早 Run 因版本不符被拒绝。读取失败不改写旧文件，继续工作应发起新 Run。
 
 `AgentState` 继承不带版本字段的 `RuntimeModel`，`JsonSessionStore.load` 按该模型校验，不能据此宣称所有旧 Session 文件都会解析失败。`memory` 和 `events.data` 是 JSON 值；`last_observation` 或 `runtime_feedback` 中若含旧版 `QuestionDraft` 等强类型公共契约，则会在对应嵌套校验处被拒绝。当前 state 还含默认空的内部 `tool_turns` 与 `tool_protocol_key`：前者用于原生工具协议恢复，后者固定创建时的 JSON/原生协议身份；它们不是公共 wire 字段或 schema 迁移承诺。部分旧 Session 可单独解析，不等于承诺其兼容恢复，更不提供旧 Run 的续跑路径；加载不会重写或清理既有 state/session/trace。
 

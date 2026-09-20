@@ -5,7 +5,7 @@
 当前已实现：
 
 - Workflow、WorkflowTask、WorkflowPatch；
-- ModuleTaskRequest、AcceptanceSpec、ModuleResult；
+- ModuleTaskRequest、TaskAcceptanceSpec、ModuleResult；
 - Attempt；
 - ArtifactRef、ArtifactCandidate；
 - QuestionDraft、PendingQuestion、UserAnswer 与系统配对的 RecordedAnswer；
@@ -27,7 +27,7 @@ python -m pip install -e 'packages/contracts[test]'
 python -m pytest tests/contracts
 ```
 
-稳定导入路径是 `resagent2_contracts`。包版本为 `0.1.0`，当前 wire schema 版本为 `11.0`。ResearchRequest 不含部署资源；dataset_refs 只在系统状态和内部调用中传递。ModuleTaskRequest 与 ScientificTurnRequest 都用单一 `instruction` 表达本次语义任务；预算、工作区、Session、资源、答案等仍使用结构化字段。Experiment 的精确交付要求使用 AcceptanceSpec，确认行为使用 confirm_before_experiment。UserAnswer 仍是调用方提交的答案；RecordedAnswer 由 Controller 配上已持久化的 question_text，供 Run 和内部调用保存、传递。旧 10.0 及更早 Run 不支持恢复，原件保留、不迁移。
+稳定导入路径是 `resagent2_contracts`。包版本为 `0.1.0`，当前 wire schema 版本为 `11.0`。ResearchRequest 不含部署资源；dataset_refs 只在系统状态和内部调用中传递。ModuleTaskRequest 与 ScientificTurnRequest 都用单一 `instruction` 表达本次语义任务；预算、工作区、Session、资源、答案等仍使用结构化字段。Experiment 的精确交付要求使用 TaskAcceptanceSpec，确认行为使用 confirm_before_experiment。UserAnswer 仍是调用方提交的答案；RecordedAnswer 由 Controller 配上已持久化的 question_text，供 Run 和内部调用保存、传递。旧 10.0 及更早 Run 不支持恢复，原件保留、不迁移。
 
 问题背景写进 QuestionDraft.text，不另填 reason。WorkflowProposal/WorkflowPatch 只携带任务图与身份/修订，不另填图级 summary/rationale/reason；任务图内部仍保留目标、约束及 typed inputs，Scheduler 执行时将其物化为 ModuleTaskRequest.instruction。完整边界见 [接口与契约](../../docs/current/CONTRACTS.md)。
 

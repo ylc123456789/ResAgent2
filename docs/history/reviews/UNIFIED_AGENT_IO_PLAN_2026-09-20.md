@@ -94,7 +94,7 @@ AgentRequest
 
 现有 `confirm_before_experiment` 迁到 `permissions` 下的操作确认策略：需要确认的是正式实验执行这一操作。提问、记录回答和恢复流程沿用已有实现；执行前由确定性逻辑检查，不能靠提示词自觉遵守，也不以新字段名引入额外默认确认。
 
-`acceptance` 以现有 AcceptanceSpec 扩展为共同结构，至少覆盖 `required_artifact_kinds`、`required_artifact_paths`、`required_metric_keys`；`required_evidence_kinds` 不并入 acceptance；它属于 Scientific 的 run-level conclusion grounding，仍由 Controller 在最终结论处检查 observed 与 cited 证据交集及 evidence kind。仅对已知的精确键/路径填写硬要求，未知要求放 instruction。类型/键要求不得成为选择另一套 Agent 模式的开关。
+`acceptance` 以现有 TaskAcceptanceSpec 扩展为共同结构，至少覆盖 `required_artifact_kinds`、`required_artifact_paths`、`required_metric_keys`；`required_evidence_kinds` 不并入 acceptance；它属于 Scientific 的 run-level conclusion grounding，仍由 Controller 在最终结论处检查 observed 与 cited 证据交集及 evidence kind。仅对已知的精确键/路径填写硬要求，未知要求放 instruction。类型/键要求不得成为选择另一套 Agent 模式的开关。
 
 路径要求在候选来源上校验，指标键要求在符合约定的 JSON 证据中校验；没有适用证据时不能静默忽略。系统仍需检查产物是否属于该任务、内容是否符合要求。空 acceptance 不取消现有的真实性、证据有效性和完成门槛。
 

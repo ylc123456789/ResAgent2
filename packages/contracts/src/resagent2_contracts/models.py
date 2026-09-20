@@ -396,7 +396,7 @@ class TaskBudget(ContractModel):
     timeout_seconds: int = Field(ge=1)
 
 
-class AcceptanceSpec(ContractModel):
+class TaskAcceptanceSpec(ContractModel):
     """Optional exact delivery requirements for one execution Agent."""
 
     required_metric_keys: list[NonEmptyStr] = Field(default_factory=list)
@@ -722,6 +722,8 @@ class TaskProposal(ContractModel):
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     inputs: CapabilityInput
+    acceptance_spec: TaskAcceptanceSpec | None = None
+    acceptance_ref: ArtifactId | None = None
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -741,6 +743,8 @@ class WorkflowTask(ContractModel):
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
     constraints: list[NonEmptyStr] = Field(default_factory=list)
+    acceptance_spec: TaskAcceptanceSpec | None = None
+    acceptance_ref: ArtifactId | None = None
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
@@ -935,7 +939,7 @@ class ModuleTaskRequest(ContractModel):
     dataset_refs: list[DatasetRef] = Field(default_factory=list)
     answers: list[RecordedAnswer] = Field(default_factory=list)
     budget: TaskBudget
-    acceptance: AcceptanceSpec = Field(default_factory=AcceptanceSpec)
+    acceptance: TaskAcceptanceSpec = Field(default_factory=TaskAcceptanceSpec)
     confirm_before_experiment: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None

@@ -1,6 +1,6 @@
 # Agent 输入输出统一与多模式清理方案（V2）
 
-> 日期：2026-09-20。状态：新版实施方案，产品代码尚未按本方案修改。
+> 日期：2026-09-20。状态：实施中；本次修订明确所有 Agent 单入口、单业务模式，并统一产物绑定与恢复规则。
 >
 > 基线：`ae33790`，schema `11.0`。继续在 **`refactor/unified-agent-entry`** 分支开发。
 >
@@ -8,7 +8,7 @@
 
 ## 1. 目标和范围
 
-本轮要真正减少任务信息的传递方式，取消同一个 Agent 的多种业务调用模式。不能只给旧 request/result 包一层新对象，也不能把旧领域字段整体搬到一个任意字典里。
+本轮要真正减少任务信息的传递方式。**Scientific、Coding、Experiment 三个 Agent 各自都只有一种调用方式和一种业务模式**，不是只合并 Coding 的 understand/modify。不能只给旧 request/result 包一层新对象，也不能把旧领域字段整体搬到一个任意字典里。
 
 最终规则只有三条：
 
@@ -19,6 +19,18 @@
 保持现有中央编排结构：Scientific 提出研究判断与工作请求，Compiler 生成执行图，Scheduler 执行 Coding/Experiment 任务，Controller 管理研究过程。此次不增加 Agent 层级，不改成自主接力，不更换框架、LLM 客户端或 Runtime 循环。
 
 本轮同时整理与新契约直接相关的 validation，只处理结构、权限、来源、生命周期及执行事实的正确性。语义完成度和结果质量评估留待后续独立设计。
+
+### 1.1 所有 Agent 单入口、单业务模式
+
+三个 Agent 的公开调用方法统一为 `invoke(request: AgentRequest) -> AgentResult`，共同使用一个 Agent 调用协议；Controller 和 Scheduler 分别调用自己负责的 Agent，不增加转发层或总管 Agent。
+
+每个 Agent 只保留一套业务提示词、动作协议和完成协议。不同 Agent 可以有不同的专业提示词、工具和领域内容 schema；同一个 Agent 不得按 understand/modify、检索/判断/总结、环境准备/执行/分析等任务分类切换整套协议。任务差异由 instruction、材料和模型选择的工具表达。共享动作中仍可包含多个工具和控制动作，这些动作不是新的调用模式。
+
+不另设 run/analyze/review/resume 业务入口，不用 mode、phase、capability 或 artifact kind 恢复模式路由。内容 kind 可以选择文件解析器和内容校验，不能选择另一套 Agent 业务协议。
+
+首次调用、恢复、等待回答、请求工作、完成和失败是同一协议下的生命周期。权限只约束可执行操作，不选择另一种业务模式。Scientific 的判断、提问、派工和最终结论使用同一个入口与结果类型；Experiment 的环境准备、执行和结果整理在同一模式中完成；Coding 的解释和修改也不再分流。
+
+统一后的简化标准是：新增一种现有 Agent 职责范围内的任务，无需新增调用模式、公开请求类型或公开结果类型；有结构化消费需要时才新增对应的 artifact 内容 schema。
 
 ## 2. 唯一的 Agent 输入协议
 
@@ -55,6 +67,8 @@ input_artifacts 提供精确参数、已有结果、论文、用户回答、数�
 
 小任务不必人为制造文件；只有需要结构化传递、精确复用或形成证据的材料才登记为 artifact。Agent 内部临时变量和 Runtime 内部状态无需全部文件化。
 
+共同调用协议不要求模型手工创建每份文件。问题、回答和工作反馈等小型结构化内容可由现有工具或确定性代码生成，经同一 Registry 登记。复用登记、授权读取和内容校验函数，不为每个 kind 增加独立存储、管理器或状态机。
+
 ### 2.2 controls 只负责控制
 
 | 控制项 | 用途 |
@@ -71,6 +85,8 @@ acceptance 和 required_evidence_kinds 不作为 AgentRequest 的额外控制字
 有效权限由系统计算，不能由 Compiler、Agent、材料中的文字或 metadata 自行提升。只隐藏模型可见的工具不等于实施授权：执行入口和底层组件仍要检查权限。
 
 写权限表示可以写，不表示必须改文件。源码只读时仍应允许在受控输出通道提交报告。WorkspaceMode 的 read_only/read_write 是权限描述，可以保留，但不能再据此选择两套业务 prompt、action 或完成协议。
+
+Experiment 分析授权的已有结果时，不因 Agent 身份就要求可写源码、准备环境或执行新实验。需要启动进程、安装依赖或写入特定目录时，在对应操作入口检查实际 grant、确认与环境条件；所需授权不足时按同一协议返回明确状态。是否必须发生一次新的成功执行或交付新产物，由明确的系统绑定要求检查，不能从 Agent 身份或任务文字猜测。
 
 现有实验确认改成对“正式实验执行”操作的控制，不新增默认确认步骤。用户回答的内容进入回答 artifact；确认是否有效、对应哪个待确认操作由系统记录和验证。
 
@@ -193,6 +209,10 @@ unresolved_task_outcomes 等相关执行事实可保存在同一反馈文件的�
 
 这里的成对关系和恢复检查依然存在，但它们检查的是 artifact 内容与系统状态，不是在公共请求上保留旧领域字段。对新入口、持久化载入和结果接收使用同一规则，不能只验证 prompt 展示时的副本。
 
+恢复路由仍由持久化状态决定；正式反馈和回答通过 input_artifacts 进入 Agent。现有 context builder 使用授权 reader 读取并校验系统指定的本次恢复材料，将关键问答或反馈投影为每步可见的必需上下文，沿用 ContextComposer 的预算机制；超限须明确报错，不能悄悄遗漏回答或反馈后继续执行。普通历史材料仍可按需分页读取。
+
+该投影只从已登记快照生成，标明 artifact 身份，不另存一份可独立更新的答案或反馈状态，也不恢复 answers/continuation 公共字段。系统恢复材料的自动投影不等于 Scientific 已观察了其引用的实验或文献证据；结论证据仍须满足原有真实读取与引用检查。
+
 ## 6. validation 本轮做什么
 
 ### 6.1 保留正确性检查，统一事实来源
@@ -216,10 +236,12 @@ unresolved_task_outcomes 等相关执行事实可保存在同一反馈文件的�
 
 | 门槛 | 问题 | 范围与执行者 |
 |---|---|---|
-| task acceptance | 本 task 是否交付显式要求的文件/类型/JSON 数值键？ | 当前 task 的正式产物；Scheduler 接收路径 |
+| task acceptance | 本 task 是否交付显式要求的文件/类型/JSON 数值键/逻辑输出，以及满足显式执行要求？ | 当前 task 的正式产物与本 Attempt 可信事件；Scheduler 接收路径 |
 | conclusion evidence | 最终结论是否引用了它实际观察过的指定类别证据？ | 整个 Run 的结论与证据；Scientific/Controller 完成边界 |
 
 task acceptance 只接收明确、可机器检查的条件，不从 instruction 猜测“应该通过哪些测试”或自动补出指标阈值。路径条件按 Registry 保存的可信源路径元信息检查；数值键从对应正式 JSON 内容检查，不从 report 抽取。
+
+明确要求本次必须执行命令时，只检查本 Attempt 的可信执行事件及其确定性产物；已有结果文件、模型自报和上一次 Attempt 的成功记录不能满足这个要求。没有该要求的已有结果分析任务，不强制执行一次新命令。复用现有执行记录检查，不新增规则引擎。
 
 明确条件保存在已登记的要求 artifact 中，由系统在任务接收时固定对应引用；Scheduler 从该引用读取条件，再检查当前 task 的正式产物。Agent 如需知道这些条件，同样通过 input_artifacts 读取。任务自己产出一份更宽松的要求文件，不能覆盖系统已绑定的要求。
 
@@ -242,9 +264,11 @@ task acceptance 只接收明确、可机器检查的条件，不从 instruction 
 
 本轮不实现“代码已满足全部意图”“研究论证成立”“实验设计合理”“摘要表达准确”等语义验收，也不把这些检查挪到控制字段、领域 artifact validator 或另一个隐藏 prompt 中继续执行。
 
-既有 finalizer 中负责生成 patch、整理日志、提取指标和记录来源的确定性工作保留；按业务模式强制“必须发生编辑”“必须输出旧 payload”等门槛删除。编译器中用于判断任务语义覆盖度的 review gate 退出本轮强制接收链，相关专用 prompt、调用和不可达代码一并删除；DAG 合法性、引用和权限需求等确定性检查保留。
+既有 finalizer 中负责生成 patch、整理日志、提取指标和记录来源的确定性工作保留；按业务模式或 Agent 身份强制“必须发生编辑”“必须执行一次新实验”“必须新增证据”“必须输出旧 payload”等通用门槛删除。显式要求中的真实执行和新产物检查仍按第 6.2 节执行。编译器中用于判断任务语义覆盖度的 review gate 退出本轮强制接收链，相关专用 prompt、调用和不可达代码一并删除；DAG 合法性、引用和权限需求等确定性检查保留。
 
 验证命令的失败仍是失败事实，应保存退出码、日志和相应错误，不能改写为成功；但某条命令成功也不等于系统证明了任务语义完成。语义 evaluator 如以后需要，另定方案，直接消费正式 artifact 和任务 instruction。
+
+取消 Compiler 语义 review 是本轮明确接受的行为变化，并非统一接口必然要求。它减少一轮模型评审，同时失去该评审发现需求遗漏的机会。保留上述删除决定，验收时单独记录这一变化；CLI、报告及当前文档应一致说明 completed 只表示调用结束且通过协议、执行事实与显式条件检查，不能标成系统已证明全部任务意图完成。发生过失败但后来完成合法恢复的命令记录仍须保留。
 
 ## 7. 各模块改动
 
@@ -252,8 +276,8 @@ task acceptance 只接收明确、可机器检查的条件，不从 instruction 
 |---|---|---|
 | contracts | 唯一 request/result；清除旧领域字段和公开 payload；受限图类型；定义必要 artifact 内容格式 | 基础 ID、版本、来源与状态不变量 |
 | Coding | 删除 understand/modify 模式入口、双 action/finish 和模式 prompt；结果产物化 | 读写工具、Git、快照、验证执行和真实事件记录 |
-| Experiment | 使用共同 instruction/artifacts；参数和数据说明从材料读取；结果产物化 | 资源解析、环境操作、执行确认、命令策略、指标提取 |
-| Scientific | 判断、问题、工作请求走产物；恢复反馈读取 artifact；使用共同输出 | 研究控制职责、文献工具、中途登记、观察记录 |
+| Experiment | 单一 invoke 入口和业务协议；准备、执行、整理不拆调用模式；参数和数据说明从材料读取；结果产物化 | 资源解析、环境操作、执行确认、命令策略、指标提取 |
+| Scientific | 单一 invoke 入口和业务协议；判断、提问、派工、完成不拆调用模式；恢复反馈读取 artifact；使用共同输出 | 研究控制职责、文献工具、中途登记、观察记录 |
 | Registry/组件 | 补齐实际需要的候选来源处理、引用验证和内容读取 | 现有目录、hash、复制、原子发布、恢复机制 |
 | Scheduler/Controller | 共同请求/结果接收；artifact 反馈与检查；清除旧 payload 消费 | 原生命周期、预算、依赖、暂停恢复与幂等 |
 
@@ -269,6 +293,7 @@ Compiler 草案及图节点的任务内容统一为：
 workflow_agent_kind: WorkflowAgentKind
 instruction
 input_artifact_bindings
+output_names  # 任务提交时声明需要交付的逻辑输出名，可为空
 workspace_id
 depends_on
 明确的控制需求
@@ -290,6 +315,7 @@ Compiler 保留非空图、依赖存在、无环、允许模块、revision 和�
 - CapabilityInput 及 CodeUnderstandInput、CodeModifyInput、ExperimentRunInput；
 - 公共请求上的旧领域字段、任意 facts 和领域 continuation；
 - 公共 payload、模式结果类型及按 capability 选择的 validator；
+- Scientific 专用公开回合请求/结果联合、独立 run 调用协议，以及所有 Agent 按业务模式选择的 prompt/action/finish 分支；
 - 旧 Compiler 草案字段及其转换/渲染逻辑；
 - 兼容解析器、deprecated alias、新旧入口切换开关和迁移 adapter；
 - 已移出范围的语义 gate 及只为其存在的代码。
@@ -311,11 +337,15 @@ Compiler 保留非空图、依赖存在、无环、允许模块、revision 和�
 必须覆盖的验收：
 
 - 新 request 只从 instruction/artifacts 读取任务信息；旧字段因 extra=forbid 被拒绝。
+- 三个 Agent 都只暴露 invoke(AgentRequest) -> AgentResult；分别覆盖多种专业任务、首次调用、恢复及合法状态返回，调用方不选择业务模式，不通过权限或 artifact kind 重新路由到模式专用实现。
 - 同一个 Coding 入口完成解释、修改等任务；只读授权拒绝编辑，可写解释任务不被强制产生变更。
+- 同一个 Experiment 入口完成已有结果分析和实际实验执行；分析任务不被强制要求可写源码、新命令或新证据。执行任务的必要权限、确认和环境条件在操作入口生效；明确要求本次成功执行时，旧记录或模型自报不能替代。
+- Scientific 首轮判断、派工、读取反馈、问答恢复和最终结论始终复用同一 invoke 与结果协议，原控制权限、真实观察记录和重复消费检查保持有效。
 - Scientific 进入图的草案在 schema 边界被拒绝；经不可信 model_copy/载入得到的对象仍在接收时重验。
 - artifact 越界、符号链接逃逸、伪造 Ref、外 Run 引用、损坏 hash、缺失内容均拒绝。
 - 中途文献登记可在同轮读取；最终返回不重复登记；control 候选引用正确解析。
 - 工作反馈缺失一半、关联错 WorkRequest、首次调用带恢复材料、回答/工作反馈混用、重复消费均拒绝。
+- 恢复时本次关键回答和工作反馈确实出现在模型上下文中，来源是正式快照；损坏或超预算时明确失败，不带着缺失的恢复信息继续调用模型。
 - task acceptance 与 conclusion evidence 分别验收：只存在但没读、只读但没引用，都不能满足最终引用要求；合法的 session 证据无需 task_id。
 - 状态、预算、真实调用计量、失败日志和恢复不回归；登记失败仍保留报告和真实部分结果。
 - 成功、失败和暂停结果均不依赖旧公共 payload；无兼容开关、adapter、旧枚举或旧模式执行路径。
@@ -325,7 +355,7 @@ Compiler 保留非空图、依赖存在、无环、允许模块、revision 和�
 以上测试证明的是接口、控制和证据链正确运行，不宣称已经建立完整的任务语义正确性评估体系。
 
 
-## 11. 四个边界问题的最终定案
+## 11. 关键边界的最终定案
 
 本节是新版方案的明确实施约束，用来消除前文可能的歧义。它不是兼容说明，也不恢复旧字段。
 
@@ -336,15 +366,20 @@ Compiler 保留非空图、依赖存在、无环、允许模块、revision 和�
 任务图在任务输入材料之外保留一个明确的控制面槽位：
 
 ```text
-TaskProposal / WorkflowTask
-  acceptance_spec: TaskTaskAcceptanceSpec | null
+TaskProposal
+  acceptance_spec: TaskAcceptanceSpec | null
+
+WorkflowTask / Attempt
+  acceptance_ref: ArtifactRef | null
 ```
 
-`TaskTaskAcceptanceSpec` 只允许直接调用方、Controller 或 Compiler 的系统入口创建。直接调用方如果要求“必须有 accuracy 指标、必须有 results.json”，就在创建任务时填写这个槽位；Compiler 只有在上游已经给出明确、可机器检查的要求时才能转交，不能自行猜测。Compiler 的 LLM 草案即使包含验收文字，也必须由 Orchestrator 接收边界按显式来源和 capability registry 的允许谓词确定性归一化；没有明确来源就丢弃，不能让模型自证验收规则。没有验收要求时槽位为空，表示该 task 没有额外的 task-level acceptance 门槛。
+`TaskAcceptanceSpec` 只允许直接调用方、Controller 或 Compiler 的系统入口创建。直接调用方如果要求“必须有 accuracy 指标、必须有 results.json”，就在创建任务时填写这个槽位；Compiler 只有在上游已经给出明确、可机器检查的要求时才能转交，不能自行猜测。系统入口只转交有可信来源的结构化要求或要求引用，不从 LLM 草案的验收文字提取新规则，也不增加一套谓词注册框架。没有此类验收要求时槽位为空；若图另有第 11.2 节的 output_names，系统仍须确定性地登记并检查这些显式输出约定。两者都为空时，该 task 没有额外的 task-level acceptance 门槛。
 
-任务接收时，系统把这个槽位物化成不可变的 `acceptance_requirements` artifact，并将正式 `acceptance_ref` 绑定到该 Task。Proposal、WorkflowTask、ModuleTaskRequest 和 Attempt 持有同一份快照；Scheduler 只读取这份系统绑定的 artifact 检查本 task 的正式产物。Agent 如需知道交付要求，也只能通过只读的要求 artifact 读取；Agent 的结果、报告或新 artifact 不能回写或放宽它。这样“谁填”的答案是明确的：直接调用方提出要求，Orchestrator 负责登记、归一化和绑定，Scheduler 负责执行检查。
+要求只沿一条路径转换：`TaskProposal 的显式要求 -> Registry -> WorkflowTask.acceptance_ref`。任务接收时，系统将 acceptance_spec 与第 11.2 节的显式输出约定归一化为同一份不可变的 `acceptance_requirements` artifact；已接受 Task 只保留正式引用，不再保存另一份完整 acceptance_spec。Attempt 记录派发时同一引用用于审计，重试和恢复不重新生成要求；Proposal 可作为原始提交记录保存，但不再作为执行时的要求来源。
 
-`acceptance_spec` 是任务控制面策略，不是 `AgentRequest.controls`，也不是第二份任务正文；它与 `input_artifacts` 分开保存。`required_evidence_kinds` 仍然是 Run 级的结论接地要求，由 Controller 创建并绑定 Run-owned requirement artifact，继续执行“已观察且被最终结论引用”的独立检查，不能并入 task acceptance。
+Scheduler 只读取这份系统绑定的 artifact 检查本 task 的正式产物。AgentRequest 仅通过 input_artifacts 收到该引用，不增加 acceptance_spec/acceptance_ref 专用字段。Agent 的结果、报告或新 artifact 不能回写或放宽绑定。直接调用方提出要求，Orchestrator 负责登记与绑定，Scheduler 负责执行检查。登记及绑定失败时任务不可派发，重启沿既有接收流程复用同一登记结果。
+
+`acceptance_spec` 是任务提交阶段的控制面策略，不是 `AgentRequest.controls`，也不是第二份任务正文。Run 的 `required_evidence_kinds` 同样在创建时登记为单独的 `conclusion_requirements` artifact，Run 绑定正式引用作为执行时的要求来源；原始 ResearchRequest 仅作提交记录。它继续执行“已观察且被最终结论引用”的独立检查，不能并入 task acceptance。任务和 Run 的两种要求共用登记与读取机制，但 kind、归属和检查时点明确区分。
 
 ### 11.2 未来产物绑定必须同时声明执行依赖
 
@@ -359,6 +394,10 @@ FutureArtifactBinding {
 
 `output_selector` 的语义固定为**逻辑输出名**，不是物理路径、artifact ID，也不是模糊的 kind 匹配。例如任务可以声明 `metrics`、`results`、`run_log` 三个输出槽位；Compiler 填写其中一个逻辑名，Scheduler 在源任务成功 Attempt 登记的产物中按该名字精确解析。逻辑输出名由任务的输出声明或系统登记时写入的 `output_name` 确定，不能由下游根据文件名猜测。kind 只描述内容类型，不能代替唯一的输出选择器。
 
+需要未来绑定时，TaskProposal 显式声明最小的 `output_names: list[OutputName]`；编译接收检查每个 selector 已在源任务声明，模型不得引用一个源任务未知的名称。系统将声明归一化为该 Task 的要求快照中的 `required_output_names`，复用同一份 `acceptance_requirements` artifact，不增加输出要求的另一套登记或检查机制。该引用通过 input_artifacts 交给源 Agent，由 context builder 呈现名称约定。命名约定是图中显式的数据交付要求，不复制任务正文、不推断指标或质量要求；没有命名声明且没有其他验收要求时，不创建空要求文件。
+
+源 Agent 以 `ArtifactCandidate.output_name` 声明产物对应的名称，Registry 校验并原样写入正式 ArtifactRef.output_name；同一成功 Attempt 不允许重复名称。系统检查要求快照中的名称全部已交付后才发布源任务成功。Scheduler 只按正式 output_name 精确解析，不回退到 metadata、文件名或 kind，不增加第二套命名映射。Proposal 中的 output_names 是提交声明；接收后只从 Task.acceptance_ref 对应的快照读取，不在已接受 Task 另存可分别修改的 output_names。
+
 一个逻辑输出名在一次成功 Attempt 中默认只能解析为一个正式 `ArtifactRef`；需要多个文件时，生产方必须声明多个逻辑输出名，或先登记一个包含文件清单的 manifest artifact。相同 selector 被多个输入位置引用时按 artifact ID 去重；selector 缺失、解析出多个结果或解析到未登记候选都直接拒绝，不使用“全都要”的隐式规则。
 
 任何 `FutureArtifactBinding.source_task` 都必须同时出现在当前任务的直接 `depends_on` 中。编译接收和图物化阶段都要检查这条不变量；缺失依赖、未知任务、自引用和形成环的绑定直接拒绝。Scheduler 只有在所有声明的依赖成功、源产物已经登记为正式 `ArtifactRef` 后，才解析这个绑定并调用下游 Agent。绑定本身只说明要读哪项材料，`depends_on` 才决定执行顺序，不能把二者混为一件事。纯顺序依赖可以没有 artifact 绑定；依赖边不要求一一对应产物。
@@ -367,7 +406,7 @@ FutureArtifactBinding {
 
 现有 `register_scientific` 中只允许 `literature_search` 的硬编码分支必须删除；不能把它当作新版登记路径继续复用。实现可以把它改为通用的 session/run artifact 登记入口，也可以拆出 `register_system_artifact`，但都必须经过同一个 hash、来源、归属和幂等检查。
 
-至少要覆盖 `literature_search`、`work_feedback`、`question`、`answer`、`work_request`、`acceptance_requirements`、`scientific_opinion` 以及本项目定义的其他系统产物。未知 kind 仍然拒绝；允许列表或 kind 注册表应是集中定义，不能再写死“不是 literature_search 就报错”。系统生成产物必须写入可信 producer、session/run 归属和必要的父关联；Agent 不能伪造这些字段。为这些 kind 增加逐类登记、重复登记和错误归属测试。
+至少要覆盖 `literature_search`、`work_feedback`、`question`、`answer`、`work_request`、`acceptance_requirements`、`conclusion_requirements`、`scientific_opinion` 以及本项目定义的其他系统产物。未知 kind 仍然拒绝；允许列表或 kind 注册表应是集中定义，不能再写死“不是 literature_search 就报错”。系统生成产物必须写入可信 producer、session/run 归属和必要的父关联；Agent 不能伪造这些字段。为这些 kind 增加逐类登记、重复登记和错误归属测试。
 
 Registry 放开后，`ArtifactRef.validate_provenance` 也必须同步改成按集中 provenance policy 校验，不能继续只接受旧的三种形状。实现至少要把以下矩阵固化为契约（实际 kind 可扩展，但不能绕过注册表）：
 
@@ -375,6 +414,7 @@ Registry 放开后，`ArtifactRef.validate_provenance` 也必须同步改成按�
 |---|---|---|---|
 | `work_feedback` | orchestrator | `session_id`，无 task/attempt | `controller_feedback` |
 | `acceptance_requirements` | orchestrator | `task_id`，无 attempt/session | `task_requirement` |
+| `conclusion_requirements` | orchestrator | Run-only，无 task/attempt/session | `conclusion_requirement` |
 | `answer` | orchestrator | Scientific 为 `session_id`；Coding/Experiment 为 `task_id + attempt_number` | `controller_answer` |
 | `question` | orchestrator | 提问所属的 session 或 task 作用域 | `controller_question` |
 | `work_request` | orchestrator | Controller 所属 session/run 作用域 | `controller_work_request` |
@@ -414,10 +454,11 @@ Registry 放开后，`ArtifactRef.validate_provenance` 也必须同步改成按�
 
 新版验收必须额外覆盖：
 
-- 直接调用方填写 `TaskTaskAcceptanceSpec` 后，系统确实生成并绑定 `acceptance_requirements` artifact；缺少绑定时 Scheduler 拒绝执行 task-level acceptance，而不是静默通过。
+- 直接调用方填写 `TaskAcceptanceSpec` 后，系统确实生成并绑定 `acceptance_requirements` artifact；缺少绑定时 Scheduler 拒绝执行 task-level acceptance，而不是静默通过。已接受 Task、AgentRequest 不再保存完整要求副本，Attempt 与 Task 使用同一正式引用。
+- Run 级 `conclusion_requirements` 可按 Run-only 归属登记、读取并在完成边界检查，不能误套 Task 归属规则，也不能替代当前 Task 的要求。
 - Agent 不能通过输出新的要求 artifact、修改 instruction 或修改 input_artifacts 覆盖已绑定验收要求；无验收要求的 task 不被强行猜测出要求。
 - 未来产物绑定但未列入 `depends_on`、列入但任务未知、源任务失败或产物未登记时均拒绝或保持不可运行；合法绑定按依赖完成后再解析。
 - 每一种系统 artifact kind 都能登记、读取、做归属检查和幂等重放；`literature_search` 不再是唯一允许值，`ArtifactRef` provenance 校验与 Registry 使用同一集中策略。
-- `output_selector` 按逻辑输出名精确解析；多个产物、重复绑定、缺失或歧义 selector 都有确定结果，不依赖物理文件名或 kind 猜测。
+- `output_selector` 按逻辑输出名精确解析；覆盖图声明、源 Agent 收到命名要求、候选命名、正式登记、下游绑定的完整链路。未声明、未交付或重复名称必须拒绝；多个产物、重复绑定、缺失或歧义 selector 都有确定结果，不依赖 metadata、物理文件名或 kind 猜测。
 - answer artifact 在 pending question 被清除后仍包含问题正文、原始请求结构和 task/session 作用域；重启恢复不依赖已删除的 QuestionDraft，且 task answer 的 task/attempt 归属与系统 pending 状态一致。
 - task acceptance 仍只检查当前 task 的交付物；conclusion evidence 仍只在 Run 完成边界检查 observed ∩ cited，二者不能互相替代。

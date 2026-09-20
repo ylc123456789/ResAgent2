@@ -1,27 +1,27 @@
 from types import SimpleNamespace
 
-from resagent2_contracts import Capability, RunStatus, TaskStatus
+from resagent2_contracts import WorkflowAgentKind, RunStatus, TaskStatus
 
 from e2e.real_e2e import _new_llm_client, _real_e2e_succeeded
 
 
 def _run(*, artifact_kinds: set[str]) -> SimpleNamespace:
     task_for = {
-        Capability.CODE_MODIFY: "task_code",
-        Capability.EXPERIMENT_RUN: "task_experiment",
+        WorkflowAgentKind.CODING: "task_code",
+        WorkflowAgentKind.EXPERIMENT: "task_experiment",
     }
     tasks = [
         SimpleNamespace(
             id=task_id,
-            capability=capability,
+            workflow_agent_kind=capability,
             status=TaskStatus.COMPLETED,
             attempts=[SimpleNamespace(number=1)],
         )
         for capability, task_id in task_for.items()
     ]
     owner_for_kind = {
-        "code_change": Capability.CODE_MODIFY,
-        "experiment_result": Capability.EXPERIMENT_RUN,
+        "code_change": WorkflowAgentKind.CODING,
+        "experiment_result": WorkflowAgentKind.EXPERIMENT,
     }
     artifacts = {
         f"artifact_{index}": SimpleNamespace(
@@ -70,3 +70,17 @@ def test_real_e2e_uses_the_configured_current_model(monkeypatch) -> None:
 
     monkeypatch.setenv("RESAGENT2_MODEL", "deepseek-v4-pro")
     assert _new_llm_client().model == "deepseek-v4-pro"
+
+
+def test_direct_agent_dataset_material_is_a_frozen_registered_snapshot(tmp_path):
+    from e2e.real_e2e import _dataset_materials
+    from resagent2_components import RegisteredArtifactReader, ResourceLayout, read_artifact_json
+    layout = ResourceLayout(resource_root=tmp_path / "resources")
+    layout.dataset_root.mkdir(parents=True)
+    catalog = layout.dataset_root / "catalog.json"
+    catalog.write_text('{"demo": "demo"}')
+    refs = _dataset_materials(tmp_path, layout, "run_direct")
+    catalog.write_text("{}")
+    data = read_artifact_json(RegisteredArtifactReader(refs, run_id="run_direct"), refs[0].id)
+    assert data["datasets"][0]["dataset_id"] == "demo"
+    assert refs[0].producer.value == "orchestrator"

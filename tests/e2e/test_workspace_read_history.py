@@ -9,7 +9,7 @@ from resagent2_components import ResourceLayout
 from resagent2_components.context import workspace_context
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
-    Capability, CodeModifyInput, ModuleStatus, ModuleTaskRequest, TaskBudget,
+    WorkflowAgentKind, ModuleStatus, AgentRequest, TaskBudget,
     WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind, task_session_id,
 )
 from resagent2_runtime import InMemorySessionStore
@@ -62,9 +62,9 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
     ]
     client = _ActionClient(actions)
     store = InMemorySessionStore()
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_read_history", task_id="task_read_history", attempt_number=1,
-        capability=Capability.CODE_MODIFY, instruction="Read the function before editing it",
+        agent="coding", instruction="Read the function before editing it",
         workspace=WorkspaceGrant(
             root=str(root), mode=WorkspaceMode.READ_WRITE,
             allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,

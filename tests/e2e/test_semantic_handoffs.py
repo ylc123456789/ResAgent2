@@ -1,15 +1,17 @@
+import json
 """Exercise real analysis artifacts across native Agent and controller boundaries."""
 
 import subprocess
+import json
 
 from resagent2_components import (
     RegisteredArtifactReader,
     ResourceLayout,
 )
 from resagent2_contracts import (
-    AgentOwner, Capability, CapabilityDefinition, CapabilityRegistry,
-    CodeUnderstandInput, ResearchRequest, RunBudget, RunStatus,
-    TaskProposal, WorkflowProposal, WorkspaceSourceKind, WorkspaceSpec,
+    AgentOwner, WorkflowAgentKind, WorkflowAgentDefinition, WorkflowAgentRegistry,
+    ResearchRequest, RunBudget, RunStatus,
+    FutureArtifactBinding, TaskProposal, WorkflowProposal, WorkspaceSourceKind, WorkspaceSpec,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_orchestrator import (
@@ -37,10 +39,16 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     read_file = {"tool": "read_file", "arguments": {"path": "util.py"}}
 
     def finish(text):
-        return {"tool": "finish", "arguments": {"result": {
-            "answer": text, "uncertainty": uncertainty,
-            "evidence_files": ["util.py"],
-        }}}
+        return {"tool": "finish", "arguments": {
+            "report": text,
+            "artifacts": [{
+                "kind": "module_report", "path": "module_report.md", "media_type": "text/markdown",
+                "output_name": "analysis",
+                "summary": "Code explanation", "content": (
+                    f"## answer\n\n{text}\n\n## uncertainty\n\n{uncertainty}\n\n## evidence_files\n\nutil.py"
+                ),
+            }],
+        }}
 
     clients = {
         "task_inspect": ScriptedLLMClient([read_file, finish(answer)]),
@@ -68,9 +76,12 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
                 work_request_id=request.id,
                 tasks=[TaskProposal(
                     id=task_id, work_request_id=request.id,
-                    capability=Capability.CODE_UNDERSTAND,
-                    goal="Inspect the code without changing it",
-                    inputs=CodeUnderstandInput(question="Where is VALUE defined?"),
+                    workflow_agent_kind=WorkflowAgentKind.CODING,
+                    instruction="Inspect the code without changing it. Where is VALUE defined?",
+                    input_artifact_bindings=[
+                        FutureArtifactBinding(source_task=dependencies[0], output_selector="analysis"),
+                    ] if dependencies else [],
+                    output_names=["analysis"],
                     workspace_id="ws_main", depends_on=dependencies,
                 ) for task_id, dependencies in [
                     ("task_inspect", []),
@@ -88,15 +99,13 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             },
         }},
         {"tool": "read_artifact", "arguments": {"artifact_id": report_id}},
-        {"tool": "finish", "arguments": {
-            "opinion": {
+        {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({
                 "verdict": "not_applicable", "statement": answer,
                 "limitations": [uncertainty], "evidence_artifact_ids": [report_id],
-            },
-        }},
+            })}]}},
     ])
     scheduler = WorkflowScheduler(
-        bindings={Capability.CODE_UNDERSTAND: ModuleBinding(
+        bindings={WorkflowAgentKind.CODING: ModuleBinding(
             owner=AgentOwner.CODING, port=CodingPort(),
         )},
         store=JsonRunStore(tmp_path / "runs"),
@@ -112,8 +121,8 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             resource_layout=layout,
         ),
         compiler=Compiler(), scheduler=scheduler,
-        registry=CapabilityRegistry(definitions=[CapabilityDefinition(
-            capability=Capability.CODE_UNDERSTAND, owner=AgentOwner.CODING,
+        registry=WorkflowAgentRegistry(definitions=[WorkflowAgentDefinition(
+            workflow_agent_kind=WorkflowAgentKind.CODING,
             description="Read-only code analysis",
         )]),
     )
@@ -126,9 +135,9 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
 
     assert run.status == RunStatus.COMPLETED, run.model_dump(mode="json")
     assert all(task.status == "completed" for task in run.workflow.tasks)
-    assert requests["task_inspect"].input_artifacts == []
-    assert requests["task_independent"].input_artifacts == []
-    assert [a.id for a in requests["task_followup"].input_artifacts] == [report_id]
+    assert not any(a.kind == "module_report" for a in requests["task_inspect"].input_artifacts)
+    assert not any(a.kind == "module_report" for a in requests["task_independent"].input_artifacts)
+    assert [a.id for a in requests["task_followup"].input_artifacts if a.kind == "module_report"] == [report_id]
     # Check actual native-Agent prompts after read_artifact, not just stored payload.
     for context in [clients["task_followup"].contexts[1], scientific_client.contexts[-1]]:
         assert answer in context.text

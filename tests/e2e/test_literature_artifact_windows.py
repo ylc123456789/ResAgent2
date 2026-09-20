@@ -20,7 +20,7 @@ from resagent2_contracts import (
     ArtifactRef,
     ResearchRequest,
     RunBudget,
-    ScientificTurnRequest,
+    AgentRequest,
     TaskBudget,
 )
 from resagent2_orchestrator import ArtifactRegistry
@@ -110,17 +110,23 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             assert snippets[0]["artifact_id"] == ref.id
             assert snippets[0]["truncated"] is False
             assert TAIL_EVIDENCE in snippets[0]["content"]
-            return {"tool": "finish", "arguments": {
-                "opinion": {"verdict": "supports", "statement": TAIL_EVIDENCE,
-                            "evidence_artifact_ids": [ref.id]},
-            }}
+            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "supports", "statement": TAIL_EVIDENCE,
+                            "evidence_artifact_ids": [ref.id]})}]}}
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
-    result = agent.run(ScientificTurnRequest(
+    requirement = registration.registry.register_system_artifact(
+        ArtifactCandidate(
+            kind="conclusion_requirements", path="requirements.json", media_type="application/json",
+            summary="Required literature", content='{"required_evidence_kinds": ["literature_search"]}',
+        ),
+        run_id=RUN_ID, source_type="conclusion_requirement",
+    )
+    result = agent.invoke(AgentRequest(
         run_id=RUN_ID,
+        agent=AgentOwner.SCIENTIFIC,
         instruction="Read the final comparison's result",
-        required_evidence_kinds=["literature_search"],
+        input_artifacts=[requirement],
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
     assert result.status == "completed"

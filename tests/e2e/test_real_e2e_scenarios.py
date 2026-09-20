@@ -1,3 +1,4 @@
+import json
 """Local ScriptedLLM validation of the Phase 7 real E2E scenario acceptance.
 
 Drives the deterministic scenarios (1: direct inconclusive, 4: ask/resume)
@@ -10,9 +11,9 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
+    WorkflowAgentKind,
+    WorkflowAgentDefinition,
+    WorkflowAgentRegistry,
     ResearchRequest,
     RunBudget,
     ScientificVerdict,
@@ -35,16 +36,14 @@ from e2e.real_e2e import (
 )
 
 
-def _registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
+def _registry() -> WorkflowAgentRegistry:
+    return WorkflowAgentRegistry(
         definitions=[
-            CapabilityDefinition(
-                capability=Capability.CODE_MODIFY,
-                owner=AgentOwner.CODING,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.CODING,
             ),
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
             ),
         ]
     )
@@ -73,9 +72,7 @@ def _controller(workdir: Path, scientific: ScientificAgent) -> ResearchControlle
 def _finish_inconclusive() -> dict:
     return {
         "tool": "finish",
-        "arguments": {
-            "opinion": {"verdict": ScientificVerdict.INCONCLUSIVE.value, "statement": "insufficient evidence"},
-        },
+        "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": ScientificVerdict.INCONCLUSIVE.value, "statement": "insufficient evidence"})}]},
     }
 
 

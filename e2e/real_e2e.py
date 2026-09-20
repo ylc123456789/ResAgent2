@@ -12,6 +12,7 @@ Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-res
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -20,13 +21,13 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
-    AcceptanceSpec,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
-    ModuleResult,
+    ArtifactCandidate,
+    WorkflowAgentKind,
+    WorkflowAgentDefinition,
+    WorkflowAgentRegistry,
+    AgentResult,
     ModuleStatus,
-    ModuleTaskRequest,
+    AgentRequest,
     ResearchRequest,
     RunBudget,
     RunStatus,
@@ -51,6 +52,7 @@ from resagent2_components import (
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
+    ArtifactRegistry,
     JsonRunStore,
     LLMWorkflowCompiler,
     ModuleBinding,
@@ -277,8 +279,8 @@ torchvision>=0.15
 """
 
 _EXPECTED_TASK_CAPABILITIES = {
-    Capability.CODE_MODIFY,
-    Capability.EXPERIMENT_RUN,
+    WorkflowAgentKind.CODING,
+    WorkflowAgentKind.EXPERIMENT,
 }
 
 _DEFAULT_MODEL = "deepseek-v4-flash"
@@ -365,42 +367,24 @@ def _scientific_agent(
     )
 
 
-def _registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
+def _registry() -> WorkflowAgentRegistry:
+    return WorkflowAgentRegistry(
         definitions=[
-            CapabilityDefinition(
-                capability=Capability.CODE_UNDERSTAND,
-                owner=AgentOwner.CODING,
-                description=(
-                    "Read-only code inspection; use only when the goal is to "
-                    "analyze or explain code without changing it."
-                ),
-            ),
-            CapabilityDefinition(
-                capability=Capability.CODE_MODIFY,
-                owner=AgentOwner.CODING,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.CODING,
                 description=(
                     "Change code to implement a feature or fix a bug; it already "
                     "reads and diagnoses the code before editing."
                 ),
             ),
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
                 description=(
                     "Run an experiment and record its measured metrics and artifacts."
                 ),
             ),
         ]
     )
-
-
-def _owner_for(registry: CapabilityRegistry, capability: Capability) -> AgentOwner:
-    """Single source of truth for capability ownership (CONTRACTS §20.10.2)."""
-    for definition in registry.definitions:
-        if definition.capability == capability:
-            return definition.owner
-    raise KeyError(f"no owner registered for capability {capability.value}")
 
 
 def _build_controller(workdir: Path, repo: Path | None):
@@ -417,20 +401,14 @@ def _build_controller(workdir: Path, repo: Path | None):
         )
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.CODE_UNDERSTAND: ModuleBinding(
-                owner=_owner_for(registry, Capability.CODE_UNDERSTAND),
+            WorkflowAgentKind.CODING: ModuleBinding(
+                owner=AgentOwner.CODING,
                 port=_coding_agent(
                     JsonSessionStore(workdir / "coding_sessions"), resource_layout
                 ),
             ),
-            Capability.CODE_MODIFY: ModuleBinding(
-                owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=_coding_agent(
-                    JsonSessionStore(workdir / "coding_sessions"), resource_layout
-                ),
-            ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
-                owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
                 port=_experiment_agent(
                     JsonSessionStore(workdir / "experiment_sessions"), resource_layout
                 ),
@@ -500,7 +478,7 @@ def _real_e2e_succeeded(run) -> bool:
         return False
     if run.workflow is None:
         return False
-    tasks = {task.capability: task for task in run.workflow.tasks}
+    tasks = {task.workflow_agent_kind: task for task in run.workflow.tasks}
     if (
         len(run.workflow.tasks) != len(_EXPECTED_TASK_CAPABILITIES)
         or set(tasks) != _EXPECTED_TASK_CAPABILITIES
@@ -514,57 +492,71 @@ def _real_e2e_succeeded(run) -> bool:
 
     artifacts = list(run.artifacts.values())
 
-    def has_artifact(capability: Capability, kind: str) -> bool:
+    def has_artifact(capability: WorkflowAgentKind, kind: str) -> bool:
         task_id = tasks[capability].id
         return any(
             artifact.kind == kind and artifact.task_id == task_id
             for artifact in artifacts
         )
 
-    if not has_artifact(Capability.EXPERIMENT_RUN, "experiment_result"):
+    if not has_artifact(WorkflowAgentKind.EXPERIMENT, "experiment_result"):
         return False
-    return has_artifact(Capability.CODE_MODIFY, "code_change")
+    return has_artifact(WorkflowAgentKind.CODING, "code_change")
 
 
-def run_code(workdir: Path) -> ModuleResult:
+def _dataset_materials(workdir: Path, layout: ResourceLayout, run_id: str):
+    """Give direct invocations the same frozen dataset catalog as Controller calls."""
+    refs = DatasetCatalog(layout.dataset_root).references()
+    registry = ArtifactRegistry(workdir / "artifacts")
+    return [registry.register_system_artifact(
+        ArtifactCandidate(
+            kind="dataset_catalog", path="dataset_catalog.json", media_type="application/json",
+            summary="Available dataset references",
+            content=json.dumps({"datasets": [ref.model_dump(mode="json") for ref in refs]}),
+        ),
+        run_id=run_id, source_type="dataset_catalog",
+    )]
+
+
+def run_code(workdir: Path) -> AgentResult:
     repo = _repo(workdir)
-    request = ModuleTaskRequest(
+    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
+    request = AgentRequest(
         run_id="run_real",
         task_id="task_code",
         attempt_number=1,
-        capability=Capability.CODE_MODIFY,
+        agent=AgentOwner.CODING,
+        input_artifacts=_dataset_materials(workdir, resource_layout, "run_real"),
         instruction=(
             "Goal:\nImplement the Squeeze-and-Excitation forward pass in train.py\n\n"
             "Task:\nImplement SELayer.forward in train.py (it raises NotImplementedError)"
         ),
         budget=TaskBudget(max_llm_calls=40, timeout_seconds=900),
         workspace=_grant(repo),
+        workspace_id="ws_main",
         output_dir=str(workdir / "out"),
     )
-    return _coding_agent(JsonSessionStore(workdir / "sessions")).invoke(request)
+    return _coding_agent(JsonSessionStore(workdir / "sessions"), resource_layout).invoke(request)
 
 
-def run_experiment(workdir: Path) -> ModuleResult:
+def run_experiment(workdir: Path) -> AgentResult:
     repo = _repo(workdir)
     resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_real",
         task_id="task_experiment",
         attempt_number=1,
-        capability=Capability.EXPERIMENT_RUN,
+        agent=AgentOwner.EXPERIMENT,
+        input_artifacts=_dataset_materials(workdir, resource_layout, "run_real"),
         instruction=(
             "Goal:\nRun train.py and record baseline and candidate accuracy\n\n"
             "Task:\nRun train.py (it trains both the baseline and the SE candidate "
             "and writes metrics.json with baseline_accuracy and candidate_accuracy). "
             "Record those accuracies."
         ),
-        acceptance=AcceptanceSpec(
-            required_metric_keys=["accuracy"],
-            required_artifact_paths=["metrics.json"],
-        ),
-        dataset_refs=DatasetCatalog(resource_layout.dataset_root).references(),
         budget=TaskBudget(max_llm_calls=60, timeout_seconds=1800),
         workspace=_grant(repo),
+        workspace_id="ws_main",
         output_dir=str(workdir / "out"),
     )
     return _experiment_agent(
@@ -600,7 +592,7 @@ def run_full(workdir: Path) -> bool:
     tasks = run.workflow.tasks if run.workflow is not None else []
     for task in tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
-        print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
+        print(f"{task.id} [{task.workflow_agent_kind.value}] {task.status.value} attempts={attempts}")
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")
     return _real_e2e_succeeded(run)
 
@@ -696,7 +688,7 @@ def run_repair(workdir: Path) -> bool:
     tasks = run.workflow.tasks if run.workflow is not None else []
     for task in tasks:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
-        print(f"{task.id} [{task.capability.value}] {task.status.value} attempts={attempts}")
+        print(f"{task.id} [{task.workflow_agent_kind.value}] {task.status.value} attempts={attempts}")
     print(f"run status={run.status.value} work_requests={len(run.work_requests)}")
     return _repair_succeeded(run)
 
@@ -779,14 +771,14 @@ def main() -> None:
     if stage == "code":
         result = run_code(workdir)
         print(f"status={result.status.value}")
-        print(f"summary={result.summary}")
-        print(f"payload={result.payload}")
+        print(f"report={result.report}")
+        print(f"artifacts={[item.kind for item in result.artifacts]}")
         sys.exit(0 if result.status == ModuleStatus.COMPLETED else 1)
     elif stage == "experiment":
         result = run_experiment(workdir)
         print(f"status={result.status.value}")
-        print(f"summary={result.summary}")
-        print(f"payload={result.payload}")
+        print(f"report={result.report}")
+        print(f"artifacts={[item.kind for item in result.artifacts]}")
         sys.exit(0 if result.status == ModuleStatus.COMPLETED else 1)
     elif stage in {"full", "code-experiment"}:
         sys.exit(0 if run_full(workdir) else 1)

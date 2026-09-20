@@ -16,8 +16,8 @@ from resagent2_components import (
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
-    AgentOwner, ArtifactRef, Capability, CodeModifyInput, ErrorCode,
-    ExperimentRunInput, ModuleStatus, ModuleTaskRequest, SessionStatus,
+    AgentOwner, ArtifactRef, WorkflowAgentKind, ErrorCode,
+    ModuleStatus, AgentRequest, SessionStatus,
     TaskBudget, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind, task_session_id,
 )
 from resagent2_experiment import NativeExperimentAgent
@@ -75,11 +75,11 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
         allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
     )
     baseline = GitWorkspace(WorkspaceBoundary(grant)).snapshot()
-    coding = capability == Capability.CODE_MODIFY
+    coding = capability == WorkflowAgentKind.CODING
     session_id = task_session_id("run_capacity", "task_capacity", 1)
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_capacity", task_id="task_capacity", attempt_number=1,
-        parent_session_id=session_id, capability=capability,
+        parent_session_id=session_id, agent=AgentOwner(capability.value),
         instruction="Review source and patch before modifying" if coding
         else "Review source and patch before evaluating",
         input_artifacts=[artifact], workspace=grant, workspace_id="ws_capacity",
@@ -88,7 +88,7 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     )
     now = datetime.now(UTC)
     state = AgentState(
-        session_id=session_id, agent_name="coding-modify" if coding else "experiment-run",
+        session_id=session_id, agent_name="coding" if coding else "experiment",
         owner=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT,
         run_id=request.run_id, task_id=request.task_id, attempt_number=1,
         status=SessionStatus.PAUSED, created_at=now, updated_at=now,
@@ -142,7 +142,7 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     return agent, client, request
 
 
-@pytest.mark.parametrize("capability", [Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN])
+@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
 @pytest.mark.parametrize("artifact_first", [False, True])
 def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch, capability, artifact_first):
     agent, client, request = _native_with_full_read_history(
@@ -173,7 +173,7 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
     assert not reads["artifact_snippets"][0]["truncated"]
 
 
-@pytest.mark.parametrize("capability", [Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN])
+@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
 @pytest.mark.parametrize("explicit_limit", [1024, 2048])
 def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
     agent, client, request = _native_with_full_read_history(
@@ -181,7 +181,7 @@ def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, 
     )
     assert agent.max_context_tokens == explicit_limit
     result = agent.invoke(request)
-    if explicit_limit == 2048 and capability == Capability.CODE_MODIFY:
+    if explicit_limit == 2048:
         # The fixed input fits; material bodies now shrink after reserving it,
         # rather than making a pre-allocated read share a required hard limit.
         assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
@@ -196,7 +196,7 @@ def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, 
     assert client.contexts == []
 
 
-@pytest.mark.parametrize("capability", [Capability.CODE_MODIFY, Capability.EXPERIMENT_RUN])
+@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
 def test_model_capacity_reduces_read_pools_before_they_are_built(tmp_path, monkeypatch, capability):
     agent, client, request = _native_with_full_read_history(tmp_path, monkeypatch, capability)
     budgets = []

@@ -1,7 +1,10 @@
-"""Freeze the model-visible tool surface at the pre-refactor commit 678b03f.
+"""Freeze the model-visible tool surface after the unified Agent IO migration.
 
 Descriptions include class docstrings and guidance, not only input schemas.
 The fixture is a regression baseline, not permission to auto-update snapshots.
+Only control schemas changed from 678b03f: shared report/artifacts finish,
+question machine-key validation and scientific content-bearing controls.
+Workspace, artifact, literature, environment and execution tools retain hashes.
 """
 
 import hashlib
@@ -52,6 +55,11 @@ def tool_surface_fingerprints() -> dict[str, str]:
     return result
 
 
-def test_model_visible_tool_surface_is_unchanged() -> None:
-    baseline = json.loads(Path(__file__).with_name("tool_surface_678b03f.json").read_text())
+def test_model_visible_tool_surface_matches_unified_protocol() -> None:
+    baseline = json.loads(Path(__file__).with_name("tool_surface_unified_v2.json").read_text())
     assert tool_surface_fingerprints() == baseline
+
+
+def test_unified_finish_has_one_schema_for_all_agents() -> None:
+    assert ScientificFinishTool is FinishTool
+    assert set(FinishTool.input_model.model_fields) == {"report", "artifacts"}

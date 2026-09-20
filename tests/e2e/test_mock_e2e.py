@@ -1,4 +1,4 @@
-from resagent2_contracts import Capability, RunStatus
+from resagent2_contracts import WorkflowAgentKind, RunStatus
 
 from e2e.mock_e2e import run_mock_e2e
 
@@ -7,9 +7,9 @@ def test_mock_e2e_runs_the_golden_loop_to_completion(tmp_path) -> None:
     run = run_mock_e2e(workdir=tmp_path)
 
     assert run.status == RunStatus.COMPLETED
-    assert [task.capability for task in run.workflow.tasks] == [
-        Capability.CODE_MODIFY,
-        Capability.EXPERIMENT_RUN,
+    assert [task.workflow_agent_kind for task in run.workflow.tasks] == [
+        WorkflowAgentKind.CODING,
+        WorkflowAgentKind.EXPERIMENT,
     ]
     assert run.final_opinion is not None
     assert run.final_report_artifact_id == "artifact_final_report"

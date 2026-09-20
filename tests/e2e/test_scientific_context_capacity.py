@@ -6,7 +6,7 @@ import json
 import pytest
 
 from resagent2_contracts import (
-    AgentOwner, ArtifactRef, ErrorCode, ResearchRequest, RunBudget, ScientificTurnRequest,
+    AgentOwner, ArtifactRef, ErrorCode, ResearchRequest, RunBudget, AgentRequest,
     TaskBudget, scientific_session_id,
 )
 from resagent2_runtime import ContextComposer, InMemorySessionStore, ScriptedLLMClient
@@ -57,10 +57,11 @@ def _pause():
 
 
 def _turn(artifacts, *, parent=None):
-    return ScientificTurnRequest(
+    return AgentRequest(
+        agent=AgentOwner.SCIENTIFIC,
         run_id="run_scientific_capacity",
         instruction="Review the supplied evidence before asking for approval",
-        authorized_artifacts=artifacts, parent_session_id=parent,
+        input_artifacts=artifacts, parent_session_id=parent,
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
 
@@ -95,7 +96,7 @@ def test_scientific_range_read_exposes_middle_evidence_in_next_real_prompt(tmp_p
     store = InMemorySessionStore()
     agent = _agent(client, store)
 
-    result = agent.run(_turn([artifact]))
+    result = agent.invoke(_turn([artifact]))
 
     assert agent.max_context_tokens == 128_000
     assert result.status == "needs_user_input", result.model_dump(mode="json")
@@ -135,7 +136,7 @@ def _run_full_pool(tmp_path):
     store = InMemorySessionStore()
     agent = _agent(client, store)
     turn = _turn([artifact_a, artifact_b])
-    result = agent.run(turn)
+    result = agent.invoke(turn)
     assert result.status == "needs_user_input", result.model_dump(mode="json")
     return agent, client, store, turn, (body_a, body_b)
 
@@ -175,7 +176,7 @@ def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limi
     agent = _agent(client, store, max_context_tokens=explicit_limit)
     resumed = turn.model_copy(update={"parent_session_id": scientific_session_id(turn.run_id)})
 
-    result = agent.run(resumed)
+    result = agent.invoke(resumed)
 
     assert agent.max_context_tokens == explicit_limit
     if explicit_limit == 1024:
@@ -200,7 +201,7 @@ def test_scientific_default_keeps_two_large_artifacts_without_extra_llm_calls(tm
     first, first_body = _artifact(tmp_path, "large_a", lines=1280)
     second, second_body = _artifact(tmp_path, "large_b", lines=1280)
     client = ScriptedLLMClient([_read(first), _read(second), _pause()])
-    result = _agent(client, InMemorySessionStore()).run(_turn([first, second]))
+    result = _agent(client, InMemorySessionStore()).invoke(_turn([first, second]))
     assert result.status == "needs_user_input", result.model_dump(mode="json")
     assert len(client.contexts) == 3  # No separate summarizer/reading-note call.
     _assert_composed(client.contexts[-1])

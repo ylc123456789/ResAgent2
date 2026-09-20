@@ -58,15 +58,15 @@ def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
             mark = _TERMINAL_MARKS.get(task.status.value, "·")
             attempts = f" · attempt {len(task.attempts)}" if task.attempts else ""
             lines.append(
-                f"{mark} {task.id} [{task.capability.value}] "
+                f"{mark} {task.id} [{task.workflow_agent_kind.value}] "
                 f"{task.status.value}{attempts}"
             )
-            if task.goal:
-                lines.append(f"     {_truncate(task.goal, 64)}")
+            if task.instruction:
+                lines.append(f"     {_truncate(task.instruction, 64)}")
             if task.attempts:
                 latest = task.attempts[-1]
-                if latest.summary:
-                    lines.append(f"     {_truncate(latest.summary, 72)}")
+                if latest.report:
+                    lines.append(f"     {_truncate(latest.report, 72)}")
                 if latest.error is not None:
                     lines.append(
                         f"     {latest.error.code.value}: {latest.error.message}"
@@ -106,8 +106,8 @@ def render_final(run: Any) -> list[str]:
             lines.append(f"  {task.id}: {task.status.value}{suffix}")
             if task.attempts:
                 latest = task.attempts[-1]
-                if latest.summary:
-                    lines.append(f"    {latest.summary}")
+                if latest.report:
+                    lines.append(f"    {latest.report}")
                 if latest.error is not None:
                     lines.append(
                         f"    {latest.error.code.value}: {latest.error.message}"

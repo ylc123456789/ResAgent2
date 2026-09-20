@@ -7,11 +7,11 @@ import json
 import pytest
 
 from resagent2_cli import composition
-from resagent2_coding.models import CodeModifyAction
+from resagent2_coding.models import CodingAction
 from resagent2_contracts import RunBudget, WorkRequest, WorkRequestDraft
 from resagent2_experiment.models import ExperimentAction
 from resagent2_orchestrator import LLMWorkflowCompiler
-from resagent2_orchestrator.compiler import CompilationDraft, CompilationReview
+from resagent2_orchestrator.compiler import CompilationDraft
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, ComposedContext, ScriptedLLMClient
 from resagent2_scientific.models import ScientificAction
 
@@ -31,10 +31,9 @@ def defaults(monkeypatch):
 
 @pytest.mark.parametrize("component,action_type,limit", [
     ("scientific", ScientificAction, 128_000),
-    ("coding", CodeModifyAction, 128_000),
+    ("coding", CodingAction, 128_000),
     ("experiment", ExperimentAction, 128_000),
     ("compiler", CompilationDraft, 128_000),
-    ("compiler", CompilationReview, 128_000),
 ])
 def test_output_headroom_preserves_every_module_input_limit(defaults, component, action_type, limit):
     client = composition._client()
@@ -90,7 +89,7 @@ def test_custom_model_can_override_capacity_output_and_timeout(defaults, monkeyp
     assert client.model_profile.context_window == 32000
     assert client.model_profile.reserved_output_tokens == 3000
     assert client.timeout_seconds == 90
-    assert client.context_budget(CodeModifyAction, composition._component_context_limit("coding")) == 12000
+    assert client.context_budget(CodingAction, composition._component_context_limit("coding")) == 12000
 
 
 @pytest.mark.parametrize("key,value", [
@@ -105,15 +104,13 @@ def test_invalid_capacity_configuration_fails_before_network(defaults, monkeypat
         composition._client()
 
 
-def test_full_cli_compilation_uses_new_defaults_for_draft_and_review(defaults, monkeypatch, tmp_path):
+def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypatch, tmp_path):
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "full")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "trace"))
     replies = iter([
         {"tasks": [{
-            "key": "measure", "capability": "experiment_run", "goal": "Measure the method",
-            "inputs": {"capability": "experiment_run", "instructions": "Measure the method"},
+            "key": "measure", "workflow_agent_kind": "experiment", "instruction": "Measure the method",
         }]},
-        {"accepted": True},
     ])
     requests = []
 
@@ -135,13 +132,12 @@ def test_full_cli_compilation_uses_new_defaults_for_draft_and_review(defaults, m
     ), current=None, registry=composition._registry(), budget=RunBudget(
         max_tasks=1, max_attempts_per_task=1, max_llm_calls=2, timeout_seconds=60,
     ), remaining_calls=2)
-    assert result.llm_calls == len(requests) == 2
+    assert result.llm_calls == len(requests) == 1
     assert all(body["max_tokens"] == 256_000 and timeout == 600 for body, timeout in requests)
     rows = [json.loads(line) for line in (tmp_path / "trace/llm_traces.jsonl").read_text().splitlines()]
-    assert len(rows) == 2
+    assert len(rows) == 1
     for row in rows:
         assert row["request_max_tokens"] == 256_000
         assert row["included_sections"] == ["system", "compiler_request"]
         assert 0 < row["estimated_tokens"] <= compiler_limit
         assert len(row["attempts"]) == row["retry_number"] + 1 == 1
-    assert rows[1]["step"] == "review"

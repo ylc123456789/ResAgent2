@@ -80,14 +80,14 @@ def test_render_live_shows_serial_tools_and_compaction():
 def test_render_live_task_attempts_and_error():
     task = SimpleNamespace(
         id="task_1",
-        capability=SimpleNamespace(value="code_modify"),
+        workflow_agent_kind=SimpleNamespace(value="coding"),
         status=SimpleNamespace(value="failed"),
-        goal="fix the SE bug",
+        instruction="fix the SE bug",
         attempts=[
             SimpleNamespace(
                 number=1,
                 status=SimpleNamespace(value="failed"),
-                summary="editing finished",
+                report="editing finished",
                 error=SimpleNamespace(
                     code=SimpleNamespace(value="TOOL_FAILED"),
                     message="boom",
@@ -99,7 +99,7 @@ def test_render_live_task_attempts_and_error():
     run.workflow = SimpleNamespace(tasks=[task])
     joined = "\n".join(render_live(run, None))
     assert "task_1" in joined
-    assert "code_modify" in joined
+    assert "coding" in joined
     assert "failed" in joined
     assert "attempt 1" in joined
     assert "editing finished" in joined

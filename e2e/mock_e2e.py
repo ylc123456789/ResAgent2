@@ -1,46 +1,16 @@
-"""Deterministic mock golden loop for the Phase 7 scientific control path.
+"""Deterministic scientific -> execution -> evidence -> conclusion loop."""
 
-Runs the full closed loop with no real LLM, no real legacy modules and no
-network:
-
-    ResearchRequest -> ScientificAgent(request_work) -> WorkflowCompiler
-    -> WorkflowScheduler(code + experiment) -> WorkOutcome
-    -> ScientificAgent(finish) -> ScientificCompletionValidator -> completed
-
-The Scientific Agent first asks for evidence, the deterministic compiler turns
-that into a code -> experiment graph, the scheduler executes both with scripted
-ports, and the resumed Scientific Agent concludes. The run persists to disk so
-a fresh store can prove recovery.
-"""
-
-from __future__ import annotations
-
+import json
 import tempfile
 from pathlib import Path
-
 from resagent2_contracts import (
-    AgentOwner,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
-    CodeModifyInput,
-    ExperimentRunInput,
-    ModuleResult,
-    ModuleStatus,
-    ResearchRequest,
-    RunBudget,
-    RunStatus,
-    ScientificVerdict,
-    TaskProposal,
-    WorkflowProposal,
+    AgentOwner, AgentResult, ArtifactCandidate, ModuleStatus, ResearchRequest,
+    RunBudget, RunStatus, TaskAcceptanceSpec, TaskProposal, WorkflowAgentKind,
+    WorkflowAgentDefinition, WorkflowAgentRegistry, WorkflowProposal,
 )
 from resagent2_orchestrator import (
-    DeterministicWorkflowCompiler,
-    JsonRunStore,
-    ModuleBinding,
-    ResearchController,
-    ScriptedModulePort,
-    WorkflowScheduler,
+    DeterministicWorkflowCompiler, JsonRunStore, ModuleBinding, ResearchController,
+    ScriptedModulePort, WorkflowScheduler,
 )
 from resagent2_runtime import InMemorySessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
@@ -49,138 +19,72 @@ RUN_ID = "run_golden"
 WORK_REQUEST_ID = "work_1"
 
 
-def registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
-        definitions=[
-            CapabilityDefinition(
-                capability=Capability.CODE_MODIFY,
-                owner=AgentOwner.CODING,
-            ),
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
-            ),
-        ]
-    )
+def registry():
+    return WorkflowAgentRegistry(definitions=[WorkflowAgentDefinition(workflow_agent_kind=kind) for kind in WorkflowAgentKind])
 
 
-def proposal() -> WorkflowProposal:
-    return WorkflowProposal(
-        work_request_id=WORK_REQUEST_ID,
-        tasks=[
-            TaskProposal(
-                id="task_code",
-                work_request_id=WORK_REQUEST_ID,
-                capability=Capability.CODE_MODIFY,
-                goal="Prepare the method implementation",
-                inputs=CodeModifyInput(instructions="Prepare the method"),
-            ),
-            TaskProposal(
-                id="task_experiment",
-                work_request_id=WORK_REQUEST_ID,
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run the experiment and record metrics",
-                depends_on=["task_code"],
-                inputs=ExperimentRunInput(
-                    instructions="Run the experiment and record metrics",
-                    expected_metrics=["accuracy"],
-                ),
-            ),
-        ],
-    )
+def proposal():
+    return WorkflowProposal(work_request_id=WORK_REQUEST_ID, tasks=[
+        TaskProposal(id="task_code", work_request_id=WORK_REQUEST_ID, workflow_agent_kind="coding", instruction="Prepare the method implementation"),
+        TaskProposal(id="task_experiment", work_request_id=WORK_REQUEST_ID, workflow_agent_kind="experiment",
+                     instruction="Run the comparison and provide accuracy", depends_on=["task_code"],
+                     acceptance_spec=TaskAcceptanceSpec(required_metric_keys=["accuracy"])),
+    ])
 
 
-def completed_result(capability: Capability) -> ModuleResult:
-    payload = {"env_id": "resenv_mock", "metrics": {"accuracy": 0.9}}
-    if capability == Capability.CODE_MODIFY:
-        payload = {
-            "changed_files": ["train.py"], "patch_path": "changes.patch",
-            "verification_passed": True, "verification_results": [{
-                "command": "python -m pytest", "exit_code": 0,
-                "stdout_path": "verify.stdout", "stderr_path": "verify.stderr",
-                "duration_seconds": 0.0,
-            }],
-        }
-    return ModuleResult(status=ModuleStatus.COMPLETED, summary="done", payload=payload)
+def completed_result(kind):
+    artifacts = []
+    if kind == WorkflowAgentKind.EXPERIMENT:
+        artifacts.append(ArtifactCandidate(kind="metrics", path="metrics.json", media_type="application/json",
+                                           summary="Measured accuracy", content='{"accuracy": 0.9}'))
+    return AgentResult(status=ModuleStatus.COMPLETED, report="done", artifacts=artifacts)
 
 
-def request_work_action() -> dict:
-    return {
-        "tool": "request_work",
-        "arguments": {
-            "assessment": {"statement": "need evidence"},
-            "work_request": {
-                "objective": "Produce evidence for the method",
-                "expected_evidence": ["accuracy"],
-            },
-        },
-    }
+def request_work_action():
+    return {"tool": "request_work", "arguments": {"assessment": {"statement": "need evidence"},
+            "work_request": {"objective": "Produce evidence for the method", "expected_evidence": ["accuracy"]}}}
 
 
-def finish_action() -> dict:
-    return {
-        "tool": "finish",
-        "arguments": {
-            "opinion": {"verdict": ScientificVerdict.INCONCLUSIVE.value, "statement": "done"},
-        },
-    }
+def finish_action():
+    return {"tool": "finish", "arguments": {"report": "done", "artifacts": [{
+        "kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json",
+        "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "done",
+        "evidence_artifact_ids": ["artifact_experiment_1_1"], "limitations": ["Deterministic fixture only"]}),
+    }]}}
 
 
 def run_mock_e2e(*, workdir: Path | None = None):
-    """Run the golden loop once and return the completed ResearchRun."""
     workdir = workdir or Path(tempfile.mkdtemp(prefix="resagent2-e2e-"))
-
     scheduler = WorkflowScheduler(
-        bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
-                owner=AgentOwner.CODING,
-                port=ScriptedModulePort([completed_result(Capability.CODE_MODIFY)]),
-            ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result(Capability.EXPERIMENT_RUN)]),
-            ),
-        },
-        store=JsonRunStore(workdir / "state"),
-        artifact_root=workdir / "artifacts",
+        bindings={kind: ModuleBinding(owner=AgentOwner(kind.value), port=ScriptedModulePort([completed_result(kind)])) for kind in WorkflowAgentKind},
+        store=JsonRunStore(workdir / "state"), artifact_root=workdir / "artifacts", data_root=workdir,
     )
-    scientific = ScientificAgent(
-        ScriptedLLMClient([request_work_action(), finish_action()]),
-        store=InMemorySessionStore(),
-    )
-    controller = ResearchController(
-        scientific_port=scientific,
-        compiler=DeterministicWorkflowCompiler(proposal(), patch=None),
-        scheduler=scheduler,
-        registry=registry(),
-    )
-
-    request = ResearchRequest(
-        goal="Determine whether the method improves accuracy",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=3,
-            max_llm_calls=50,
-            timeout_seconds=60,
-        ),
-    )
-    return controller.create_run(RUN_ID, request)
+    scientific = ScientificAgent(ScriptedLLMClient([
+        request_work_action(),
+        {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_experiment_1_1"}},
+        finish_action(),
+    ]), store=InMemorySessionStore())
+    controller = ResearchController(scientific_port=scientific, compiler=DeterministicWorkflowCompiler(proposal()),
+                                    scheduler=scheduler, registry=registry())
+    return controller.create_run(RUN_ID, ResearchRequest(goal="Determine whether the method improves accuracy",
+        budget=RunBudget(max_tasks=5, max_attempts_per_task=3, max_llm_calls=50, timeout_seconds=60)))
 
 
-def _summarize(run) -> str:
-    lines = [f"run={run.run_id} status={run.status.value} artifacts={len(run.artifacts)}"]
-    lines.append(f"opinion={run.final_opinion.statement if run.final_opinion else None}")
-    lines.append(f"report={run.final_report_artifact_id}")
-    for task in run.workflow.tasks:
+def _summarize(run):
+    lines = [f"run={run.run_id} status={run.status.value} artifacts={len(run.artifacts)}",
+             f"opinion={run.final_opinion.statement if run.final_opinion else None}", f"report={run.final_report_artifact_id}"]
+    for task in run.workflow.tasks if run.workflow else []:
         attempts = ", ".join(f"{a.number}:{a.status.value}" for a in task.attempts)
-        lines.append(f"  {task.id} [{task.capability.value}] attempts={attempts}")
+        lines.append(f"  {task.id} [{task.workflow_agent_kind.value}] attempts={attempts}")
+    if run.terminal_error:
+        lines.append(run.terminal_error.message)
     return "\n".join(lines)
 
 
-def main() -> None:
+def main():
     run = run_mock_e2e()
-    assert run.status == RunStatus.COMPLETED, f"golden loop did not complete: {run.status}"
     print(_summarize(run))
+    assert run.status == RunStatus.COMPLETED
 
 
 if __name__ == "__main__":

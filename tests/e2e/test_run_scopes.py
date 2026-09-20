@@ -18,16 +18,14 @@ from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
     ArtifactRef,
-    Capability,
-    CapabilityRegistry,
-    CodeUnderstandInput,
-    ExperimentRunInput,
+    WorkflowAgentKind,
+    WorkflowAgentRegistry,
     ModuleStatus,
-    ModuleTaskRequest,
+    AgentRequest,
     ResearchRequest,
     RunBudget,
     RunStatus,
-    ScientificTurnRequest,
+    AgentRequest,
     SessionId,
     TaskBudget,
     WorkspaceGrant,
@@ -87,9 +85,7 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
 
     sessions = JsonSessionStore(tmp_path / "sessions")
     agent = ScientificAgent(ScriptedLLMClient([
-        {"tool": "finish", "arguments": {
-            "opinion": {"verdict": "inconclusive", "statement": "No evidence requested"},
-        }},
+        {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "No evidence requested"})}]}},
     ]), store=sessions)
     scheduler = WorkflowScheduler(
         bindings={}, store=JsonRunStore(tmp_path / "runs"),
@@ -97,7 +93,7 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
     )
     controller = ResearchController(
         scientific_port=agent, compiler=UnusedCompiler(), scheduler=scheduler,
-        registry=CapabilityRegistry(definitions=[]),
+        registry=WorkflowAgentRegistry(definitions=[]),
     )
     run = controller.create_run(run_id, _research())
     assert run.status == RunStatus.COMPLETED
@@ -117,7 +113,6 @@ def test_native_agents_share_store_without_cross_run_session_collision(
          "commit", "--allow-empty", "-qm", "baseline"],
         cwd=workspace, check=True,
     )
-    monkeypatch.setattr("resagent2_experiment.agent.HardwareAudit.text", lambda _: "test")
     ask = {
         "tool": "ask_user",
         "arguments": {
@@ -131,9 +126,9 @@ def test_native_agents_share_store_without_cross_run_session_collision(
         resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
     )
     coding = agent_type is NativeCodingAgent
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_a", task_id="task_shared", attempt_number=1,
-        capability=Capability.CODE_UNDERSTAND if coding else Capability.EXPERIMENT_RUN,
+        agent=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT,
         instruction="Ask first",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
         workspace=WorkspaceGrant(
@@ -201,18 +196,17 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
 
     client = ScriptedLLMClient([
         {"tool": "read_artifact", "arguments": {"artifact_id": artifact.id}},
-        {"tool": "finish", "arguments": {
-            "opinion": {"verdict": "inconclusive", "statement": "Evidence unavailable"},
-        }},
+        {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Evidence unavailable"})}]}},
     ])
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("must not read"))
     agent = ScientificAgent(client, registration_port=WrongResolver())
-    result = agent.run(ScientificTurnRequest(
+    result = agent.invoke(AgentRequest(
+        agent=AgentOwner.SCIENTIFIC,
         run_id="run_b", instruction="Check Run isolation",
         budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
     ))
     assert result.status == "completed"
-    assert result.observed_artifact_ids == []
+    assert json.loads(next(item.content for item in result.artifacts if item.kind == "observation_trace"))["observed_artifact_ids"] == []
     assert "private evidence" not in client.contexts[-1].text
 
 
@@ -231,7 +225,7 @@ def registration(tmp_path, request):
     return ScientificArtifactRegistration(ArtifactRegistry(tmp_path / "artifacts"), store)
 
 
-def test_live_registration_is_scoped_even_when_content_ids_match(registration):
+def test_live_registration_binds_identity_and_content_to_run_scope(registration):
     candidate = ArtifactCandidate(
         kind="literature_search", path="literature.json", media_type="application/json",
         summary="shared query", metadata={"papers": []},
@@ -241,7 +235,7 @@ def test_live_registration_is_scoped_even_when_content_ids_match(registration):
     assert first.session_id == "session_a"
     assert registration.resolve(first.id, run_id="run_b") is None
     second = registration.register_scientific(candidate, run_id="run_b", session_id="session_b")
-    assert first.id == second.id
+    assert first.id != second.id
     assert registration._store.load("run_b").artifacts[second.id] == second
     assert first.uri != second.uri
     assert registration.resolve(first.id, run_id="run_a") == first
@@ -268,14 +262,13 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             assert self.artifact_id in context.text
             assert "# Literature search results" in context.text
             assert "No papers returned" in context.text
-            return {"tool": "finish", "arguments": {
-                "opinion": {"verdict": "inconclusive", "statement": "No papers found",
-                            "evidence_artifact_ids": [self.artifact_id]},
-            }}
+            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "No papers found",
+                            "evidence_artifact_ids": [self.artifact_id]})}]}}
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
-    result = agent.run(ScientificTurnRequest(
+    result = agent.invoke(AgentRequest(
+        agent=AgentOwner.SCIENTIFIC,
         run_id="run_a", instruction="Check Run isolation",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
     ))
@@ -285,3 +278,39 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     reads = [e for e in state.events if e.type == "observation" and e.tool == "read_artifact"]
     assert "No papers returned" in reads[-1].data["value"]["content"]
     assert "read_artifact_summaries" not in state.memory
+
+
+def test_resumed_scientific_does_not_return_historical_input_refs(registration):
+    class Backend:
+        def search(self, query, **kwargs):
+            return []
+
+    client = ScriptedLLMClient([
+        {"tool": "literature_search", "arguments": {"query": "history"}},
+        {"tool": "ask_user", "arguments": {
+            "assessment": {"statement": "Need permission to conclude"},
+            "text": "Proceed with this evidence?", "requested_fields": ["approve"],
+        }},
+        {"tool": "finish", "arguments": {
+            "report": "No papers found",
+            "artifacts": [{
+                "kind": "scientific_opinion", "path": "opinion.json",
+                "media_type": "application/json", "summary": "Conclusion",
+                "content": '{"verdict": "inconclusive", "statement": "No papers found"}',
+            }],
+        }},
+    ])
+    agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
+    request = AgentRequest(
+        run_id="run_a", agent=AgentOwner.SCIENTIFIC, instruction="Review evidence",
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
+    )
+    first = agent.invoke(request)
+    ref = next(item for item in first.artifacts if isinstance(item, ArtifactRef))
+    second = agent.invoke(request.model_copy(update={
+        "parent_session_id": first.session.id, "input_artifacts": [ref],
+    }))
+    assert second.status == "completed", second.report
+    assert not any(isinstance(item, ArtifactRef) and item.id == ref.id for item in second.artifacts)
+    trace = json.loads(next(item.content for item in second.artifacts if item.kind == "observation_trace"))
+    assert ref.id in trace["observed_artifact_ids"]

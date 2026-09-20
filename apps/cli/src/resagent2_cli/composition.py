@@ -23,9 +23,9 @@ from resagent2_components import (
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    CapabilityDefinition,
-    CapabilityRegistry,
+    WorkflowAgentKind,
+    WorkflowAgentDefinition,
+    WorkflowAgentRegistry,
     WorkspaceSpec,
 )
 from resagent2_experiment import NativeExperimentAgent
@@ -113,41 +113,23 @@ def _compiler_client(*, max_context_tokens: int) -> PromptLLMClient:
     )
 
 
-def _registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
+def _registry() -> WorkflowAgentRegistry:
+    return WorkflowAgentRegistry(
         definitions=[
-            CapabilityDefinition(
-                capability=Capability.CODE_UNDERSTAND,
-                owner=AgentOwner.CODING,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.CODING,
                 description=(
-                    "Read-only code inspection; use only when the goal is to "
-                    "analyze or explain code without changing it."
+                    "Understand, explain, modify and verify code under the granted permissions."
                 ),
             ),
-            CapabilityDefinition(
-                capability=Capability.CODE_MODIFY,
-                owner=AgentOwner.CODING,
-                description=(
-                    "Change code to implement a feature or fix a bug; it already "
-                    "reads and diagnoses the code before editing."
-                ),
-            ),
-            CapabilityDefinition(
-                capability=Capability.EXPERIMENT_RUN,
-                owner=AgentOwner.EXPERIMENT,
+            WorkflowAgentDefinition(
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
                 description=(
                     "Run an experiment and record its measured metrics and artifacts."
                 ),
             ),
         ]
     )
-
-
-def _owner_for(registry: CapabilityRegistry, capability: Capability) -> AgentOwner:
-    for definition in registry.definitions:
-        if definition.capability == capability:
-            return definition.owner
-    raise KeyError(f"no owner registered for capability {capability.value}")
 
 
 def build_application(
@@ -173,8 +155,8 @@ def build_application(
 
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.CODE_UNDERSTAND: ModuleBinding(
-                owner=_owner_for(registry, Capability.CODE_UNDERSTAND),
+            WorkflowAgentKind.CODING: ModuleBinding(
+                owner=AgentOwner.CODING,
                 port=NativeCodingAgent(
                     _client(),
                     store=coding_store,
@@ -182,17 +164,8 @@ def build_application(
                     max_context_tokens=coding_context_tokens,
                 ),
             ),
-            Capability.CODE_MODIFY: ModuleBinding(
-                owner=_owner_for(registry, Capability.CODE_MODIFY),
-                port=NativeCodingAgent(
-                    _client(),
-                    store=coding_store,
-                    resource_layout=resource_layout,
-                    max_context_tokens=coding_context_tokens,
-                ),
-            ),
-            Capability.EXPERIMENT_RUN: ModuleBinding(
-                owner=_owner_for(registry, Capability.EXPERIMENT_RUN),
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
+                owner=AgentOwner.EXPERIMENT,
                 port=NativeExperimentAgent(
                     _client(),
                     store=experiment_store,

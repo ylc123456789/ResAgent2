@@ -3,12 +3,12 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    ExperimentRunInput,
+    WorkflowAgentKind,
     ResearchRequest,
     RunBudget,
     RunStatus,
     TaskProposal,
+    TaskAcceptanceSpec,
     TaskStatus,
     VerificationResult,
     WorkflowProposal,
@@ -143,7 +143,7 @@ class _NativeExperimentPort:
             FinishTool(),
         )
         definition = AgentDefinition(
-            name="experiment-run",
+            name="experiment",
             owner=AgentOwner.EXPERIMENT,
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
@@ -155,10 +155,11 @@ class _NativeExperimentPort:
                     {
                         "tool": "finish",
                         "arguments": {
-                            "result": {
-                                "summary": "done",
-                                "evidence_files": ["metrics.json"],
-                            }
+                            "report": "done",
+                            "artifacts": [{
+                                "kind": "experiment_result", "path": "metrics.json",
+                                "media_type": "application/json", "summary": "Measured accuracy",
+                            }],
                         },
                     },
                 ]
@@ -167,11 +168,6 @@ class _NativeExperimentPort:
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ExperimentCompletionCheck(
                 WorkspaceObserver(boundary),
-                expected_metrics=list(request.acceptance.required_metric_keys),
-                expected_artifacts=list(request.acceptance.required_artifact_paths),
-                env_id="resenv_x",
-                repo_url="https://example.com/repo.git",
-                commit="abc",
             ),
             action_type=ExperimentAction,
         )
@@ -194,7 +190,7 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     workspace.mkdir()
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.EXPERIMENT_RUN: ModuleBinding(
+            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
                 port=_NativeExperimentPort(AgentLoop(store=InMemorySessionStore())),
             )
@@ -225,12 +221,11 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
             TaskProposal(
                 id="task_experiment_native",
                 work_request_id="work_legacy_initial",
-                capability=Capability.EXPERIMENT_RUN,
-                goal="Run train.py and record accuracy",
-                inputs=ExperimentRunInput(
-                    instructions="Run train.py and record accuracy",
-                    expected_metrics=["accuracy"],
-                    expected_artifacts=["metrics.json"],
+                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
+                instruction="Run train.py and record accuracy",
+                acceptance_spec=TaskAcceptanceSpec(
+                    required_metric_keys=["accuracy"],
+                    required_artifact_paths=["metrics.json"],
                 ),
             )
         ],
@@ -241,5 +236,7 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
 
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     artifacts = list(run.artifacts.values())
-    assert {artifact.kind for artifact in artifacts} == {"experiment_result"}
+    assert {artifact.kind for artifact in artifacts} == {
+        "experiment_result", "execution_record", "acceptance_requirements",
+    }
     assert all(len(artifact.sha256) == 64 for artifact in artifacts)

@@ -6,10 +6,9 @@ from datetime import UTC, datetime
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentOwner,
-    Capability,
-    CodeModifyInput,
+    WorkflowAgentKind,
     ModuleStatus,
-    ModuleTaskRequest,
+    AgentRequest,
     ResearchRequest,
     RunBudget,
     RunStatus,
@@ -107,14 +106,14 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
                 },
                 {
                     "tool": "finish",
-                    "arguments": {"result": {"summary": "Updated VALUE"}},
+                    "arguments": {"report": "Updated VALUE"},
                 },
             ]
         )
     )
     scheduler = WorkflowScheduler(
         bindings={
-            Capability.CODE_MODIFY: ModuleBinding(
+            WorkflowAgentKind.CODING: ModuleBinding(
                 owner=AgentOwner.CODING,
                 port=coding,
             )
@@ -145,11 +144,8 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
             TaskProposal(
                 id="task_code_native",
                 work_request_id="work_legacy_initial",
-                capability=Capability.CODE_MODIFY,
-                goal="Change VALUE from 1 to 2",
-                inputs=CodeModifyInput(
-                    instructions="Change VALUE from 1 to 2",
-                ),
+                workflow_agent_kind=WorkflowAgentKind.CODING,
+                instruction="Change VALUE from 1 to 2",
             )
         ],
     )
@@ -161,6 +157,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
     assert {artifact.kind for artifact in run.artifacts.values()} == {
         "code_patch",
         "code_change",
+        "verification_result",
     }
     assert all(len(artifact.sha256) == 64 for artifact in run.artifacts.values())
 
@@ -209,17 +206,17 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
                 },
                 {
                     "tool": "finish",
-                    "arguments": {"result": {"summary": "Updated VALUE"}},
+                    "arguments": {"report": "Updated VALUE"},
                 },
             ]
         )
     )
 
-    request = ModuleTaskRequest(
+    request = AgentRequest(
         run_id="run_resume",
         task_id="task_code",
         attempt_number=1,
-        capability=Capability.CODE_MODIFY,
+        agent=AgentOwner.CODING,
         instruction="Change VALUE from 1 to 2",
         budget=TaskBudget(max_llm_calls=20, timeout_seconds=60),
         workspace=WorkspaceGrant(
@@ -246,4 +243,4 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
     second = coding.invoke(resume_request)
 
     assert second.status == ModuleStatus.COMPLETED
-    assert second.payload["changed_files"] == ["util.py"]
+    assert [item.path for item in second.artifacts if item.kind == "code_change"] == ["util.py"]

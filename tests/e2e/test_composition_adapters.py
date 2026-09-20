@@ -39,23 +39,21 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("oversized", [False, True])
-def test_full_review_semantics_use_the_existing_context_budget(monkeypatch, tmp_path, oversized):
+def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, tmp_path, oversized):
     """Actual compiler + composition adapter; no network or scripted judgment claim."""
     repeats = DEFAULT_AGENT_CONTEXT_TOKENS if oversized else 4000
     instructions = "Measure accuracy without changing code." + " detail" * repeats
     draft = {
         "tasks": [{
-            "key": "measure", "capability": "experiment_run", "goal": "Run measurement",
-            "constraints": ["Use registered data only"],
-            "inputs": {"capability": "experiment_run", "instructions": instructions},
+            "key": "measure", "workflow_agent_kind": "experiment", "instruction": instructions,
         }],
     }
-    client = ScriptedLLMClient([draft, {"accepted": True}])
+    client = ScriptedLLMClient([draft])
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
     controller, _ = real_e2e._build_controller(tmp_path, None)
     request = WorkRequest(
         id="work_review", run_id="run_review", scientific_session_id="session_review",
-        request=WorkRequestDraft(objective="Measure the method", expected_evidence=["accuracy"]),
+        request=WorkRequestDraft(objective=instructions, expected_evidence=["accuracy"]),
         created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
     kwargs = dict(
@@ -65,17 +63,17 @@ def test_full_review_semantics_use_the_existing_context_budget(monkeypatch, tmp_
     if oversized:
         with pytest.raises(CompilationError) as caught:
             controller.compiler.compile(request, **kwargs)
-        assert isinstance(caught.value.__cause__, ContextBudgetExceeded)
-        assert caught.value.llm_calls == 1
-        assert len(client.contexts) == 1  # draft only; oversized review never calls provider
+        cause = caught.value.__cause__
+        while cause is not None and not isinstance(cause, ContextBudgetExceeded):
+            cause = cause.__cause__
+        assert isinstance(cause, ContextBudgetExceeded)
+        assert caught.value.llm_calls == 0
+        assert len(client.contexts) == 0
         assert controller.compiler._client.last_attempts == 0
     else:
         result = controller.compiler.compile(request, **kwargs)
-        assert result.llm_calls == 2
-        assert len(client.contexts) == 2
-        review = client.contexts[1]
-        assert review.included_sections == ["system", "compiler_request"]
-        assert 4096 < review.estimated_tokens <= DEFAULT_AGENT_CONTEXT_TOKENS
-        assert "  inputs=" in review.text and instructions in review.text
-        assert "  constraints=" in review.text and "Use registered data only" in review.text
-        assert "Code-level verification does not replace formal experiment delivery" in review.text
+        assert result.llm_calls == len(client.contexts) == 1
+        context = client.contexts[0]
+        assert context.included_sections == ["system", "compiler_request"]
+        assert 4096 < context.estimated_tokens <= DEFAULT_AGENT_CONTEXT_TOKENS
+        assert instructions in context.text

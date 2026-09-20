@@ -10,7 +10,7 @@ from resagent2_cli import composition
 from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
-    Capability,
+    WorkflowAgentKind,
     DatasetRef,
     EnvironmentSpec,
     PendingQuestion,
@@ -288,8 +288,8 @@ def test_coding_and_experiment_share_resource_layout(tmp_path: Path):
     application = build_application(data_root=tmp_path)
     bindings = application.controller.scheduler.bindings
 
-    coding = bindings[Capability.CODE_MODIFY].port
-    experiment = bindings[Capability.EXPERIMENT_RUN].port
+    coding = bindings[WorkflowAgentKind.CODING].port
+    experiment = bindings[WorkflowAgentKind.EXPERIMENT].port
 
     # Both execution agents must resolve envs/resources from the same layout, so
     # a code_modify prepare_environment and a follow-on experiment_run see the

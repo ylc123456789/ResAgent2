@@ -310,6 +310,47 @@ class WorkflowScheduler:
             return self._resume_task(run, task, last)
         return self._start_task(run, task)
 
+    def _resolve_future_artifact_bindings(
+        self, run: ResearchRun, task: WorkflowTask
+    ) -> list[str]:
+        """Resolve logical outputs only after each direct dependency succeeded."""
+        resolved: list[str] = []
+        for binding in task.input_artifact_bindings:
+            source = self._task(run, binding.source_task)
+            successful = [
+                attempt
+                for attempt in source.attempts
+                if attempt.status
+                in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
+            ]
+            if not successful:
+                raise OrchestrationError(
+                    f"future artifact source task is not complete: {binding.source_task}"
+                )
+            attempt = successful[-1]
+            candidates = [
+                artifact_id
+                for artifact_id in attempt.artifact_ids
+                if artifact_id in run.artifacts
+                and (
+                    run.artifacts[artifact_id].output_name == binding.output_selector
+                    or run.artifacts[artifact_id].metadata.get("output_name")
+                    == binding.output_selector
+                )
+            ]
+            if not candidates:
+                raise OrchestrationError(
+                    f"future artifact selector {binding.output_selector!r} "
+                    f"was not produced by {binding.source_task}"
+                )
+            if len(candidates) > 1:
+                raise OrchestrationError(
+                    f"future artifact selector {binding.output_selector!r} "
+                    f"is ambiguous for {binding.source_task}"
+                )
+            resolved.append(candidates[0])
+        return resolved
+
     def _start_task(self, run: ResearchRun, task: WorkflowTask) -> ResearchRun:
         """Start a new Attempt for a fresh or retried task."""
         attempt_number = len(task.attempts) + 1
@@ -330,11 +371,12 @@ class WorkflowScheduler:
             in {AttemptStatus.COMPLETED, AttemptStatus.COMPLETED_WITH_WARNINGS}
             for artifact_id in dependency_attempt.artifact_ids
         ]
-        # Imported input artifacts are authorized to every task; dependency
-        # artifacts are added on top (ADR-0011 §4).
+        bound_artifacts = self._resolve_future_artifact_bindings(run, task)
+        # Imported and legacy inherited inputs remain authorized during this
+        # migration; explicit future bindings are resolved to formal Refs here.
         task.input_artifacts = list(
             dict.fromkeys(
-                [*task.input_artifacts, *import_artifacts, *inherited_artifacts]
+                [*task.input_artifacts, *import_artifacts, *inherited_artifacts, *bound_artifacts]
             )
         )
         started = datetime.now(UTC)

@@ -209,6 +209,9 @@ class WorkflowScheduler:
                 depends_on=item.depends_on,
                 workspace_id=self._resolve_workspace_id(item),
                 constraints=list(item.constraints),
+                acceptance_spec=item.acceptance_spec,
+                acceptance_ref=item.acceptance_ref,
+                input_artifact_bindings=list(item.input_artifact_bindings),
             )
             for item in proposal.tasks
         ]

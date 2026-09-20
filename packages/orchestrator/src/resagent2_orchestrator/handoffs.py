@@ -8,7 +8,7 @@ from urllib.request import url2pathname
 
 from resagent2_contracts import (
     AgentOwner, ArtifactCandidate, ArtifactRef, TaskAcceptanceSpec, VerificationResult,
-    SYSTEM_ARTIFACT_PROVENANCE,
+    SYSTEM_ARTIFACT_PROVENANCE, latest_command_results,
 )
 from .artifacts import ArtifactRegistrationError, _sha256
 
@@ -122,6 +122,7 @@ def check_acceptance(run, task, attempt, refs):
         raise ArtifactRegistrationError("required artifact paths missing")
     numeric = set()
     executed = False
+    execution_rows = []
     for item in refs:
         if item.media_type != "application/json":
             continue
@@ -133,9 +134,13 @@ def check_acceptance(run, task, attempt, refs):
                 rows = [VerificationResult.model_validate(row) for row in data.get("results", [])]
                 current = item.kind != "verification_result" or data.get("covers_current_workspace") is True
                 if item.kind == "execution_record":
-                    rows = rows[-1:]
-                executed |= current and bool(rows) and all(
-                    row.exit_code == 0 and not row.timed_out for row in rows)
+                    execution_rows.extend(rows)
+                else:
+                    executed |= current and bool(rows) and all(
+                        row.exit_code == 0 and not row.timed_out for row in rows)
+    if execution_rows:
+        executed = all(row.exit_code == 0 and not row.timed_out
+                       for row in latest_command_results(execution_rows))
     if not set(spec.required_metric_keys) <= numeric:
         raise ArtifactRegistrationError("required numeric metric keys missing")
     if spec.require_successful_execution and not executed:

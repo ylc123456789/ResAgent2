@@ -141,6 +141,8 @@ Scientific 的普通产物归属 Session，支持 literature_search、scientific
 
 注入的进程内 ModulePort 与原生 Agent 的确定性 finalizer 是可信实现。模型 finish 候选不能提交 `execution_record`、`verification_result` 或 `observation_trace`；原生代码从真实命令回执、验证状态和读取观察中生成它们。Coding 的 patch 同样从实际差异生成。
 
+同一 Attempt 的执行结果按命令 argv 归并：仅同一命令后来成功重跑才能解除它此前的失败或超时；不同命令的成功（包括诊断探针）不能覆盖未恢复失败。仅忽略 shell 引号和参数间空白，不推测不同参数或解释器是否等价。Experiment 完成判定和 `require_successful_execution` 验收共用该规则，原始 `execution_record` 保留全部执行。没有执行的纯分析任务仍可完成；要求实际执行时应同时声明所需指标与产物，成功命令本身不证明目标实验已完成。
+
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
 报告用于解释；`module_report` 可保存需要下游分页读取的长说明。报告不替代原始测量、代码或文献。拿到 Ref 不代表已读正文，读过一次也不表示全文始终在模型上下文中。

@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from resagent2_contracts import ArtifactCandidate, ErrorCode, ModuleError, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
+from resagent2_contracts import (
+    ArtifactCandidate, ErrorCode, ModuleError, VerificationResult,
+    SYSTEM_GENERATED_ARTIFACT_KINDS, latest_command_results,
+)
 from resagent2_components import WorkspaceObserver
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
@@ -71,6 +74,16 @@ class ExperimentCompletionCheck:
 
     @staticmethod
     def _last_failed_command(state: AgentState) -> dict | None:
+        results = latest_command_results(
+            VerificationResult.model_validate(record)
+            for record in ExperimentCompletionCheck._execution_records(state)
+        )
+        failed = next((result for result in reversed(results)
+                       if result.exit_code != 0 or result.timed_out), None)
+        if failed is None:
+            return None
+        details = failed.model_dump(mode="json")
+        details["stderr_tail"] = ""
         for event in reversed(state.events):
             if event.type != "observation" or event.tool != "run_command":
                 continue
@@ -79,18 +92,11 @@ class ExperimentCompletionCheck:
             value = event.data.get("value")
             if not isinstance(value, dict):
                 continue
-            exit_code = value.get("exit_code")
-            timed_out = bool(value.get("timed_out", False))
-            if exit_code is None:
-                continue
-            if exit_code == 0 and not timed_out:
-                return None
-            if not value.get("stdout_path") and not value.get("stderr_path"):
-                continue
-            return {
-                "command": value.get("command") or "", "exit_code": exit_code,
-                "timed_out": timed_out, "stdout_path": value.get("stdout_path") or "",
-                "stderr_path": value.get("stderr_path") or "",
-                "stderr_tail": value.get("stderr_tail") or "",
-            }
-        return None
+            if (value.get("command") == failed.command
+                    and value.get("exit_code") == failed.exit_code
+                    and bool(value.get("timed_out", False)) == failed.timed_out
+                    and value.get("stdout_path") == failed.stdout_path
+                    and value.get("stderr_path") == failed.stderr_path):
+                details["stderr_tail"] = value.get("stderr_tail") or ""
+                break
+        return details

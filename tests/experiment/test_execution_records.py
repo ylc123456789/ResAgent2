@@ -65,18 +65,40 @@ def test_loop_returns_execution_record_for_success_and_failure(tmp_path, exit_co
         assert result.error.details["stderr_tail"] == "error"
 
 
-def test_successful_retry_supersedes_earlier_failure(tmp_path):
+@pytest.mark.parametrize("commands,failed_command", [
+    ([("python train.py", 1, False), ("python train.py", 0, False)], None),
+    ([("python train.py", 1, False), ('python  "train.py"', 0, False)], None),
+    ([("python train.py", 1, False), ("python --version", 0, False)], "python train.py"),
+    ([("python train.py", 0, True), ("python --version", 0, False)], "python train.py"),
+    ([("python train.py", 1, False), ("python train.py --smoke", 0, False)], "python train.py"),
+    ([("python train.py", 1, False), ("python other.py", 1, False),
+      ("python train.py", 0, False)], "python other.py"),
+])
+def test_only_successful_retry_of_same_command_resolves_failure(tmp_path, commands, failed_command):
     from resagent2_runtime import AgentEvent
     now = datetime.now(UTC)
     state = AgentState(
         session_id="session_test", agent_name="experiment", owner=AgentOwner.EXPERIMENT,
         run_id="run_test", task_id="task_test", attempt_number=1, created_at=now, updated_at=now,
     )
-    for sequence, exit_code in enumerate([1, 0], start=1):
+    for sequence, (command, exit_code, timed_out) in enumerate(commands, start=1):
         observation = Command(exit_code).execute(state, CommandInput())
+        observation.value.update(command=command, timed_out=timed_out,
+                                 stdout_path=f"{sequence}.stdout", stderr_path=f"{sequence}.stderr")
         state.events.append(AgentEvent(
             sequence=sequence, step=sequence, type="observation", tool="run_command",
             data=observation.model_dump(mode="json"), created_at=now,
         ))
-    assert ExperimentCompletionCheck._last_failed_command(state) is None
-    assert [record["exit_code"] for record in ExperimentCompletionCheck._execution_records(state)] == [1, 0]
+    boundary = WorkspaceBoundary(WorkspaceGrant(
+        root=str(tmp_path), mode=WorkspaceMode.READ_ONLY, source=WorkspaceSourceKind.LOCAL,
+    ))
+    decision = ExperimentCompletionCheck(WorkspaceObserver(boundary)).evaluate(
+        state, FinishCandidate(report="Recorded all outcomes"))
+    assert decision.complete == (failed_command is None)
+    if failed_command is not None:
+        assert decision.failure.details["command"] == failed_command
+        if not decision.failure.details["timed_out"]:
+            assert decision.failure.details["stderr_tail"] == "error"
+    record = json.loads(next(item.content for item in decision.artifacts if item.kind == "execution_record"))
+    assert [(row["command"], row["exit_code"], row["timed_out"])
+            for row in record["results"]] == commands

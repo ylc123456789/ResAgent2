@@ -14,6 +14,7 @@ ALLOWED_IMPORT_ROOTS = {
     "enum",
     "os",
     "pathlib",
+    "shlex",
     "typing",
     "pydantic",
 }

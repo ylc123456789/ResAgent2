@@ -1,6 +1,6 @@
 """Stable public imports for ResAgent2 cross-module contracts."""
 
-from .evidence import missing_required_evidence_kinds
+from .evidence import latest_command_results, missing_required_evidence_kinds
 from .identifiers import scientific_session_id, task_session_id
 from .models import (
     SCHEMA_VERSION,
@@ -25,7 +25,7 @@ from .models import (
 )
 
 __all__ = [
-    "SCHEMA_VERSION", "missing_required_evidence_kinds", "scientific_session_id",
+    "SCHEMA_VERSION", "latest_command_results", "missing_required_evidence_kinds", "scientific_session_id",
     "SCIENTIFIC_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_PROVENANCE",
     "SYSTEM_GENERATED_ARTIFACT_KINDS",
     "task_session_id", "AgentOwner", "AgentPermissions", "AgentRequest",

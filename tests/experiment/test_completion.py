@@ -98,6 +98,7 @@ def test_failed_finish_preserves_verified_execution_error(tmp_path, exit_code, t
         data={"ok": False, "value": {
             "command": "python train.py", "exit_code": exit_code, "timed_out": timed_out,
             "stdout_path": "out.stdout", "stderr_path": "out.stderr", "stderr_tail": "real error",
+            "duration_seconds": 0.1,
         }},
     ))
     candidate = FinishCandidate(report="Training failed")

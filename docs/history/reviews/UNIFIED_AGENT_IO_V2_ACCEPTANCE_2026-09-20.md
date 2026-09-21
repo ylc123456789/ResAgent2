@@ -1,5 +1,7 @@
 # Unified Agent IO V2：本地实现与验收
 
+后续服务器复测及独立验收见 [2026-09-21 复核记录](UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md)。本文保留初次本地验收时的结果与范围。
+
 日期：2026-09-20。分支：`refactor/unified-agent-entry`。对应[实施方案](UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)。
 
 ## 实现结果

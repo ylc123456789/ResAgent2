@@ -1,4 +1,5 @@
 # Unified Agent IO V2：修复与定向复测
+后续独立验收见 [2026-09-21 复测复核记录](UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md)：主要产品流程通过，repair 自动判定按既定规则人工复核通过，旧答案拒绝的原始材料待补。以下保留当时的复测交接内容。
 
 日期：2026-09-21。开发分支：`refactor/unified-agent-entry`。本轮未合并或推送。
 

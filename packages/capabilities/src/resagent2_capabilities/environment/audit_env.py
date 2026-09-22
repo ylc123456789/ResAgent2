@@ -33,8 +33,7 @@ class AuditEnvTool:
                 ok=False,
                 value={"blocked": True, "reason": "no_environment"},
             )
-        audit = self.binding.manager.audit(self.binding.current)
-        self.binding.certified = bool(audit.get("success"))
+        audit = self.binding.audit()
         return ToolObservation(
             summary=(
                 "Environment audit passed"

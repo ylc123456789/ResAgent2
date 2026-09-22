@@ -226,7 +226,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 ### 4.3 目录、环境、数据集的刷新频率不同
 
 - **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
-- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified 等当前绑定状态；环境恢复不自动沿用旧认证，不代表每轮扫描所有依赖。
+- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified 等当前绑定状态；环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
 - **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料，历史工件仍保留。必需材料过大时明确超限，不静默截断结构化答案。
 

@@ -82,9 +82,9 @@ def _verification_status(
     if state.memory.get("verification_revision") != int(state.memory.get("edit_revision", 0)):
         return results, "Run verification after the latest file edit", "run_verification"
     if binding is not None and not binding.certified:
-        return results, "Audit the environment before verification", "audit_env"
+        return results, "Rerun verification; its environment will be audited automatically", "run_verification"
     if binding is not None and state.memory.get("verification_environment_generation") != binding.generation:
-        return results, "Environment changed or was restored; rerun verification after audit", "run_verification"
+        return results, "Environment changed or was restored; rerun verification", "run_verification"
     if any(item.exit_code != 0 or item.timed_out for item in results):
         return results, "Verification failed; inspect the latest command observation", "inspect_and_fix_verification"
     if not state.memory.get("verification_workspace_unchanged", False):
@@ -104,7 +104,6 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) 
         "edited_since_verification": int(state.memory.get("edit_revision", 0)) > int(state.memory.get("verification_revision") or 0),
         "verification_stale": edited and issue is not None,
         "suggested_next_action": (
-            "none" if not edited else
-            "audit_env" if binding is not None and not binding.certified else next_action
+            "none" if not edited else next_action
         ),
     }

@@ -100,15 +100,17 @@ def test_classify_command_does_not_treat_wrapper_run_as_setup() -> None:
     assert classify_command("bash -c 'echo hi'") == "experiment"
 
 
-def test_run_command_blocks_experiment_before_certification(tmp_path) -> None:
+def test_run_command_blocks_experiment_when_automatic_audit_fails(tmp_path, monkeypatch) -> None:
     boundary = _boundary(tmp_path)
     tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=False), timeout_seconds=30)
+    monkeypatch.setattr(tool.binding.manager, "audit", lambda _: {"success": False})
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 
     assert observation.ok is False
     assert observation.value["blocked"] is True
-    assert "audit_env" in observation.summary
+    assert observation.value["reason"] == "environment_audit_failed"
+    assert observation.memory_updates["env_audit"] == {"success": False}
 
 
 def test_run_command_allows_experiment_after_certification(tmp_path) -> None:

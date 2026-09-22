@@ -142,7 +142,7 @@ def test_setup_then_audit_cannot_revive_prior_verification(setup, exit_code):
     assert setup.binding.generation != generation
     assert setup.binding.certified is False
     assert not finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "audit_env"
+    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
     generation = setup.binding.generation
     assert reaudit(setup.binding, setup.state).ok
     assert setup.binding.generation == generation

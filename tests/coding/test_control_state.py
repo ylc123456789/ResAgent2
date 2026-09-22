@@ -40,7 +40,7 @@ def test_after_edit_verification_is_required() -> None:
     assert control["edited_since_verification"] is True
     assert control["verification_stale"] is True
     assert control["environment_certified"] is False
-    assert control["suggested_next_action"] == "audit_env"
+    assert control["suggested_next_action"] == "run_verification"
 
 
 def test_after_audit_still_requires_verification() -> None:

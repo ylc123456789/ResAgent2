@@ -445,7 +445,7 @@ class EnvironmentBinding:
 
     On construction the binding restores an existing healthy environment via
     ``inspect`` (so a resumed session finds its env), but starts uncertified:
-    the restored env must be re-audited before any experiment/verification.
+    execution tools re-audit it after authorization and before running commands.
     """
 
     def __init__(
@@ -471,6 +471,15 @@ class EnvironmentBinding:
         """Invalidate environment-dependent observations before a mutation starts."""
         self.certified = False
         self.generation = uuid4().hex
+
+    def audit(self) -> dict:
+        """Validate the current interpreter without trusting persisted certification."""
+        self.certified = False
+        if self.current is None:
+            raise EnvironmentManagerError("No environment prepared")
+        audit = self.manager.audit(self.current)
+        self.certified = bool(audit.get("success"))
+        return audit
 
     def argv_prefix(self) -> list[str] | None:
         if self.current is None or self.manager.conda_exe is None:

@@ -19,8 +19,10 @@ one protocol. Analysis alone does not require new execution or writable source.
 
 Read the repository's instructions and entry scripts before running commands.
 Read project Python and dependency requirements, then use prepare_environment
-when needed, run_setup for installation, and audit_env before execution.
-Use run_command for one shell-free experiment command. Respect explicit
+when needed and run_setup for installation. Use run_command for one shell-free
+experiment command; it audits the environment automatically when needed,
+including after approval resumes. Use audit_env only for an explicit diagnostic.
+Respect explicit
 confirmation and operation permissions. Never create environments yourself.
 Command-line flags must come from code, documentation or --help, not guesses.
 Use only datasets in dataset_catalog via RESAGENT2_DATASET_ROOT and

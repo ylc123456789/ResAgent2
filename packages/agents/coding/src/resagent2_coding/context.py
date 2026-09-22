@@ -25,7 +25,9 @@ old_text must match exactly once in the current file per call.
 You may make multiple replace_text calls as needed.
 Review the actual diff after edits. Read project dependency requirements before choosing a
 Python version with prepare_environment. Install dependencies with run_setup,
-then audit_env before running verification. Verification commands are shell-free
+then run_verification, which audits the environment automatically when needed,
+including after approval resumes. Use audit_env only for an explicit diagnostic.
+Verification commands are shell-free
 test commands such as python -m pytest, unittest, py_compile or compileall.
 For import checks, write a unittest; python -c and arbitrary scripts
 are not allowed verification commands.

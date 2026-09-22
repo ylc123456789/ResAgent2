@@ -158,6 +158,7 @@ class RunVerificationTool:
         if not decision.allowed:
             raise ValueError(f"verification commands rejected: {decision.reason}")
         argv_prefix = None
+        audit_updates = {}
         if self.env_binding is not None:
             argv_prefix = self.env_binding.argv_prefix()
             if argv_prefix is None:
@@ -167,11 +168,14 @@ class RunVerificationTool:
                     value={"blocked": True, "reason": "no_environment"},
                 )
             if not self.env_binding.certified:
-                return ToolObservation(
-                    summary="Environment not audited; call audit_env before verification",
-                    ok=False,
-                    value={"blocked": True, "reason": "not_certified"},
-                )
+                audit_updates["env_audit"] = self.env_binding.audit()
+                if not self.env_binding.certified:
+                    return ToolObservation(
+                        summary="Environment audit failed; verification was not executed",
+                        ok=False,
+                        value={"blocked": True, "reason": "environment_audit_failed", **audit_updates},
+                        memory_updates=audit_updates,
+                    )
         revision = int(state.memory.get("edit_revision", 0))
 
         def _digest() -> str:
@@ -248,8 +252,10 @@ class RunVerificationTool:
                 "passed": passed,
                 "workspace_unchanged": workspace_unchanged,
                 "results": observations,
+                **audit_updates,
             },
             memory_updates={
+                **audit_updates,
                 "verification_revision": revision,
                 "verification_results": payload,
                 "verification_diff_sha256": after_digest,

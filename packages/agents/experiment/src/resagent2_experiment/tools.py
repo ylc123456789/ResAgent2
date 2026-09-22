@@ -118,12 +118,16 @@ class RunCommandTool:
                 ok=False,
                 value={"blocked": True, "reason": "not_an_experiment_command"},
             )
+        audit_updates = {}
         if not self.binding.certified:
-            return ToolObservation(
-                summary="Experiment command blocked: run audit_env first",
-                ok=False,
-                value={"blocked": True, "reason": "environment not certified"},
-            )
+            audit_updates["env_audit"] = self.binding.audit()
+            if not self.binding.certified:
+                return ToolObservation(
+                    summary="Environment audit failed; experiment command was not executed",
+                    ok=False,
+                    value={"blocked": True, "reason": "environment_audit_failed", **audit_updates},
+                    memory_updates=audit_updates,
+                )
         index = int(state.memory.get("command_count", 0)) + 1
         result = self.runner.run(
             args.command,
@@ -133,7 +137,7 @@ class RunCommandTool:
             argv_prefix=self.binding.argv_prefix(),
             extra_env=self.extra_env,
         )
-        memory_updates: dict = {"command_count": index}
+        memory_updates: dict = {"command_count": index, **audit_updates}
         if (
             classify_command(args.command) == "experiment"
             and result.exit_code == 0
@@ -143,6 +147,7 @@ class RunCommandTool:
                 int(state.memory.get("experiment_success_count", 0)) + 1
             )
         value = result.model_dump(mode="json")
+        value.update(audit_updates)
         value["stdout_tail"] = self._tail(result.stdout_path)
         value["stderr_tail"] = self._tail(result.stderr_path)
         return ToolObservation(

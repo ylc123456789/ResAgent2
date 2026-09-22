@@ -33,7 +33,8 @@ def setup(tmp_path, monkeypatch, actions):
         sequence += 1
         body = json.loads(request.content)
         sent_tools.append({tool["function"]["name"] for tool in body["tools"]})
-        tool, arguments = next(replies)
+        reply = next(replies)
+        tool, arguments = reply(body) if callable(reply) else reply
         return httpx.Response(200, request=request, json={"choices": [{
             "finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [{
                 "id": f"call_{sequence}", "type": "function",
@@ -99,7 +100,27 @@ def test_native_coding_deletes_file_or_empty_directory_without_asking(
 
 def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path, monkeypatch):
     deletion = ("delete_path", {"path": "obsolete", "recursive": True})
-    repo, request, agent, _ = setup(tmp_path, monkeypatch, [deletion, deletion, FINISH])
+
+    def resumed_action(body):
+        # Exercise the current wire input, not only the persisted approval state.
+        current = body["messages"][-1]["content"]
+        assert "## pending_operation" in current
+        assert "This operation has not executed" in current
+        assert "call the same tool with the same arguments" in current
+        assert '"tool": "delete_path"' in current
+        assert '"recursive": true' in current
+        assert '"approve": "yes"' in current
+        receipts = [json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"]
+        assert receipts[-1]["execution_status"] == "not_executed"
+        assert target.is_dir()
+        return deletion
+
+    def after_execution(body):
+        assert "## pending_operation" not in body["messages"][-1]["content"]
+        assert not target.exists()
+        return FINISH
+
+    repo, request, agent, _ = setup(tmp_path, monkeypatch, [deletion, resumed_action, after_execution])
     target = repo / "obsolete"
     target.mkdir()
     for name in ("first.txt", "second.txt"):
@@ -150,4 +171,3 @@ def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path,
     assert set(deletions[0].data["value"]["deleted_paths"]) == {
         "obsolete", "obsolete/first.txt", "obsolete/second.txt",
     }
-

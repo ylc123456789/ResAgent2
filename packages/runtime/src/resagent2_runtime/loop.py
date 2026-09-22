@@ -794,6 +794,25 @@ class AgentLoop:
         turns = self._active_turns(state)
         material_limit = native_context_budget(context_limit, schemas, turns) if native else context_limit
         sections = list(definition.context_builder(request, state, material_limit))
+        if state.pending_action is not None:
+            sections.insert(0, ContextSection(
+                name="pending_operation", required=True, priority=1000,
+                content=(
+                    "This operation has not executed. The earlier call only requested approval. "
+                    "An answer does not execute it automatically. Read the current answer artifact: "
+                    "if approved and still needed, call the same tool with the same arguments. "
+                    "This continues the pending operation, not a second execution. "
+                    "If declined, do not execute it. The runtime rechecks permissions and the "
+                    "target before execution; approval cannot override those checks. "
+                    "Only an execution receipt establishes what actually happened.\n"
+                    + json.dumps({
+                        "action_id": state.pending_action.action_id,
+                        "tool": state.pending_action.tool,
+                        "arguments": state.pending_action.arguments,
+                        "execution_status": "not_executed",
+                    }, ensure_ascii=False)
+                ),
+            ))
         if state.history_checkpoint is not None:
             sections.insert(0, ContextSection(
                 name="history_checkpoint",

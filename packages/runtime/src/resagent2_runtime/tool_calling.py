@@ -167,6 +167,8 @@ def tool_receipt(observation: ToolObservation, sequence: int | None = None) -> s
         result["observed_at"] = sequence
     if observation.question is not None:
         result["control"] = "question_issued_not_answered"
+        if observation.question.action is not None:
+            result["execution_status"] = "not_executed"
     elif observation.request_work is not None:
         result["control"] = "work_requested_not_executed"
     elif observation.finish_candidate is not None:

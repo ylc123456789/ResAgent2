@@ -36,11 +36,15 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `12.0`（`SCHEMA_VERSION="12.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `13.0`（`SCHEMA_VERSION="13.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 
 调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
+
+Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，任务数/尝试数单列为 ExecutionLimits；三个 Agent 与 Compiler 共用持久请求用量及截止时间，每次模型 HTTP 尝试发送前登记。工作区统一使用 read_paths/write_paths/denied_paths，操作权限显式继承。共享规则将操作判为允许、询问或拒绝；批准仅供本次动作使用，普通文件删除可直接进行，非空目录清理需确认目标快照。参数见 [CLI 运行控制](apps/cli/README.md#run-controls)。
+
+路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集、环境和依赖缓存继续按原有职责管理，不新增通用资源配额层。
 
 Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Compiler 生成一个任务草图，结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，历史验收不代表本次重构已完成真实服务器验证。
 
@@ -54,7 +58,7 @@ Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instructio
 
 Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。`capabilities` 放模型可调用的 Tool；`components` 放文件授权、Git、进程、环境、工件读取、文献后端等普通 Python 实现。Tool、Agent 和组合根按需直接调用组件，不要求一一对应，也不强制经过中间层。Runtime 仍只管运行机制。入口见 [工具目录](packages/capabilities/README.md) 与 [组件目录](packages/components/README.md)。
 
-LLM 客户端的必需方法是 `next_action`；预算和 trace hooks 可选。Compiler 使用同一 LLM/上下文基础，但不必运行 Agentic Loop。
+LLM 客户端的必需方法是 `next_action`；最小客户端由共享入口在调用前计一次，自带 HTTP 重试的客户端须逐次接入同一用量接口。trace hooks 可选。Compiler 使用同一 LLM/上下文与执行预算基础，但不必运行 Agentic Loop。
 
 ```text
 apps/cli/                     人类入口与生产装配

@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **12.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **13.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -67,6 +67,8 @@ flowchart TB
     Agents --> Components
     Agents --> Contracts
     Orch[orchestrator] --> Contracts
+    Orch -->|仅 runtime.budget| Runtime
+    Orch -->|仅 components.workspace| Components
     Root[CLI / E2E 各自的组合根] --> Orch
     Root --> Agents
     Root --> Caps
@@ -75,11 +77,11 @@ flowchart TB
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
-Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
+Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。除 Contracts 外，它仅依赖 runtime.budget 的共享执行上下文和 components.workspace 的路径边界检查，不调用具体 Tool 或 Agent 实现。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
 
 Runtime 不 import Components 或 Capabilities；Components 不 import Capabilities、Agent 或 Orchestrator；Capabilities 不 import Agent 或 Orchestrator。组件与 Tool **没有一一对应关系**，不建立注册器、适配器基类或自动映射。
 
-Capabilities 的四个目录是 `workspace/`、`artifacts/`、`environment/`、`literature/`，每组在 `__init__.py` 放 Tool 实现。Components 按实际复杂度组织：多数操作一个文件；文献后端及其共用 HTTP 实现在 `literature/`；小函数跟随使用它们的实现。目录示例不是“每类都必须拆文件”的规则。
+Capabilities 的四个目录是 `workspace/`、`artifacts/`、`environment/`、`literature/`，每个 Tool 使用独立实现文件，`__init__.py` 显式导出。Components 按实际复杂度组织：多数操作一个文件；文献后端及其共用 HTTP 实现在 `literature/`；小函数跟随使用它们的实现。目录示例不是“每类都必须拆文件”的规则。
 
 `run_verification` 的命令规则、编辑 revision 和验证记录属于 Coding，放在 [verification.py](../../packages/agents/coding/src/resagent2_coding/verification.py)，与 Experiment 自有 `run_command` 对称；二者共用 Components 的 ProcessRunner。Runtime 自有 finish/ask_user 和 Scientific 的控制工具仍留在原模块，不为统一目录搬走领域控制。
 
@@ -89,7 +91,7 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 
 ## 3. 一次工作如何往返
 
-1. **创建 Run**：入口提供 ResearchRequest 与授权工作区，不预填资源。Controller 保存目标和导入工件，从部署目录发现数据集引用并保存到 Run，再启动科学回合；后续推进及回答恢复时可发现新登记。
+1. **创建 Run**：入口提供 ResearchRequest 与授权工作区，不预填资源。Controller 解析并持久保存工作区、操作权限、预算及执行限制，保存导入工件，从部署目录发现数据集引用并保存到 Run，再启动科学回合；后续推进及回答恢复时可发现新登记。
 2. **提出需求**：Scientific 自己检索、读证据、判断；需要执行工作时返回 WorkRequestDraft，只表达目标、期望证据和约束。
 3. **编译当前一轮**：LLM 产生一个任务草图；代码分配身份、解析依赖和工作区，进行结构校验。解析或结构错误最多纠正一次，无额外语义复审调用。
 4. **接受并执行图**：Scheduler 校验候选图、绑定、预算和 revision 后接受；只执行依赖成功的 ready Task。已知代码前置条件先交 Coding，正式实验交 Experiment。
@@ -124,6 +126,7 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 | Run / WorkRequest | 整个研究过程 / 其中一轮工作需求 | Controller |
 | Workflow / Task / Attempt | 已接受任务图 / 任务 / 一次执行尝试 | Scheduler |
 | Session / events / memory / tool_turns | Agent 内部执行记录与原生工具协议续传 | Agent 与 runtime |
+| RunUsage / 执行截止时间 | 请求占用与结果 / 扣除人工等待后的剩余时长 | Run 持久记录；Runtime 向下传递并检查 |
 | ArtifactRef 与冻结内容 | 有来源和 hash 的证据引用及文件 | Registry 登记；Controller/Scheduler 收入 Run |
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
@@ -173,10 +176,14 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用与冻结 dataset_catalog 工件 → Agent 的实际可用性检查。缺所需资源复用 ask_user。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 
+RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；重试、格式纠正、Compiler 和摘要都占用余额。结果用量仅用于诊断，不二次扣费；中断留下的 unknown 占用不退款。嵌套调用只能收紧额度与截止时间，不能新开钱包。
+
+Run 的操作授权与 WorkspaceAccess 是内部权限上限。Components 的 OperationPermissionPolicy 共用 allow / ask / deny 判定，文件和进程组件在执行前仍检查边界；领域命令约束保留在各自工具。ask 复用现有 question/answer 工件与 Session，批准绑定单次动作、参数、上下文和身份，派发前持久消费。Coding 的 delete_path 允许授权文件和空目录删除，非空目录使用待删除目标快照确认；不新增审批服务。
+
 Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者不要求每项配一个 Agent、Session 或管理器。只服务单个 Tool 的小逻辑可留在 Tool 内；业务策略留在所属 Agent，不一概塞进“共用”目录。
 
-- WorkspaceBoundary 管文件访问范围；WorkspaceObserver 在 Git 下用 Attempt baseline，非 Git 下用有界文件 hash 观察变化。
-- ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
+- WorkspaceBoundary 用 read_paths/write_paths/denied_paths 管文件访问范围；排除项优先，子调用只能收紧。WorkspaceObserver 在 Git 下用 Attempt baseline，非 Git 下用有界文件 hash 观察变化。
+- ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。模型/文献 HTTP、退避、环境操作和受控进程沿用 Run 截止时间，到期取消 HTTP 或终止进程树。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
 - Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用128000的默认输入额度，Compiler为无状态JSON编译，不使用Session压缩；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
@@ -184,7 +191,7 @@ Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
 
-最小 LLM client 仍只须 `next_action`；AgentLoop 会探测可选的 `next_tool_call`。OpenAICompatibleClient 同时提供两条路径：AgentLoop 用原生工具调用，Compiler 经 PromptLLMClient 继续用正文 JSON；两者不互相降级。计量、预算和 trace hooks 仍可选，内部有重试的客户端应提供真实计量。细节见 [Runtime 参考](CONTRACTS.md#tools)；部署参数集中在 [CLI README](../../apps/cli/README.md#6-模型与上下文预算)。
+最小 LLM client 仍只须 `next_action`；AgentLoop 会探测可选的 `next_tool_call`。OpenAICompatibleClient 同时提供两条路径：AgentLoop 用原生工具调用，Compiler 经 PromptLLMClient 继续用正文 JSON；两者不互相降级。最小客户端由 invoke_model 在调用前占用一次；内部有重试的客户端须接入同一共享用量接口逐次占用，不能靠回传计数补账。trace hooks 仍可选。细节见 [Runtime 参考](CONTRACTS.md#tools)；部署参数集中在 [CLI README](../../apps/cli/README.md#6-模型与上下文预算)。
 
 正文 JSON 路径的模型正文不是合法 JSON，或原生路径的 tool arguments 不是 JSON object 时，客户端不原样重发同一请求。AgentLoop 把简短原因送入已有的 required `runtime_feedback`，在同一 Session/Attempt 内允许有限纠正；原生每轮接受 1–8 个 tool calls，整批参数/权限预检后串行执行并逐项保存回执；控制工具独占一轮，失败取消剩余调用，assistant content 不是备用指令。Compiler 使用已有的两版 draft 上限处理正文 JSON 错误，不引入 AgentLoop。网络及响应封装故障仍走客户端原有有界重试。
 
@@ -207,6 +214,6 @@ Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史
 
 没有通用 MCP/A2A 服务、动态插件市场、分布式调度或通用逐轮聊天控制。Port 是替换位置，不代表这些功能已实现。
 
-权限与 shell-free 执行不是 OS 沙箱；环境 audit 不是安全认证。预算检查不抢占正在运行的工具；没有全 Run 货币/总输出 token 硬预算。Session 目录/文件固定为 `0700/0600`，不受 trace 档位影响；full trace 还可能含源码、用户输入、`raw_tool_calls` 和 `raw_reasoning_text`，只用于受控调试，不自动成为科学证据。metadata 仅留 hash，不表示 Session 不保存原生协议续传字段。
+权限与 shell-free 执行不是 OS 沙箱；环境 audit 不是安全认证。没有隔离后端时，只读、局部读写或带用户排除路径的工作区拒绝通用脚本执行，批准也不能绕过；完整授权只适合可信代码。受控 HTTP/进程到期可取消，但已产生的副作用不回滚，也不保证供应商停止计算或计费。没有全 Run 货币/总输出 token 硬预算。Session 目录/文件固定为 `0700/0600`，不受 trace 档位影响；full trace 还可能含源码、用户输入、`raw_tool_calls` 和 `raw_reasoning_text`，只用于受控调试，不自动成为科学证据。metadata 仅留 hash，不表示 Session 不保存原生协议续传字段。
 
 历史取舍和验收见 [决策与历史](../history/README.md)。这些限制不是本轮文档调整新增的功能或降级。

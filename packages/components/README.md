@@ -7,6 +7,7 @@
 | 文件 / 目录 | 内容 |
 |---|---|
 | [workspace.py](src/resagent2_components/workspace.py) | 工作区授权、路径与软链边界 |
+| [permissions.py](src/resagent2_components/permissions.py)、[operations.py](src/resagent2_components/operations.py) | Run 操作授权、固定命令规则、allow/ask/deny 和单次确认匹配 |
 | [git.py](src/resagent2_components/git.py) | Git 快照与 Attempt 相对变化 |
 | [repo.py](src/resagent2_components/repo.py)、[snapshot.py](src/resagent2_components/snapshot.py) | 仓库物化；Git/非 Git 工作区变化观察 |
 | [process.py](src/resagent2_components/process.py) | shell-free 命令解析/执行、凭据过滤、日志、进程树超时终止 |
@@ -24,6 +25,12 @@
 
 不要求所有组件纯函数：环境绑定、资源 IO 和文献来源索引保持既有状态；但不新建一份 Run/Session，不替代 Controller/Scheduler 的状态归属。ArtifactRegistrationPort 由组合根注入，登记实现仍在 Orchestrator；Components 不反向依赖它。
 
+WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denied_paths 均为相对前缀，空允许列表拒绝全部，排除项优先。每次文件操作检查解析路径；写范围是读范围的子集。`.git`、`.resagent2` 受保护，普通可重建缓存只是展示时忽略，可按写权限清理。prepare_delete/delete_prepared 先快照准确删除集合，再重验执行；只 unlink 最终链接自身，内容变化或中断时保留部分完成记录。
+
+OperationPermissionPolicy 共用 Run 权限和固定安全规则。先检查授权、工作区及工具自身约束，再返回 allow/ask/deny；确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；命令黑名单、shell-free 和路径 Tool 都不是 OS 沙箱。
+
+ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化、环境准备也使用这一执行路径。数据集/环境身份和缓存机制不变，不新增通用资源配额或镜像预检。
+
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 
 workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环境状态；材料按 Runtime 的统一权重/优先级分配，旧读取保留时序和后续内置修改标记。规则与预算只在 [CONTEXT](../../docs/current/CONTEXT.md) 维护；调用语义见 [CONTRACTS](../../docs/current/CONTRACTS.md#components)。
@@ -40,10 +47,12 @@ CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表，互为备份。初
 
 HTTP 使用 User-Agent，进程内按来源串行：arXiv 请求结束后至少间隔 3 秒，OpenAlex 1 秒。429 立即进入至少 60 秒冷却；Retry-After 支持秒数/HTTP 日期，更长则遵守。5xx/408 有 Retry-After 时同样冷却；其余超时/网络/5xx/408 最多三次 HTTP 尝试，退避 3/6 秒，耗尽后冷却。冷却期直接报不可用，不在 Agent 内长睡眠。既有 `max_retries` 参数指总尝试数。
 
+HTTP 复用 Runtime 的 httpx 总超时传输；节奏等待、退避和请求都沿用 Run 剩余时间。Run 截止不作为普通来源不可用继续切换，耗尽后停止发新请求。论文 HTTP 不消耗模型请求次数，但消耗 Run 时间。
+
 OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送，不进 URL、工件或模型上下文；匿名额度由服务端决定。摘要缺失就留空，每篇仍最多 2000 字符，不抓 PDF、不新增 LLM 摘要。生成 Markdown 明示检索摘要不等于全文或独立测量。
 
 节奏/冷却只协调同进程，重启不保留；多进程及同出口其他程序由部署方协调。不轮换 IP，不新增缓存、队列或多源融合框架。
 
-既有来源规范：[arXiv 使用约定](https://info.arxiv.org/help/api/tou.html)、[OpenAlex 鉴权](https://help.openalex.org/api/authentication/)、[Work 字段](https://github.com/ourresearch/openalex-docs/blob/main/api-entities/works/work-object/README.md)。本次仅整理实现位置，不改变这些访问策略。
+既有来源规范：[arXiv 使用约定](https://info.arxiv.org/help/api/tou.html)、[OpenAlex 鉴权](https://help.openalex.org/api/authentication/)、[Work 字段](https://github.com/ourresearch/openalex-docs/blob/main/api-entities/works/work-object/README.md)。
 
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。

@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 12.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 13.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -99,7 +99,7 @@ resagent2 answer run_20260901_120000_ab12cd34 \
 resagent2 resume run_20260901_120000_ab12cd34
 ```
 
-`answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。若 Run 在 workspace 持久化前就暂停，回答或恢复时需要再次提供相同的 `--workspace` 或 `--git`。
+`answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。工作区在创建 Run 时已解析并保存，恢复沿用已保存的工作区和授权，不能借新的任务或回答扩权。
 
 按 `show` 显示的实际 Fields 填写回答即可，不需要重写原题，也没有新增 `--question-text` 参数。Controller 会从当前已保存的问题取得原文，与答案一起记录；恢复时对应 Agent 同时看见原题和答案，避免把“是”或“第二个”误配到另一问题。问题身份和字段校验仍沿用原规则。
 
@@ -108,6 +108,35 @@ Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下�
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 
 常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
+
+<a id="run-controls"></a>
+
+### Run 预算与授权
+
+| 参数 | 默认值与含义 |
+|---|---|
+| `--max-llm-calls` | 200；整次 Run 的模型请求占用上限，包含 HTTP 重试、格式纠正和摘要 |
+| `--timeout-seconds` | 7200；扣除显式人工等待后的总时长，安装、下载、命令和进程停机均计入 |
+| `--max-tasks` / `--max-attempts` | 8 / 2；图中任务数和每任务尝试数上限，属于 ExecutionLimits |
+| `--no-execute-commands` | 关闭命令执行；CLI 默认明确授权执行，包含验证、实验和环境审计 |
+| `--no-prepare-environment` | 关闭环境准备和安装；CLI 默认明确授权受控环境管理 |
+| `--confirm-commands` | 默认关闭；开启后，权限允许的 Agent 顶层外部操作需逐次确认 |
+| `--read-path` / `--write-path` | 可重复的工作区相对前缀，各默认 `.`；写范围必须属于读范围 |
+| `--read-only` | 写范围为空，与 `--write-path` 互斥 |
+| `--deny-path` | 可重复的排除前缀，对读取和写入优先拒绝 |
+
+例如只分析源码且不准备环境：
+
+```bash
+resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报告" \
+  --read-only --no-execute-commands --no-prepare-environment
+```
+
+权限在创建 Run 时固定，内部 Agent 只能继承或收紧。路径按前缀匹配，不接受 glob；系统报告输出不受源目录只读限制。没有 OS 隔离后端时，只读、局部读写或带 `--deny-path` 的工作区不能执行通用脚本/验证/安装，即使开启执行开关或回答同意也不放行。默认完整授权适用于可信项目代码，命令规则不保证脚本无法访问宿主其他路径。
+
+正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具确认目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/环境/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 git 探针不逐条提问，批准也不开放被拒绝的路径或命令。
+
+三个 Agent、Compiler 及模型重试共用 Run 用量。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
 
 ## 4. 数据集资源库
 
@@ -209,7 +238,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 - `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `128000`；
 - `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `128000`，仍可单独覆盖；CLI与real E2E的Compiler默认值共用runtime常量。
 
-网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，传给现有客户端的 `urlopen(timeout=...)`。它不是整次 Run 的硬截止时间；超时仍走既有有界失败/重试路径，不新增自动扩容或无限等待。
+网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，限制单次模型 HTTP 请求总时长。实际取它与 Run 当前剩余时间的较小值，通过 httpx 与可取消的总超时执行；每次重试重新计算余量，同时消耗请求次数。取消本地请求不保证供应商停止计算或计费，未知结果保留预算占用。
 
 三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
 

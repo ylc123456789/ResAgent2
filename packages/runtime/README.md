@@ -12,7 +12,7 @@
 - PermissionPolicy；
 - action/observation/error/compaction event 和 session 快照持久化协议；
 - 确定性 completion check；
-- timeout、唯一的 LLM-call budget 和结构化错误（step 仅为动作序号）；
+- 共享 execution_budget、请求发送前用量接口、总截止时间及结构化错误（step 仅为动作序号）；
 - `needs_user_input` 信号。
 
 runtime 提供机制，不包含科研、代码修改或实验策略，也不包含 ResAgent Workflow Scheduler。
@@ -46,14 +46,15 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
   → 每轮取得 1–8 个原生候选动作，或一个正文 JSON 候选
   → action schema 校验
   → Tool 是否属于 Profile
-  → PermissionPolicy
-  → Tool input schema 校验
+  → Tool input schema 校验与 PermissionPolicy：allow / ask / deny
   → 原生批次整体预检，再串行执行并逐项生成 ToolObservation
   → 保存状态快照
   → CompletionCheck
 ```
 
 `AgentAction.arguments` 保持通用对象，以便同一 Loop 复用不同 Tool 集。`OpenAICompatibleClient` 的 AgentLoop 走 `next_tool_call`，把每个 Tool 既有 `input_model` 的完整 JSON Schema 放进原生 `tools` 参数；Compiler 仍经 `PromptLLMClient.next_action` 从正文读取 JSON。没有 `next_tool_call` 的测试或注入客户端继续使用 `next_action`，Loop 为它们从同一 `input_model` 渲染简短必填参数契约。两条路径最终都由 ToolRegistry 做完整输入模型校验，不改变 Tool、AgentAction 或 Compiler 的业务接口。
+
+PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，固定命令/删除规则由 Components 的 OperationPermissionPolicy 提供；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过现有 question/answer 工件确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
 
 原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work` 必须单独调用；零个、超量或混入控制工具的批次整体拒绝，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
 
@@ -73,7 +74,13 @@ AgentLoop 统一返回 `AgentResult`。提问和工作请求被转换成 JSON ar
 
 ## 预算与最小压缩
 
-当前 TaskBudget 只含 max_llm_calls 和 timeout_seconds；Controller/Scheduler 下发 Run 当前余额，没有隐藏的 50 步/50 次上限。step 是已尝试动作序号，一次原生回复可产生多个动作；模型请求、HTTP 重试、格式失败、摘要调用均共用调用账本。非法 last_attempts 不伪造为 1。正常暂停恢复沿用 Run 余额；跨 Run/Session/外部请求没有事务级 exactly-once 计量。
+当前 RunBudget/TaskBudget 只含 max_llm_calls 和 timeout_seconds；任务数与每任务尝试数由 ExecutionLimits 单独限制。Controller/Scheduler 为执行绑定 [execution_budget](src/resagent2_runtime/budget.py)，注入持久 RunUsagePort；嵌套调用只能收紧调用上限和截止时间，共享同一个 UsagePort。独立 Agent 调用可使用同一机制的内存用量，不具有跨进程 Run 持久化保证。
+
+每次实际模型 HTTP 请求先 charge，再发送，最后 complete 为 succeeded/failed/unknown；重试、格式纠正和摘要都占用同一余额。Run 原子保存失败不发送，中断后的 unknown 不退款。AgentResult.llm_calls 与 Session 计数是用量差额投影，不再二次扣费；last_attempts 只是诊断。invoke_model 为最小客户端预扣一次，manages_usage 客户端须自行通过同一接口逐次登记传输。该占用不冒充供应商精确账单，也不是跨 Run/Session/Provider 的事务。
+
+[http.py](src/resagent2_runtime/http.py) 使用 httpx 与可取消的总超时覆盖完整响应读取；每次 HTTP/重试取操作超时与当前截止时间的较小值。Components 的进程与环境操作沿用该截止时间并在超时后终止进程树。显式等待用户的时间由 Run 扣除，安装、下载及普通停机不扣除；恢复不重置余额。step 只记动作时序，没有隐藏的 50 步/50 次上限。
+
+HTTP 取消后不等待默认 executor 的 DNS 线程。系统解析可能在后台结束，但不会恢复已取消的 HTTP 请求；本地取消不保证供应商停止计算或计费。
 
 共用 [compaction.py](src/resagent2_runtime/compaction.py)：完整原生输入超过有效上限 80%，或必需上下文实际装不下时，尝试总结较早完整 turn；保留至少最新完整 turn，近期历史以 20% 额度为目标。仅支持压缩的客户端调用 summarize_history，OpenAICompatibleClient 复用原 HTTP/trace/计量实现；没有单独摘要 Agent。
 

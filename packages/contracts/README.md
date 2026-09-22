@@ -1,16 +1,17 @@
 # contracts
 
-跨模块稳定类型和接口。当前 wire schema 为 `12.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
+跨模块稳定类型和接口。当前 wire schema 为 `13.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
 
 三个 Agent 共同使用 `invoke(AgentRequest) -> AgentResult`。任务内容只有 `instruction` 和 `input_artifacts`；预算、权限、工作区和恢复定位保留明确控制字段。结果业务内容只有 `report + artifacts`，状态、控制动作、Session、错误和实际调用计量独立保存。
 
 主要契约：
 
 - `AgentRequest`、`AgentResult`、`ControlSignal`；
+- `RunBudget`、`ExecutionLimits`、`RunPermissions`、`AgentPermissions`、`WorkspaceAccess`；
 - `WorkflowAgentKind`、`WorkflowAgentRegistry`、`WorkflowTask`、`TaskProposal`、`WorkflowPatch`；
 - `ArtifactCandidate`、`ArtifactRef`、`Attempt`；
 - `TaskAcceptanceSpec`、`ConclusionRequirements`；
-- `QuestionDraft`、`PendingQuestion`、`UserAnswer`、`RecordedAnswer`；
+- `QuestionDraft`、`PendingQuestion`、`UserAnswer`、`RecordedAnswer`、`ActionSnapshot`；
 - `WorkFeedback`、`ScientificOpinion`、`ObservationTrace` 等结构化 artifact 内容。
 
 图节点只允许 Coding 和 Experiment，Scientific 由 Controller 调用。任务提交阶段的验收要求及逻辑输出名称登记为一份 `acceptance_requirements`，已接受任务和 Attempt 只保存同一正式引用。

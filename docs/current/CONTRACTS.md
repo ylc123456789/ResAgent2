@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 12.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 13.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -12,7 +12,7 @@
 |---|---|---|---|
 | 用户入口 → Controller | create_run / answer_question / run_until_stable | ResearchRequest / UserAnswer → ResearchRun | [用户与控制](#entry) |
 | Controller → Scientific | ModulePort.invoke | AgentRequest → AgentResult | [统一调用](#module)、[科学决策](#scientific) |
-| Controller → Compiler | WorkflowCompiler.compile | WorkRequest + 图/路由/预算 → CompilationResult | [工作编译](#compiler) |
+| Controller → Compiler | WorkflowCompiler.compile | WorkRequest + 图/路由/执行限制 → CompilationResult | [工作编译](#compiler) |
 | Scheduler → Coding / Experiment | ModulePort.invoke | AgentRequest → AgentResult | [统一调用](#module) |
 | AgentLoop → ToolRegistry → Tool | dispatch / execute | arguments → ToolObservation | [工具与运行](#tools) |
 | Tool / Agent / 组合根 → Components | 普通 Python 调用 | 授权、资源、命令、事件 → 操作结果或内容投影 | [普通组件](#components) |
@@ -37,7 +37,20 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 
 <a id="research-request"></a>
 
-`ResearchRequest` 包含 `goal`、可选 `hypothesis`、`context`、`constraints`、`input_artifacts: list[ArtifactImport]`、`required_evidence_kinds` 和 `budget: RunBudget`。RunBudget 限制任务数、每任务尝试数、LLM 调用数和总时间；明确等待用户的暂停时间不计入超时，其他耗时仍计入。
+`ResearchRequest` 包含 `goal`、可选 `hypothesis`、`context`、`constraints`、`input_artifacts: list[ArtifactImport]`、`required_evidence_kinds`，以及下列 Run 控制字段。创建 Run 时保存授权与执行限制，内部调用只能继承或收紧。
+
+| 字段 | 含义 |
+|---|---|
+| `budget: RunBudget` | 仅含 `max_llm_calls`、`timeout_seconds`，控制模型请求次数和有效运行时长 |
+| `execution_limits: ExecutionLimits` | `max_tasks=8`、`max_attempts_per_task=2`，限制任务图增长和重试，不是独立消费预算 |
+| `permissions: RunPermissions` | 必填；`execute_commands`、`prepare_environment` 默认均为 False，可信入口负责明确授权 |
+| `confirm_commands: bool` | 默认 False；启用后，对权限允许的 Agent 顶层外部操作逐次询问 |
+
+明确等待用户的暂停时间不计入超时；安装、下载、命令、模型等待和普通进程停机仍计入。CLI 默认明确授权执行命令和环境准备，可分别关闭；这不改变公共契约的默认拒绝语义。
+
+`ResearchRun.usage.requests` 按 `call_id:retry_index` 保存模型请求占用及 `succeeded / failed / unknown` 结果，`llm_calls_used` 从中计算。发送前先原子保存占用；保存失败不发送，登记后中断不退款。HTTP 重试、格式纠正、摘要、Compiler 和三个 Agent 共用此用量。结果中的 `llm_calls` 用于诊断，不再扣费。单个 Run 只支持一个执行者。
+
+Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套调用共享用量并取更早截止时间。TaskBudget 是当前余额的调用上限快照，不是第二份钱包。模型及文献 HTTP、退避、环境准备和受控子进程都受剩余时间约束；到期取消请求或终止进程树。本地取消不保证供应商停止计费，未知结果保留占用。
 
 调用者用 ArtifactImport 提交本地输入的 URI、kind、media_type、summary 和可选 expected_sha256。Controller 校验并冻结为已登记工件。数据集目录由部署环境提供，不是 ResearchRequest 的逐次路径参数。
 
@@ -50,6 +63,8 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 Agent 返回 `needs_user_input`、paused Session 和指向 `question` 工件的 ControlSignal。Controller 分配并保存 PendingQuestion；用户只提交 `UserAnswer(question_id, values, answered_at)`。values 必须匹配保存的问题字段。
 
 Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。
+
+操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，过期问题或不匹配的回答在状态修改前拒绝。消费后崩溃而无回执不自动重放。
 
 任务问答继续同一 Attempt、Session、输出目录与基线；retry 才产生新 Attempt。Scientific 工作交付与问答也通过同一个 invoke 恢复，答案和工作反馈不能混作同一次恢复材料。资源是否准备好仍须重新检查，口头回答不替代目录事实。
 
@@ -76,13 +91,13 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | instruction | 本次唯一自然语言任务指令 |
 | input_artifacts | 已登记、同 Run 且 ID 唯一的输入材料 |
 | budget | TaskBudget：本次调用的 max_llm_calls、timeout_seconds |
-| permissions | AgentPermissions：execute_commands、prepare_environment、request_work |
+| permissions | 必填 AgentPermissions：execute_commands、prepare_environment、request_work |
 | workspace、workspace_id、workspace_spec | 物理授权、逻辑工作区身份和来源声明 |
 | environment_spec、output_dir | 环境约束和系统指定的输出位置 |
-| confirm_before_experiment、experiment_confirmed | 执行确认控制 |
+| confirm_commands | 继承 Run 的逐次外部操作确认要求 |
 | parent_session_id、resume_artifact_ids | 恢复所属 Session，以及此次 answer 或 work_feedback 工件 ID |
 
-permissions 是操作授权，WorkspaceGrant.mode 是文件访问上限，都不构成业务模式。`request_work=True` 只允许 Scientific；模型不能自行提高权限。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。
+permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。`request_work=True` 只允许 Scientific；模型不能自行提高权限。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
 
 resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_session_id；仅允许 answer 或 work_feedback，同次不能混用。接收端另外校验工件内容中的 Run、Task/Attempt、Session 与当前调用一致。
 
@@ -98,7 +113,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 | session | 子模块拥有的 SessionRef |
 | control | 只含 action 和工件定位，不复制业务正文 |
 | error、warnings | 结构化错误和非致命警告 |
-| llm_calls | 本次实际调用消费；严格非负整数，拒绝 bool |
+| llm_calls | 本次调用用量的诊断投影；严格非负整数，拒绝 bool；Run 以发送前持久占用为准 |
 
 `ControlSignal.action` 是 ask_user 或 request_work；`artifact_id` 与 `candidate_index` 必须且只能填写一个，分别指向返回列表中的 Ref 或 Candidate。ask_user 必须指向 question，request_work 必须指向 work_request。只有 Scientific 可以返回 request_work。
 
@@ -177,18 +192,17 @@ Scientific finish 使用统一的 report/artifacts，并提交一个 `scientific
 
 ```python
 compile(request: WorkRequest, *, current: Workflow | None,
-        registry: WorkflowAgentRegistry, budget: RunBudget,
-        workspaces: list[WorkspaceDescriptor] | None = None,
-        remaining_calls: int | None = None) -> CompilationResult
+        registry: WorkflowAgentRegistry, limits: ExecutionLimits,
+        workspaces: list[WorkspaceDescriptor] | None = None) -> CompilationResult
 ```
 
-成功返回 CompilationResult(output, llm_calls)，output 为 WorkflowProposal 或 WorkflowPatch；失败抛 CompilationError，并保留实际 llm_calls。Compiler 不读下游 Session，不直接修改 Run 状态。
+成功返回 CompilationResult(output, llm_calls)，output 为 WorkflowProposal 或 WorkflowPatch；编译错误抛 CompilationError，并保留实际 llm_calls。预算耗尽和超时分别抛 BudgetExhaustedError、DeadlineExceededError，由 Controller 保存对应终止原因。Compiler 不读下游 Session，不直接修改 Run 状态。LLM 编译必须处于可信调用方绑定的共享 execution_budget 中，直接使用该余额和期限。
 
 LLMWorkflowCompiler 请求一个 CompilationDraft，由确定性代码物化正式身份、解析工作区并校验。正文解析或结构校验失败时最多纠正一次，无额外语义复审调用。Compiler 使用 PromptLLMClient 的 JSON 输出路径，无 AgentLoop、工具或 Session；上下文和调用消费仍受共同预算约束。
 
 <a id="workflow"></a>
 
-TaskProposal 包含 id、work_request_id、workflow_agent_kind、instruction、depends_on、workspace_id、已有 input_artifacts ID、未来 input_artifact_bindings、output_names，以及可选 acceptance_spec 和 confirm_before_experiment。
+TaskProposal 包含 id、work_request_id、workflow_agent_kind、instruction、depends_on、workspace_id、已有 input_artifacts ID、未来 input_artifact_bindings、output_names，以及可选 acceptance_spec。它不携带单独的扩权或确认开关。
 
 LLM 草图只给逻辑 key、路由、instruction、依赖、逻辑工作区和工件交接，不编造指标键、文件路径、验收策略、操作权限或运行身份。外部确定性调用方可以提供明确的 TaskAcceptanceSpec；自然语言证据要求仍须保留在 instruction 中。
 
@@ -221,12 +235,16 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
 | PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
-| PermissionPolicy.check(action, state, request) | 派发前确定性允许/拒绝，不是 OS 沙箱或人工审批 UI |
+| PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Components，不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
 
 LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域指令、工件和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、WorkspaceSnapshot 留在 components，不变成 wire 消息。
 
-参数错误、ok=False 和执行时 PermissionError 等可恢复错误进反馈；PermissionPolicy 明确拒绝则立即 permission_denied。未知工具走既有拒绝策略，不放宽 schema。Action 校验前只移除旧 reasoning_summary 字段，不忽略其它未知字段。
+参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
+
+`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围，再检查工具自身命令约束与固定 argv 规则。常规受支持验证及直接工作区脚本可放行；内联解释器代码和未覆盖命令询问；裸 rm/rmdir、提权、shell 包装及明确破坏性系统操作拒绝。环境安装仍走受控环境 Tool。confirm_commands 为允许范围内的操作增加确认，不能把 deny 改为 allow；需确认的验证一次只提交一条命令。
+
+Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，更新编辑 revision 及验证新鲜度，不承诺原子回滚。删除文件中的内容仍用 replace_text。
 
 **协议与格式纠错**：OpenAICompatibleClient 区分响应封装/传输失败与模型输出拒绝。前者保持现有至多三次尝试（受剩余额度限制）；正文 JSON 解析失败，或原生 tool arguments 不是 JSON object，则完成本次 trace 后直接交回 Loop，不在客户端原样重试。原生每轮接受 1–8 个 tool calls，整批先做参数/权限预检，再逐项复核权限/超时并串行执行。finish/ask_user/request_work 必须单独一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果并取消余下项，不做事务回滚，assistant `content` 不作为备用动作解析。AgentLoop 记录已发生的全部 HTTP 尝试，把简短原因和“未执行工具”送入 required `runtime_feedback`，同 Session/Attempt 继续；不把坏正文或 reasoning 复制到反馈。JSON、原生 framing 和 schema 错误共用连续失败上限 5、LLM 调用预算和超时；成功非 finish 工具清除该反馈并重置失败计数，完成时也清除反馈。耗尽后沿用已有失败出口，不保证模型一定纠正成功。
 
@@ -267,7 +285,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 
 ### LLM 计量与 trace
 
-最小客户端只有 next_action；context_budget、set_attempt_limit、last_attempts、set_trace_context、record_validation 等 hooks 按存在与否使用。内部有重试应提供计量与限制；无 hook 按每请求一次计数，不宣称获知隐藏重试。
+最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
 
 OpenAICompatibleClient 的 trace 按 call_id 关联逻辑调用和后续校验记录。attempts 保留各次 finish_reason/usage/错误，顶层响应对应最后一次；retry_number+1 是 HTTP 尝试数，不能再加 attempts 长度。request_max_tokens 是实际输出上限，null 表示未指定。
 
@@ -291,13 +309,13 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - 已配对的 RecordedAnswer 冻结为 answer 工件；调用方用 resume_artifact_ids 交付本次恢复材料。三个 Agent 共用 request_materials_context，原题 question_text 与回答 values 一起进入必需材料段，仍由 ContextComposer 计量，装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - 正文 JSON 客户端使用 `recent_observations` 有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 是约 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整。原生客户端改为重放 `tool_turns` 中检查点之后已配对的 assistant/tool 消息，并在末尾加入最新业务 Context；两者都不把历史 prompt 当第二套记忆；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以 (path, start_line, end_line) 为片段身份、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
-- 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。components 仅对有后续同路径成功内置写入的文件片段附 `modified_after_read_at`，不清空旧片段、不标记冻结 Artifact、不把失败动作当修改。无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
+- 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。components 对有后续同路径内置写入或已完成删除的文件片段附 `modified_after_read_at`；部分删除只标记确实删除的条目，不把未执行项当修改。不清空旧片段、不标记冻结 Artifact；无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
 - 三个Agent及Compiler默认输入上限同源为128000 tokens，模块分别可配置；CLI与real E2E的Compiler复用同一默认常量，Compiler仍无Session或历史压缩。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按文件/工件/诊断/目录16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
 - 共享command_results从原事件中选择run_verification/run_setup/run_command各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
 - directory附observed_at并明确是历史目录观察，创建文件不会自动重写旧清单。Coding控制投影用edited_since_verification表达编辑/验证版本差，不再把它叫workspace_changed；这些是模型可见投影，不增加业务schema字段；
 - 按行读取的工件工作集从 Session 工具观测投影；要求和当前恢复材料则由共享读取函数直接校验并装入必需段。已读 ID、工件说明和检索短预览不是完整正文，也不是当前论断的支持证明；需要精确内容时按工件行范围读取。冻结工件、原始观测与 full trace 不因工作集淘汰而删除；
-- 共享客户端的每次 HTTP 尝试（含重试）都计入 `llm_calls`；AgentLoop/Compiler 通过可选的 `set_attempt_limit`/`last_attempts` hooks 限制并计量实际尝试。最小 LLM 客户端只须有 `next_action`，无计数 hook 时一次调用按一次计；自带内部重试的实现应提供这两个 hooks；
-- 工具派发前重新检查 wall-clock 余量；LLM 或权限检查已用尽时间时，不再派发工具，已发生调用仍入账。这不等于能撤销或抢占已经执行的外部操作；
+- 共享客户端的每次 HTTP 尝试（含重试）都在发送前占用 Run 请求次数；格式纠正与摘要也共用余额。Session 和结果用量从共享用量差额投影，不再次扣费；
+- 工具派发前重新检查剩余时间；模型及文献 HTTP 使用支持取消的总超时，受控命令/安装到期终止进程树。重试和批量命令每次重新取余量；已经发生的外部副作用不能撤销，供应商是否停止计算可能未知；
 - 一条 ToolObservation 的 `question`、`request_work`、`finish_candidate` 至多一个非空；普通观察可以全为空；
 - 连续失败计数：成功的非 finish 工具重置；`ok=False` 累加；completion check 拒绝的 finish 也累加；连续 5 次失败返回 `TOOL_FAILED`。这是有界纠错的停止条件，不是第二套任务步骤预算。
 
@@ -310,7 +328,7 @@ LLM trace 的 `action_valid` 表示响应已解析出候选动作：单工具 pa
 统一的 finish 只提交 `report` 和 `artifacts`。它是完成提议，不能自行设置最终 status 或提交另一套机器结果。
 
 - Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录，标明验证是否覆盖当前代码和环境。分析任务可以无修改完成，未执行验证不能被写成已通过。
-- Experiment 可分析已有结果；执行后由代码生成 execution_record。最新实际命令失败会返回失败及诊断，后续成功命令可以取代该失败状态，旧记录仍保留。
+- Experiment 可分析已有结果；执行后由代码生成 execution_record。未恢复的真实命令失败会返回失败及诊断；只有同一 argv 的成功重跑可解除该失败，不同诊断命令不能覆盖，旧记录仍保留。
 - Scientific 校验意见、工件授权和已观察引用，并生成 observation_trace。
 
 Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：required_metric_keys 必须是 JSON 顶层有限数值（排除 bool）；required_artifact_paths、required_artifact_kinds、required_output_names 必须实际存在。require_successful_execution 需要可信的成功 execution_record 或覆盖当前代码的 verification_result；报告文字不计作执行证据。未明确要求的检查不会从 Agent 名称或任务文本猜测出来。
@@ -349,11 +367,14 @@ JSON RunStore 适合单进程、单写入者；单个快照可原子替换，但
 ### 工作区
 
 ```python
+class WorkspaceAccess:
+    read_paths: list[str] = []
+    write_paths: list[str] = []
+    denied_paths: list[str] = []
+
 class WorkspaceGrant:
     root: NonEmptyStr
-    mode: WorkspaceMode
-    allowed_paths: list[str] = []
-    denied_paths: list[str] = []
+    access: WorkspaceAccess
     source: WorkspaceSourceKind
 
 class WorkspaceSpec:
@@ -361,7 +382,7 @@ class WorkspaceSpec:
     source_kind: WorkspaceSourceKind
     location: str | None = None
     environment: EnvironmentSpec | None = None
-    mode: WorkspaceMode = WorkspaceMode.READ_WRITE
+    access: WorkspaceAccess
 
 class WorkspaceRecord:
     workspace_id: WorkspaceId
@@ -378,6 +399,12 @@ class WorkspaceDescriptor:
 `WorkspaceSourceKind`：GIT（clone 到受管目录）/ LOCAL（原地绑定，managed=False）/ COPY（复制已有本地 Git 工作树）/ GENERATED（创建空受管工作区）。
 
 `WorkspaceSpec` 是逻辑来源声明，`location` 可包含仓库 URL 或本地来源路径，但不是 Attempt 的物理授权；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
+
+WorkspaceSpec/WorkspaceGrant 共用必填 access。路径是工作区相对前缀，不是 glob；允许列表 `[]` 表示无权限，`["."]` 表示全工作区。write_paths 必须包含于 read_paths，denied_paths 对读写优先拒绝。子授权只能收紧，不能清空父级排除项获得访问。工作区在 create_run 时解析并保存；后续模型只能引用已授权逻辑 ID，不能自填物理根路径。
+
+WorkspaceBoundary 每次检查真实路径、软链逃逸与授权；`.git`、`.resagent2` 受保护，`__pycache__`、`.pytest_cache` 等只是可忽略的普通缓存，可按写权限清理。系统输出目录、冻结工件、数据集和环境缓存由各自组件管理，不因此授予源目录写权限。
+
+当前进程使用宿主账户，shell-free 和固定命令规则不是 OS 沙箱。没有隔离后端时，仅完整可读写、无用户 denied_paths 的工作区允许通用脚本/验证/安装执行；只读或局部授权即使打开执行权限并批准也不能绕过。完整授权仅适合可信代码，不保证脚本无法访问宿主其他路径或元数据。
 
 components 提供一个内部 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline` 的 tree hash，非 Git workspace 用有界 file-hash fallback）表达 Attempt 起点；Coding 的差异与验证新鲜度检查使用 Attempt 基线；环境或代码变动不能由旧验证冒充当前状态。
 
@@ -425,9 +452,9 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 12.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 13.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
-本版统一 AgentRequest/AgentResult，任务改用 instruction 和模块路由，移除模式专属输入输出与独立科学回合信封。答案、反馈、目录和验收要求通过工件传递；不保留旧版兼容运行分支。
+本版保持统一 AgentRequest/AgentResult，预算与执行限制分开，Run 授权必填，工作区统一为 WorkspaceAccess，操作批准使用结构化单次快照。移除旧工作区 mode/allowed_paths 和实验全局确认字段，不保留兼容运行分支。
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 
@@ -437,4 +464,4 @@ AgentState 继承不带公共版本字段的 RuntimeModel；某些旧 Session �
 
 ### 公共导出
 
-完整导出见 [contracts 包入口](../../packages/contracts/src/resagent2_contracts/__init__.py)。主要分组是 AgentRequest/AgentResult/AgentPermissions/ControlSignal、工件与要求内容模型、工作流与绑定、身份状态、资源授权，以及 WorkRequest/WorkOutcome/ScientificOpinion。Runtime 的 AgentState、ToolObservation、FinishCandidate、CompletionDecision 和 ContextSection 仍由 runtime 定义；内部工具观察不等于跨 Agent 结果信封。
+完整导出见 [contracts 包入口](../../packages/contracts/src/resagent2_contracts/__init__.py)。主要分组是 AgentRequest/AgentResult/AgentPermissions/ControlSignal、RunBudget/ExecutionLimits/RunPermissions、WorkspaceAccess/ActionSnapshot、工件与要求内容模型、工作流与绑定、身份状态、资源授权，以及 WorkRequest/WorkOutcome/ScientificOpinion。Runtime 的 AgentState、ToolObservation、FinishCandidate、CompletionDecision 和 ContextSection 仍由 runtime 定义；内部工具观察不等于跨 Agent 结果信封。

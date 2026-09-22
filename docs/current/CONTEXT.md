@@ -135,7 +135,7 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `task` | `instruction`、workspace_mode、permissions，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
+| `task` | `instruction`、workspace_access、permissions、confirm_commands，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
 | `dataset_catalog` | 当前 invoke 解析的数据集视图与共享说明 | 必需 |
 | `material_<artifact_id>` | acceptance_requirements，以及本次 resume_artifact_ids 指定的 answer | 对已选材料必需；校验 Task/Attempt 归属 |
 | `verification_state` | 编辑版本、验证状态、环境代次对应的下一步建议 | 存在控制投影时必需；每步调用 derive_control_state |
@@ -160,7 +160,7 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `task` | `instruction`、workspace_mode、output_dir、permissions、输入工件清单和实验确认控制项 | 必需 |
+| `task` | `instruction`、workspace_access、output_dir、permissions、输入工件清单和 confirm_commands | 必需 |
 | `dataset_catalog` | 与另两个 Agent 同源的 dataset_context | 必需 |
 | `material_<artifact_id>` | acceptance_requirements，以及本次 resume_artifact_ids 指定的 answer | 对已选材料必需；与 Coding 共用函数 |
 | `environment` | 实际环境绑定与认证状态 | 有绑定时必需；每次构造读取同一绑定 |
@@ -184,7 +184,7 @@ compiler_request 包含当前 WorkRequest 的目标、证据要求、约束，�
 
 草图顶层只有 tasks；节点使用 instruction，不另列 goal/constraints/inputs 或业务模式。代码物化正式身份并校验，不额外发起语义复审。当前图历史主要用于物化、校验和剩余预算，不把全部旧 Task 和 Run 历史倒给编译模型。
 
-Compiler 没有 Session、工具读取工作集或 AgentLoop 的 runtime_feedback 段。编译拒绝进入下一版 compiler_request，最多两版草图。预算限制能复用，并不要求复用工具循环；Agent 的坏原生输出也不会降级到这条 JSON-only 路径。三个 Agent 的模型反馈、permission、finish 与 Run 预算语义保持原样。
+Compiler 没有 Session、工具读取工作集或 AgentLoop 的 runtime_feedback 段。编译拒绝进入下一版 compiler_request，最多两版草图。任务数来自 ExecutionLimits；请求次数和截止时间使用调用方绑定的同一 Run execution_budget，不另开余额。复用预算不要求复用工具循环，Agent 的坏原生输出也不会降级到这条 JSON-only 路径。
 
 **源码与测试**：[编译草图与校验](../../packages/orchestrator/src/resagent2_orchestrator/compiler.py)、[PromptLLMClient](../../packages/runtime/src/resagent2_runtime/llm.py)、[CLI 组合根](../../apps/cli/src/resagent2_cli/composition.py)、[E2E 组合根](../../e2e/real_e2e.py)、[编译器测试](../../tests/orchestrator/test_compiler.py)、[适配器测试](../../tests/runtime/test_prompt_client.py)。
 
@@ -215,7 +215,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | 提示字段 | 当前含义 | 不能据此推出什么 |
 |---|---|---|
 | `observed_at` | 原始 Session 事件序号 | 不是文件版本、当前 step 或时钟时间 |
-| `modified_after_read_at` | 记录中有同路径、较晚的成功内置编辑 | 无标记不证明外部没改文件；不用于冻结工件 |
+| `modified_after_read_at` | 记录中有同路径、较晚的内置编辑或已完成删除（含部分删除中的完成项） | 无标记不证明外部没改文件；不用于冻结工件 |
 | `truncated` | 当前显示正文是否遭到工具或工作集裁剪 | 不代表整个原文件都读完了 |
 | `context_truncated` | 工作集又裁剪了工具返回的正文 | 不会覆盖或修改原事件的截断标志 |
 | `previously_read` | 所在文件/工件段中最多20个、合计600字符的来源提示，不切断单个标识 | 不是完整读史，没有已发现结论或语义定位目录 |
@@ -278,7 +278,8 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
 | 一次工具读取 | 默认所选行范围最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
 | 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
-| 调用次数/时间 | Run 下发当前剩余 max_llm_calls 和 timeout；动作 step 只记录、不再限制 | Controller / Scheduler / AgentLoop 同一调用账本 |
+| 调用次数/时间 | RunBudget 仅含 max_llm_calls 和 timeout_seconds；发送前持久占用，内部共享余额和截止时间 | Controller / Scheduler / Runtime 的共享 execution_budget 与 RunUsage |
+| 流程上限 | ExecutionLimits 的 max_tasks、max_attempts_per_task；step 仅记录动作时序 | Compiler / Scheduler，不另立消费预算 |
 
 Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块上限”和“模型可用输入容量”的较小值；没有hook时使用模块上限，不猜Provider容量。原生路径先为完整 tools schema 和当前续传历史预留空间，再把剩余材料额度交给builder；Composer 随后仍按完整请求复核。输入压力先尝试下述最小压缩；没有可用前缀、schema/单个巨大回合/required 领域段仍装不下时，明确返回 `budget_exhausted`。不删除半个 assistant/tool pair，也不暗改上限。CLI注入Profile；real E2E有自己的装配，但原生Agent默认值同源，不能假定它继承CLI的环境变量覆盖。
 
@@ -305,7 +306,7 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 较早完整回合连同已有摘要送给同一个客户端作纯文本交接；输入整包仍受相同容量限制。摘要的生成目标按有效输入的 5% 换算字符，目标值最多 16384 字符；这是写短的提示，不是返回长度的独立拒绝上限。Provider 输出额度仍沿用 ModelProfile，避免 thinking 挤空正文。
 - 接受摘要后，由原 Composer 检查“完整摘要 + 近期完整回合 + 当前领域上下文 + 工具 schema”能否装下；略超生成目标但整包能容纳就完整保留，不截断摘要。成功后才把摘要和绝对边界一起写入 history_checkpoint，并追加 compaction 审计事件。失败、空摘要、截断响应、unfinished prefix、重建真正超限都不推进边界。
 - 后续发送“摘要 + 边界后的完整回合 + 最新领域上下文”；重启从持久检查点继续，不重复总结已经覆盖的原始前缀。总结只提供做过什么、待办和来源线索，不具证据权威性。
-- 摘要调用和 HTTP 重试计入原有 max_llm_calls，开始前至少留下两次额度（摘要与下一次动作）；不设置另一份摘要调用钱包。正常暂停恢复沿用 Run 余额，跨进程崩溃不具 Run/Session/Provider 的事务级 exactly-once 计量。
+- 摘要调用和 HTTP 重试计入同一 max_llm_calls，开始前至少留下两次额度（摘要与下一次动作）；不设置另一份摘要调用钱包。每次发送前持久占用，暂停恢复不重置余额，崩溃留下的 unknown 不退款；这不是供应商精确计费或 Run/Session/Provider 的跨系统事务。
 - 没有可选 summarize_history 的注入客户端仍可运行；真正装不下时明确失败。摘要失败不会悄悄换模型、增大预算或自动无限重试。
 
 这里新增的是一个共享检查点，不是分 Agent 的长期记忆、阅读笔记或向量检索。Compiler 没有 Session，不走压缩。压缩有损；它不保证避免所有循环、保留所有历史细节或节省每次调用费用。
@@ -335,4 +336,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 12.0 统一三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。TaskBudget 只含调用与时间额度，step 仅记时序。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次接口重构的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 13.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

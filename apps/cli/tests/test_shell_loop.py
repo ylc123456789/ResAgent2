@@ -98,7 +98,7 @@ def test_watch_stops_on_terminal_snapshot(tmp_path):
     shell = _shell(tmp_path, store)
     shell.runner = SimpleNamespace(done=False)
     shell.display = _FakeDisplay()
-    result = shell._watch("run_x", poll_interval=0)
+    result = shell._watch("run_x", poll_interval=0, wait_for_runner=False)
     assert result.status == RunStatus.COMPLETED
     assert shell.display.cleared >= 1
 
@@ -111,6 +111,22 @@ def test_watch_returns_result_when_runner_done(tmp_path):
     shell.display = _FakeDisplay()
     result = shell._watch("run_x", poll_interval=0)
     assert result is completed
+
+
+def test_watch_waits_for_worker_instead_of_old_paused_snapshot(tmp_path, monkeypatch):
+    paused = _run(RunStatus.PAUSED)
+    completed = _run(RunStatus.COMPLETED)
+    shell = _shell(tmp_path, _SequenceStore([paused]))
+    shell.runner = SimpleNamespace(done=False, outcome=lambda: (completed, None))
+    waits = []
+
+    def worker_finishes(interval):
+        waits.append(interval)
+        shell.runner.done = True
+
+    monkeypatch.setattr("resagent2_cli.shell.time.sleep", worker_finishes)
+    assert shell._watch("run_x", poll_interval=0) is completed
+    assert waits == [0]
 
 
 def test_watch_raises_on_runner_error(tmp_path):

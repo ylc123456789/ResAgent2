@@ -423,7 +423,7 @@ class Shell:
                     for line in render.render_final(result):
                         self.stream.write(line + "\n")
                 return result
-            if run is not None and run.status in TERMINAL_STATUSES:
+            if not wait_for_runner and run is not None and run.status in TERMINAL_STATUSES:
                 self.display.clear()
                 for line in render.render_final(run):
                     self.stream.write(line + "\n")

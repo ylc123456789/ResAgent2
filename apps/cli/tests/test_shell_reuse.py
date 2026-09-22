@@ -100,7 +100,7 @@ def test_shell_answer_reaches_controller_and_resumes_same_session(
     shell.current_run_id = paused.run_id
     workspace_flags = ["--workspace", str(tmp_path), "--read-only"] if repeat_workspace else []
     shell._dispatch(shlex.join(["/answer", *answer_tokens, *workspace_flags]))
-    shell.runner._thread.join(timeout=5)
+    assert shell.runner.done
     result, error = shell.runner.outcome()
     assert error is None
     assert result.status == RunStatus.COMPLETED, result.terminal_error

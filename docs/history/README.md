@@ -4,7 +4,7 @@
 
 ## 最近已完成的主线
 
-Run 控制简化已完成本地实现（schema **13.0**，产品 `b947261`，分支 `refactor/run-control`）：Run 统一预算和授权，内部只能收紧，持久用量与单次操作批准进入公共执行链。本地 **1136 passed、1 skipped**，尚未做本轮真实模型验收，也未合并或推送。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，已验证边界与服务器步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
+Run 控制简化已完成本地实现（schema **13.0**，产品 `b947261`，分支 `refactor/run-control`）：Run 统一预算和授权，内部只能收紧，持久用量与单次操作批准进入公共执行链。本地 **1136 passed、1 skipped**，已推送、未合并，尚未做本轮真实模型验收。服务器开发和测试统一使用现有 `projects/ResAgent2` 仓库，版本由 Git 管理；每轮只新增独立证据目录。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，已验证边界与服务器步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
 
 统一 Agent IO V2 已完成本地实现（schema **12.0**，分支 `refactor/unified-agent-entry`）：三个 Agent 共用单一 invoke 和报告/工件协议；本地 **1036 passed、1 skipped**，模拟 E2E 与 CLI 入口通过。代码已分段提交，尚未合并或推送；真实模型与 GPU 验收等待服务器启动。具体范围、提交和验证边界见 [本地验收记录](reviews/UNIFIED_AGENT_IO_V2_ACCEPTANCE_2026-09-20.md)。
 

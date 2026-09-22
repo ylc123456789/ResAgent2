@@ -1,81 +1,59 @@
-"""Shell argument helpers: token splitting and answer-value resolution."""
+"""Both CLI entrypoints parse answers and workspace flags through argparse."""
 
-from __future__ import annotations
-
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
-from resagent2_cli.shell import (
-    _answer_values,
-    _flag_value,
-    _reject_shell_data_root,
-    _split_answer_tokens,
-)
+from resagent2_cli.main import _answer_from_args, _parser
+from resagent2_cli.shell import _NoExitParser, _reject_shell_data_root
+from resagent2_contracts import PendingQuestion
 
 
-def _run(requested_fields=None):
-    if requested_fields is None:
-        return SimpleNamespace(pending_question=None)
-    return SimpleNamespace(
-        pending_question=SimpleNamespace(
-            id="question_1", text="q", requested_fields=requested_fields
-        )
+def _answer(tokens, requested_fields=None):
+    question = None if requested_fields is None else PendingQuestion(
+        id="question_1", run_id="run_x", text="Choose a value",
+        requested_fields=requested_fields, created_at=datetime.now(UTC),
     )
+    run = SimpleNamespace(run_id="run_x", pending_question=question)
+    args = _parser(_NoExitParser).parse_args(["answer", "run_x"] + tokens)
+    return _answer_from_args(args, run)
 
 
-def test_split_answer_tokens_single_field_with_workspace():
-    fields, ws = _split_answer_tokens(["accuracy", "--workspace", "/tmp"])
-    assert fields == ["accuracy"]
-    assert ws == ["--workspace", "/tmp"]
+@pytest.mark.parametrize("tokens", [["accuracy"], ["primary_metric=accuracy"],
+                                   ["--field", "primary_metric=accuracy"]])
+def test_answer_single_field_spellings(tokens):
+    assert _answer(tokens, ["primary_metric"]).values == {"primary_metric": "accuracy"}
 
 
-def test_split_answer_tokens_name_value_pairs():
-    fields, ws = _split_answer_tokens(["metric=accuracy", "seed=42"])
-    assert fields == ["metric=accuracy", "seed=42"]
-    assert ws == []
+def test_answer_shorthand_rejects_multiple_requested_fields():
+    with pytest.raises(ValueError, match="exactly one requested field"):
+        _answer(["accuracy"], ["a", "b"])
 
 
-def test_split_answer_tokens_mixed():
-    fields, ws = _split_answer_tokens(
-        ["metric=accuracy", "--git", "https://x", "seed=1"]
-    )
-    assert fields == ["metric=accuracy", "seed=1"]
-    assert ws == ["--git", "https://x"]
-
-
-def test_flag_value():
-    assert _flag_value(["--workspace", "/tmp"], "--workspace") == "/tmp"
-    assert _flag_value([], "--workspace") is None
-    assert _flag_value(["--git"], "--git") is None
-
-
-def test_answer_values_single_field_shorthand():
-    assert _answer_values(_run(["primary_metric"]), ["accuracy"]) == {
-        "primary_metric": "accuracy"
+def test_answer_explicit_fields_and_value_with_equals():
+    assert _answer(["a=1", "b=second, mul=2*3"], ["a", "b"]).values == {
+        "a": "1", "b": "second, mul=2*3",
     }
 
 
-def test_answer_values_shorthand_rejects_multiple_requested_fields():
+def test_answer_rejects_missing_pending_question():
+    with pytest.raises(ValueError, match="no pending question"):
+        _answer(["accuracy"])
+
+
+def test_answer_rejects_empty_fields():
+    with pytest.raises(ValueError, match="requires a value"):
+        _answer([], ["metric"])
+
+
+@pytest.mark.parametrize("tokens", [["accuracy", "--unknown"], ["accuracy", "--workspace"]])
+def test_answer_rejects_invalid_flags(tokens):
     with pytest.raises(ValueError):
-        _answer_values(_run(["a", "b"]), ["accuracy"])
+        _answer(tokens, ["metric"])
 
 
-def test_answer_values_explicit_name_value():
-    assert _answer_values(_run(["a", "b"]), ["a=1", "b=2"]) == {"a": "1", "b": "2"}
-
-
-def test_answer_value_can_contain_natural_language_and_equals():
-    assert _answer_values(_run(["mode"]), ["mode=第二个，mul=2*3"]) == {
-        "mode": "第二个，mul=2*3"
-    }
-
-
-def test_answer_values_rejects_missing_pending_question():
-    with pytest.raises(ValueError):
-        _answer_values(_run(None), ["accuracy"])
-
-
-def test_shell_data_root_is_fixed_at_startup():
+@pytest.mark.parametrize("tokens", [["--data-root", "/other"], ["--data-root=/other"]])
+def test_shell_data_root_is_fixed_at_startup(tokens):
     with pytest.raises(ValueError, match="fixed at startup"):
-        _reject_shell_data_root(["--data-root", "/other"])
+        _reject_shell_data_root(tokens)

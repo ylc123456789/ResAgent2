@@ -25,7 +25,7 @@ from resagent2_contracts import (
 )
 from resagent2_orchestrator import InMemoryRunStore, ResearchRun
 from resagent2_runtime import AgentAction
-from resagent2_cli.main import _specs_for_existing_run
+from resagent2_cli.main import _parser, _specs_for_existing_run
 
 
 def _request(goal: str = "test goal") -> ResearchRequest:
@@ -305,11 +305,57 @@ def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(
         source=source,
         managed=False,
     )
-    args = type(
-        "Args",
-        (),
-        {"workspace": str(workspace), "git": None, "python_version": None,
-         "read_path": None, "write_path": None, "deny_path": [], "read_only": False},
-    )()
+    args = _parser().parse_args(["resume", run.run_id, "--workspace", str(workspace)])
 
     assert _specs_for_existing_run(args, run) == {"ws_main": source}
+
+
+@pytest.mark.parametrize("command", ["answer", "resume"])
+def test_recovery_rejects_adding_workspace(tmp_path, command):
+    run = _run(RunStatus.PAUSED)
+    store = InMemoryRunStore()
+    store.save(run)
+    controller = _Controller(run)
+    builder = _Builder(controller)
+    tokens = [command, run.run_id, "--workspace", str(tmp_path)]
+    if command == "answer":
+        tokens += ["--field", "ready=yes"]
+    with pytest.raises(ValueError, match="cannot add a workspace"):
+        cli(tokens, application_builder=builder, store_factory=lambda root: store)
+    assert builder.calls == []
+    assert store.load(run.run_id).model_dump_json() == run.model_dump_json()
+
+
+@pytest.mark.parametrize("flags", [["--read-only"], ["--read-path", "src"],
+                                   ["--write-path", "src"], ["--deny-path", "secrets"]])
+def test_workspace_permissions_require_a_workspace_source(flags):
+    args = _parser().parse_args(["resume", "run_test"] + flags)
+    with pytest.raises(ValueError, match="require --workspace or --git"):
+        _specs_for_existing_run(args, _run())
+
+
+@pytest.mark.parametrize("flags,accepted", [
+    (["--read-path", "src", "--read-only", "--deny-path", "src/private"], True),
+    (["--read-path", "src", "--read-only"], False),
+    (["--read-path", "src", "--write-path", "src", "--deny-path", "src/private"], False),
+    (["--read-only"], False),
+    ([], False),
+])
+def test_recovery_workspace_flags_can_only_repeat_persisted_grants(tmp_path, flags, accepted):
+    run = _run(RunStatus.PAUSED)
+    source = WorkspaceSpec(
+        workspace_id="ws_main", source_kind="local", location=str(tmp_path),
+        access=WorkspaceAccess(read_paths=["src"], write_paths=[], denied_paths=["src/private"]),
+    )
+    run.workspaces["ws_main"] = WorkspaceRecord(
+        workspace_id="ws_main", root=str(tmp_path), source=source, managed=False,
+    )
+    args = _parser().parse_args(["resume", run.run_id, "--workspace", str(tmp_path)] + flags)
+    if accepted:
+        assert _specs_for_existing_run(args, run) == {"ws_main": source}
+    else:
+        with pytest.raises(ValueError, match="does not match"):
+            _specs_for_existing_run(args, run)
+    assert _specs_for_existing_run(_parser().parse_args(["resume", run.run_id]), run) == {
+        "ws_main": source,
+    }

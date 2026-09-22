@@ -99,11 +99,11 @@ resagent2 answer run_20260901_120000_ab12cd34 \
 resagent2 resume run_20260901_120000_ab12cd34
 ```
 
-`answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。工作区在创建 Run 时已解析并保存，恢复沿用已保存的工作区和授权，不能借新的任务或回答扩权。
+`answer` 只回答当前 pending question，并随后继续同一个 Run；`resume` 不制造答案，只继续可恢复的执行。工作区在创建 Run 时已解析并保存，恢复沿用已保存的工作区和授权，不能借新的任务或回答扩权。恢复时无需重复工作区参数；若重复，来源和权限必须与保存值一致。创建时没有工作区的 Run 不能在回答或恢复时补加，需新建 Run。路径权限参数必须与 `--workspace` 或 `--git` 一起提供，不能被静默忽略。
 
 按 `show` 显示的实际 Fields 填写回答即可，不需要重写原题，也没有新增 `--question-text` 参数。Controller 会从当前已保存的问题取得原文，与答案一起记录；恢复时对应 Agent 同时看见原题和答案，避免把“是”或“第二个”误配到另一问题。问题身份和字段校验仍沿用原规则。
 
-Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下划线，以 ASCII 字母开头；问题与选项显示在正文，不放在键里。若实际字段是 mode，可用 `--field 'mode=第二个，mul=2*3'`，或在 shell 用 `/answer "mode=第二个，mul=2*3"`。命令仍按第一个 `=` 分隔，答案本身可以包含 `=` 和自然语言。不要自行改名；无效提问键由共享工具契约在暂停前拒绝并反馈给模型，详见 [问答规则](../../docs/current/CONTRACTS.md#questions)。
+Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下划线，以 ASCII 字母开头；问题与选项显示在正文，不放在键里。若实际字段是 mode，可用 `--field 'mode=第二个，mul=2*3'`，或在 shell 用 `/answer "mode=第二个，mul=2*3"`。命令仍按第一个 `=` 分隔，答案本身可以包含 `=` 和自然语言。shell 与一次性 CLI 共用参数解析和答案组装，也都接受单字段值或 `NAME=VALUE` 简写；答案放在工作区选项之前，或使用可重复的 `--field NAME=VALUE`。不要自行改名；无效提问键由共享工具契约在暂停前拒绝并反馈给模型，详见 [问答规则](../../docs/current/CONTRACTS.md#questions)。
 
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 

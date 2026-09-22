@@ -74,6 +74,11 @@ def _workspace_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
+    if not args.workspace and not args.git:
+        if (args.python_version or args.read_path is not None or args.write_path is not None
+                or args.read_only or args.deny_path):
+            raise ValueError("workspace options require --workspace or --git")
+        return {}
     access = WorkspaceAccess(
         read_paths=args.read_path if args.read_path is not None else ["."],
         write_paths=[] if args.read_only else (args.write_path if args.write_path is not None else ["."]),
@@ -107,9 +112,6 @@ def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
                 access=access,
             )
         }
-    if args.python_version:
-        raise ValueError("--python-version requires --workspace or --git")
-    return {}
 
 
 def _specs_for_existing_run(
@@ -121,7 +123,9 @@ def _specs_for_existing_run(
         workspace_id: record.source
         for workspace_id, record in run.workspaces.items()
     }
-    if supplied and persisted:
+    if supplied:
+        if not persisted:
+            raise ValueError("cannot add a workspace to an existing Run; create a new Run")
         if set(supplied) != set(persisted):
             raise ValueError("supplied workspace does not match the persisted Run workspace")
         for workspace_id, proposed in supplied.items():
@@ -138,8 +142,29 @@ def _specs_for_existing_run(
                 raise ValueError(
                     "supplied workspace does not match the persisted Run workspace"
                 )
-        return persisted
-    return supplied or persisted
+    return persisted
+
+
+def _answer_from_args(args: argparse.Namespace, run: ResearchRun) -> UserAnswer:
+    question = run.pending_question
+    if question is None:
+        raise ValueError(f"Run {run.run_id} has no pending question")
+    fields = args.field + args.values
+    if not fields:
+        raise ValueError("answer requires a value or NAME=VALUE fields")
+    if len(fields) == 1 and "=" not in fields[0]:
+        if len(question.requested_fields) != 1:
+            raise ValueError(
+                "single-value shorthand needs exactly one requested field; use NAME=VALUE"
+            )
+        values = {question.requested_fields[0]: fields[0]}
+    else:
+        values = dict(_assignment(value, label="answer field") for value in fields)
+    return UserAnswer(
+        question_id=question.id,
+        values=values,
+        answered_at=datetime.now(UTC),
+    )
 
 
 def _run_store(data_root: Path) -> JsonRunStore:
@@ -216,7 +241,8 @@ def _parser(
 
     answer = subparsers.add_parser("answer", help="answer the current pending question")
     answer.add_argument("run_id")
-    answer.add_argument("--field", action="append", required=True, metavar="NAME=VALUE")
+    answer.add_argument("values", nargs="*", metavar="VALUE|NAME=VALUE")
+    answer.add_argument("--field", action="append", default=[], metavar="NAME=VALUE")
     answer.add_argument("--data-root", default=_default_data_root())
     _workspace_args(answer)
 
@@ -272,27 +298,11 @@ def cli(
         if args.command == "resume":
             run = application.controller.run_until_stable(args.run_id)
         else:
-            question = existing.pending_question
-            if question is None:
-                raise ValueError(f"Run {args.run_id} has no pending question")
-            values = dict(
-                _assignment(value, label="--field") for value in args.field
-            )
             run = application.controller.answer_question(
-                args.run_id,
-                UserAnswer(
-                    question_id=question.id,
-                    values=values,
-                    answered_at=datetime.now(UTC),
-                ),
+                args.run_id, _answer_from_args(args, existing),
             )
 
     _render_run(run)
-    if run.status == RunStatus.PAUSED and not run.workspaces:
-        print(
-            "Note: repeat --workspace or --git when answering/resuming this Run "
-            "because no workspace has been persisted yet."
-        )
     return _exit_code(run)
 
 

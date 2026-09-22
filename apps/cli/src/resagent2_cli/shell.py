@@ -26,18 +26,16 @@ import shlex
 import sys
 import threading
 import time
-from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable
 
-from resagent2_contracts import RunStatus, UserAnswer
+from resagent2_contracts import RunStatus
 
 from . import render
 from .composition import build_application
 from .main import (
     EXIT_COMPLETED,
-    _assignment,
+    _answer_from_args,
     _default_data_root,
     _new_run_id,
     _parser,
@@ -49,7 +47,6 @@ from .main import (
 
 TERMINAL_STATUSES = {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}
 POLL_INTERVAL = 0.25
-_WS_FLAGS = ("--workspace", "--git", "--python-version")
 
 
 class _NoExitParser(argparse.ArgumentParser):
@@ -179,53 +176,13 @@ class TraceTail:
         return records
 
 
-def _split_answer_tokens(tokens: list[str]) -> tuple[list[str], list[str]]:
-    """Split ``/answer`` tokens into field tokens and workspace flags."""
-    fields: list[str] = []
-    ws: list[str] = []
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token in _WS_FLAGS:
-            ws.append(token)
-            if index + 1 < len(tokens):
-                ws.append(tokens[index + 1])
-            index += 2
-        else:
-            fields.append(token)
-            index += 1
-    return fields, ws
-
-
-def _flag_value(tokens: list[str], flag: str) -> str | None:
-    for index, token in enumerate(tokens):
-        if token == flag and index + 1 < len(tokens):
-            return tokens[index + 1]
-    return None
-
-
 def _reject_shell_data_root(tokens: list[str]) -> None:
     """Keep one interactive session bound to its startup data root."""
-    if "--data-root" in tokens:
+    if any(token == "--data-root" or token.startswith("--data-root=") for token in tokens):
         raise ValueError(
             "the shell data root is fixed at startup; exit and restart with "
             "resagent2 shell --data-root PATH"
         )
-
-
-def _answer_values(run, fields: list[str]) -> dict[str, str]:
-    question = run.pending_question
-    if question is None:
-        raise ValueError("this Run has no pending question")
-    if len(fields) == 1 and "=" not in fields[0]:
-        requested = question.requested_fields
-        if len(requested) != 1:
-            raise ValueError(
-                "single-value shorthand needs exactly one requested field; "
-                "use NAME=VALUE"
-            )
-        return {requested[0]: fields[0]}
-    return dict(_assignment(value, label="--field") for value in fields)
 
 
 class Shell:
@@ -369,21 +326,11 @@ class Shell:
 
     def _cmd_answer(self, rest: list[str]) -> bool:
         run = self._require_current_run("/answer")
-        fields, ws = _split_answer_tokens(rest)
-        values = _answer_values(run, fields)
-        ws_args = SimpleNamespace(
-            workspace=_flag_value(ws, "--workspace"),
-            git=_flag_value(ws, "--git"),
-            python_version=_flag_value(ws, "--python-version"),
-        )
+        args = _parser(_NoExitParser).parse_args(["answer", run.run_id] + rest)
+        answer = _answer_from_args(args, run)
         application = self.application_builder(
             data_root=self.data_root,
-            workspaces=_specs_for_existing_run(ws_args, run),
-        )
-        answer = UserAnswer(
-            question_id=run.pending_question.id,
-            values=values,
-            answered_at=datetime.now(UTC),
+            workspaces=_specs_for_existing_run(args, run),
         )
         self.runner.start(
             lambda: application.controller.answer_question(run.run_id, answer)

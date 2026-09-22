@@ -1,5 +1,7 @@
 """A schema break rejects old runs without rewriting their audit records."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+
 from datetime import UTC, datetime
 
 import pytest
@@ -16,13 +18,7 @@ from resagent2_orchestrator import JsonRunStore, ResearchRun
 
 def test_old_run_rejected_without_rewriting_file(tmp_path):
     now = datetime.now(UTC)
-    run = ResearchRun(
-        run_id="run_schema", status=RunStatus.RUNNING,
-        request=ResearchRequest(goal="Version boundary", budget=RunBudget(
-            max_tasks=1, max_attempts_per_task=1, max_llm_calls=1, timeout_seconds=60,
-        )),
-        created_at=now, updated_at=now,
-    )
+    run = ResearchRun(run_id='run_schema', status=RunStatus.RUNNING, request=ResearchRequest(goal='Version boundary', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1)), created_at=now, updated_at=now)
     store = JsonRunStore(tmp_path)
     store.save(run)
     assert store.load(run.run_id) == run

@@ -1,3 +1,5 @@
+
+from resagent2_contracts import AgentPermissions
 from datetime import UTC, datetime
 
 from resagent2_contracts import (AgentOwner, ModuleStatus, AgentRequest, TaskBudget, SessionStatus)
@@ -32,15 +34,7 @@ class _AcceptFinish:
 
 
 def _request(*, attempt: int, parent: str | None = None) -> AgentRequest:
-    return AgentRequest(
-        run_id="run_resume",
-        task_id="task_experiment",
-        attempt_number=attempt,
-        agent=AgentOwner.CODING,
-        instruction="Which dataset?",
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
-        parent_session_id=parent,
-    )
+    return AgentRequest(run_id='run_resume', task_id='task_experiment', attempt_number=attempt, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id=parent, permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
 
 def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
@@ -238,15 +232,7 @@ def test_resume_rejects_mismatched_task() -> None:
     first = loop.run(definition, _request(attempt=1), session_id="session_child")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
 
-    other = AgentRequest(
-        run_id="run_resume",
-        task_id="task_other",
-        attempt_number=2,
-        agent=AgentOwner.CODING,
-        instruction="Which dataset?",
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
-        parent_session_id="session_child",
-    )
+    other = AgentRequest(run_id='run_resume', task_id='task_other', attempt_number=2, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id='session_child', permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     result = loop.run(definition, other, session_id="session_child")
 
     assert result.status == ModuleStatus.FAILED

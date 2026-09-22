@@ -6,17 +6,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 from pydantic import BaseModel
+from resagent2_runtime.budget import execution_budget
 from resagent2_contracts import (
-    AgentOwner, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
+    AgentOwner, AgentPermissions, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
     ErrorCode, ModuleError, ModuleStatus, PendingQuestion, QuestionDraft, RunStatus,
     TaskAcceptanceSpec, TaskBudget, TaskStatus, Workflow, WorkflowAgentKind,
     WorkflowPatch, WorkflowProposal, WorkflowTask, WorkOutcome, WorkRequestStatus,
-    WorkTaskOutcome, WorkspaceGrant, WorkspaceMode, WorkspaceRecord, WorkspaceSourceKind,
+    WorkTaskOutcome, WorkspaceGrant, WorkspaceRecord, WorkspaceSourceKind,
 )
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
 from .handoffs import check_acceptance, read_json, receive_artifacts, system_artifact
 from .layout import RunLayout
 from .store import InMemoryRunStore
+from .usage import RunUsagePort
 from .workflow_validation import validate_workflow_candidate
 
 
@@ -72,9 +74,8 @@ class WorkflowScheduler:
             raise OrchestrationError("run already has an accepted workflow")
         proposal = WorkflowProposal.model_validate(proposal.model_dump())
         validate_workflow_candidate(proposal)
-        if len(proposal.tasks) > run.request.budget.max_tasks:
-            raise OrchestrationError("workflow exceeds run max_tasks budget")
-        run.workspaces = self._resolve_workspaces(run_id)
+        if len(proposal.tasks) > run.request.execution_limits.max_tasks:
+            raise OrchestrationError("workflow exceeds run task limit")
         tasks = self._tasks_from_proposal(run, proposal.tasks)
         run.workflow = Workflow(run_id=run_id, revision=1, tasks=tasks, created_from=proposal.work_request_id)
         self._save(run)
@@ -94,15 +95,14 @@ class WorkflowScheduler:
             tasks.append(WorkflowTask(
                 id=item.id, work_request_id=item.work_request_id,
                 workflow_agent_kind=item.workflow_agent_kind, instruction=item.instruction,
-                depends_on=item.depends_on, workspace_id=self._resolve_workspace_id(item),
+                depends_on=item.depends_on, workspace_id=self._resolve_workspace_id(run, item),
                 input_artifacts=item.input_artifacts, input_artifact_bindings=item.input_artifact_bindings,
                 acceptance_ref=ref,
-                confirm_before_experiment=item.confirm_before_experiment,
             ))
         return tasks
 
-    def _resolve_workspace_id(self, task):
-        ids = list(self.workspace_specs)
+    def _resolve_workspace_id(self, run, task):
+        ids = list(run.workspaces)
         if task.workspace_id is not None:
             if task.workspace_id not in ids:
                 raise OrchestrationError("task references unknown workspace_id")
@@ -125,7 +125,7 @@ class WorkflowScheduler:
 
     @staticmethod
     def _grant(record):
-        return WorkspaceGrant(root=record.root, mode=record.source.mode, source=record.source.source_kind)
+        return WorkspaceGrant(root=record.root, access=record.source.access, source=record.source.source_kind)
 
     def load(self, run_id):
         return self.store.load(run_id)
@@ -172,8 +172,8 @@ class WorkflowScheduler:
             parent = last.session.id
         else:
             number = len(task.attempts) + 1
-            if number > run.request.budget.max_attempts_per_task:
-                raise OrchestrationError("task attempt budget is exhausted")
+            if number > run.request.execution_limits.max_attempts_per_task:
+                raise OrchestrationError("task attempt limit is exhausted")
             task.input_artifacts = list(dict.fromkeys([
                 *task.input_artifacts, *self._resolve_future_artifact_bindings(run, task),
             ]))
@@ -220,7 +220,8 @@ class WorkflowScheduler:
             workspace_spec=record.source if record else None,
             environment_spec=record.source.environment or EnvironmentSpec() if record else EnvironmentSpec(),
             output_dir=str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number)),
-            confirm_before_experiment=task.confirm_before_experiment,
+            permissions=AgentPermissions(**run.request.permissions.model_dump(exclude={"schema_version"})),
+            confirm_commands=run.request.confirm_commands,
             parent_session_id=parent_session_id,
             resume_artifact_ids=[ref.id for ref in fresh_answers] if parent_session_id else [],
         )
@@ -230,7 +231,10 @@ class WorkflowScheduler:
         before = set(run.artifacts)
         calls = 0
         try:
-            raw = binding.port.invoke(request)
+            with execution_budget(max_llm_calls=request.budget.max_llm_calls,
+                                  timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
+                                  usage=RunUsagePort(run, self.store)):
+                raw = binding.port.invoke(request)
             value = raw.model_dump() if isinstance(raw, BaseModel) else raw
             claimed = value.get("llm_calls", 0) if isinstance(value, dict) else 0
             if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed >= 0:
@@ -239,7 +243,6 @@ class WorkflowScheduler:
         except Exception as error:
             result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {error}",
                                  llm_calls=calls, error=ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error), retryable=False))
-        run.llm_calls_used += result.llm_calls
         attempt.report = result.report
         attempt.session = result.session
         task.warnings.extend(result.warnings)
@@ -282,7 +285,7 @@ class WorkflowScheduler:
             run.pending_question = PendingQuestion(
                 id=_question_id(), run_id=run.run_id, task_id=task.id, attempt_number=attempt.number,
                 text=draft.text, requested_fields=draft.requested_fields,
-                options=draft.options, created_at=datetime.now(UTC),
+                options=draft.options, created_at=datetime.now(UTC), action=draft.action,
             )
             run.pending_question_ref = control_ref
         else:
@@ -294,7 +297,7 @@ class WorkflowScheduler:
             elif result.status == ModuleStatus.BLOCKED:
                 task.status = TaskStatus.BLOCKED
             else:
-                retry = result.error and result.error.retryable and attempt.number < run.request.budget.max_attempts_per_task
+                retry = result.error and result.error.retryable and attempt.number < run.request.execution_limits.max_attempts_per_task
                 task.status = TaskStatus.PENDING if retry else TaskStatus.FAILED
         self._evaluate_run(run)
         self._save(run)
@@ -329,7 +332,7 @@ class WorkflowScheduler:
             attempt.status = AttemptStatus.FAILED
             attempt.finished_at = datetime.now(UTC)
             attempt.error = ModuleError(code=ErrorCode.INTERRUPTED, message="attempt interrupted before result persistence", retryable=True)
-            task.status = TaskStatus.PENDING if attempt.number < run.request.budget.max_attempts_per_task else TaskStatus.FAILED
+            task.status = TaskStatus.PENDING if attempt.number < run.request.execution_limits.max_attempts_per_task else TaskStatus.FAILED
             changed = True
         if changed:
             self._evaluate_run(run)
@@ -338,7 +341,7 @@ class WorkflowScheduler:
     def retry_task(self, run_id, task_id):
         run = self.store.load(run_id)
         task = self._task(run, task_id)
-        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED} or len(task.attempts) >= run.request.budget.max_attempts_per_task:
+        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED} or len(task.attempts) >= run.request.execution_limits.max_attempts_per_task:
             raise OrchestrationError("task cannot be retried")
         task.status = TaskStatus.PENDING
         run.status = RunStatus.RUNNING
@@ -353,8 +356,8 @@ class WorkflowScheduler:
         if patch.based_on_revision != run.workflow.revision:
             raise OrchestrationError("patch is based on a stale workflow revision")
         validate_workflow_candidate(patch)
-        if len(run.workflow.tasks) + len(patch.add_tasks) > run.request.budget.max_tasks:
-            raise OrchestrationError("patched workflow exceeds max_tasks budget")
+        if len(run.workflow.tasks) + len(patch.add_tasks) > run.request.execution_limits.max_tasks:
+            raise OrchestrationError("patched workflow exceeds task limit")
         tasks = [*run.workflow.tasks, *self._tasks_from_proposal(run, patch.add_tasks)]
         revised = Workflow(run_id=run_id, revision=run.workflow.revision+1, tasks=tasks, created_from=patch.work_request_id)
         run.workflow_history.append(run.workflow.model_copy(deep=True))

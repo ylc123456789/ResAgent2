@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from resagent2_components.workspace import WorkspaceBoundary, WorkspacePermissionError
+
 from resagent2_contracts import (
     AgentOwner,
     ArtifactCandidate,
@@ -101,16 +103,11 @@ class ArtifactRegistry:
                 raise ArtifactRegistrationError(
                     "artifact path is outside workspace or not a file"
                 )
-            if label == "workspace" and grant.allowed_paths and not any(
-                source.is_relative_to((workspace / path).resolve())
-                for path in grant.allowed_paths
-            ):
-                raise ArtifactRegistrationError("artifact path is outside allowed_paths")
-            if label == "workspace" and any(
-                source.is_relative_to((workspace / path).resolve())
-                for path in grant.denied_paths
-            ):
-                raise ArtifactRegistrationError("artifact path is inside denied_paths")
+            if label == "workspace":
+                try:
+                    source = WorkspaceBoundary(grant).resolve_read_file(candidate.path)
+                except (OSError, WorkspacePermissionError) as error:
+                    raise ArtifactRegistrationError(str(error)) from error
             metadata["source_path"] = source.relative_to(workspace).as_posix()
             metadata["source_root"] = label
 

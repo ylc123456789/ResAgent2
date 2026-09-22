@@ -1,5 +1,7 @@
 """Immutable requirements constrain registered outputs of the accepted Attempt."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits, WorkspaceAccess
+
 import json
 from datetime import UTC, datetime
 
@@ -34,10 +36,7 @@ def accepted(tmp_path, outputs, *, spec=None):
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
     now = datetime.now(UTC)
-    run = ResearchRun(run_id="run_acceptance", status="running",
-        request=ResearchRequest(goal="Evaluate", budget=RunBudget(max_tasks=2,
-            max_attempts_per_task=2, max_llm_calls=10, timeout_seconds=60)),
-        created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_acceptance', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=2)), created_at=now, updated_at=now)
     scheduler.store.save(run)
     proposal = WorkflowProposal(work_request_id="work_1", tasks=[TaskProposal(
         id="task_measure", work_request_id="work_1", instruction="Measure accuracy",
@@ -135,8 +134,7 @@ def test_registry_derives_required_paths_and_ignores_claimed_metadata(tmp_path):
     workspace.mkdir()
     (workspace / "actual.json").write_text('{"accuracy":0.9}')
     registry = ArtifactRegistry(tmp_path / "registered")
-    common = dict(grant=WorkspaceGrant(root=str(workspace), mode="read_only", source="local"),
-                  producer="experiment", run_id="run_test", task_id="task_test", attempt_number=1, existing_ids=set())
+    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1, existing_ids=set())
     candidate = metrics(path="actual.json").model_copy(update={"content": None, "metadata": {"source_path": "fake.json"}})
     ref = registry.register(candidate, index=1, **common)
     assert ref.metadata["source_path"] == "actual.json"
@@ -153,9 +151,7 @@ def test_registry_accepts_controlled_output_files_but_rejects_escape_and_ambigui
     (output / "metrics.json").write_text('{"accuracy":0.9}')
     registry = ArtifactRegistry(tmp_path / "registered")
     candidate = metrics().model_copy(update={"content": None})
-    common = dict(grant=WorkspaceGrant(root=str(workspace), mode="read_only", source="local"),
-                  output_dir=str(output), producer="experiment", run_id="run_test", task_id="task_test",
-                  attempt_number=1, existing_ids=set())
+    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), output_dir=str(output), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1, existing_ids=set())
     ref = registry.register(candidate, index=1, **common)
     assert ref.metadata["source_root"] == "output_dir"
     (workspace / "metrics.json").write_text("{}")

@@ -2,7 +2,7 @@
 
 import json
 from io import BytesIO
-from urllib.error import HTTPError
+from httpx import HTTPStatusError, Request, Response
 
 import pytest
 
@@ -225,10 +225,10 @@ def test_summary_request_uses_exact_bounded_wire_and_shared_full_trace(
     requests = []
 
     def respond(request, **kwargs):
-        requests.append(json.loads(request.data))
+        requests.append(json.loads(request.content))
         return _summary_response("  concise handoff  ", reasoning="summary reasoning")
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     prompt = '{"previous_handoff":null,"completed_tool_messages":[]}'
     result = client.summarize_history(
         prompt,
@@ -280,7 +280,7 @@ def test_invalid_summary_output_is_not_retried(
             content, finish_reason=finish_reason, tool_calls=tool_calls,
         )
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     with pytest.raises(LLMTextResponseError, match=message):
         client.summarize_history("source", max_input_tokens=500)
     assert calls == client.last_attempts == 1
@@ -304,7 +304,7 @@ def test_summary_input_budget_fails_before_transport(monkeypatch, tmp_path):
         calls += 1
         return _summary_response("unused")
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     with pytest.raises(ValueError, match="input budget"):
         client.summarize_history("source", max_input_tokens=0)
     with pytest.raises(ContextBudgetExceeded, match="compaction request"):
@@ -320,10 +320,10 @@ def test_summary_without_model_profile_leaves_provider_output_limit_unset(
     requests = []
 
     def respond(request, **kwargs):
-        requests.append(json.loads(request.data))
+        requests.append(json.loads(request.content))
         return _summary_response("handoff")
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     assert client.summarize_history("source", max_input_tokens=500) == "handoff"
     assert "max_tokens" not in requests[0]
     row = json.loads((client.trace_dir / "llm_traces.jsonl").read_text())
@@ -337,15 +337,13 @@ def test_summary_http_429_uses_existing_no_retry_and_trace_path(monkeypatch, tmp
     def respond(*args, **kwargs):
         nonlocal calls
         calls += 1
-        raise HTTPError(
-            "https://example.invalid/v1/chat/completions",
-            429,
+        raise HTTPStatusError(
             "rate limited",
-            None,
-            BytesIO(b"slow down"),
+            request=Request("POST", "https://example.invalid/v1/chat/completions"),
+            response=Response(429, content=b"slow down"),
         )
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     with pytest.raises(RuntimeError, match="LLM HTTP 429"):
         client.summarize_history("source", max_input_tokens=500)
     assert calls == client.last_attempts == 1
@@ -361,7 +359,7 @@ def test_summary_metadata_and_off_traces_do_not_leak_text(
 ):
     client = _summary_client(monkeypatch, tmp_path, trace_level=trace_level)
     monkeypatch.setattr(
-        "resagent2_runtime.llm.urlopen",
+        "resagent2_runtime.llm.send_request",
         lambda *args, **kwargs: _summary_response(
             "PRIVATE_SUMMARY", reasoning="PRIVATE_REASONING",
         ),

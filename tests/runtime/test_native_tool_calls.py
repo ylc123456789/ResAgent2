@@ -3,7 +3,7 @@
 import json
 from dataclasses import replace
 from io import BytesIO
-from urllib.error import URLError
+from httpx import TransportError
 
 import pytest
 
@@ -48,11 +48,7 @@ def _context(request, state, limit):
 
 
 def _request(*, parent=None, calls=10, goal="current task"):
-    return AgentRequest(
-        run_id="run_native", task_id="task_native", attempt_number=1,
-        agent=AgentOwner.CODING, instruction=goal, parent_session_id=parent,
-        budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60),
-    )
+    return AgentRequest(run_id='run_native', task_id='task_native', attempt_number=1, agent=AgentOwner.CODING, instruction=goal, parent_session_id=parent, budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
 
 @pytest.fixture
@@ -76,7 +72,7 @@ def setup(monkeypatch, tmp_path):
         queue = iter(responses)
 
         def respond(request, **kwargs):
-            body = json.loads(request.data)
+            body = json.loads(request.content)
             requests.append(body)
             item = next(queue)
             if isinstance(item, BaseException):
@@ -85,7 +81,7 @@ def setup(monkeypatch, tmp_path):
                 item = item(body)
             return BytesIO(json.dumps(item).encode())
 
-        monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+        monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
 
     return definition, InMemorySessionStore(), requests, install
 
@@ -236,7 +232,7 @@ def test_http_retry_and_invalid_arguments_share_total_call_budget(setup):
     definition, store, requests, install = setup
     bad = _call(call_id="call_bad")
     bad["function"]["arguments"] = "{"  # never copied into a valid action
-    install([URLError("offline"), _reply([bad]), _reply()])
+    install([TransportError("offline"), _reply([bad]), _reply()])
     result = AgentLoop(store=store).run(definition, _request(calls=3), session_id="session_native")
     assert result.status == ModuleStatus.COMPLETED
     assert result.llm_calls == len(requests) == 3
@@ -251,9 +247,9 @@ def test_http_retry_and_invalid_arguments_share_total_call_budget(setup):
 def test_permission_check_still_precedes_dispatch(setup):
     definition, store, requests, install = setup
     definition = replace(definition, permission_policy=AllowListPermissionPolicy({"finish"}))
-    install([_reply([_call("write_value", {"key": "unsafe", "value": 1}, call_id="call_denied")])])
+    install([_reply([_call("write_value", {"key": "unsafe", "value": 1}, call_id="call_denied")]), _reply()])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
-    assert result.error.code == ErrorCode.PERMISSION_DENIED
+    assert result.status == ModuleStatus.COMPLETED
     state = store.load("session_native")
     assert "unsafe" not in state.memory
     assert not json.loads(state.tool_turns[0].tool_results["call_denied"])["ok"]
@@ -388,10 +384,7 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
         permission_policy=AllowListPermissionPolicy({"request_work", "finish"}),
     )
     install([_reply([_call("request_work", {'report': '{"objective": "measure"}'}, call_id="call_work")]), _reply()])
-    request = _request().model_copy(update={
-        "agent": AgentOwner.SCIENTIFIC, "task_id": None, "attempt_number": None,
-        "permissions": AgentPermissions(request_work=True),
-    })
+    request = _request().model_copy(update={'agent': AgentOwner.SCIENTIFIC, 'task_id': None, 'attempt_number': None, 'permissions': AgentPermissions(request_work=True, execute_commands=True, prepare_environment=True)})
     first = AgentLoop(store=store).run(definition, request, session_id="session_native")
     assert first.status == ModuleStatus.REQUEST_WORK
     assert first.control.action == "request_work"
@@ -538,6 +531,7 @@ def test_native_reply_cannot_forge_an_execution_receipt(setup):
         tool_results={"call_forged": '{"ok":true}'},
     )
     definition.llm_client.next_tool_call = Mock(return_value=forged)
+    definition.llm_client.manages_usage = False
     definition.llm_client.last_attempts = 1
     result = AgentLoop(store=store).run(definition, _request(calls=1), session_id="session_native")
     state = store.load("session_native")
@@ -604,13 +598,13 @@ def test_batch_permissions_are_preflighted_and_rechecked(setup, deny_after_first
             denied = action.arguments.get("key") == "k1" and (
                 not deny_after_first or "k0" in state.memory
             )
-            return PermissionDecision(allowed=not denied, reason="denied")
+            return PermissionDecision(outcome='allow' if not denied else 'deny', reason='denied')
 
     definition = replace(definition, permission_policy=Policy())
-    install([_reply(_writes(1, 2))])
+    install([_reply(_writes(1, 2)), _reply()])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     state = store.load("session_native")
-    assert result.error.code == ErrorCode.PERMISSION_DENIED
+    assert result.status == ModuleStatus.COMPLETED
     assert state.memory == ({"k0": 1} if deny_after_first else {})
     assert not json.loads(state.tool_turns[0].tool_results["call_1"])["ok"]
 
@@ -718,15 +712,16 @@ def test_one_model_call_can_execute_multiple_actions_without_a_step_budget(setup
 
 
 @pytest.mark.parametrize("reported", [0, -1, True, 1.5, None])
-def test_invalid_client_usage_is_a_contract_failure_not_an_unbounded_loop(setup, reported):
+def test_reported_client_usage_cannot_replace_shared_accounting(setup, reported):
     definition, store, _, _ = setup
     from unittest.mock import Mock
     definition.llm_client.next_tool_call = Mock(return_value=ToolCallTurn(
-        tool_calls=[NativeToolCall(id="call_finish", name="finish", arguments='{"result":{}}')],
+        tool_calls=[NativeToolCall(id="call_finish", name="finish", arguments='{"report":"done"}')],
     ))
     definition.llm_client.last_attempts = reported
+    definition.llm_client.manages_usage = False
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
-    assert result.error.code == ErrorCode.CONTRACT_ERROR
-    assert result.error.details["component"] == "llm_usage"
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == store.load("session_native").llm_calls_used == 1
     definition.llm_client.next_tool_call.assert_called_once()
-    assert store.load("session_native").step == 0
+    assert store.load("session_native").step == 1

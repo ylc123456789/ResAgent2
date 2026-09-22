@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -56,6 +57,21 @@ class CompletionViolation(OrchestratorModel):
     related_ids: list[str] = Field(default_factory=list)
 
 
+class RunUsage(OrchestratorModel):
+    """Durable reservations; unknown outcomes remain consumed after recovery."""
+
+    requests: dict[str, Literal["succeeded", "failed", "unknown"]] = Field(default_factory=dict)
+
+    @property
+    def used(self) -> int:
+        return len(self.requests)
+
+    @property
+    def outcomes(self) -> dict[str, int]:
+        return {outcome: sum(value == outcome for value in self.requests.values())
+                for outcome in ("succeeded", "failed", "unknown")}
+
+
 class ResearchRun(OrchestratorModel):
     """Complete persisted state owned by the Research Orchestrator."""
 
@@ -83,13 +99,17 @@ class ResearchRun(OrchestratorModel):
     final_opinion: ScientificOpinion | None = None
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
-    llm_calls_used: int = Field(default=0, ge=0)
+    usage: RunUsage = Field(default_factory=RunUsage)
     # Settled ask_user pauses only; the currently open pause is derived below.
     user_wait_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
     terminal_error: ModuleError | None = None
     created_at: datetime
     updated_at: datetime
+
+    @property
+    def llm_calls_used(self) -> int:
+        return self.usage.used
 
     def remaining_timeout_seconds(self, now: datetime) -> float:
         """One Run clock for Controller and Scheduler: wall time minus user wait.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Protocol
 from pydantic import BaseModel
+from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, execution_budget
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ConclusionRequirements,
     DatasetRef, ErrorCode, ModuleError, ModuleStatus, ObservationTrace, PendingQuestion,
@@ -19,6 +20,7 @@ from .handoffs import read_json, receive_artifacts, system_artifact
 from .models import ResearchRun
 from .ports import ModulePort
 from .scheduler import _question_id, _transition_work_request, _validate_answer
+from .usage import RunUsagePort
 
 
 class ScientificGate(Protocol):
@@ -57,7 +59,10 @@ class ResearchController:
         if self.scheduler.store.exists(run_id):
             raise ValueError("run already exists")
         now = datetime.now(UTC)
-        run = ResearchRun(run_id=run_id, request=request, status=RunStatus.RUNNING, created_at=now, updated_at=now)
+        request = ResearchRequest.model_validate(request)
+        run = ResearchRun(run_id=run_id, request=request, status=RunStatus.RUNNING,
+                          workspaces=self.scheduler._resolve_workspaces(run_id),
+                          created_at=now, updated_at=now)
         for item in request.input_artifacts:
             ref = self.scheduler.artifact_registry.register_import(item, run_id=run_id)
             run.artifacts[ref.id] = ref
@@ -78,6 +83,7 @@ class ResearchController:
             question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
             options=question.options, values=answer.values, answered_at=answer.answered_at,
             run_id=run.run_id, session_id=session_id, task_id=task_id, attempt_number=question.attempt_number,
+            action=question.action,
         )
         if task_id:
             task = self.scheduler._task(run, task_id)
@@ -120,7 +126,10 @@ class ResearchController:
             except Exception as error:
                 run = self.scheduler.store.load(run_id)
                 return self._fail_run(run, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error) or type(error).__name__, retryable=False))
-            result = self.scientific_port.invoke(request)
+            with execution_budget(max_llm_calls=request.budget.max_llm_calls,
+                                  timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
+                                  usage=RunUsagePort(run, self.scheduler.store)):
+                result = self.scientific_port.invoke(request)
             run = self._apply_turn(run_id, request, result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
@@ -182,9 +191,6 @@ class ResearchController:
     def _apply_turn(self, run_id, request, raw_result):
         run = self.scheduler.store.load(run_id)
         raw = raw_result.model_dump() if isinstance(raw_result, BaseModel) else raw_result
-        calls = raw.get("llm_calls", 0) if isinstance(raw, dict) else 0
-        if isinstance(calls, int) and not isinstance(calls, bool) and calls >= 0:
-            run.llm_calls_used += calls
         try:
             result = AgentResult.model_validate(raw)
             run.scientific_report = result.report
@@ -234,7 +240,7 @@ class ResearchController:
                 if len(assessments) == 1:
                     accepted.latest_scientific_assessment = read_json(assessments[0], ScientificAssessment)
                 accepted.pending_question = PendingQuestion(id=_question_id(), run_id=run.run_id, text=draft.text,
-                                                           requested_fields=draft.requested_fields, options=draft.options, created_at=datetime.now(UTC))
+                                                           requested_fields=draft.requested_fields, options=draft.options, created_at=datetime.now(UTC), action=draft.action)
                 accepted.pending_question_ref = control_ref
                 accepted.status = RunStatus.PAUSED
             else:
@@ -265,16 +271,19 @@ class ResearchController:
             self._save(run)
             return self.scheduler.run_until_stable(run_id)
         try:
-            if (len(run.workflow.tasks) if run.workflow else 0) >= run.request.budget.max_tasks:
+            if (len(run.workflow.tasks) if run.workflow else 0) >= run.request.execution_limits.max_tasks:
                 failure = ModuleError(code=ErrorCode.BUDGET_EXHAUSTED, message="No remaining task slots", retryable=False)
                 _transition_work_request(active, WorkRequestStatus.FAILED, error=failure)
                 return self._fail_run(run, failure)
             if active.status == WorkRequestStatus.REQUESTED:
                 _transition_work_request(active, WorkRequestStatus.COMPILING)
                 self._save(run)
-            compilation = self.compiler.compile(active, current=run.workflow, registry=self.registry, budget=run.request.budget,
-                                                workspaces=self._workspace_descriptors(), remaining_calls=run.request.budget.max_llm_calls-run.llm_calls_used)
-            run.llm_calls_used += compilation.llm_calls
+            with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
+                                  timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
+                                  usage=RunUsagePort(run, self.scheduler.store)):
+                compilation = self.compiler.compile(active, current=run.workflow, registry=self.registry,
+                                                    limits=run.request.execution_limits,
+                                                    workspaces=self._workspace_descriptors(run))
             self._save(run)
             if run.llm_calls_used > run.request.budget.max_llm_calls:
                 raise ValueError("Compiler exceeded Run budget")
@@ -290,9 +299,9 @@ class ResearchController:
         except Exception as error:
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)
-            if isinstance(error, CompilationError):
-                run.llm_calls_used += error.llm_calls
-            failure = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error) or type(error).__name__, retryable=False,
+            code = (ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else
+                    ErrorCode.BUDGET_EXHAUSTED if isinstance(error, BudgetExhaustedError) else ErrorCode.CONTRACT_ERROR)
+            failure = ModuleError(code=code, message=str(error) or type(error).__name__, retryable=False,
                                   details={"compiler_usage_known": isinstance(error, CompilationError)})
             if active:
                 _transition_work_request(active, WorkRequestStatus.FAILED, error=failure)
@@ -324,9 +333,9 @@ class ResearchController:
                 result.extend(item for item in work.outcome.tasks if item.status != "completed")
         return result
 
-    def _workspace_descriptors(self):
-        return [WorkspaceDescriptor(workspace_id=key, source_kind=spec.source_kind)
-                for key, spec in self.scheduler.workspace_specs.items()]
+    def _workspace_descriptors(self, run):
+        return [WorkspaceDescriptor(workspace_id=key, source_kind=record.source.source_kind)
+                for key, record in run.workspaces.items()]
 
     def _save(self, run):
         run.updated_at = datetime.now(UTC)

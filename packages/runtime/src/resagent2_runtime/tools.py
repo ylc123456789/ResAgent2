@@ -67,10 +67,14 @@ class ToolRegistry:
         name: str,
         arguments: dict[str, JsonValue],
         state: AgentState,
+        *,
+        prepared: dict[str, JsonValue] | None = None,
     ) -> ToolObservation:
         """Validate raw arguments and execute the selected Tool."""
 
         parsed = self.validate(name, arguments)
+        if prepared is not None:
+            return self._tools[name].execute_prepared(state, parsed, prepared)
         return self._tools[name].execute(state, parsed)
 
     def validate(self, name: str, arguments: dict[str, JsonValue]) -> BaseModel:

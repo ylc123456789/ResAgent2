@@ -1,5 +1,8 @@
 """The replaceable ModulePort must obey both envelope and Agent routing contracts."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+from resagent2_runtime.budget import current_budget
+
 from datetime import UTC, datetime
 
 import pytest
@@ -39,8 +42,15 @@ def _session(status=SessionStatus.COMPLETED):
 
 
 
-def _execute(tmp_path, result, agent_kind=WorkflowAgentKind.EXPERIMENT):
-    port = ScriptedModulePort([result])
+def _execute(tmp_path, result, agent_kind=WorkflowAgentKind.EXPERIMENT, *, charged_calls=0):
+    class MeteredPort(ScriptedModulePort):
+        def invoke(self, request):
+            budget = current_budget()
+            for index in range(charged_calls):
+                budget.charge("test-module", index)
+                budget.usage.complete("test-module", index, "succeeded")
+            return super().invoke(request)
+    port = MeteredPort([result])
     engine = WorkflowScheduler(
         bindings={agent_kind: ModuleBinding(
             owner=AgentOwner.EXPERIMENT if agent_kind == WorkflowAgentKind.EXPERIMENT else AgentOwner.CODING,
@@ -49,12 +59,7 @@ def _execute(tmp_path, result, agent_kind=WorkflowAgentKind.EXPERIMENT):
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
     now = datetime.now(UTC)
-    engine.store.save(ResearchRun(
-        run_id="run_boundary", request=ResearchRequest(goal="Test ModulePort", budget=RunBudget(
-            max_tasks=3, max_attempts_per_task=2, max_llm_calls=50, timeout_seconds=60,
-        )),
-        status=RunStatus.RUNNING, created_at=now, updated_at=now,
-    ))
+    engine.store.save(ResearchRun(run_id='run_boundary', request=ResearchRequest(goal='Test ModulePort', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=2)), status=RunStatus.RUNNING, created_at=now, updated_at=now))
     engine.accept_proposal("run_boundary", WorkflowProposal(
         work_request_id="work_boundary",
         tasks=[TaskProposal(
@@ -75,7 +80,7 @@ def test_success_for_each_agent_uses_shared_envelope(tmp_path, agent_kind, with_
         report="done",  llm_calls=3,
         warnings=[WarningRecord(code="caveat", message="Limited sample")] if with_warnings else [],
     )
-    _, run, attempt = _execute(tmp_path, result, agent_kind)
+    _, run, attempt = _execute(tmp_path, result, agent_kind, charged_calls=3)
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert attempt.error is None
     assert run.llm_calls_used == 3
@@ -144,7 +149,7 @@ def test_registration_failure_preserves_diagnostics_calls_and_prior_artifact(tmp
                               summary="Missing file"),
         ],
     )
-    engine, run, attempt = _execute(tmp_path, result)
+    engine, run, attempt = _execute(tmp_path, result, charged_calls=9)
     assert run.workflow.tasks[0].status == TaskStatus.FAILED
     assert run.llm_calls_used == 9
     assert attempt.session == session

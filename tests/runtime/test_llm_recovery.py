@@ -1,9 +1,11 @@
 """JSON-only injected clients keep bounded recovery; native clients share the ledger."""
 
+from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
+
 import json
 from datetime import UTC, datetime
 from unittest import mock
-from urllib.error import URLError
+from httpx import TransportError
 
 import pytest
 
@@ -87,18 +89,11 @@ def test_bad_json_stops_at_existing_limits(
         permission_policy=AllowListPermissionPolicy({"finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = AgentRequest(
-        run_id="run_r",
-        task_id="task_r",
-        attempt_number=1,
-        agent=AgentOwner.CODING,
-        instruction="q",
-        budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60),
-    )
+    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
-        mock.patch("resagent2_runtime.llm.urlopen", return_value=bad),
+        mock.patch("resagent2_runtime.llm.send_request", return_value=bad),
     ):
         result = AgentLoop(store=InMemorySessionStore()).run(
             definition, request, session_id="session_recovery"
@@ -169,15 +164,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
         store=store,
         data_root=tmp_path / "data",
     )
-    request = ResearchRequest(
-        goal="exercise retry recovery",
-        budget=RunBudget(
-            max_tasks=1,
-            max_attempts_per_task=2,
-            max_llm_calls=10,
-            timeout_seconds=60,
-        ),
-    )
+    request = ResearchRequest(goal='exercise retry recovery', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2))
     now = datetime.now(UTC)
     store.save(
         ResearchRun(
@@ -205,7 +192,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
     )
     bad = _FakeResponse({"choices": [{"message": {"content": "not valid json"}}]})
     if network_failure:
-        bad = URLError("unavailable")
+        bad = TransportError("unavailable")
     valid = _FakeResponse(
         {
             "choices": [
@@ -232,7 +219,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
         mock.patch(
-            "resagent2_runtime.llm.urlopen",
+            "resagent2_runtime.llm.send_request",
             side_effect=[bad, bad, bad, valid],
         ),
     ):
@@ -280,11 +267,7 @@ def recovery(monkeypatch, tmp_path):
         permission_policy=AllowListPermissionPolicy({"write_value", "finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = AgentRequest(
-        run_id="run_r", task_id="task_r", attempt_number=1,
-        agent=AgentOwner.CODING, instruction="q",
-        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
-    )
+    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=10, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     return definition, request, InMemorySessionStore()
 
 
@@ -308,7 +291,7 @@ _WRITE = '{"tool":"write_value","arguments":{"key":"kept","value":7}}'
 ])
 def test_bad_json_feedback_preserves_state_and_never_executes_prefix(recovery, bad):
     definition, request, store = recovery
-    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=[
         _response(bad), _response(_WRITE), _response(_FINISH),
     ]):
         result = AgentLoop(store=store).run(definition, request, session_id="session_r")
@@ -343,8 +326,8 @@ def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
     request = request.model_copy(update={"budget": TaskBudget(
         max_llm_calls=call_budget, timeout_seconds=60,
     )})
-    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
-        URLError("transient"), _response("bad JSON"), _response(_FINISH),
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=[
+        TransportError("transient"), _response("bad JSON"), _response(_FINISH),
     ]) as provider:
         result = AgentLoop(store=store).run(definition, request, session_id="session_r")
     assert result.llm_calls == provider.call_count == call_budget
@@ -364,7 +347,7 @@ def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
 def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
     definition, request, store = recovery
     bad_schema = '{"tool":"finish","report":"Done"}'
-    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=[
         _response("bad JSON"), _response(bad_schema), _response("bad JSON"),
         _response(bad_schema), _response("bad JSON"), _response(_FINISH),
     ]) as provider:
@@ -380,9 +363,12 @@ def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
 
 def test_json_correction_still_respects_wall_clock(recovery):
     definition, request, store = recovery
-    ticks = iter([0, 0, 0, 61])  # start, first iteration, pre-request guard, next iteration
-    with mock.patch("resagent2_runtime.llm.urlopen", return_value=_response("bad JSON")) as provider:
-        result = AgentLoop(store=store, clock=lambda: next(ticks)).run(
+    clock = [0.0]
+    def respond(*args, **kwargs):
+        clock[0] = 61.0
+        return _response("bad JSON")
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=respond) as provider:
+        result = AgentLoop(store=store, clock=lambda: clock[0]).run(
             definition, request, session_id="session_r",
         )
     assert result.error.code == ErrorCode.TIMEOUT
@@ -413,7 +399,7 @@ def test_json_feedback_is_provider_neutral(recovery):
 
 def test_correction_keeps_previously_completed_work(recovery):
     definition, request, store = recovery
-    with mock.patch("resagent2_runtime.llm.urlopen", side_effect=[
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=[
         _response(_WRITE), _response("bad JSON"), _response(_FINISH),
     ]):
         result = AgentLoop(store=store).run(definition, request, session_id="session_r")

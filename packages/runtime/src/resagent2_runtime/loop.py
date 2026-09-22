@@ -7,11 +7,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, Callable, Literal, Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
+    ActionSnapshot,
     AgentPermissions,
     ArtifactCandidate,
     ArtifactOutput,
@@ -27,9 +29,13 @@ from resagent2_contracts import (
     SessionStatus,
     TaskBudget,
     TaskId,
+    QuestionDraft,
 )
 
 from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer, ContextMaterial
+from .budget import (
+    BudgetExhaustedError, DeadlineExceededError, current_budget, execution_budget, invoke_model,
+)
 from .compaction import plan_compaction
 from .llm import LLMClient, LLMExhaustedError
 from .models import (
@@ -119,7 +125,7 @@ class PermissionPolicy(Protocol):
         state: AgentState,
         request: Any,
     ) -> PermissionDecision:
-        """Return a structured allow or deny decision."""
+        """Return a structured allow, ask or deny decision."""
 
 
 class AllowListPermissionPolicy:
@@ -135,9 +141,9 @@ class AllowListPermissionPolicy:
         request: AgentRequest,
     ) -> PermissionDecision:
         if action.tool in self._allowed_tools:
-            return PermissionDecision(allowed=True)
+            return PermissionDecision(outcome="allow")
         return PermissionDecision(
-            allowed=False,
+            outcome="deny",
             reason=f"tool {action.tool!r} is not allowed by this Agent profile",
         )
 
@@ -184,7 +190,14 @@ class AgentLoop:
     ) -> AgentResult:
         """Run one new Agent session until completion, pause, or structured failure."""
 
+        with execution_budget(max_llm_calls=request.budget.max_llm_calls,
+                              timeout_seconds=request.budget.timeout_seconds, clock=self.clock):
+            return self._run(definition, request, session_id=session_id, initial_memory=initial_memory)
+
+    def _run(self, definition, request, *, session_id, initial_memory):
+
         self._run_llm_calls = 0
+        self._initial_usage = current_budget().usage.used
         self._active_call_id = None
         now = datetime.now(UTC)
         native_call = getattr(definition.llm_client, "next_tool_call", None)
@@ -299,10 +312,9 @@ class AgentLoop:
                 tool="runtime",
             )
 
-        started = self.clock()
         consecutive_failures = 0
         while self._run_llm_calls < request.budget.max_llm_calls:
-            if self.clock() - started >= request.budget.timeout_seconds:
+            if current_budget().expired:
                 return self._failure(
                     state,
                     ErrorCode.TIMEOUT,
@@ -354,6 +366,11 @@ class AgentLoop:
                         )
                 if context is None:
                     raise context_error or ContextBudgetExceeded("current context does not fit")
+            except (BudgetExhaustedError, DeadlineExceededError) as error:
+                self._sync_usage(state)
+                return self._failure(state,
+                                     ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else ErrorCode.BUDGET_EXHAUSTED,
+                                     str(error), retryable=False)
             except ContextBudgetExceeded as error:
                 return self._failure(
                     state,
@@ -369,7 +386,7 @@ class AgentLoop:
                     retryable=False,
                 )
 
-            if self.clock() - started >= request.budget.timeout_seconds:
+            if current_budget().expired:
                 return self._failure(state, ErrorCode.TIMEOUT, "Agent session exceeded timeout", retryable=True)
             limiter = getattr(definition.llm_client, "set_attempt_limit", None)
             if limiter is not None:
@@ -377,12 +394,11 @@ class AgentLoop:
             charged = False
             try:
                 if native_call is not None:
-                    reply = native_call(context, schemas, self._active_turns(state), max_input_tokens=context_limit)
+                    reply = invoke_model(definition.llm_client, "next_tool_call", context, schemas,
+                                         self._active_turns(state), max_input_tokens=context_limit)
                 else:
-                    reply = definition.llm_client.next_action(context, definition.action_type)
-                failure = self._charge_calls(state, definition.llm_client, response_received=True)
-                if failure is not None:
-                    return failure
+                    reply = invoke_model(definition.llm_client, "next_action", context, definition.action_type)
+                self._sync_usage(state)
                 charged = True
                 if self._run_llm_calls > request.budget.max_llm_calls:
                     return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
@@ -408,22 +424,16 @@ class AgentLoop:
                     raw_actions = native_actions(turn)
                 else:
                     raw_actions = [reply]
-                # Tolerate the single historical dead field; every other unknown
-                # field still fails ``extra="forbid"`` validation.
                 actions = []
                 for raw_action in raw_actions:
-                    if isinstance(raw_action, dict):
-                        raw_action.pop("reasoning_summary", None)
                     actions.append(definition.action_type.model_validate(raw_action))
                 if len(actions) > 1:
                     failure = self._preflight_batch(definition, registry, request, state, actions)
                     if failure is not None:
                         return failure
-            except (json.JSONDecodeError, ValidationError, NativeToolCallError) as error:
+            except (json.JSONDecodeError, ValidationError, NativeToolCallError, PermissionError) as error:
                 if not charged:
-                    failure = self._charge_calls(state, definition.llm_client, response_received=True)
-                    if failure is not None:
-                        return failure
+                    self._sync_usage(state)
                 if isinstance(error, json.JSONDecodeError):
                     # next_action raised before the success-path accounting.
                     # Count any preceding transport retries as well.
@@ -440,6 +450,9 @@ class AgentLoop:
                     # Feedback never quotes invalid output. Native calls remain
                     # in the paired protocol history, not domain memory; JSON-only
                     # clients keep the raw response exclusively in full trace.
+                    details = None
+                elif isinstance(error, PermissionError):
+                    summary = f"Tool execution denied: {error}. No tool was executed."
                     details = None
                 elif isinstance(error, NativeToolCallError):
                     summary = str(error) + " Correct the native tool batch. No tool was executed."
@@ -464,11 +477,17 @@ class AgentLoop:
                     return failure
                 consecutive_failures += 1
                 continue
+            except (BudgetExhaustedError, DeadlineExceededError) as error:
+                self._sync_usage(state)
+                return self._failure(state,
+                                     ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else ErrorCode.BUDGET_EXHAUSTED,
+                                     str(error), retryable=False)
             except ContextBudgetExceeded as error:
                 return self._failure(
                     state, ErrorCode.BUDGET_EXHAUSTED, str(error), retryable=False,
                 )
             except LLMExhaustedError as error:
+                self._sync_usage(state)
                 return self._failure(
                     state,
                     ErrorCode.TOOL_FAILED,
@@ -480,9 +499,7 @@ class AgentLoop:
                 # The transport failed after one or more real HTTP attempts;
                 # those attempts still count toward the Run ledger.
                 if not charged:
-                    failure = self._charge_calls(state, definition.llm_client, response_received=False)
-                    if failure is not None:
-                        return failure
+                    self._sync_usage(state)
                 return self._failure(
                     state,
                     ErrorCode.TOOL_FAILED,
@@ -511,7 +528,17 @@ class AgentLoop:
                     )
 
                 try:
+                    registry.validate(action.tool, action.arguments)
                     permission = definition.permission_policy.check(action, state, request)
+                except DeadlineExceededError as error:
+                    return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
+                except (ValidationError, PermissionError, ValueError) as error:
+                    self._feedback(state, f"Tool request rejected: {error}", tool=action.tool)
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
                 except Exception as error:
                     return self._failure(
                         state,
@@ -519,18 +546,20 @@ class AgentLoop:
                         f"permission policy failed: {error}",
                         retryable=False,
                     )
-                if not permission.allowed:
-                    return self._failure(
-                        state,
-                        ErrorCode.PERMISSION_DENIED,
-                        permission.reason or "Tool execution denied",
-                        retryable=False,
-                    )
+                if permission.outcome == "deny":
+                    if permission.approval_id:
+                        state.pending_action = None
+                    self._feedback(state, permission.reason or "Tool execution denied", tool=action.tool)
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
 
                 # Model calls and permission checks can consume the remaining
                 # deadline. Their completed work is already accounted for, but an
                 # expired action must not start a new tool or its side effects.
-                if self.clock() - started >= request.budget.timeout_seconds:
+                if current_budget().expired:
                     return self._failure(
                         state,
                         ErrorCode.TIMEOUT,
@@ -538,15 +567,39 @@ class AgentLoop:
                         retryable=True,
                     )
 
-                if native_call is not None:
-                    state.tool_turns[-1].executing_call_id = self._active_call_id
-                    self._save(state)
                 try:
-                    observation = registry.dispatch(
-                        action.tool,
-                        action.arguments,
-                        state,
-                    )
+                    current_budget().remaining_timeout()
+                    if permission.outcome == "ask":
+                        state.pending_action = ActionSnapshot(
+                            action_id=f"action_{uuid4().hex}", tool=action.tool,
+                            arguments=registry.validate(action.tool, action.arguments).model_dump(mode="json"),
+                            context=permission.context, run_id=request.run_id,
+                            session_id=state.session_id, task_id=request.task_id,
+                            attempt_number=request.attempt_number,
+                        )
+                        observation = ToolObservation(
+                            summary=permission.reason or "Operation confirmation required",
+                            question=QuestionDraft(
+                                text=(permission.reason + "\nTool: " + action.tool
+                                      + "\nArguments: " + json.dumps(state.pending_action.arguments, ensure_ascii=False)
+                                      + "\nContext: " + json.dumps({key: value for key, value in permission.context.items()
+                                                                    if key != "deletion"}, ensure_ascii=False)),
+                                requested_fields=["approve"], options={"approve": ["yes", "no"]},
+                                action=state.pending_action,
+                            ),
+                        )
+                    else:
+                        if permission.approval_id:
+                            if state.pending_action is None or state.pending_action.action_id != permission.approval_id:
+                                raise PermissionError("approval is not pending")
+                            state.pending_action = None
+                        if native_call is not None:
+                            state.tool_turns[-1].executing_call_id = self._active_call_id
+                        self._save(state)
+                        observation = registry.dispatch(action.tool, action.arguments, state,
+                                                        prepared=permission.prepared)
+                except DeadlineExceededError as error:
+                    return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
                 except ValidationError as error:
                     self._feedback(
                         state,
@@ -608,7 +661,7 @@ class AgentLoop:
                         return failure
                     consecutive_failures += 1
 
-                if self.clock() - started >= request.budget.timeout_seconds:
+                if current_budget().expired:
                     return self._failure(
                         state,
                         ErrorCode.TIMEOUT,
@@ -660,6 +713,8 @@ class AgentLoop:
                         state,
                         observation.finish_candidate,
                     )
+                except DeadlineExceededError as error:
+                    return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
                 except Exception as error:
                     return self._failure(
                         state,
@@ -805,17 +860,15 @@ class AgentLoop:
         if limiter is not None:
             limiter(remaining - 1)
         try:
-            summary = client.summarize_history(plan.prompt, max_input_tokens=context_limit)
+            summary = invoke_model(client, "summarize_history", plan.prompt, max_input_tokens=context_limit)
+        except (BudgetExhaustedError, DeadlineExceededError):
+            raise
         except Exception as error:
-            failure = self._charge_calls(state, client, response_received=False)
-            if failure is not None:
-                return failure
+            self._sync_usage(state)
             return self._failure(state, ErrorCode.TOOL_FAILED,
                                  f"History compaction failed: {error}", retryable=False,
                                  details={"component": "compaction"})
-        failure = self._charge_calls(state, client, response_received=True)
-        if failure is not None:
-            return failure
+        self._sync_usage(state)
         if self._run_llm_calls >= request.budget.max_llm_calls:
             return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
                                  "Compaction consumed the remaining call budget", retryable=False)
@@ -863,18 +916,11 @@ class AgentLoop:
             )
         )
 
-    def _charge_calls(self, state: AgentState, client, *, response_received: bool) -> AgentResult | None:
-        """Use the same attempt ledger for actions, errors and compaction calls."""
-        attempts = getattr(client, "last_attempts", 1)
-        if type(attempts) is not int or attempts < 0 or (response_received and attempts == 0):
-            return self._failure(
-                state, ErrorCode.CONTRACT_ERROR,
-                "Client last_attempts must be a nonnegative integer and positive after a response; usage is unknown",
-                retryable=False, details={"component": "llm_usage"},
-            )
-        self._run_llm_calls += attempts
-        state.llm_calls_used += attempts
-        return None
+    def _sync_usage(self, state: AgentState) -> None:
+        """Project authoritative request reservations into Session diagnostics."""
+        used = current_budget().usage.used - self._initial_usage
+        state.llm_calls_used += used - self._run_llm_calls
+        self._run_llm_calls = used
 
     def _preflight_batch(self, definition, registry, request, state, actions) -> AgentResult | None:
         """Validate the whole batch before its first side effect; recheck at dispatch."""
@@ -885,12 +931,17 @@ class AgentLoop:
             registry.validate(action.tool, action.arguments)
             try:
                 permission = definition.permission_policy.check(action, state, request)
+            except DeadlineExceededError:
+                raise
+            except (PermissionError, ValueError) as error:
+                raise PermissionError(str(error)) from error
             except Exception as error:
                 return self._failure(state, ErrorCode.CONTRACT_ERROR,
                                      f"permission policy failed: {error}", retryable=False)
-            if not permission.allowed:
-                return self._failure(state, ErrorCode.PERMISSION_DENIED,
-                                     permission.reason or "Tool execution denied", retryable=False)
+            if permission.outcome == "deny":
+                if permission.approval_id:
+                    state.pending_action = None
+                raise PermissionError(permission.reason or "Tool execution denied")
         return None
 
     def _cancel_pending_calls(self, state: AgentState, reason: str = "an earlier call stopped the batch") -> None:

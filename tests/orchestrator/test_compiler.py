@@ -1,6 +1,9 @@
 """Compiler structure, correction budget, routing and immutable graph materialization."""
+
+from resagent2_contracts import ExecutionLimits
 import json
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +21,13 @@ from resagent2_contracts import (
 )
 from resagent2_orchestrator import CompilationError, DeterministicWorkflowCompiler, LLMWorkflowCompiler
 from resagent2_orchestrator.compiler import CompilationDraft, _materialize_draft
+from resagent2_runtime.budget import BudgetExhaustedError, execution_budget, current_budget
+
+
+@pytest.fixture
+def compiler_scope():
+    with execution_budget(max_llm_calls=50, timeout_seconds=60):
+        yield
 
 
 def work_request():
@@ -33,7 +43,7 @@ def registry():
 
 
 def budget(max_tasks=5):
-    return RunBudget(max_tasks=max_tasks, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60)
+    return ExecutionLimits(max_tasks=max_tasks, max_attempts_per_task=2)
 
 
 def raw_task(key="measure", **changes):
@@ -50,12 +60,13 @@ def current_workflow():
 
 
 def materialize(data, **changes):
-    args = dict(request=work_request(), current=None, registry=registry(), budget=budget(), workspaces=[])
+    args = dict(request=work_request(), current=None, registry=registry(), limits=budget(), workspaces=[])
     args.update(changes)
     return _materialize_draft(CompilationDraft.model_validate(data), **args)
 
 
 class Client:
+    manages_usage = True
     def __init__(self, *replies, attempts=1):
         self.replies = iter(replies)
         self.last_attempts = attempts
@@ -64,6 +75,11 @@ class Client:
         self.limits = []
 
     def next_action(self, prompt, action_type):
+        call_id = uuid4().hex
+        for index in range(self.last_attempts):
+            scope = current_budget()
+            scope.charge(call_id, index)
+            scope.usage.complete(call_id, index, "succeeded")
         self.prompts.append(prompt)
         self.schemas.append(action_type)
         reply = next(self.replies)
@@ -75,20 +91,20 @@ class Client:
         self.limits.append(remaining)
 
 
-def compile_with(client, **changes):
-    args = dict(current=None, registry=registry(), budget=budget()) | changes
-    return LLMWorkflowCompiler(client).compile(work_request(), **args)
+def compile_with(client, *, max_llm_calls=50, **changes):
+    args = dict(current=None, registry=registry(), limits=budget()) | changes
+    with execution_budget(max_llm_calls=max_llm_calls, timeout_seconds=60):
+        return LLMWorkflowCompiler(client).compile(work_request(), **args)
 
 
 def test_deterministic_compiler_preserves_trusted_submission():
     proposal = materialize(raw())
     compiler = DeterministicWorkflowCompiler(proposal)
-    assert compiler.compile(work_request(), current=None, registry=registry(), budget=budget()).output == proposal
+    assert compiler.compile(work_request(), current=None, registry=registry(), limits=budget()).output == proposal
     with pytest.raises(CompilationError, match="no patch"):
-        compiler.compile(work_request(), current=current_workflow(), registry=registry(), budget=budget())
+        compiler.compile(work_request(), current=current_workflow(), registry=registry(), limits=budget())
     patch = materialize(raw(), current=current_workflow())
-    assert DeterministicWorkflowCompiler(proposal, patch).compile(work_request(), current=current_workflow(),
-        registry=registry(), budget=budget()).output == patch
+    assert DeterministicWorkflowCompiler(proposal, patch).compile(work_request(), current=current_workflow(), registry=registry(), limits=budget()).output == patch
 
 
 @pytest.mark.parametrize("field", ["summary", "rationale", "reason", "unknown"])
@@ -122,8 +138,8 @@ def test_invalid_graph_shapes_are_rejected(tasks, match):
 def test_materialization_checks_registry_budget_and_workspace():
     with pytest.raises(CompilationError, match="undeclared Agent"):
         materialize(raw(), registry=WorkflowAgentRegistry(definitions=[]))
-    with pytest.raises(CompilationError, match="task budget"):
-        materialize(raw(raw_task("a"), raw_task("b")), budget=budget(1))
+    with pytest.raises(CompilationError, match="task limits"):
+        materialize(raw(raw_task("a"), raw_task("b")), limits=budget(1))
     with pytest.raises(CompilationError, match="undeclared workspace"):
         materialize(raw(raw_task(workspace_id="ws_missing")))
     workspaces = [WorkspaceDescriptor(workspace_id="ws_a", source_kind="local")]
@@ -172,7 +188,7 @@ def test_valid_compile_uses_one_model_call_and_no_semantic_review():
     json.JSONDecodeError("invalid", "bad", 0)])
 def test_invalid_structure_or_json_gets_one_bounded_correction(bad):
     client = Client(bad, raw())
-    result = compile_with(client, remaining_calls=5)
+    result = compile_with(client, max_llm_calls=5)
     assert result.llm_calls == 2
     assert client.limits == [5, 4]
     assert "Previous draft rejected" in client.prompts[1]
@@ -184,22 +200,41 @@ def test_invalid_draft_fails_after_two_attempts_and_keeps_metering():
     assert raised.value.llm_calls == 2
 
 
-def test_provider_retry_attempts_count_against_compiler_budget():
-    with pytest.raises(CompilationError) as raised:
-        compile_with(Client(raw(), attempts=3), remaining_calls=2)
-    assert raised.value.llm_calls == 3
+def test_provider_retry_attempts_count_against_compiler_budget(compiler_scope):
+    before = current_budget().usage.used
+    with pytest.raises(BudgetExhaustedError):
+        compile_with(Client(raw(), attempts=3), max_llm_calls=2)
+    assert current_budget().usage.used - before == 2
     with pytest.raises(CompilationError) as raised:
         compile_with(Client(RuntimeError("provider down"), attempts=3))
     assert raised.value.llm_calls == 3
 
 
-def test_no_remaining_task_or_call_budget_invokes_no_model():
-    for changes in [dict(remaining_calls=0), dict(current=current_workflow(), budget=budget(1))]:
-        client = Client(raw())
-        with pytest.raises(CompilationError) as raised:
-            compile_with(client, **changes)
-        assert raised.value.llm_calls == 0
-        assert client.schemas == []
+def test_no_remaining_call_budget_invokes_no_model():
+    client = Client(raw())
+    with pytest.raises(BudgetExhaustedError):
+        compile_with(client, max_llm_calls=0)
+    assert client.schemas == []
+
+
+def test_no_remaining_task_slots_invokes_no_model():
+    client = Client(raw())
+    with pytest.raises(CompilationError) as raised:
+        compile_with(client, current=current_workflow(), limits=budget(1))
+    assert raised.value.llm_calls == 0
+    assert client.schemas == []
+
+
+@pytest.mark.parametrize("bad", [{"tasks": []}, json.JSONDecodeError("invalid", "bad", 0)])
+def test_invalid_final_budgeted_draft_cannot_start_correction(bad):
+    client = Client(bad, raw())
+    compiler = LLMWorkflowCompiler(client)
+    with execution_budget(max_llm_calls=1, timeout_seconds=60) as scope:
+        with pytest.raises(BudgetExhaustedError):
+            compiler.compile(work_request(), current=None, registry=registry(), limits=budget())
+        assert scope.usage.used == compiler.llm_calls == 1
+    assert len(client.schemas) == 1
+    assert client.limits == [1]
 
 
 def test_typed_draft_copies_are_revalidated():
@@ -207,10 +242,10 @@ def test_typed_draft_copies_are_revalidated():
     assert compile_with(Client(draft, raw())).llm_calls == 2
 
 
-def test_compile_usage_resets_between_calls():
+def test_compile_usage_resets_between_calls(compiler_scope):
     client = Client(raw(), RuntimeError("down"), raw())
     compiler = LLMWorkflowCompiler(client)
-    args = dict(current=None, registry=registry(), budget=budget())
+    args = dict(current=None, registry=registry(), limits=budget())
     assert compiler.compile(work_request(), **args).llm_calls == 1
     with pytest.raises(CompilationError) as raised:
         compiler.compile(work_request(), **args)

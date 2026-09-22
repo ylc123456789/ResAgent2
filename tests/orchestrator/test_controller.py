@@ -1,5 +1,7 @@
 """Tests for the Phase 7.5 ResearchController (DEVELOPMENT_PLAN §7.5)."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+
 from datetime import UTC, datetime
 import json
 
@@ -222,15 +224,7 @@ def test_run_rejects_invalid_user_wait(invalid):
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Evaluate the method",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=2,
-            max_llm_calls=50,
-            timeout_seconds=60,
-        ),
-    )
+    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def registry() -> WorkflowAgentRegistry:
@@ -326,6 +320,44 @@ def test_direct_conclusion_without_work() -> None:
     assert report.metadata == {"source_type": "final_report"}
 
 
+def test_run_creation_freezes_grants_before_any_work_request(tmp_path):
+    from resagent2_contracts import WorkspaceAccess, WorkspaceSpec
+
+    controller = build_controller(actions=[finish_action()])
+    original = WorkspaceSpec(
+        workspace_id="ws_main", source_kind="local", location=str(tmp_path / "original"),
+        access=WorkspaceAccess(read_paths=["src"], denied_paths=["src/private"]),
+    )
+    controller.scheduler.workspace_specs = {"ws_main": original}
+    request = research_request().model_copy(update={"permissions": RunPermissions()})
+    created = controller.create_run("run_frozen", request)
+    assert not created.work_requests
+    assert created.workspaces["ws_main"].source.access == original.access
+
+    # Subsequent resolver configuration and caller-owned models are not authority
+    # to expand an already persisted Run, even before its first task is accepted.
+    request.permissions.execute_commands = True
+    original.access.read_paths[:] = ["."]
+    original.access.write_paths[:] = ["."]
+    original.access.denied_paths.clear()
+    controller.scheduler.workspace_specs = {"ws_main": WorkspaceSpec(
+        workspace_id="ws_main", source_kind="local", location=str(tmp_path / "other"),
+        access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
+    )}
+    persisted = controller.scheduler.load(created.run_id)
+    persisted.status = RunStatus.RUNNING
+    controller.scheduler.store.save(persisted)
+    controller.scheduler.accept_proposal(created.run_id, proposal("work_later"))
+    controller.scheduler.run_until_stable(created.run_id)
+    received = controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT].port.requests[0]
+    assert received.workspace.root == str(tmp_path / "original")
+    assert received.workspace.access.read_paths == ["src"]
+    assert received.workspace.access.write_paths == []
+    assert received.workspace.access.denied_paths == ["src/private"]
+    assert not received.permissions.execute_commands
+    assert not received.permissions.prepare_environment
+
+
 def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
     """A crash after runtime checkpointing cannot orphan the first session."""
     store = InMemoryRunStore()
@@ -406,7 +438,7 @@ def _cycle_compiler():
     a fresh task) for every subsequent request on the same workflow."""
 
     class _CycleCompiler:
-        def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
+        def compile(self, request, *, current, registry, limits, workspaces=None):
             if current is None:
                 return CompilationResult(proposal(request.id))
             # A new request on an existing workflow becomes a patch adding one task.
@@ -709,15 +741,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
 
 def test_task_question_resume_does_not_consume_attempt_budget() -> None:
     """max_attempts_per_task=1 must still allow a pause/resume round-trip."""
-    request = ResearchRequest(
-        goal="Evaluate",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=1,
-            max_llm_calls=50,
-            timeout_seconds=60,
-        ),
-    )
+    request = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=1))
     scheduler = WorkflowScheduler(
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
@@ -767,7 +791,7 @@ def test_json_store_recovers_run_boundary(tmp_path) -> None:
 
 def test_compilation_failure_fails_run() -> None:
     class _FailingCompiler:
-        def compile(self, request, *, current, registry, budget, workspaces=None):
+        def compile(self, request, *, current, registry, limits, workspaces=None):
             raise ValueError("compiler exploded")
 
     scheduler = WorkflowScheduler(
@@ -796,7 +820,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
     """Do not compile/apply a second graph after the acceptance crash window."""
 
     class _MustNotCompile:
-        def compile(self, request, *, current, registry, budget, workspaces=None):
+        def compile(self, request, *, current, registry, limits, workspaces=None):
             raise AssertionError("accepted workflow must not be compiled again")
 
     completed_session = SessionRef(
@@ -842,7 +866,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
         updated_at=NOW,
     )
     request = research_request()
-    request.budget.max_tasks = 1
+    request.execution_limits.max_tasks = 1
     store.save(
         ResearchRun(
             run_id="run_accept_recovery",
@@ -917,7 +941,7 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
         compiler=compiler, scheduler=scheduler, registry=registry(),
     )
     request = research_request()
-    request.budget.max_tasks = 1
+    request.execution_limits.max_tasks = 1
     run = controller.create_run("run_task_slots", request)
 
     assert run.status == RunStatus.FAILED
@@ -1065,15 +1089,7 @@ def test_forged_observed_artifact_is_rejected() -> None:
 
 def test_run_total_llm_budget_exhaustion() -> None:
     # A tiny run budget so the accumulated Scientific turns exceed it.
-    tiny = ResearchRequest(
-        goal="Evaluate",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=2,
-            max_llm_calls=1,
-            timeout_seconds=60,
-        ),
-    )
+    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     actions = [request_work_action(), request_work_action()]
     scheduler = WorkflowScheduler(
         bindings={
@@ -1285,15 +1301,7 @@ def test_paired_answers_keep_task_and_scientific_scopes():
 
 def test_budget_overrun_does_not_complete(tmp_path) -> None:
     """A final turn that pushes llm_calls past the budget must not complete."""
-    tiny = ResearchRequest(
-        goal="Evaluate",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=2,
-            max_llm_calls=1,
-            timeout_seconds=60,
-        ),
-    )
+    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     # First request_work consumes 1 LLM call; a second turn would overrun.
     actions = [request_work_action(), finish_action()]
     scheduler = WorkflowScheduler(
@@ -1387,8 +1395,13 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
 
 
 def test_compiler_llm_calls_enter_the_run_ledger() -> None:
+    from resagent2_runtime.budget import current_budget
     class _CountingCompiler:
-        def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
+        def compile(self, request, *, current, registry, limits, workspaces=None):
+            scope = current_budget()
+            for index in range(7):
+                scope.charge("test-compiler", index)
+                scope.usage.complete("test-compiler", index, "succeeded")
             return CompilationResult(proposal(request.id), llm_calls=7)
 
     scheduler = WorkflowScheduler(
@@ -1418,18 +1431,21 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
 
 
 @pytest.mark.parametrize("usage_known", [True, False])
-def test_failed_compiler_usage_comes_from_error(tmp_path, usage_known) -> None:
+def test_failed_compiler_usage_comes_from_reservations(tmp_path, usage_known) -> None:
+    from resagent2_runtime.budget import current_budget
     class _FailingCompiler:
         # A stale implementation attribute must never override invocation usage.
         llm_calls = 99
         invocations = 0
 
         def compile(
-            self, request, *, current, registry, budget,
-            workspaces=None, remaining_calls=None,
+            self, request, *, current, registry, limits,
+            workspaces=None,
         ):
             self.invocations += 1
             if usage_known:
+                for index in range(3):
+                    current_budget().charge("failed-compiler", index)
                 raise CompilationError("compiler failed", llm_calls=3)
             raise RuntimeError("compiler failed")
 

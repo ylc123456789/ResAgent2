@@ -1,3 +1,5 @@
+
+from resagent2_contracts import AgentPermissions
 import pytest
 
 from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, AgentRequest, TaskBudget)
@@ -28,17 +30,7 @@ def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
 
 
 def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> AgentRequest:
-    return AgentRequest(
-        run_id="run_guard",
-        task_id="task_guard",
-        attempt_number=1,
-        agent=AgentOwner.CODING,
-        instruction="Can the action run?",
-        budget=TaskBudget(
-            max_llm_calls=max_llm_calls,
-            timeout_seconds=timeout_seconds,
-        ),
-    )
+    return AgentRequest(run_id='run_guard', task_id='task_guard', attempt_number=1, agent=AgentOwner.CODING, instruction='Can the action run?', budget=TaskBudget(max_llm_calls=max_llm_calls, timeout_seconds=timeout_seconds), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
 
 def definition(actions, *, allowed_tools: set[str]) -> AgentDefinition:
@@ -66,13 +58,14 @@ def test_permission_is_checked_before_tool_execution() -> None:
             ],
             allowed_tools=set(),
         ),
-        request(),
+        request(max_llm_calls=1),
         session_id="session_denied",
     )
 
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
-    assert result.error.code == ErrorCode.PERMISSION_DENIED
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert "not allowed" in store.load("session_denied").runtime_feedback.summary
     assert "forbidden" not in store.load("session_denied").memory
 
 

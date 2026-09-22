@@ -29,7 +29,7 @@ ALLOWED_IMPORT_ROOTS = {
 }
 
 
-def test_orchestrator_does_not_import_runtime_or_specific_agents() -> None:
+def test_orchestrator_imports_only_shared_control_and_no_specific_agents() -> None:
     imported_roots: set[str] = set()
     for source_file in PACKAGE_ROOT.rglob("*.py"):
         tree = ast.parse(source_file.read_text(encoding="utf-8"))
@@ -37,6 +37,8 @@ def test_orchestrator_does_not_import_runtime_or_specific_agents() -> None:
             if isinstance(node, ast.Import):
                 imported_roots.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module in {"resagent2_runtime.budget", "resagent2_components.workspace"}:
+                    continue
                 imported_roots.add(node.module.split(".")[0])
     assert imported_roots <= ALLOWED_IMPORT_ROOTS
 

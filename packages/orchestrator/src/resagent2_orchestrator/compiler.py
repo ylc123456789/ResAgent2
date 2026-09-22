@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from typing import Annotated, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, current_budget, invoke_model
 
 from resagent2_contracts import (
-    FutureArtifactBinding, RunBudget, TaskProposal, Workflow, WorkflowAgentKind,
+    FutureArtifactBinding, ExecutionLimits, TaskProposal, Workflow, WorkflowAgentKind,
     WorkflowAgentRegistry, WorkflowPatch, WorkflowProposal, WorkRequest,
     WorkspaceDescriptor, WorkspaceId,
 )
@@ -37,9 +38,8 @@ class CompilerLLM(Protocol):
 class WorkflowCompiler(Protocol):
     def compile(
         self, request: WorkRequest, *, current: Workflow | None,
-        registry: WorkflowAgentRegistry, budget: RunBudget,
+        registry: WorkflowAgentRegistry, limits: ExecutionLimits,
         workspaces: list[WorkspaceDescriptor] | None = None,
-        remaining_calls: int | None = None,
     ) -> CompilationResult: ...
 
 
@@ -80,7 +80,7 @@ class DeterministicWorkflowCompiler:
         self._proposal = proposal
         self._patch = patch
 
-    def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
+    def compile(self, request, *, current, registry, limits, workspaces=None):
         if current is None:
             return CompilationResult(self._proposal)
         if self._patch is None:
@@ -88,8 +88,8 @@ class DeterministicWorkflowCompiler:
         return CompilationResult(self._patch)
 
 
-def _compile_prompt(request, current, registry, budget, workspaces, *, feedback=None):
-    remaining = budget.max_tasks - (len(current.tasks) if current else 0)
+def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=None):
+    remaining = limits.max_tasks - (len(current.tasks) if current else 0)
     lines = [
         "Compile the smallest currently executable graph for this work request.",
         request.request.model_dump_json(),
@@ -113,10 +113,10 @@ def _compile_prompt(request, current, registry, budget, workspaces, *, feedback=
     return "\n".join(lines)
 
 
-def _materialize_draft(draft, *, request, current, registry, budget, workspaces):
+def _materialize_draft(draft, *, request, current, registry, limits, workspaces):
     used = len(current.tasks) if current else 0
-    if not draft.tasks or len(draft.tasks) > budget.max_tasks - used:
-        raise CompilationError("draft exceeds remaining task budget or is empty")
+    if not draft.tasks or len(draft.tasks) > limits.max_tasks - used:
+        raise CompilationError("draft exceeds remaining task limits or is empty")
     keys = [task.key for task in draft.tasks]
     if len(keys) != len(set(keys)):
         raise CompilationError("draft has duplicate task keys")
@@ -179,25 +179,30 @@ class LLMWorkflowCompiler:
         self._client = client
         self.llm_calls = 0
 
-    def compile(self, request, *, current, registry, budget, workspaces=None, remaining_calls=None):
+    def compile(self, request, *, current, registry, limits, workspaces=None):
+        if current_budget() is None:
+            raise CompilationError("Compiler requires a caller-supplied execution budget")
+        return self._compile(request, current=current, registry=registry, limits=limits,
+                             workspaces=workspaces)
+
+    def _compile(self, request, *, current, registry, limits, workspaces=None):
         self.llm_calls = 0
+        initial_usage = current_budget().usage.used
         feedback = None
         try:
-            if budget.max_tasks <= (len(current.tasks) if current else 0):
+            if limits.max_tasks <= (len(current.tasks) if current else 0):
                 raise CompilationError("no remaining task slots")
             for attempt in range(2):
-                if remaining_calls is not None:
-                    if self.llm_calls >= remaining_calls:
-                        raise CompilationError("compiler LLM budget exhausted")
-                    setter = getattr(self._client, "set_attempt_limit", None)
-                    if setter:
-                        setter(remaining_calls - self.llm_calls)
+                current_budget().check()
+                setter = getattr(self._client, "set_attempt_limit", None)
+                if setter:
+                    setter(current_budget().remaining_calls)
                 tracer = getattr(self._client, "set_trace_context", None)
                 if tracer:
                     tracer(agent="workflow_compiler", run_id=request.run_id, work_request_id=request.id)
                 try:
-                    raw = self._client.next_action(
-                        _compile_prompt(request, current, registry, budget, workspaces or [], feedback=feedback),
+                    raw = invoke_model(self._client, "next_action",
+                        _compile_prompt(request, current, registry, limits, workspaces or [], feedback=feedback),
                         CompilationDraft,
                     )
                 except (json.JSONDecodeError, ValidationError) as error:
@@ -206,20 +211,20 @@ class LLMWorkflowCompiler:
                     feedback = str(error)
                     continue
                 finally:
-                    self.llm_calls += getattr(self._client, "last_attempts", 1)
-                if remaining_calls is not None and self.llm_calls > remaining_calls:
-                    raise CompilationError("compiler exceeded remaining LLM budget")
+                    self.llm_calls = current_budget().usage.used - initial_usage
                 try:
                     draft = CompilationDraft.model_validate(raw.model_dump() if isinstance(raw, BaseModel) else raw)
                     output = _materialize_draft(
                         draft, request=request, current=current, registry=registry,
-                        budget=budget, workspaces=workspaces or [],
+                        limits=limits, workspaces=workspaces or [],
                     )
                     return CompilationResult(output, self.llm_calls)
                 except (ValueError, json.JSONDecodeError) as error:
                     if attempt:
                         raise CompilationError(f"compiler failed after 2 attempts: {error}") from error
                     feedback = str(error)
+        except (BudgetExhaustedError, DeadlineExceededError):
+            raise
         except Exception as error:
             if isinstance(error, CompilationError):
                 error.llm_calls = self.llm_calls

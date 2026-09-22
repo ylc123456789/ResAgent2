@@ -1,3 +1,5 @@
+
+from resagent2_contracts import RunPermissions, ExecutionLimits
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -22,7 +24,7 @@ from resagent2_contracts import (
     WorkflowPatch,
     WorkflowProposal,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
@@ -44,6 +46,7 @@ def _create_run(engine, run_id, request, proposal):
         ResearchRun(
             run_id=run_id,
             request=request,
+            workspaces=engine._resolve_workspaces(run_id),
             status=RunStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -53,15 +56,7 @@ def _create_run(engine, run_id, request, proposal):
 
 
 def request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Persist a workflow",
-        budget=RunBudget(
-            max_tasks=5,
-            max_attempts_per_task=2,
-            max_llm_calls=10,
-            timeout_seconds=600,
-        ),
-    )
+    return ResearchRequest(goal='Persist a workflow', budget=RunBudget(max_llm_calls=10, timeout_seconds=600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def proposal() -> WorkflowProposal:
@@ -118,23 +113,7 @@ def test_artifact_is_hashed_copied_and_bound_to_attempt(tmp_path: Path) -> None:
         ],
     )
     store = JsonRunStore(tmp_path / "state")
-    engine = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([result]),
-            )
-        },
-        store=store,
-        artifact_root=tmp_path / "artifacts",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(workspace),
-            )
-        },
-    )
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([result]))}, store=store, artifact_root=tmp_path / 'artifacts', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     _create_run(engine, "run_artifact", request(), proposal())
 
     run = engine.run_until_stable("run_artifact")
@@ -183,27 +162,7 @@ def test_dependency_artifacts_are_forwarded_to_downstream_request(tmp_path: Path
         input_artifact_bindings=[dict(source_task="task_experiment", output_selector="metrics")],
 
     )
-    engine = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=experiment_port,
-            ),
-            WorkflowAgentKind.CODING: ModuleBinding(
-                owner=AgentOwner.CODING,
-                port=analyze_port,
-            ),
-        },
-        store=JsonRunStore(tmp_path / "forward-state"),
-        artifact_root=tmp_path / "forward-artifacts",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(workspace),
-            )
-        },
-    )
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=experiment_port), WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=analyze_port)}, store=JsonRunStore(tmp_path / 'forward-state'), artifact_root=tmp_path / 'forward-artifacts', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[experiment, analyze],
@@ -269,27 +228,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
         input_artifact_bindings=[dict(source_task="task_experiment", output_selector="metrics")],
 
     )
-    engine = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=experiment_port,
-            ),
-            WorkflowAgentKind.CODING: ModuleBinding(
-                owner=AgentOwner.CODING,
-                port=analyze_port,
-            ),
-        },
-        store=JsonRunStore(tmp_path / "retry-state"),
-        artifact_root=tmp_path / "retry-artifacts",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(workspace),
-            )
-        },
-    )
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=experiment_port), WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=analyze_port)}, store=JsonRunStore(tmp_path / 'retry-state'), artifact_root=tmp_path / 'retry-artifacts', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     combined = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[experiment, analyze],
@@ -435,12 +374,7 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
     workspace.mkdir()
     (workspace / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
     registry = ArtifactRegistry(tmp_path / "artifacts")
-    grant = WorkspaceGrant(
-        root=str(workspace),
-        mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."],
-        source=WorkspaceSourceKind.LOCAL,
-    )
+    grant = WorkspaceGrant(root=str(workspace), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     candidate = ArtifactCandidate(
         kind="experiment_result",
         path="metrics.json",

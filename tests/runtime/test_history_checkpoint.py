@@ -3,7 +3,7 @@
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
-from urllib.error import URLError
+from httpx import ConnectError
 
 import pytest
 from pydantic import ValidationError
@@ -183,7 +183,7 @@ def test_summary_http_retry_shares_action_call_ledger(setup):
     state = _seed_state(definition, store, [_paired_turn(i) for i in range(6)])
     request = _request(parent="session_native", calls=3)
     definition = replace(definition, max_context_tokens=_exact_limit(definition, request, state))
-    install([URLError("temporary"), _summary(), _reply()])
+    install([ConnectError("temporary"), _summary(), _reply()])
     result = AgentLoop(store=store).run(definition, request, session_id="ignored")
     assert result.status == ModuleStatus.COMPLETED
     assert result.llm_calls == store.load("session_native").llm_calls_used == len(requests) == 3
@@ -270,7 +270,7 @@ def test_checkpoint_survives_pause_and_disk_resume(setup, tmp_path):
 @pytest.mark.parametrize(
     ("response", "error_code"),
     [
-        (URLError("offline"), ErrorCode.TOOL_FAILED),
+        (ConnectError("offline"), ErrorCode.TOOL_FAILED),
         (_summary("x" * 20_000), ErrorCode.BUDGET_EXHAUSTED),
         (_summary(""), ErrorCode.TOOL_FAILED),
         (_summary("   "), ErrorCode.TOOL_FAILED),

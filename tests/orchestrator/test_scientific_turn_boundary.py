@@ -1,4 +1,7 @@
 """Result acceptance precedes delivery acknowledgement and state transitions."""
+
+from resagent2_contracts import RunPermissions, ExecutionLimits
+from resagent2_orchestrator.models import RunUsage
 import json
 from datetime import UTC, datetime
 
@@ -38,13 +41,7 @@ def prepared(tmp_path):
         registry=WorkflowAgentRegistry(definitions=[]))
     session = SessionRef(id="session_scientific_run_boundary", module="scientific", status="paused",
         state_uri="session://session_scientific_run_boundary", created_at=now, updated_at=now)
-    run = ResearchRun(run_id="run_boundary", status="running",
-        request=ResearchRequest(goal="Evaluate", budget=RunBudget(max_tasks=4,max_attempts_per_task=2,max_llm_calls=20,timeout_seconds=60)),
-        scientific_session=session, llm_calls_used=2,
-        work_requests=[WorkRequest(id="work_1", run_id="run_boundary", scientific_session_id=session.id,
-            request=WorkRequestDraft(objective="Run", expected_evidence=["result"]), status="stable", workflow_revision=1,
-            outcome=WorkOutcome(work_request_id="work_1", workflow_revision=1, summary="Executed", tasks=[WorkTaskOutcome(task_id="task_one",status="completed",summary="Done")]),
-            created_at=now, updated_at=now)], created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', expected_evidence=['result']), status='stable', workflow_revision=1, outcome=WorkOutcome(work_request_id='work_1', workflow_revision=1, summary='Executed', tasks=[WorkTaskOutcome(task_id='task_one', status='completed', summary='Done')]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
         "conclusion_requirements", ConclusionRequirements())
     request = controller._scientific_request(run)
@@ -70,7 +67,7 @@ def reply(run, status):
 
 def assert_unconsumed(run):
     assert run.status == "failed"
-    assert run.llm_calls_used == 5
+    assert run.llm_calls_used == 2
     assert run.work_requests[0].status == "stable"
     assert run.scientific_session.status == "paused"
     assert run.pending_question is None
@@ -101,7 +98,7 @@ def test_valid_question_acknowledges_work_feedback_once(tmp_path):
     actual = controller._apply_turn(run.run_id,request,reply(run,"needs_user_input"))
     assert actual.status == "paused"
     assert actual.work_requests[0].status == "consumed"
-    assert actual.llm_calls_used == 5
+    assert actual.llm_calls_used == 2
     assert actual.pending_question.requested_fields == ["metric"]
     assert actual.pending_question_ref.kind == "question"
     assert actual.terminal_error is None
@@ -116,7 +113,7 @@ def test_failed_turn_keeps_root_cause_on_disk(tmp_path,with_session):
         result.artifacts=[]
     controller._apply_turn(run.run_id,request,result)
     actual = controller.scheduler.store.load(run.run_id)
-    assert actual.status == "failed" and actual.llm_calls_used == 5
+    assert actual.status == "failed" and actual.llm_calls_used == 2
     assert actual.terminal_error == result.error
 
 
@@ -126,7 +123,7 @@ def test_final_report_storage_failure_has_durable_reason(tmp_path,monkeypatch):
     monkeypatch.setattr(controller.scheduler.artifact_registry,"register_final_report",fail)
     controller._apply_turn(run.run_id,request,reply(run,"completed"))
     actual = controller.scheduler.store.load(run.run_id)
-    assert actual.status == "failed" and actual.llm_calls_used == 5
+    assert actual.status == "failed" and actual.llm_calls_used == 2
     assert "REPORT_STORAGE_UNAVAILABLE" in actual.terminal_error.message
     assert actual.final_opinion is None and actual.final_report_artifact_id is None
 

@@ -72,6 +72,19 @@ def test_request_enforces_invocation_scope_and_dispatch_authority():
         request(agent="orchestrator")
 
 
+def test_run_and_agent_require_explicit_permissions():
+    with pytest.raises(ValidationError, match="permissions"):
+        AgentRequest.model_validate(request().model_dump(exclude={"permissions"}))
+    with pytest.raises(ValidationError, match="permissions"):
+        contracts.ResearchRequest(goal="Inspect", budget=contracts.RunBudget(
+            max_llm_calls=5, timeout_seconds=60,
+        ))
+    assert not contracts.RunPermissions().execute_commands
+    assert not contracts.RunPermissions().prepare_environment
+    assert not AgentPermissions().execute_commands
+    assert not AgentPermissions().prepare_environment
+
+
 def test_resume_ids_are_identity_only_and_must_resolve_to_input_artifacts():
     ref = artifact()
     request(input_artifacts=[ref])  # Historical answers are ordinary first-call material.

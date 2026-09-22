@@ -1,5 +1,7 @@
 """Workspace resolution tests for the scheduler (DEVELOPMENT_PLAN §10.6)."""
 
+from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
+
 from datetime import UTC, datetime
 
 import pytest
@@ -29,12 +31,7 @@ from resagent2_orchestrator import (
 
 
 def _request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Evaluate",
-        budget=RunBudget(
-            max_tasks=5, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60
-        ),
-    )
+    return ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
@@ -54,9 +51,7 @@ def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
 
 
 def _local_spec(location) -> WorkspaceSpec:
-    return WorkspaceSpec(
-        workspace_id="ws_a", source_kind=WorkspaceSourceKind.LOCAL, location=str(location)
-    )
+    return WorkspaceSpec(workspace_id='ws_a', source_kind=WorkspaceSourceKind.LOCAL, location=str(location), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def _scheduler(workspaces, *, data_root=None) -> WorkflowScheduler:
@@ -79,6 +74,7 @@ def _create_run(engine, run_id, request, proposal):
         ResearchRun(
             run_id=run_id,
             request=request,
+            workspaces=engine._resolve_workspaces(run_id),
             status=RunStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -112,20 +108,7 @@ def test_undeclared_workspace_id_is_rejected(tmp_path) -> None:
 
 
 def test_multiple_workspaces_require_explicit_id(tmp_path) -> None:
-    engine = _scheduler(
-        {
-            "ws_a": WorkspaceSpec(
-                workspace_id="ws_a",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(tmp_path / "repo_a"),
-            ),
-            "ws_b": WorkspaceSpec(
-                workspace_id="ws_b",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(tmp_path / "repo_b"),
-            ),
-        }
-    )
+    engine = _scheduler({'ws_a': WorkspaceSpec(workspace_id='ws_a', source_kind=WorkspaceSourceKind.LOCAL, location=str(tmp_path / 'repo_a'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), 'ws_b': WorkspaceSpec(workspace_id='ws_b', source_kind=WorkspaceSourceKind.LOCAL, location=str(tmp_path / 'repo_b'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
 
     with pytest.raises(OrchestrationError, match="workspace_id"):
         _create_run(engine, "run_x", _request(), _proposal(workspace_id=None))
@@ -134,20 +117,7 @@ def test_multiple_workspaces_require_explicit_id(tmp_path) -> None:
 def test_two_workspaces_resolve_to_distinct_roots(tmp_path) -> None:
     repo_a = tmp_path / "repo_a"
     repo_b = tmp_path / "repo_b"
-    engine = _scheduler(
-        {
-            "ws_a": WorkspaceSpec(
-                workspace_id="ws_a",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(repo_a),
-            ),
-            "ws_b": WorkspaceSpec(
-                workspace_id="ws_b",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(repo_b),
-            ),
-        }
-    )
+    engine = _scheduler({'ws_a': WorkspaceSpec(workspace_id='ws_a', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo_a), access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), 'ws_b': WorkspaceSpec(workspace_id='ws_b', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo_b), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
 
     run = _create_run(engine, "run_x", _request(), _proposal(workspace_id="ws_a"))
 
@@ -166,25 +136,7 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
     experiment_port = ScriptedModulePort(
         [AgentResult(status=ModuleStatus.COMPLETED, report="exp")]
     )
-    engine = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.CODING: ModuleBinding(
-                owner=AgentOwner.CODING, port=coding_port
-            ),
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT, port=experiment_port
-            ),
-        },
-        store=InMemoryRunStore(),
-        data_root=tmp_path / "data",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(repo),
-            )
-        },
-    )
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=coding_port), WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=experiment_port)}, store=InMemoryRunStore(), data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     proposal = WorkflowProposal(
         work_request_id="work_1",
         tasks=[
@@ -221,9 +173,7 @@ def test_same_workspace_id_gives_same_root_to_coding_and_experiment(tmp_path) ->
 
 def test_managed_workspace_defaults_to_data_root_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("RESAGENT2_DATA_ROOT", str(tmp_path / "data"))
-    engine = _scheduler(
-        {"ws_a": WorkspaceSpec(workspace_id="ws_a", source_kind=WorkspaceSourceKind.GENERATED)}
-    )
+    engine = _scheduler({'ws_a': WorkspaceSpec(workspace_id='ws_a', source_kind=WorkspaceSourceKind.GENERATED, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
 
     run = _create_run(engine, "run_x", _request(), _proposal(workspace_id="ws_a"))
 
@@ -234,10 +184,7 @@ def test_managed_workspace_defaults_to_data_root_env(tmp_path, monkeypatch) -> N
 
 
 def test_managed_workspace_root_is_under_data_root(tmp_path) -> None:
-    engine = _scheduler(
-        {"ws_a": WorkspaceSpec(workspace_id="ws_a", source_kind=WorkspaceSourceKind.GENERATED)},
-        data_root=tmp_path / "data",
-    )
+    engine = _scheduler({'ws_a': WorkspaceSpec(workspace_id='ws_a', source_kind=WorkspaceSourceKind.GENERATED, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))}, data_root=tmp_path / 'data')
 
     run = _create_run(engine, "run_x", _request(), _proposal(workspace_id="ws_a"))
 
@@ -254,28 +201,8 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
     port = ScriptedModulePort(
         [AgentResult(status=ModuleStatus.COMPLETED, report="ok")]
     )
-    engine = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT, port=port
-            )
-        },
-        store=InMemoryRunStore(),
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(tmp_path),
-                environment=EnvironmentSpec(python_version="3.10"),
-            )
-        },
-    )
-    request = ResearchRequest(
-        goal="Run",
-        budget=RunBudget(
-            max_tasks=5, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60
-        ),
-    )
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=port)}, store=InMemoryRunStore(), workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(tmp_path), environment=EnvironmentSpec(python_version='3.10'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
+    request = ResearchRequest(goal='Run', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     proposal = WorkflowProposal(
         work_request_id="work_1",
         tasks=[

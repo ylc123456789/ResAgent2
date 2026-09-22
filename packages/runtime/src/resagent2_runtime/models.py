@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints,
 
 from resagent2_contracts import (
     AgentOwner,
+    ActionSnapshot,
     ArtifactOutput,
     ModuleError,
     QuestionDraft,
@@ -121,8 +122,11 @@ class CompletionDecision(RuntimeModel):
 class PermissionDecision(RuntimeModel):
     """Permission result produced before a Tool can execute."""
 
-    allowed: bool
+    outcome: Literal["allow", "ask", "deny"]
     reason: str = ""
+    context: dict[str, JsonValue] = Field(default_factory=dict)
+    prepared: dict[str, JsonValue] | None = None
+    approval_id: str | None = None
 
 
 class AgentEvent(RuntimeModel):
@@ -203,6 +207,7 @@ class AgentState(RuntimeModel):
     tool_protocol_key: NonEmptyStr | None = None
     tool_turns: list[ToolCallTurn] = Field(default_factory=list)
     history_checkpoint: HistoryCheckpoint | None = None
+    pending_action: ActionSnapshot | None = None
     created_at: datetime
     updated_at: datetime
 

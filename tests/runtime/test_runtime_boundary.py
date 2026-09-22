@@ -8,10 +8,14 @@ import resagent2_runtime
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "runtime" / "src"
 ALLOWED_IMPORT_ROOTS = {
     "__future__",
+    "asyncio",
     "collections",
+    "contextlib",
+    "contextvars",
     "dataclasses",
     "datetime",
     "hashlib",
+    "httpx",
     "json",
     "math",
     "os",

@@ -12,14 +12,17 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
+import httpx
 from pydantic import BaseModel
 
+from .budget import (
+    RequestOutcome, current_budget, execution_budget, invoke_model,
+)
 from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
+from .http import send_request
 from .tool_calling import (
     NativeToolCallError, native_actions, native_input, native_input_text, parse_tool_turn,
 )
@@ -95,6 +98,8 @@ class PromptLLMClient:
     provider hooks retain the same semantics as direct runtime-client use.
     """
 
+    manages_usage = True
+
     def __init__(
         self,
         client: LLMClient,
@@ -111,6 +116,7 @@ class PromptLLMClient:
         self._section_name = section_name
         self._composer = ContextComposer()
         self.last_attempts = 0
+        self._attempt_limit = 3
 
     def set_trace_context(self, **kwargs) -> None:
         tracer = getattr(self._client, "set_trace_context", None)
@@ -120,6 +126,7 @@ class PromptLLMClient:
     def set_attempt_limit(self, max_attempts: int) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
+        self._attempt_limit = max_attempts
         limiter = getattr(self._client, "set_attempt_limit", None)
         if limiter is not None:
             limiter(max_attempts)
@@ -141,10 +148,16 @@ class PromptLLMClient:
             )],
             max_tokens=max_tokens,
         )
-        try:
-            return self._client.next_action(context, action_type)
-        finally:
-            self.last_attempts = getattr(self._client, "last_attempts", 1)
+        with execution_budget(
+            max_llm_calls=self._attempt_limit,
+            timeout_seconds=getattr(self._client, "timeout_seconds", 120),
+        ) as budget:
+            before = budget.usage.used
+            try:
+                return invoke_model(self._client, "next_action", context, action_type)
+            finally:
+                self.last_attempts = budget.usage.used - before
+                self._attempt_limit = 3
 
 
 class LLMExhaustedError(RuntimeError):
@@ -181,6 +194,8 @@ class OpenAICompatibleClient:
     The caller owns native conversation history; sharing a client cannot share
     Session reasoning or tool results. Neither path falls back to the other.
     """
+
+    manages_usage = True
 
     def __init__(
         self,
@@ -468,18 +483,32 @@ class OpenAICompatibleClient:
         attempt_limit = min(3, self._attempt_limit or 3)
         self._attempt_limit = None
         self.last_attempts = 0
+        with execution_budget(
+            max_llm_calls=attempt_limit,
+            timeout_seconds=self.timeout_seconds * attempt_limit + attempt_limit - 1,
+        ):
+            return self._request_attempts(
+                context, message, body_data,
+                native=native, text=text, attempt_limit=attempt_limit,
+            )
+
+    def _request_attempts(
+        self, context, message, body_data, *, native, text, attempt_limit,
+    ):
+        budget = current_budget()
+        assert budget is not None
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
         body = json.dumps(body_data).encode("utf-8")
-        request = Request(
+        request = httpx.Request(
+            "POST",
             self.endpoint,
-            data=body,
+            content=body,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            method="POST",
         )
         call_id = uuid.uuid4().hex
         created_at = datetime.now(UTC).isoformat()
@@ -490,8 +519,10 @@ class OpenAICompatibleClient:
         attempts: list[dict] = []
         try:
             for attempt in range(attempt_limit):
+                budget.check()
                 if attempt:
-                    time.sleep(1.0)
+                    time.sleep(budget.remaining_timeout(1.0))
+                budget.charge(call_id, attempt)
                 self.last_attempts = attempt + 1
                 # Never attribute an earlier response to a later transport failure.
                 raw_response_text = None
@@ -501,9 +532,12 @@ class OpenAICompatibleClient:
                 usage = None
                 finish_reason = None
                 last_error = None
+                outcome: RequestOutcome = "unknown"
                 try:
-                    with urlopen(request, timeout=self.timeout_seconds) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                    timeout = budget.remaining_timeout(self.timeout_seconds)
+                    response = send_request(request, timeout=timeout)
+                    outcome = "failed"
+                    payload = json.loads(response.read().decode("utf-8"))
                     if not isinstance(payload, dict):
                         raise TypeError("provider response must be an object")
                     # Capture provider diagnostics before parsing the action JSON.
@@ -529,18 +563,20 @@ class OpenAICompatibleClient:
                     if not native and not text and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
-                except HTTPError as error:
-                    detail = error.read(2000).decode("utf-8", errors="replace")
+                except httpx.HTTPStatusError as error:
+                    detail = error.response.content[:2000].decode("utf-8", errors="replace")
+                    outcome = "failed"
                     last_error = error
                     # Preserve the existing no-retry policy for client errors.
-                    if error.code is not None and error.code < 500:
-                        last_error = RuntimeError(f"LLM HTTP {error.code}: {detail}")
+                    if error.response.status_code < 500:
+                        last_error = RuntimeError(f"LLM HTTP {error.response.status_code}: {detail}")
                         raise last_error from error
                 except (
-                    URLError, TimeoutError, json.JSONDecodeError,
+                    httpx.TransportError, TimeoutError, json.JSONDecodeError,
                     KeyError, IndexError, TypeError,
                 ) as error:
                     last_error = error
+                    budget.remaining_timeout()
                 else:
                     # The provider envelope was valid. Malformed model output
                     # needs caller feedback, not an identical HTTP retry. Parse
@@ -565,6 +601,7 @@ class OpenAICompatibleClient:
                             parsed_action = content
                         else:
                             parsed_action = json.loads(content)
+                        outcome = "succeeded"
                     except (
                         json.JSONDecodeError, NativeToolCallError, LLMTextResponseError,
                     ) as error:
@@ -572,6 +609,7 @@ class OpenAICompatibleClient:
                         raise
                     break
                 finally:
+                    budget.usage.complete(call_id, attempt, outcome)
                     attempts.append({
                         "retry_number": attempt,
                         **self._response_trace_fields(

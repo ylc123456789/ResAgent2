@@ -2,7 +2,7 @@
 
 import json
 from unittest import mock
-from urllib.error import URLError
+from httpx import TransportError
 
 import pytest
 from pydantic import BaseModel
@@ -111,11 +111,11 @@ def test_plain_prompt_forwards_retry_limit_trace_and_real_attempt_count(
     adapter = _adapter(client)
     adapter.set_trace_context(agent="plain_caller", run_id="run_plain", step="review")
     adapter.set_attempt_limit(2)
-    responses = [URLError("transient"), _Response() if succeeds else URLError("again")]
+    responses = [TransportError("transient"), _Response() if succeeds else TransportError("again")]
 
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
-        mock.patch("resagent2_runtime.llm.urlopen", side_effect=responses) as request,
+        mock.patch("resagent2_runtime.llm.send_request", side_effect=responses) as request,
     ):
         if succeeds:
             assert adapter.next_action("Complete", AgentAction) == {"tool": "finish"}

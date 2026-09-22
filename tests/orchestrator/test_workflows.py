@@ -1,3 +1,5 @@
+
+from resagent2_contracts import RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 
 
@@ -42,15 +44,7 @@ NOW = datetime(2026, 8, 26, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Evaluate a method",
-        budget=RunBudget(
-            max_tasks=12,
-            max_attempts_per_task=3,
-            max_llm_calls=50,
-            timeout_seconds=3600,
-        ),
-    )
+    return ResearchRequest(goal='Evaluate a method', budget=RunBudget(max_llm_calls=50, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=12, max_attempts_per_task=3))
 
 
 def task(
@@ -489,7 +483,7 @@ def test_budget_exhaustion_does_not_persist_a_running_attempt() -> None:
         tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
     ))
     run = engine.store.load("run_no_calls")
-    run.llm_calls_used = run.request.budget.max_llm_calls
+    run.usage.requests = {f"fixture_{i}:0": "succeeded" for i in range(run.request.budget.max_llm_calls)}
     engine.store.save(run)
 
     with pytest.raises(OrchestrationError, match="LLM-call budget"):
@@ -510,15 +504,7 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler_module, "datetime", FixedClock)
     engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
-    request = ResearchRequest(
-        goal="Use the full remaining budget",
-        budget=RunBudget(
-            max_tasks=1,
-            max_attempts_per_task=1,
-            max_llm_calls=120,
-            timeout_seconds=3600,
-        ),
-    )
+    request = ResearchRequest(goal='Use the full remaining budget', budget=RunBudget(max_llm_calls=120, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     _create_run(engine, "run_remaining_budget", request, WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
@@ -526,7 +512,7 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
     run = engine.store.load("run_remaining_budget")
     run.created_at = NOW
     run.updated_at = NOW
-    run.llm_calls_used = 17
+    run.usage.requests = {f"fixture_{i}:0": "succeeded" for i in range(17)}
 
     module_request = engine._module_request(
         run,

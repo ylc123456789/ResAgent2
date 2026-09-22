@@ -11,11 +11,11 @@ from resagent2_components import (
 from resagent2_contracts import AgentRequest, WorkFeedback
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 
-from .completion import _observed_artifact_ids
+from .completion import SCIENTIFIC_FINISH_ARTIFACT_KINDS, _observed_artifact_ids
 from .interpreter import render_work_brief
 
 
-SCIENTIFIC_PROMPT = """You are the Scientific Agent: the scientific brain of one research run.
+SCIENTIFIC_PROMPT = f"""You are the Scientific Agent: the scientific brain of one research run.
 Follow the instruction and registered materials using one action protocol.
 Use request_work for the next necessary round of code inspection, changes or
 experiment work; ask_user for missing decisions; finish for a final judgment.
@@ -27,6 +27,10 @@ path="scientific_opinion.json", media_type="application/json", summary and JSON
 content. Cite only ArtifactIds actually observed through read_artifact or
 literature_search. The system records observation evidence independently.
 The report explains your conclusion; machines consume the opinion artifact.
+New artifact kinds allowed at finish: {", ".join(sorted(SCIENTIFIC_FINISH_ARTIFACT_KINDS))}.
+Existing evidence remains registered under its original ID: cite it in the opinion
+and report instead of returning it as a new output or copying it into a new artifact.
+Tool and system records are returned automatically.
 
 request_work accepts assessment and work_request. assessment contains statement,
 evidence_artifact_ids, limitations and unresolved_questions. work_request

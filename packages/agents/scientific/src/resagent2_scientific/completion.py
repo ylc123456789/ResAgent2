@@ -8,12 +8,15 @@ from collections.abc import Callable
 from pydantic import ValidationError
 
 from resagent2_contracts import (
-    ArtifactCandidate, ArtifactRef, ScientificOpinion, WorkTaskOutcome,
-    missing_required_evidence_kinds,
+    AgentOwner, ArtifactCandidate, ArtifactRef, ScientificOpinion, WorkTaskOutcome,
+    missing_required_evidence_kinds, SCIENTIFIC_ARTIFACT_KINDS,
     SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
 from resagent2_components import RegisteredArtifactReader, read_artifact_json
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
+
+
+SCIENTIFIC_FINISH_ARTIFACT_KINDS = SCIENTIFIC_ARTIFACT_KINDS - SYSTEM_GENERATED_ARTIFACT_KINDS
 
 
 def _observed_artifact_ids(state: AgentState) -> list[str]:
@@ -34,23 +37,24 @@ class ScientificCompletionCheck:
         required_evidence_kinds: list[str] | None = None, *,
         resolve_artifact: Callable[[str], ArtifactRef | None] | None = None,
         reader: RegisteredArtifactReader | None = None,
+        input_artifact_ids: list[str] | None = None,
     ) -> None:
         self._unresolved = unresolved_task_outcomes
         self._required_evidence_kinds = required_evidence_kinds or []
         self._resolve_artifact = resolve_artifact
         self._reader = reader
+        self._input_artifact_ids = frozenset(input_artifact_ids or [])
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
+        output_error = self._output_error(state, candidate)
+        if output_error is not None:
+            return CompletionDecision(complete=False, report=output_error)
         opinions = [item for item in candidate.artifacts if item.kind == "scientific_opinion"]
         if len(opinions) != 1:
             return CompletionDecision(
                 complete=False, report="Submit exactly one scientific_opinion JSON artifact",
-            )
-        if any(item.kind in SYSTEM_GENERATED_ARTIFACT_KINDS for item in candidate.artifacts):
-            return CompletionDecision(
-                complete=False, report="Observation traces are generated from actual tool records",
             )
         try:
             item = opinions[0]
@@ -94,3 +98,35 @@ class ScientificCompletionCheck:
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=list(candidate.artifacts),
         )
+
+    def _output_error(self, state: AgentState, candidate: FinishCandidate) -> str | None:
+        returned_ids = set()
+        output_names = set()
+        for item in candidate.artifacts:
+            if isinstance(item, ArtifactRef):
+                registered = self._resolve_artifact(item.id) if self._resolve_artifact else None
+                if (
+                    registered != item or item.run_id != state.run_id
+                    or item.producer != AgentOwner.SCIENTIFIC
+                    or item.session_id != state.session_id
+                    or item.id in self._input_artifact_ids
+                ):
+                    return (
+                        "Input, foreign or unregistered artifacts cannot be returned as new outputs; "
+                        "cite existing evidence IDs in scientific_opinion.evidence_artifact_ids"
+                    )
+                if item.id in returned_ids:
+                    return "Return each registered artifact only once"
+                returned_ids.add(item.id)
+            elif item.kind not in SCIENTIFIC_FINISH_ARTIFACT_KINDS:
+                return (
+                    f"Unsupported Scientific finish artifact kind: {item.kind}. "
+                    "New artifact kinds allowed: " + ", ".join(sorted(SCIENTIFIC_FINISH_ARTIFACT_KINDS))
+                    + ". Cite existing evidence IDs in scientific_opinion.evidence_artifact_ids; "
+                    "tool and system records are returned automatically"
+                )
+            if item.output_name is not None:
+                if item.output_name in output_names:
+                    return "Use a unique output_name for each output artifact"
+                output_names.add(item.output_name)
+        return None

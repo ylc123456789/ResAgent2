@@ -108,6 +108,7 @@ class ScientificAgent:
             completion_check=ScientificCompletionCheck(
                 unresolved, list(dict.fromkeys(requirements)),
                 resolve_artifact=reader.resolve_ref, reader=reader,
+                input_artifact_ids=[item.id for item in request.input_artifacts],
             ),
             action_type=ScientificAction, max_context_tokens=self.max_context_tokens,
         )

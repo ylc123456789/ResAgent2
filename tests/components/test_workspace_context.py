@@ -1,5 +1,7 @@
 """Shared material allocation preserves source semantics and separate read shares."""
 
+from resagent2_contracts import AgentPermissions
+
 from datetime import UTC, datetime
 import json
 from types import SimpleNamespace
@@ -181,11 +183,7 @@ def test_both_agents_use_shared_context_within_existing_budget(tmp_path, builder
     binding = _binding(tmp_path)
     _observe(state, "read_file", {"path": "train.py", "content": "X" * 6000})
     _observe(state, "read_artifact", {"artifact_id": "artifact_patch", "content": "Y" * 6000})
-    request = AgentRequest(
-        run_id="run_context", task_id="task_context", attempt_number=1,
-        agent=agent, instruction="Bounded task",
-        budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
-    )
+    request = AgentRequest(run_id='run_context', task_id='task_context', attempt_number=1, agent=agent, instruction='Bounded task', budget=TaskBudget(max_llm_calls=10, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     sections = builder(request, state, binding=binding, max_context_tokens=8192)
     assert {s.name for s in sections} >= {"environment", "file_reads", "artifact_reads"}
     context = ContextComposer().compose(prompt, sections, max_tokens=8192)

@@ -1,4 +1,4 @@
-import io
+import httpx
 import json
 from datetime import date
 from urllib.parse import parse_qs, urlsplit
@@ -45,8 +45,8 @@ def fake_response(monkeypatch, body):
     requests = []
     def open_request(request, *, timeout):
         requests.append((request, timeout))
-        return io.BytesIO(body)
-    monkeypatch.setattr(openalex, "urlopen", open_request)
+        return httpx.Response(200, content=body, request=request)
+    monkeypatch.setattr(openalex, "send_request", open_request)
     return requests
 
 
@@ -61,13 +61,13 @@ def test_query_auth_and_normalized_record(monkeypatch):
         source_url="https://openalex.org/W123",
     )
     request, timeout = requests[0]
-    params = parse_qs(urlsplit(request.full_url).query)
+    params = parse_qs(urlsplit(str(request.url)).query)
     assert params["search"] == ["learning rate"]
     assert params["per_page"] == ["5"]
     assert params["filter"] == ["from_publication_date:2019-01-01,to_publication_date:2024-12-31"]
-    assert request.get_header("Authorization") == "Bearer private-test-key"
-    assert request.get_header("User-agent").startswith("ResAgent2/")
-    assert "private-test-key" not in request.full_url
+    assert request.headers.get("Authorization") == "Bearer private-test-key"
+    assert request.headers.get("User-agent").startswith("ResAgent2/")
+    assert "private-test-key" not in str(request.url)
     assert "private-test-key" not in papers[0].model_dump_json()
     assert timeout == 9
 
@@ -80,8 +80,8 @@ def test_optional_metadata_and_key_can_be_absent(monkeypatch):
     assert paper.abstract == ""
     assert paper.authors == []
     assert paper.published_at is None
-    assert requests[0][0].get_header("Authorization") is None
-    assert "filter" not in parse_qs(urlsplit(requests[0][0].full_url).query)
+    assert requests[0][0].headers.get("Authorization") is None
+    assert "filter" not in parse_qs(urlsplit(str(requests[0][0].url)).query)
 
 
 def test_abstract_bound_matches_arxiv():

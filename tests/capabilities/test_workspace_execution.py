@@ -11,7 +11,7 @@ from resagent2_contracts import (
     ArtifactRef,
     VerificationResult,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
 )
 from resagent2_components import (
@@ -33,12 +33,11 @@ from resagent2_coding.verification import RunVerificationTool
 from resagent2_runtime import AgentState
 
 
-def grant(root: Path, *, mode: WorkspaceMode = WorkspaceMode.READ_WRITE) -> WorkspaceGrant:
+def grant(root: Path, *, read_only: bool = False, denied_paths=("denied",)) -> WorkspaceGrant:
     return WorkspaceGrant(
         root=str(root),
-        mode=mode,
-        allowed_paths=["."],
-        denied_paths=["denied"],
+        access=WorkspaceAccess(read_paths=["."], write_paths=[] if read_only else ["."],
+                               denied_paths=list(denied_paths)),
         source=WorkspaceSourceKind.LOCAL,
     )
 
@@ -69,9 +68,9 @@ def test_workspace_rejects_traversal_reserved_paths_and_escaping_symlink(tmp_pat
 
 
 def test_read_only_workspace_cannot_resolve_a_write(tmp_path) -> None:
-    boundary = WorkspaceBoundary(grant(tmp_path, mode=WorkspaceMode.READ_ONLY))
+    boundary = WorkspaceBoundary(grant(tmp_path, read_only=True))
 
-    with pytest.raises(WorkspacePermissionError, match="read-only"):
+    with pytest.raises(WorkspacePermissionError, match="write scope"):
         boundary.resolve_write_file("new.py", must_be_new=True)
 
 
@@ -323,14 +322,13 @@ def test_git_diff_respects_denied_paths(tmp_path) -> None:
     assert "secret content" not in repository.diff_since(baseline)
 
 
-def test_resolve_system_write_ignores_allowed_paths(tmp_path) -> None:
+def test_resolve_system_write_is_separate_from_source_scope(tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(root),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["src"],
+            access=WorkspaceAccess(read_paths=["src"], write_paths=["src"]),
             source=WorkspaceSourceKind.LOCAL,
         )
     )
@@ -481,7 +479,7 @@ class _FailingVerificationRunner:
 
 def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
     init_repo(tmp_path)
-    boundary = WorkspaceBoundary(grant(tmp_path))
+    boundary = WorkspaceBoundary(grant(tmp_path, denied_paths=()))
     repository = GitWorkspace(boundary)
     tool = RunVerificationTool(
         _FailingVerificationRunner(boundary),
@@ -501,7 +499,7 @@ def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
 
 def test_run_verification_passes_shared_resource_environment(tmp_path) -> None:
     init_repo(tmp_path)
-    boundary = WorkspaceBoundary(grant(tmp_path))
+    boundary = WorkspaceBoundary(grant(tmp_path, denied_paths=()))
     repository = GitWorkspace(boundary)
     runner = _FailingVerificationRunner(boundary)
     tool = RunVerificationTool(

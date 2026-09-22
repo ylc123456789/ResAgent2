@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .process import CommandPermissionDecision, UnsafeCommandError, parse_command
+from .process import CommandPermissionDecision, UnsafeCommandError, parse_command, run_process
+from resagent2_runtime.budget import DeadlineExceededError
 
 import platform
 
@@ -192,7 +193,7 @@ class EnvironmentManager:
             "pip",
             "-y",
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = run_process(command, capture_output=True, text=True)
         if result.returncode != 0:
             raise EnvironmentManagerError(
                 f"conda env creation failed: {(result.stderr or '').strip()}"
@@ -257,7 +258,7 @@ class EnvironmentManager:
 
     def _probe(self, prefix: Path) -> dict:
         try:
-            result = subprocess.run(
+            result = run_process(
                 [
                     self.conda_exe,
                     "run",
@@ -272,6 +273,8 @@ class EnvironmentManager:
                 text=True,
                 timeout=120,
             )
+        except DeadlineExceededError:
+            raise
         except (OSError, subprocess.TimeoutExpired) as error:
             return {
                 "returncode": None,
@@ -505,7 +508,7 @@ class HardwareAudit:
         if not exe:
             return []
         try:
-            result = subprocess.run(
+            result = run_process(
                 [
                     exe,
                     "--query-gpu=name,memory.total,driver_version",
@@ -515,6 +518,8 @@ class HardwareAudit:
                 capture_output=True,
                 timeout=timeout,
             )
+        except DeadlineExceededError:
+            raise
         except (OSError, subprocess.TimeoutExpired):
             return []
         if result.returncode != 0:

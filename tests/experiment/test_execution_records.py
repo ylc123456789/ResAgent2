@@ -1,11 +1,13 @@
 """Actual command receipts remain machine-readable across completion outcomes."""
 
+from resagent2_contracts import AgentPermissions
+
 from datetime import UTC, datetime
 import json
 
 import pytest
 
-from resagent2_contracts import AgentOwner, AgentRequest, TaskBudget, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind
+from resagent2_contracts import AgentOwner, AgentRequest, TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
 from resagent2_components import WorkspaceBoundary, WorkspaceObserver
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_runtime import (
@@ -39,9 +41,7 @@ class Command:
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_loop_returns_execution_record_for_success_and_failure(tmp_path, exit_code):
-    boundary = WorkspaceBoundary(WorkspaceGrant(
-        root=str(tmp_path), mode=WorkspaceMode.READ_WRITE, source=WorkspaceSourceKind.LOCAL,
-    ))
+    boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])))
     tools = (Command(exit_code), FinishTool())
     definition = AgentDefinition(
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
@@ -53,10 +53,7 @@ def test_loop_returns_execution_record_for_success_and_failure(tmp_path, exit_co
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(WorkspaceObserver(boundary)),
     )
-    result = AgentLoop().run(definition, AgentRequest(
-        run_id="run_records", task_id="task_records", attempt_number=1, agent=AgentOwner.EXPERIMENT,
-        instruction="Run", budget=TaskBudget(max_llm_calls=3, timeout_seconds=10),
-    ), session_id="session_records")
+    result = AgentLoop().run(definition, AgentRequest(run_id='run_records', task_id='task_records', attempt_number=1, agent=AgentOwner.EXPERIMENT, instruction='Run', budget=TaskBudget(max_llm_calls=3, timeout_seconds=10), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)), session_id='session_records')
     assert result.status == ("completed" if exit_code == 0 else "failed")
     record = json.loads(next(item.content for item in result.artifacts if item.kind == "execution_record"))
     assert record["results"][0]["exit_code"] == exit_code
@@ -89,9 +86,7 @@ def test_only_successful_retry_of_same_command_resolves_failure(tmp_path, comman
             sequence=sequence, step=sequence, type="observation", tool="run_command",
             data=observation.model_dump(mode="json"), created_at=now,
         ))
-    boundary = WorkspaceBoundary(WorkspaceGrant(
-        root=str(tmp_path), mode=WorkspaceMode.READ_ONLY, source=WorkspaceSourceKind.LOCAL,
-    ))
+    boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))
     decision = ExperimentCompletionCheck(WorkspaceObserver(boundary)).evaluate(
         state, FinishCandidate(report="Recorded all outcomes"))
     assert decision.complete == (failed_command is None)

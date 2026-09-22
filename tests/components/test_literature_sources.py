@@ -99,7 +99,7 @@ def test_empty_configuration_is_rejected():
 
 def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     import json
-    from urllib.error import HTTPError
+    from tests.components.test_literature_http import http_error
     from resagent2_components.literature import (
         _http as _literature_http,
         backends as literature,
@@ -126,13 +126,13 @@ def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     def arxiv_request(self, url):
         calls.append(("arxiv", clock[0]))
         if clock[0] < 60:
-            raise HTTPError(url, 429, "rate limited", {}, None)
+            raise http_error(429)
         return ARXIV_ATOM.encode()
 
     def openalex_request(self, url):
         calls.append(("openalex", clock[0]))
         if clock[0] >= 10:
-            raise HTTPError(url, 429, "rate limited", {}, None)
+            raise http_error(429)
         return json.dumps({"results": [work()]}).encode()
 
     monkeypatch.setattr(literature.ArxivLiteratureBackend, "_request", arxiv_request)

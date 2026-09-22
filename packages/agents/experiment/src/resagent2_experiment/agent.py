@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from resagent2_contracts import (
-    AgentOwner, AgentRequest, AgentResult, ErrorCode, ModuleError, ModuleStatus, WorkspaceMode, RecordedAnswer,
+    AgentOwner, AgentRequest, AgentResult, ErrorCode, ModuleError, ModuleStatus,
     task_session_id,
 )
 from resagent2_capabilities import (
@@ -17,11 +17,11 @@ from resagent2_components import (
     EnvironmentManager, ProcessRunner, RegisteredArtifactReader,
     RepoMaterializer, RepoMaterializerError, ResourceLayout,
     WorkspaceBoundary, WorkspaceObserver, WorkspacePermissionError,
-    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, read_artifact_json,
+    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
-    AllowListPermissionPolicy, AskUserTool, FinishTool, InMemorySessionStore,
+    AskUserTool, FinishTool, InMemorySessionStore,
     LLMClient, SessionStore,
 )
 
@@ -29,6 +29,8 @@ from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
 from .tools import RunCommandTool
+from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
 
 class NativeExperimentAgent:
@@ -59,6 +61,15 @@ class NativeExperimentAgent:
             request = AgentRequest.model_validate(request)
         except ValueError as error:
             return self._failure(str(error))
+        with execution_budget(max_llm_calls=request.budget.max_llm_calls,
+                              timeout_seconds=request.budget.timeout_seconds):
+            try:
+                return self._invoke(request)
+            except DeadlineExceededError as error:
+                return AgentResult(status=ModuleStatus.FAILED, report=str(error),
+                                   error=ModuleError(code=ErrorCode.TIMEOUT, message=str(error), retryable=False))
+
+    def _invoke(self, request: AgentRequest) -> AgentResult:
         if request.agent != AgentOwner.EXPERIMENT:
             return self._failure("NativeExperimentAgent received a non-Experiment request")
         if request.workspace is None:
@@ -72,6 +83,8 @@ class NativeExperimentAgent:
                     return self._failure("Materialized repository is outside the granted root", blocked=True)
             boundary = WorkspaceBoundary(request.workspace)
             datasets = resolve_dataset_refs(self.resource_layout.dataset_root, request_dataset_refs(request))
+        except DeadlineExceededError:
+            raise
         except (OSError, ValueError, WorkspacePermissionError, RepoMaterializerError,
                 DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
@@ -84,28 +97,6 @@ class NativeExperimentAgent:
             hard_constraint=request.environment_spec.python_version,
         )
         observer = WorkspaceObserver(boundary)
-        confirmed_command = None
-        if request.parent_session_id and request.confirm_before_experiment:
-            try:
-                prior = self.loop.store.load(request.parent_session_id)
-                pending = prior.memory.get("pending_command_confirmation")
-                reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
-                for ref in request.input_artifacts:
-                    if ref.kind != "answer" or ref.id not in request.resume_artifact_ids:
-                        continue
-                    answer = read_artifact_json(reader, ref.id, RecordedAnswer)
-                    if (prior.run_id == request.run_id and prior.task_id == request.task_id
-                            and prior.attempt_number == request.attempt_number
-                            and prior.owner == AgentOwner.EXPERIMENT and pending
-                            and answer.run_id == request.run_id and answer.task_id == request.task_id
-                            and answer.attempt_number == request.attempt_number
-                            and answer.question_text == "Pre-experiment confirmation is enabled. "
-                                f"Confirm running the experiment command: {pending}"
-                            and answer.values.get("approve", "").strip().lower()
-                                in {"yes", "true", "approve", "approved", "确认", "同意", "是"}):
-                        confirmed_command = pending
-            except (OSError, ValueError, KeyError) as error:
-                return self._failure(str(error))
         output_root = request.output_dir or str(boundary.root / ".resagent2" / request.task_id)
         runner = ProcessRunner(boundary)
         tools = (
@@ -118,9 +109,6 @@ class NativeExperimentAgent:
             AuditEnvTool(binding, allowed=request.permissions.execute_commands),
             RunCommandTool(
                 runner, binding,
-                confirm_before_experiment=request.confirm_before_experiment,
-                confirmed=request.experiment_confirmed,
-                confirmed_command=confirmed_command,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
                 log_dir=f"{output_root}/commands",
@@ -128,20 +116,13 @@ class NativeExperimentAgent:
             ),
             AskUserTool(), FinishTool(),
         )
-        allowed = {tool.name for tool in tools}
-        if not request.permissions.execute_commands:
-            allowed -= {"run_command", "run_setup", "audit_env"}
-        if not request.permissions.prepare_environment:
-            allowed -= {"prepare_environment", "run_setup"}
-        if request.workspace.mode != WorkspaceMode.READ_WRITE:
-            allowed -= {"run_setup", "run_command"}
         definition = AgentDefinition(
             name="experiment", owner=AgentOwner.EXPERIMENT,
             system_prompt=EXPERIMENT_PROMPT, tools=tools, llm_client=self.llm_client,
             context_builder=lambda request, state, limit: build_context(
                 request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
             ),
-            permission_policy=AllowListPermissionPolicy(allowed),
+            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=ExperimentCompletionCheck(observer, output_dir=request.output_dir),
             action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
         )

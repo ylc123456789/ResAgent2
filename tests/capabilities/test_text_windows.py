@@ -18,7 +18,7 @@ from resagent2_capabilities import (
     ReadFileTool,
     SearchTextTool,
 )
-from resagent2_contracts import AgentOwner, ArtifactRef, WorkspaceGrant, WorkspaceMode
+from resagent2_contracts import AgentOwner, ArtifactRef, WorkspaceAccess, WorkspaceGrant
 from resagent2_runtime import AgentState
 
 
@@ -32,9 +32,10 @@ def _state():
 
 def _boundary(root, **kwargs):
     return WorkspaceBoundary(WorkspaceGrant(
-        root=str(root), mode=WorkspaceMode.READ_ONLY, source="local",
-        allowed_paths=kwargs.get("allowed_paths", ["."]),
-        denied_paths=kwargs.get("denied_paths", []),
+        root=str(root), source="local", access=WorkspaceAccess(
+            read_paths=kwargs.get("read_paths", ["."]),
+            denied_paths=kwargs.get("denied_paths", []),
+        ),
     ))
 
 
@@ -157,10 +158,10 @@ def test_single_file_search_cannot_bypass_path_scope(tmp_path, query_path):
         tool.execute(_state(), tool.input_model(path=query_path, query="target"))
 
 
-def test_single_file_search_respects_allowed_paths(tmp_path):
+def test_single_file_search_respects_read_paths(tmp_path):
     (tmp_path / "allowed.py").write_text("target = 1\n")
     (tmp_path / "other.py").write_text("target = 2\n")
-    tool = SearchTextTool(_boundary(tmp_path, allowed_paths=["allowed.py"]))
+    tool = SearchTextTool(_boundary(tmp_path, read_paths=["allowed.py"]))
     assert tool.execute(_state(), tool.input_model(path="allowed.py", query="target")).ok
     with pytest.raises(WorkspacePermissionError):
         tool.execute(_state(), tool.input_model(path="other.py", query="target"))

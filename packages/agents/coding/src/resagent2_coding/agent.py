@@ -6,10 +6,10 @@ from pathlib import Path
 
 from resagent2_contracts import (
     AgentOwner, AgentRequest, AgentResult, ArtifactCandidate, ErrorCode,
-    ModuleError, ModuleStatus, WorkspaceMode, task_session_id,
+    ModuleError, ModuleStatus, task_session_id,
 )
 from resagent2_capabilities import (
-    AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
+    AuditEnvTool, CreateFileTool, DeletePathTool, GitDiffTool, ListFilesTool,
     PrepareEnvironmentTool, ReadArtifactTool, ReadFileTool, ReplaceTextTool,
     RunSetupTool, SearchTextTool,
 )
@@ -22,7 +22,7 @@ from resagent2_components import (
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
-    AllowListPermissionPolicy, AskUserTool, FinishTool,
+    AskUserTool, FinishTool,
     InMemorySessionStore, LLMClient, SessionStore,
 )
 
@@ -30,6 +30,8 @@ from .completion import CodingCompletionCheck, derive_control_state
 from .context import CODING_PROMPT, build_context
 from .models import CodingAction
 from .verification import RunVerificationTool
+from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
 
 class NativeCodingAgent:
@@ -60,6 +62,15 @@ class NativeCodingAgent:
             request = AgentRequest.model_validate(request)
         except ValueError as error:
             return self._failure(str(error))
+        with execution_budget(max_llm_calls=request.budget.max_llm_calls,
+                              timeout_seconds=request.budget.timeout_seconds):
+            try:
+                return self._invoke(request)
+            except DeadlineExceededError as error:
+                return AgentResult(status=ModuleStatus.FAILED, report=str(error),
+                                   error=ModuleError(code=ErrorCode.TIMEOUT, message=str(error), retryable=False))
+
+    def _invoke(self, request: AgentRequest) -> AgentResult:
         if request.agent != AgentOwner.CODING:
             return self._failure("NativeCodingAgent received a non-Coding request")
         if request.workspace is None:
@@ -74,6 +85,8 @@ class NativeCodingAgent:
             boundary = WorkspaceBoundary(request.workspace)
             repository = GitWorkspace(boundary)
             datasets = resolve_dataset_refs(self.resource_layout.dataset_root, request_dataset_refs(request))
+        except DeadlineExceededError:
+            raise
         except (OSError, ValueError, GitWorkspaceError, WorkspacePermissionError,
                 RepoMaterializerError, DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
@@ -106,7 +119,7 @@ class NativeCodingAgent:
             ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
             GitDiffTool(repository, baseline=baseline),
-            CreateFileTool(boundary), ReplaceTextTool(boundary),
+            CreateFileTool(boundary), ReplaceTextTool(boundary), DeletePathTool(boundary),
             PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
             RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
                          timeout_seconds=request.budget.timeout_seconds,
@@ -121,13 +134,6 @@ class NativeCodingAgent:
             ),
             AskUserTool(), FinishTool(),
         )
-        allowed = {tool.name for tool in tools}
-        if not request.permissions.execute_commands:
-            allowed -= {"run_setup", "audit_env", "run_verification"}
-        if not request.permissions.prepare_environment:
-            allowed -= {"prepare_environment", "run_setup"}
-        if request.workspace.mode != WorkspaceMode.READ_WRITE:
-            allowed -= {"run_setup", "run_verification"}
         definition = AgentDefinition(
             name="coding", owner=AgentOwner.CODING, system_prompt=CODING_PROMPT,
             tools=tools, llm_client=self.llm_client,
@@ -135,7 +141,7 @@ class NativeCodingAgent:
                 request, state, binding=binding, datasets=datasets,
                 control_state=derive_control_state(state, binding), max_context_tokens=limit,
             ),
-            permission_policy=AllowListPermissionPolicy(allowed),
+            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=CodingCompletionCheck(
                 repository, boundary, baseline=baseline, env_binding=binding,
             ),

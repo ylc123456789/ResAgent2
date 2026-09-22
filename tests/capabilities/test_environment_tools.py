@@ -5,7 +5,7 @@ from resagent2_contracts import (
     AgentOwner,
     VerificationResult,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
 )
 from resagent2_capabilities import (
@@ -208,8 +208,7 @@ def test_run_setup_blocks_without_environment(tmp_path) -> None:
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(tmp_path),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
             source=WorkspaceSourceKind.LOCAL,
         )
     )
@@ -230,8 +229,7 @@ def test_run_setup_rejects_forbidden_command(tmp_path) -> None:
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(tmp_path),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
             source=WorkspaceSourceKind.LOCAL,
         )
     )
@@ -252,8 +250,7 @@ def test_run_setup_success_invalidates_certification(tmp_path) -> None:
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(tmp_path),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
             source=WorkspaceSourceKind.LOCAL,
         )
     )
@@ -348,8 +345,7 @@ def test_conda_update_uses_manager_conda_and_single_prefix(tmp_path) -> None:
     boundary = WorkspaceBoundary(
         WorkspaceGrant(
             root=str(tmp_path),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
             source=WorkspaceSourceKind.LOCAL,
         )
     )

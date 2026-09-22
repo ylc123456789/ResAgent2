@@ -9,7 +9,7 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ModuleStatus,
-    TaskBudget, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
+    TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_coding import CodingAction, NativeCodingAgent
 from resagent2_runtime import ScriptedLLMClient
@@ -25,16 +25,8 @@ def init_repo(root: Path) -> None:
 
 
 def request(root: Path, *, writable=False, task_id="task_coding", **updates) -> AgentRequest:
-    values = dict(
-        run_id="run_coding", task_id=task_id, attempt_number=1, agent=AgentOwner.CODING,
-        instruction="Inspect add and make only needed changes",
-        budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
-        workspace=WorkspaceGrant(
-            root=str(root), mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
-            allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-        ),
-        workspace_id="ws_test", output_dir=str(root.parent / "output"),
-    )
+    values = dict(run_id='run_coding', task_id=task_id, attempt_number=1, agent=AgentOwner.CODING, instruction='Inspect add and make only needed changes', budget=TaskBudget(max_llm_calls=8, timeout_seconds=30), workspace=WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])), workspace_id='ws_test', output_dir=str(root.parent / 'output'))
+    values["permissions"] = AgentPermissions(execute_commands=True, prepare_environment=True)
     values.update(updates)
     return AgentRequest(**values)
 
@@ -136,9 +128,7 @@ def test_disallowed_verification_command_does_not_execute(tmp_path):
 
 def test_process_permission_is_enforced(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([
-        {"tool": "run_verification", "arguments": {"commands": ["python -m pytest"]}},
-    ])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False)))
+    result = NativeCodingAgent(ScriptedLLMClient([{'tool': 'run_verification', 'arguments': {'commands': ['python -m pytest']}}])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
     assert result.status == ModuleStatus.FAILED
 
 

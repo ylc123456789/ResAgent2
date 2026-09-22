@@ -20,6 +20,8 @@ from .create_file import (
     CreateFileTool,
 )
 
+from .delete_path import DeletePathInput, DeletePathTool
+
 from .replace_text import (
     ReplaceTextInput,
     ReplaceTextTool,
@@ -39,6 +41,8 @@ __all__ = [
     "SearchTextTool",
     "CreateFileInput",
     "CreateFileTool",
+    "DeletePathInput",
+    "DeletePathTool",
     "ReplaceTextInput",
     "ReplaceTextTool",
     "GitDiffInput",

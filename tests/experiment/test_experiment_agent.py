@@ -6,24 +6,16 @@ import pytest
 
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ModuleStatus, TaskBudget,
-    WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
+    WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_runtime import ScriptedLLMClient
 
 
 def request(root, *, writable=False, **updates):
-    values = dict(
-        run_id="run_experiment", task_id="task_experiment", attempt_number=1,
-        agent=AgentOwner.EXPERIMENT, instruction="Analyze the existing results",
-        budget=TaskBudget(max_llm_calls=8, timeout_seconds=30),
-        workspace=WorkspaceGrant(
-            root=str(root), mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
-            allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-        ),
-        workspace_id="ws_test", output_dir=str(root.parent / "out"),
-    )
+    values = dict(run_id='run_experiment', task_id='task_experiment', attempt_number=1, agent=AgentOwner.EXPERIMENT, instruction='Analyze the existing results', budget=TaskBudget(max_llm_calls=8, timeout_seconds=30), workspace=WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])), workspace_id='ws_test', output_dir=str(root.parent / 'out'))
     values.update(updates)
+    values.setdefault("permissions", AgentPermissions(execute_commands=True, prepare_environment=True))
     return AgentRequest(**values)
 
 
@@ -35,7 +27,7 @@ def test_existing_result_analysis_finishes_without_new_execution(tmp_path, writa
         {"tool": "finish", "arguments": {"report": "The recorded accuracy is 0.9."}},
     ])
     agent = NativeExperimentAgent(client)
-    result = agent.invoke(request(tmp_path, writable=writable, confirm_before_experiment=True))
+    result = agent.invoke(request(tmp_path, writable=writable, confirm_commands=True))
     assert result.status == ModuleStatus.COMPLETED, result.report
     persisted = agent.loop.store.load(result.session.id)
     assert persisted.memory["command_count"] == 0
@@ -55,9 +47,7 @@ def test_generic_finish_delivers_named_file(tmp_path):
 
 
 def test_command_permission_denied_before_environment_access(tmp_path):
-    result = NativeExperimentAgent(ScriptedLLMClient([{
-        "tool": "run_command", "arguments": {"command": "python train.py"},
-    }])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False)))
+    result = NativeExperimentAgent(ScriptedLLMClient([{'tool': 'run_command', 'arguments': {'command': 'python train.py'}}])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
     assert result.status == ModuleStatus.FAILED
 
 

@@ -7,7 +7,6 @@ from typing import cast
 
 from pydantic import BaseModel
 
-from resagent2_contracts import QuestionDraft, WorkspaceMode
 from resagent2_components import (
     EnvironmentBinding,
     ProcessRunner,
@@ -76,9 +75,6 @@ class RunCommandTool:
         runner: ProcessRunner,
         binding: EnvironmentBinding,
         *,
-        confirm_before_experiment: bool,
-        confirmed: bool,
-        confirmed_command: str | None = None,
         timeout_seconds: int,
         extra_env: dict[str, str] | None = None,
         log_dir: str = ".resagent2/experiment/commands",
@@ -86,9 +82,6 @@ class RunCommandTool:
     ) -> None:
         self.runner = runner
         self.binding = binding
-        self.confirm_before_experiment = confirm_before_experiment
-        self.confirmed = confirmed
-        self.confirmed_command = confirmed_command
         self.timeout_seconds = timeout_seconds
         self.extra_env = extra_env
         self.log_dir = log_dir
@@ -108,8 +101,8 @@ class RunCommandTool:
         args = cast(RunCommandInput, arguments)
         if not self.allowed:
             raise PermissionError("Process execution is not authorized")
-        if self.runner.boundary.grant.mode != WorkspaceMode.READ_WRITE:
-            raise PermissionError("Experiment processes require a writable workspace")
+        if not self.runner.boundary.grant.access.unrestricted:
+            raise PermissionError("Experiment processes require an unrestricted trusted workspace")
         if self.binding.current is None:
             return ToolObservation(
                 summary="No environment prepared; call prepare_environment first",
@@ -130,19 +123,6 @@ class RunCommandTool:
                 summary="Experiment command blocked: run audit_env first",
                 ok=False,
                 value={"blocked": True, "reason": "environment not certified"},
-            )
-        if self.confirm_before_experiment and not (self.confirmed or args.command == self.confirmed_command):
-            return ToolObservation(
-                summary="Experiment confirmation required",
-                value={"blocked": True, "reason": "confirmation required"},
-                memory_updates={"pending_command_confirmation": args.command},
-                question=QuestionDraft(
-                    text=(
-                        "Pre-experiment confirmation is enabled. "
-                        f"Confirm running the experiment command: {args.command}"
-                    ),
-                    requested_fields=["approve"],
-                ),
             )
         index = int(state.memory.get("command_count", 0)) + 1
         result = self.runner.run(

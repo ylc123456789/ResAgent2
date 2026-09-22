@@ -21,7 +21,7 @@ from resagent2_components import (
     WorkspaceBoundary,
 )
 from resagent2_contracts import (
-    AgentOwner, VerificationResult, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind,
+    AgentOwner, VerificationResult, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_coding.completion import CodingCompletionCheck, derive_control_state
 from resagent2_runtime import AgentState, FinishCandidate
@@ -70,10 +70,7 @@ class Runner:
 @pytest.fixture
 def setup(tmp_path):
     (tmp_path / "code.py").write_text("new\n", encoding="utf-8")
-    boundary = WorkspaceBoundary(WorkspaceGrant(
-        root=str(tmp_path), mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-    ))
+    boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])))
     manager = Manager(tmp_path)
     binding = EnvironmentBinding(manager, run_id="run_test", workspace_id="ws_test")
     binding.certified = True

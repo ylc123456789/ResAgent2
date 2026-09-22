@@ -20,6 +20,7 @@ Use the same tools and finish protocol for explanation, investigation and edits.
 A writable workspace permits changes; it does not require them.
 
 Use replace_text for existing files and create_file for new files.
+Use delete_path for files and directories; nonempty directories require confirmation.
 old_text must match exactly once in the current file per call.
 You may make multiple replace_text calls as needed.
 Review the actual diff after edits. Read project dependency requirements before choosing a
@@ -57,7 +58,8 @@ def build_context(
             name="task",
             content=json.dumps({
                 "instruction": request.instruction,
-                "workspace_mode": request.workspace.mode.value if request.workspace else None,
+                "workspace_access": request.workspace.access.model_dump(mode="json") if request.workspace else None,
+                "confirm_commands": request.confirm_commands,
                 "permissions": request.permissions.model_dump(mode="json"),
                 "input_artifacts": [
                     {"id": item.id, "kind": item.kind, "summary": item.summary}

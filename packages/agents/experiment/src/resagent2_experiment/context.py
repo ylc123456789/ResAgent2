@@ -55,11 +55,10 @@ def build_context(
             name="task",
             content=json.dumps({
                 "instruction": request.instruction,
-                "workspace_mode": request.workspace.mode.value if request.workspace else None,
+                "workspace_access": request.workspace.access.model_dump(mode="json") if request.workspace else None,
                 "output_dir": request.output_dir,
                 "permissions": request.permissions.model_dump(mode="json"),
-                "confirm_before_experiment": request.confirm_before_experiment,
-                "experiment_confirmed": request.experiment_confirmed,
+                "confirm_commands": request.confirm_commands,
                 "input_artifacts": [
                     {"id": item.id, "kind": item.kind, "summary": item.summary}
                     for item in request.input_artifacts

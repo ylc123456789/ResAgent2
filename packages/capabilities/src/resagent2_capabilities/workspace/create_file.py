@@ -30,6 +30,7 @@ class CreateFileTool:
         args = cast(CreateFileInput, arguments)
         path = self.boundary.resolve_write_file(args.path, must_be_new=True)
         path.parent.mkdir(parents=True, exist_ok=True)
+        path = self.boundary.resolve_write_file(args.path, must_be_new=True)
         with path.open("x", encoding="utf-8") as handle:
             handle.write(args.content)
         revision = int(state.memory.get("edit_revision", 0)) + 1

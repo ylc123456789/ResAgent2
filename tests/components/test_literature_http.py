@@ -1,9 +1,8 @@
 """HTTP policy tests use virtual time, never live sleeps or requests."""
 
 from datetime import UTC, datetime, timedelta
-from email.message import Message
 from email.utils import format_datetime
-from urllib.error import HTTPError, URLError
+import httpx
 
 import pytest
 
@@ -20,10 +19,11 @@ def clock(monkeypatch):
 
 
 def http_error(status, retry_after=None):
-    headers = Message()
+    headers = {}
     if retry_after is not None:
         headers["Retry-After"] = retry_after
-    return HTTPError("https://example.test/?q=x", status, "private response", headers, None)
+    response = httpx.Response(status, headers=headers, request=httpx.Request("GET", "https://example.test/?q=x"))
+    return httpx.HTTPStatusError("private response", request=response.request, response=response)
 
 
 def test_arxiv_instances_share_spacing(clock, monkeypatch):
@@ -76,7 +76,7 @@ def test_503_with_retry_after_defers_instead_of_waiting(clock):
     assert policy._cooldown_until == 3600
 
 
-@pytest.mark.parametrize("failure", [TimeoutError(), URLError("offline"), ConnectionResetError(), http_error(503)])
+@pytest.mark.parametrize("failure", [TimeoutError(), httpx.ConnectError("offline"), ConnectionResetError(), http_error(503)])
 def test_transient_failures_have_finite_spaced_attempts(clock, failure):
     policy = http.LiteratureHTTP("test", interval_seconds=3)
     times = []

@@ -68,6 +68,8 @@ class ReplaceTextTool:
                 handle.write(updated)
                 temporary = Path(handle.name)
             os.chmod(temporary, mode)
+            if self.boundary.resolve_write_file(args.path) != path:
+                raise PermissionError("write target changed during replacement")
             os.replace(temporary, path)
         finally:
             if temporary is not None and temporary.exists():

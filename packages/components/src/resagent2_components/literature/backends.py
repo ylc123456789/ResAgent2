@@ -7,12 +7,13 @@ import logging
 from datetime import date
 from typing import Protocol
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+import httpx
 
 from defusedxml import ElementTree
 from pydantic import Field, ValidationError
 
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from resagent2_runtime.http import send_request
 from ..text import wrap_text_lines
 from ._http import (
     USER_AGENT, LiteratureHTTP, LiteratureSearchError, LiteratureUnavailableError,
@@ -104,9 +105,8 @@ class ArxivLiteratureBackend:
 
     def _request(self, url: str) -> bytes:
         """One raw HTTP request; overridable in tests to avoid the network."""
-        request = Request(url, headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return response.read()
+        return send_request(httpx.Request("GET", url, headers={"User-Agent": USER_AGENT}),
+                            timeout=self.timeout_seconds).content
 
     def _fetch(self, url: str) -> bytes:
         return _ARXIV_HTTP.fetch(
@@ -292,9 +292,8 @@ class OpenAlexLiteratureBackend:
         if self._api_key:
             # Never place credentials in URLs, artifacts, or model context.
             headers["Authorization"] = f"Bearer {self._api_key}"
-        request = Request(url, headers=headers)
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return response.read()
+        return send_request(httpx.Request("GET", url, headers=headers),
+                            timeout=self.timeout_seconds).content
 
     def _parse(self, body: bytes) -> list[LiteraturePaper]:
         try:

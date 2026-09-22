@@ -11,6 +11,7 @@ from pathlib import Path
 from time import monotonic
 
 from resagent2_contracts import VerificationResult
+from resagent2_runtime.budget import current_budget, remaining_timeout
 
 from .workspace import WorkspaceBoundary
 
@@ -124,15 +125,41 @@ def _kill_process_tree(pid: int) -> None:
     """Best-effort SIGKILL of a process group and its descendants (POSIX)."""
     if os.name != "posix":
         return
+    descendants = _descendant_pids(pid)
     try:
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         pass
-    for child in _descendant_pids(pid):
+    for child in descendants:
         try:
             os.kill(child, signal.SIGKILL)
         except (ProcessLookupError, PermissionError, OSError):
             pass
+
+
+def run_process(command, *, timeout: float = 3600, cwd=None, env=None,
+                capture_output: bool = True, text: bool = True, check: bool = False):
+    """Bound fixed framework commands by the same deadline and process cleanup."""
+    timeout = remaining_timeout(timeout)
+    with subprocess.Popen(command, cwd=cwd, env=env, text=text,
+                          stdout=subprocess.PIPE if capture_output else None,
+                          stderr=subprocess.PIPE if capture_output else None,
+                          start_new_session=os.name == "posix") as process:
+        try:
+            stdout, stderr = process.communicate(timeout=remaining_timeout(timeout))
+        except BaseException as error:
+            if os.name == "posix":
+                _kill_process_tree(process.pid)
+            else:
+                process.kill()
+            process.communicate()
+            if isinstance(error, subprocess.TimeoutExpired) and current_budget() is not None:
+                current_budget().remaining_timeout()
+            raise
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
 
 
 class ProcessRunner:
@@ -151,6 +178,7 @@ class ProcessRunner:
         argv_prefix: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
     ) -> VerificationResult:
+        timeout_seconds = remaining_timeout(timeout_seconds)
         argv = [*(argv_prefix or []), *parse_command(command)]
         stdout_path, stderr_path = self._log_paths(log_dir, index)
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +199,7 @@ class ProcessRunner:
                 start_new_session=os.name == "posix",
             )
             try:
-                exit_code = process.wait(timeout=timeout_seconds)
+                exit_code = process.wait(timeout=remaining_timeout(timeout_seconds))
             except subprocess.TimeoutExpired:
                 timed_out = True
                 if os.name == "posix":
@@ -179,6 +207,13 @@ class ProcessRunner:
                 else:
                     process.kill()
                 exit_code = process.wait()
+            except BaseException:
+                if os.name == "posix":
+                    _kill_process_tree(process.pid)
+                else:
+                    process.kill()
+                process.wait()
+                raise
         return VerificationResult(
             command=command,
             exit_code=exit_code,

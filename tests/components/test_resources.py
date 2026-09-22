@@ -1,3 +1,5 @@
+
+from resagent2_contracts import WorkspaceAccess
 import json
 import os
 import subprocess
@@ -44,7 +46,7 @@ def _init_repo(root: Path, *, commit_file: str = "tracked.txt") -> str:
 
 
 def _spec(kind: WorkspaceSourceKind, location: str | None = None) -> WorkspaceSpec:
-    return WorkspaceSpec(workspace_id="ws_main", source_kind=kind, location=location)
+    return WorkspaceSpec(workspace_id='ws_main', source_kind=kind, location=location, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def test_materialize_clones_git_source(tmp_path) -> None:
@@ -198,26 +200,22 @@ def test_materialize_generated_creates_empty_managed_workspace(tmp_path) -> None
 
 def test_git_source_requires_location() -> None:
     with pytest.raises(ValidationError, match="requires a location"):
-        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.GIT)
+        WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.GIT, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def test_local_source_requires_location() -> None:
     with pytest.raises(ValidationError, match="requires a location"):
-        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.LOCAL)
+        WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def test_copy_source_requires_location() -> None:
     with pytest.raises(ValidationError, match="requires a location"):
-        WorkspaceSpec(workspace_id="ws_main", source_kind=WorkspaceSourceKind.COPY)
+        WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.COPY, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def test_generated_source_forbids_location() -> None:
     with pytest.raises(ValidationError, match="must not have a location"):
-        WorkspaceSpec(
-            workspace_id="ws_main",
-            source_kind=WorkspaceSourceKind.GENERATED,
-            location="/tmp/x",
-        )
+        WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.GENERATED, location='/tmp/x', access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
 
 
 def test_resource_layout_respects_resource_root_env(tmp_path, monkeypatch) -> None:

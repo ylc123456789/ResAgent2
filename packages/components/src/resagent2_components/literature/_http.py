@@ -7,7 +7,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from threading import Lock
-from urllib.error import HTTPError, URLError
+import httpx
+from resagent2_runtime.budget import DeadlineExceededError, current_budget, remaining_timeout
 
 
 USER_AGENT = "ResAgent2/0.1 (+https://github.com/ylc123456789/ResAgent2)"
@@ -55,7 +56,10 @@ class LiteratureHTTP:
     def fetch(self, request: Callable[[], bytes], *, max_attempts: int) -> bytes:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
-        with self._lock:
+        budget = current_budget()
+        if not self._lock.acquire(timeout=budget.remaining_timeout() if budget else -1):
+            raise DeadlineExceededError("execution deadline exceeded waiting for literature access")
+        try:
             remaining = self._cooldown_until - time.monotonic()
             if remaining > 0:
                 raise LiteratureUnavailableError(
@@ -65,16 +69,17 @@ class LiteratureHTTP:
             for attempt in range(max_attempts):
                 wait = self._next_request_at - time.monotonic()
                 if wait > 0:
-                    time.sleep(wait)
+                    time.sleep(remaining_timeout(wait))
+                if current_budget() is not None:
+                    current_budget().remaining_timeout()
                 retry_after = 0.0
                 try:
                     return request()
-                except HTTPError as error:
-                    status = error.code
+                except httpx.HTTPStatusError as error:
+                    status = error.response.status_code
                     retry_after = _retry_after(
-                        error.headers.get("Retry-After") if error.headers else None
+                        error.response.headers.get("Retry-After")
                     )
-                    error.close()
                     # Do not include response bodies, query URLs or auth in errors.
                     reason = f"HTTP {status}"
                     if status == 429:
@@ -95,7 +100,9 @@ class LiteratureHTTP:
                         raise LiteratureUnavailableError(
                             f"{self.source} {reason}; Retry-After cooldown active"
                         ) from None
-                except (URLError, TimeoutError, ConnectionError) as error:
+                except DeadlineExceededError:
+                    raise
+                except (httpx.TransportError, TimeoutError, ConnectionError) as error:
                     reason = type(error).__name__
                 finally:
                     self._next_request_at = time.monotonic() + self.interval_seconds
@@ -107,3 +114,5 @@ class LiteratureHTTP:
             raise LiteratureUnavailableError(
                 f"{self.source} request failed after {max_attempts} attempts: {reason}"
             )
+        finally:
+            self._lock.release()

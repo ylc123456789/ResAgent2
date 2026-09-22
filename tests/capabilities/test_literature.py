@@ -298,17 +298,17 @@ def test_arxiv_invalid_feed_is_not_an_empty_search(body):
 
 
 def test_arxiv_request_identifies_application(monkeypatch):
-    import io
+    import httpx
     from resagent2_components.literature import backends as literature
 
     requests = []
     def open_request(request, *, timeout):
         requests.append((request, timeout))
-        return io.BytesIO(ARXIV_ATOM.encode())
-    monkeypatch.setattr(literature, "urlopen", open_request)
+        return httpx.Response(200, content=ARXIV_ATOM.encode(), request=request)
+    monkeypatch.setattr(literature, "send_request", open_request)
     ArxivLiteratureBackend(timeout_seconds=7).search("x", max_results=1)
     request, timeout = requests[0]
-    assert request.get_header("User-agent").startswith("ResAgent2/")
+    assert request.headers.get("User-agent").startswith("ResAgent2/")
     assert timeout == 7
 
 

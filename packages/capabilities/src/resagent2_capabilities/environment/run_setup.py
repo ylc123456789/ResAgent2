@@ -12,7 +12,6 @@ from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.environment import EnvironmentBinding, SetupCommandPolicy
 from resagent2_components.process import ProcessRunner, UnsafeCommandError, parse_command
-from resagent2_contracts import WorkspaceMode
 
 class RunSetupInput(RuntimeModel):
     """One shell-free dependency-installation command."""
@@ -56,8 +55,8 @@ class RunSetupTool:
         if not self.allowed:
             raise PermissionError("Environment setup is not authorized")
         boundary = getattr(self.runner, "boundary", None)
-        if boundary is not None and boundary.grant.mode != WorkspaceMode.READ_WRITE:
-            raise PermissionError("Setup processes require a writable workspace")
+        if boundary is not None and not boundary.grant.access.unrestricted:
+            raise PermissionError("Setup processes require an unrestricted trusted workspace")
         args = cast(RunSetupInput, arguments)
         if self.binding.current is None:
             return ToolObservation(

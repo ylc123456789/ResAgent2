@@ -37,15 +37,19 @@ def _recorded_file_edits(state: AgentState) -> dict[str, int]:
     """Project successful built-in writes, not inferred or external changes."""
     latest: dict[str, int] = {}
     for event in reversed(state.events):
-        if event.type != "observation" or event.tool not in ("create_file", "replace_text"):
+        if event.type != "observation" or event.tool not in ("create_file", "replace_text", "delete_path"):
             continue
         data = event.data if isinstance(event.data, dict) else {}
         value = data.get("value")
-        if data.get("ok") is not True or not isinstance(value, dict):
+        if not isinstance(value, dict):
             continue
-        path = _path_key(value.get("path"))
-        if path is not None:
-            latest.setdefault(path, event.sequence)
+        paths = value.get("deleted_paths", []) if event.tool == "delete_path" else [value.get("path")]
+        if event.tool != "delete_path" and data.get("ok") is not True:
+            continue
+        for value in paths:
+            path = _path_key(value)
+            if path is not None:
+                latest.setdefault(path, event.sequence)
     return latest
 
 

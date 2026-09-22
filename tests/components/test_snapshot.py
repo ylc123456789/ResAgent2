@@ -13,14 +13,13 @@ from resagent2_components import (
     WorkspaceSnapshot,
     snapshot_workspace,
 )
-from resagent2_contracts import WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind
+from resagent2_contracts import WorkspaceAccess, WorkspaceGrant, WorkspaceSourceKind
 
 
 def _grant(root: Path) -> WorkspaceGrant:
     return WorkspaceGrant(
         root=str(root),
-        mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."],
+        access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
         source=WorkspaceSourceKind.LOCAL,
     )
 
@@ -43,6 +42,23 @@ def test_snapshot_workspace_prefers_git_tree_hash(tmp_path) -> None:
     assert snapshot.tree_hash is not None
     assert snapshot.file_hashes is None
     assert snapshot.git_baseline is not None
+
+
+def test_git_snapshot_does_not_copy_denied_tracked_files(tmp_path):
+    from resagent2_components.git import GitWorkspace
+    _init_repo(tmp_path)
+    (tmp_path / "visible.txt").write_text("visible")
+    grant = _grant(tmp_path)
+    grant.access.denied_paths = ["tracked.txt"]
+    repository = GitWorkspace(WorkspaceBoundary(grant))
+    first = repository.snapshot()
+    (tmp_path / "tracked.txt").write_text("SECRET_CHANGED")
+    second = repository.snapshot()
+    assert first.tree_hash == second.tree_hash
+    paths = subprocess.run(["git", "ls-tree", "--name-only", second.tree_hash],
+                           cwd=tmp_path, check=True, capture_output=True, text=True).stdout
+    assert paths.splitlines() == ["visible.txt"]
+    assert repository.diff_since(first) == ""
 
 
 def test_snapshot_workspace_falls_back_to_file_hashes_for_non_git(tmp_path) -> None:

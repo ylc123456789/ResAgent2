@@ -6,7 +6,7 @@ from resagent2_contracts import (
     AgentOwner,
     VerificationResult,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
 )
 from resagent2_components import (
@@ -36,14 +36,7 @@ def _state(**memory) -> AgentState:
 
 
 def _boundary(root: Path) -> WorkspaceBoundary:
-    return WorkspaceBoundary(
-        WorkspaceGrant(
-            root=str(root),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
-            source=WorkspaceSourceKind.LOCAL,
-        )
-    )
+    return WorkspaceBoundary(WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])))
 
 
 class _FakeRunner:
@@ -93,14 +86,8 @@ def test_classify_command_is_deterministic() -> None:
 
 @pytest.mark.parametrize("writable,allowed", [(False, True), (True, False)])
 def test_run_command_enforces_permission_at_tool_entry(tmp_path, writable, allowed):
-    boundary = WorkspaceBoundary(WorkspaceGrant(
-        root=str(tmp_path), mode=WorkspaceMode.READ_WRITE if writable else WorkspaceMode.READ_ONLY,
-        allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-    ))
-    tool = RunCommandTool(
-        _FakeRunner(boundary), _binding(tmp_path, certified=True),
-        confirm_before_experiment=False, confirmed=True, timeout_seconds=30, allowed=allowed,
-    )
+    boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])))
+    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30, allowed=allowed)
     with pytest.raises(PermissionError):
         tool.execute(_state(), tool.input_model(command="python train.py"))
 
@@ -115,13 +102,7 @@ def test_classify_command_does_not_treat_wrapper_run_as_setup() -> None:
 
 def test_run_command_blocks_experiment_before_certification(tmp_path) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(
-        _FakeRunner(boundary),
-        _binding(tmp_path, certified=False),
-        confirm_before_experiment=False,
-        confirmed=True,
-        timeout_seconds=30,
-    )
+    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=False), timeout_seconds=30)
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 
@@ -132,48 +113,11 @@ def test_run_command_blocks_experiment_before_certification(tmp_path) -> None:
 
 def test_run_command_allows_experiment_after_certification(tmp_path) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(
-        _FakeRunner(boundary),
-        _binding(tmp_path, certified=True),
-        confirm_before_experiment=False,
-        confirmed=True,
-        timeout_seconds=30,
-    )
+    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30)
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 
     assert observation.value["exit_code"] == 0
-
-
-def test_run_command_asks_for_confirmation(tmp_path) -> None:
-    boundary = _boundary(tmp_path)
-    tool = RunCommandTool(
-        _FakeRunner(boundary),
-        _binding(tmp_path, certified=True),
-        confirm_before_experiment=True,
-        confirmed=False,
-        timeout_seconds=30,
-    )
-
-    observation = tool.execute(_state(), tool.input_model(command="python train.py"))
-
-    assert observation.question is not None
-    assert "confirmation is enabled" in observation.question.text
-    assert "python train.py" in observation.question.text
-    assert observation.question.requested_fields == ["approve"]
-    assert observation.memory_updates["pending_command_confirmation"] == "python train.py"
-
-
-def test_confirmation_only_authorizes_the_paired_command(tmp_path):
-    tool = RunCommandTool(
-        _FakeRunner(_boundary(tmp_path)), _binding(tmp_path, certified=True),
-        confirm_before_experiment=True, confirmed=False,
-        confirmed_command="python train.py", timeout_seconds=30,
-    )
-    allowed = tool.execute(_state(), tool.input_model(command="python train.py"))
-    assert allowed.value["exit_code"] == 0
-    changed = tool.execute(_state(), tool.input_model(command="python other.py"))
-    assert changed.question is not None
 
 
 @pytest.mark.parametrize("kind", ["prepare", "audit", "setup"])
@@ -197,13 +141,7 @@ def test_environment_tools_reject_disabled_operations_before_effects(tmp_path, k
 
 def test_run_command_rejects_setup_commands(tmp_path) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(
-        _FakeRunner(boundary),
-        _binding(tmp_path, certified=True),
-        confirm_before_experiment=False,
-        confirmed=True,
-        timeout_seconds=30,
-    )
+    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30)
 
     observation = tool.execute(_state(), tool.input_model(command="pip install numpy"))
 
@@ -218,13 +156,7 @@ def test_run_command_blocks_without_environment(tmp_path) -> None:
         run_id="run_test",
         workspace_id="ws_test",
     )
-    tool = RunCommandTool(
-        _FakeRunner(boundary),
-        binding,
-        confirm_before_experiment=False,
-        confirmed=True,
-        timeout_seconds=30,
-    )
+    tool = RunCommandTool(_FakeRunner(boundary), binding, timeout_seconds=30)
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 

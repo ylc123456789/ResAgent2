@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from resagent2_contracts import WorkspaceSourceKind, WorkspaceSpec
+from .process import run_process
+from resagent2_runtime.budget import DeadlineExceededError
 
 
 class RepoMaterializerError(ValueError):
@@ -31,12 +33,14 @@ _METADATA_FILENAME = "workspace.json"
 def _git_commit(repo_path: Path) -> str:
     """Return the HEAD commit of a repository, or ``""`` when unavailable."""
     try:
-        result = subprocess.run(
+        result = run_process(
             ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
             text=True,
             capture_output=True,
             timeout=20,
         )
+    except DeadlineExceededError:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip() if result.returncode == 0 else ""
@@ -47,12 +51,14 @@ def _is_git_worktree(path: Path) -> bool:
     if not path.is_dir():
         return False
     try:
-        result = subprocess.run(
+        result = run_process(
             ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
             text=True,
             capture_output=True,
             timeout=20,
         )
+    except DeadlineExceededError:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0 and result.stdout.strip() == "true"
@@ -207,7 +213,7 @@ class RepoMaterializer:
             )
 
         def build(staging: Path) -> None:
-            result = subprocess.run(
+            result = run_process(
                 ["git", "clone", "--depth", "1", "--single-branch", repo_url, str(staging)],
                 text=True,
                 capture_output=True,
@@ -280,7 +286,7 @@ class RepoMaterializer:
 
         def build(staging: Path) -> None:
             staging.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run(
+            result = run_process(
                 ["git", "init", "-q", str(staging)],
                 text=True,
                 capture_output=True,

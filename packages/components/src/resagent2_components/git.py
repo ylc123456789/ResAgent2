@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .workspace import WorkspaceBoundary
+from .process import run_process
 
 
 class GitWorkspaceError(ValueError):
@@ -44,7 +45,7 @@ class GitWorkspace:
         accepted: tuple[int, ...] = (0,),
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
+        result = run_process(
             ["git", *arguments],
             cwd=self.boundary.root,
             text=True,
@@ -70,34 +71,26 @@ class GitWorkspace:
     def _write_tree(self) -> str:
         """Return a tree hash of the complete visible working-directory state.
 
-        Uses a temporary index (``GIT_INDEX_FILE``) seeded from HEAD, then
-        updates tracked files and adds visible untracked files. The real index,
+        Uses an empty temporary index and adds only authorized files. The real index,
         branch and working tree are untouched.
         """
         fd, tmp_index = tempfile.mkstemp(prefix="resagent2-index-")
         os.close(fd)
         try:
             index_env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
-            head = self._run(
-                ["rev-parse", "--verify", "HEAD"], accepted=(0, 1), env=index_env
-            )
-            self._run(
-                ["read-tree", "HEAD" if head.returncode == 0 else "--empty"],
-                env=index_env,
-            )
-            self._run(["add", "-u"], env=index_env)
             snapshot_paths = self._run(
                 ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-                env=index_env,
             ).stdout.split("\0")
-            visible_files = [
-                path
-                for path in snapshot_paths
-                if path
-                and self._visible(path)
-                and self.boundary.allows_read(path)
-                and (self.boundary.root / path).is_file()
-            ]
+            self._run(["read-tree", "--empty"], env=index_env)
+            visible_files = []
+            for path in snapshot_paths:
+                if not path or not self._visible(path) or not self.boundary.allows_read(path):
+                    continue
+                try:
+                    self.boundary.resolve_read_file(path)
+                except (ValueError, OSError):
+                    continue
+                visible_files.append(path)
             for offset in range(0, len(visible_files), 256):
                 literal_paths = [
                     f":(literal){path}"

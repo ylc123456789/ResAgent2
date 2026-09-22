@@ -1,25 +1,18 @@
+
+from resagent2_contracts import RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from resagent2_contracts import (ArtifactCandidate, ArtifactRef, AgentOwner, Attempt, AttemptStatus, TaskAcceptanceSpec, WorkflowAgentKind, ErrorCode, FutureArtifactBinding, ModuleError, AgentResult, ModuleStatus, PendingQuestion, QuestionDraft, RecordedAnswer, RunBudget, TaskBudget, TaskProposal, TaskStatus, UserAnswer, Workflow, WorkflowPatch, WorkflowProposal, WorkflowTask, WorkspaceGrant, WorkspaceMode, WorkspaceRecord, WorkspaceSourceKind, WorkspaceSpec, AgentRequest, ResearchRequest, WarningRecord)
+from resagent2_contracts import (ArtifactCandidate, ArtifactRef, AgentOwner, Attempt, AttemptStatus, TaskAcceptanceSpec, WorkflowAgentKind, ErrorCode, FutureArtifactBinding, ModuleError, AgentResult, ModuleStatus, PendingQuestion, QuestionDraft, RecordedAnswer, RunBudget, TaskBudget, TaskProposal, TaskStatus, UserAnswer, Workflow, WorkflowPatch, WorkflowProposal, WorkflowTask, WorkspaceGrant, WorkspaceAccess, WorkspaceRecord, WorkspaceSourceKind, WorkspaceSpec, AgentRequest, ResearchRequest, WarningRecord)
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Evaluate the proposed method",
-        context="A small reference implementation is available.",
-        budget=RunBudget(
-            max_tasks=8,
-            max_attempts_per_task=2,
-            max_llm_calls=20,
-            timeout_seconds=3600,
-        ),
-    )
+    return ResearchRequest(goal='Evaluate the proposed method', context='A small reference implementation is available.', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
 
 
 def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
@@ -104,14 +97,7 @@ def test_research_request_does_not_accept_deployment_resources() -> None:
 
     assert "dataset_refs" not in ResearchRequest.model_fields
     with pytest.raises(ValidationError, match="dataset_refs"):
-        ResearchRequest(
-            goal="Discover resources during execution",
-            budget=RunBudget(
-                max_tasks=1, max_attempts_per_task=1,
-                max_llm_calls=5, timeout_seconds=60,
-            ),
-            dataset_refs=[],
-        )
+        ResearchRequest(goal='Discover resources during execution', budget=RunBudget(max_llm_calls=5, timeout_seconds=60), dataset_refs=[], permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
 
 
 def test_future_artifact_binding_requires_direct_dependency() -> None:
@@ -198,7 +184,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == "12.0"
+    assert restored.schema_version == '13.0'
 
 
 @pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0"])
@@ -225,16 +211,7 @@ def test_user_answer_requires_at_least_one_value() -> None:
 
 def test_unsupported_evidence_kind_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        ResearchRequest(
-            goal="Evaluate the method",
-            required_evidence_kinds=["code_change"],
-            budget=RunBudget(
-                max_tasks=1,
-                max_attempts_per_task=1,
-                max_llm_calls=10,
-                timeout_seconds=60,
-            ),
-        )
+        ResearchRequest(goal='Evaluate the method', required_evidence_kinds=['code_change'], budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
 
 
 @pytest.mark.parametrize(
@@ -431,12 +408,7 @@ def test_recorded_answer_requires_question_but_user_input_does_not() -> None:
 
 def test_workspace_grant_rejects_paths_outside_root() -> None:
     with pytest.raises(ValidationError, match="relative"):
-        WorkspaceGrant(
-            root="/work/repo",
-            mode=WorkspaceMode.READ_ONLY,
-            allowed_paths=["/etc/passwd"],
-            source=WorkspaceSourceKind.LOCAL,
-        )
+        WorkspaceGrant(root='/work/repo', source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['/etc/passwd'], write_paths=[]))
 
 
 @pytest.mark.parametrize("bad_path", ["../x", "..\\x", "a/../../x", "a\\..\\..\\x"])
@@ -471,11 +443,7 @@ def test_workspace_source_kind_values() -> None:
 
 
 def test_workspace_spec_and_record_round_trip() -> None:
-    spec = WorkspaceSpec(
-        workspace_id="ws_main",
-        source_kind=WorkspaceSourceKind.LOCAL,
-        location="/tmp/repo",
-    )
+    spec = WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location='/tmp/repo', access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     record = WorkspaceRecord(
         workspace_id="ws_main", root="/tmp/repo", source=spec, managed=False
     )
@@ -488,10 +456,4 @@ def test_workspace_spec_and_record_round_trip() -> None:
 
 def test_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
-        RunBudget(
-            max_tasks=8,
-            max_attempts_per_task=2,
-            max_llm_calls=20,
-            timeout_seconds=3600,
-            undocumented_switch=True,
-        )
+        RunBudget(max_llm_calls=20, timeout_seconds=3600, undocumented_switch=True)

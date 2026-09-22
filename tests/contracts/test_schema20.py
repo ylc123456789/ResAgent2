@@ -1,5 +1,7 @@
 """Contract tests for the schema 2.0 Phase 7 target types (CONTRACTS §20)."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+
 from datetime import UTC, datetime
 
 import pytest
@@ -11,15 +13,7 @@ NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(
-        goal="Evaluate the method",
-        budget=RunBudget(
-            max_tasks=8,
-            max_attempts_per_task=2,
-            max_llm_calls=20,
-            timeout_seconds=3600,
-        ),
-    )
+    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
 
 
 def session_ref(status: SessionStatus = SessionStatus.PAUSED) -> SessionRef:

@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "12.0"
+SCHEMA_VERSION = "13.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["12.0"] = SCHEMA_VERSION
+    schema_version: Literal["13.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +161,6 @@ class ErrorCode(StrEnum):
     ENVIRONMENT_UNAVAILABLE = "environment_unavailable"
     ARTIFACT_MISSING = "artifact_missing"
     INTERRUPTED = "interrupted"
-
-
-class WorkspaceMode(StrEnum):
-    """Maximum access granted inside a workspace."""
-
-    READ_ONLY = "read_only"
-    READ_WRITE = "read_write"
 
 
 class WorkspaceSourceKind(StrEnum):
@@ -387,10 +380,22 @@ class ArtifactCandidate(ContractModel):
 class RunBudget(ContractModel):
     """Run limits; timeout counts wall time except explicit ask_user pauses."""
 
-    max_tasks: int = Field(ge=1)
-    max_attempts_per_task: int = Field(ge=1)
     max_llm_calls: int = Field(ge=1)
     timeout_seconds: int = Field(ge=1)
+
+
+class ExecutionLimits(ContractModel):
+    """Fixed workflow growth limits, separate from consumed Run resources."""
+
+    max_tasks: int = Field(default=8, ge=1)
+    max_attempts_per_task: int = Field(default=2, ge=1)
+
+
+class RunPermissions(ContractModel):
+    """Trusted caller grants; omitted operations are not authorized."""
+
+    execute_commands: bool = False
+    prepare_environment: bool = False
 
 
 class TaskBudget(ContractModel):
@@ -450,6 +455,28 @@ class ResearchRequest(ContractModel):
     input_artifacts: list[ArtifactImport] = Field(default_factory=list)
     required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
     budget: RunBudget
+    execution_limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
+    permissions: RunPermissions
+    confirm_commands: bool = False
+
+
+class ActionSnapshot(ContractModel):
+    """Immutable public identity of a system-prepared approval request."""
+
+    action_id: NonEmptyStr
+    tool: NonEmptyStr
+    arguments: dict[str, JsonValue]
+    context: dict[str, JsonValue] = Field(default_factory=dict)
+    run_id: RunId
+    session_id: SessionId
+    task_id: TaskId | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> ActionSnapshot:
+        if (self.task_id is None) != (self.attempt_number is None):
+            raise ValueError("action task_id and attempt_number must be paired")
+        return self
 
 
 class QuestionDraft(ContractModel):
@@ -458,6 +485,7 @@ class QuestionDraft(ContractModel):
     text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
     options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
+    action: ActionSnapshot | None = None
 
 
 class PendingQuestion(ContractModel):
@@ -471,6 +499,7 @@ class PendingQuestion(ContractModel):
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
     options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
     created_at: datetime
+    action: ActionSnapshot | None = None
 
 
 class UserAnswer(ContractModel):
@@ -491,6 +520,7 @@ class RecordedAnswer(UserAnswer):
     session_id: SessionId | None = None
     task_id: TaskId | None = None
     attempt_number: int | None = Field(default=None, ge=1)
+    action: ActionSnapshot | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> RecordedAnswer:
@@ -605,7 +635,6 @@ class TaskProposal(ContractModel):
     workspace_id: WorkspaceId | None = None
     acceptance_spec: TaskAcceptanceSpec | None = None
     output_names: list[OutputName] = Field(default_factory=list)
-    confirm_before_experiment: bool = False
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
 
@@ -626,7 +655,6 @@ class WorkflowTask(ContractModel):
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
     acceptance_ref: ArtifactRef | None = None
-    confirm_before_experiment: bool = False
     status: TaskStatus = TaskStatus.PENDING
     input_artifacts: list[ArtifactId] = Field(default_factory=list)
     input_artifact_bindings: list[FutureArtifactBinding] = Field(default_factory=list)
@@ -748,21 +776,51 @@ class WorkflowPatch(ContractModel):
 # ---------------------------------------------------------------------------
 
 
+class WorkspaceAccess(ContractModel):
+    """Relative prefix grants with deny taking precedence over read and write."""
+
+    read_paths: list[str] = Field(default_factory=list)
+    write_paths: list[str] = Field(default_factory=list)
+    denied_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("read_paths", "write_paths", "denied_paths")
+    @classmethod
+    def validate_paths(cls, values: list[str]) -> list[str]:
+        normalized = []
+        for value in values:
+            path = value.strip().replace("\\", "/")
+            if "\x00" in path or PureWindowsPath(path).drive:
+                raise ValueError("workspace paths must be relative")
+            normalized.append(PurePosixPath(_validate_relative_path(path)).as_posix())
+        return list(dict.fromkeys(normalized))
+
+    @staticmethod
+    def contains(path: str, prefixes: list[str]) -> bool:
+        return any(prefix == "." or path == prefix or path.startswith(prefix + "/")
+                   for prefix in prefixes)
+
+    @model_validator(mode="after")
+    def validate_write_scope(self) -> WorkspaceAccess:
+        if any(not self.contains(path, self.read_paths) for path in self.write_paths):
+            raise ValueError("workspace write paths must be inside read paths")
+        return self
+
+    @property
+    def unrestricted(self) -> bool:
+        return "." in self.read_paths and "." in self.write_paths and not self.denied_paths
+
+    def is_subset_of(self, parent: WorkspaceAccess) -> bool:
+        return (all(self.contains(path, parent.read_paths) for path in self.read_paths)
+                and all(self.contains(path, parent.write_paths) for path in self.write_paths)
+                and all(self.contains(path, self.denied_paths) for path in parent.denied_paths))
+
+
 class WorkspaceGrant(ContractModel):
     """Explicit filesystem boundary granted to one module invocation."""
 
     root: NonEmptyStr
-    mode: WorkspaceMode
-    allowed_paths: list[str] = Field(default_factory=list)
-    denied_paths: list[str] = Field(default_factory=list)
+    access: WorkspaceAccess
     source: WorkspaceSourceKind
-
-    @field_validator("allowed_paths", "denied_paths")
-    @classmethod
-    def validate_paths(cls, values: list[str]) -> list[str]:
-        """Require every grant path to be relative to root."""
-
-        return [_validate_relative_path(value) for value in values]
 
 
 class WorkspaceSpec(ContractModel):
@@ -772,7 +830,7 @@ class WorkspaceSpec(ContractModel):
     source_kind: WorkspaceSourceKind
     location: str | None = None
     environment: EnvironmentSpec | None = None
-    mode: WorkspaceMode = WorkspaceMode.READ_WRITE
+    access: WorkspaceAccess
 
     @model_validator(mode="after")
     def validate_location(self) -> WorkspaceSpec:
@@ -813,11 +871,9 @@ class WorkspaceDescriptor(ContractModel):
     description: str = ""
 
 
-class AgentPermissions(ContractModel):
+class AgentPermissions(RunPermissions):
     """System-granted operations; filesystem writes still require a writable grant."""
 
-    execute_commands: bool = True
-    prepare_environment: bool = True
     request_work: bool = False
 
 
@@ -831,9 +887,8 @@ class AgentRequest(ContractModel):
     instruction: NonEmptyStr
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     budget: TaskBudget
-    permissions: AgentPermissions = Field(default_factory=AgentPermissions)
-    confirm_before_experiment: bool = False
-    experiment_confirmed: bool = False
+    permissions: AgentPermissions
+    confirm_commands: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
@@ -885,6 +940,8 @@ class AgentRequest(ContractModel):
                 raise ValueError("workspace_id must match workspace_spec.workspace_id")
             if self.workspace.source != self.workspace_spec.source_kind:
                 raise ValueError("workspace.source must match workspace_spec.source_kind")
+            if not self.workspace.access.is_subset_of(self.workspace_spec.access):
+                raise ValueError("workspace grant exceeds its declared access")
         return self
 
 

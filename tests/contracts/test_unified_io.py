@@ -22,6 +22,7 @@ def request(**changes):
         instruction="Inspect the implementation", budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
     )
     data.update(changes)
+    data.setdefault("permissions", AgentPermissions(execute_commands=True, prepare_environment=True))
     return AgentRequest(**data)
 
 
@@ -66,7 +67,7 @@ def test_request_enforces_invocation_scope_and_dispatch_authority():
     with pytest.raises(ValidationError, match="task_id"):
         request(task_id=None)
     with pytest.raises(ValidationError, match="only Scientific"):
-        request(permissions=AgentPermissions(request_work=True))
+        request(permissions=AgentPermissions(request_work=True, execute_commands=True, prepare_environment=True))
     with pytest.raises(ValidationError):
         request(agent="orchestrator")
 

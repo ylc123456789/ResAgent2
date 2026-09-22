@@ -2,7 +2,9 @@
 
 日期：2026-09-22。实现分支：`fix/code-health`，从已合并的 `main@5fe2c7f` 派生，**本轮尚未合并**。产品与回归测试基线：`51c32381088e5b7d7face36d5e4586f53563aaa5`，schema **14.0**。后续文档提交不表示重新进行过产品验收；服务器记录实际测试 HEAD。
 
-状态：三个实施阶段及本地确定性验证完成；真实模型服务器复测待执行。原始问题及复现见[主线代码健康审查](MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，当前行为以[契约](../../current/CONTRACTS.md)、[架构](../../current/ARCHITECTURE.md)、[模型上下文](../../current/CONTEXT.md)与[CLI 使用说明](../../../apps/cli/README.md)为准。
+后续状态（2026-09-23）：本轮服务器回归与 mock 通过，两条真实模型整链均未完成；原始证据复核、报告勘误、根因修复及新版复测步骤见[服务器复核与根因修复复测](CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。以下保留原交接基线和操作记录；新复测以该文档为准。
+
+原交接状态：三个实施阶段及本地确定性验证完成；真实模型服务器复测待执行。原始问题及复现见[主线代码健康审查](MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，当前行为以[契约](../../current/CONTRACTS.md)、[架构](../../current/ARCHITECTURE.md)、[模型上下文](../../current/CONTEXT.md)与[CLI 使用说明](../../../apps/cli/README.md)为准。
 
 ## 1. 本轮做了什么
 

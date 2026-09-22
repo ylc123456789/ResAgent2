@@ -68,6 +68,8 @@ Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question
 
 操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，不再是当前待答问题的答案或字段不匹配的回答在状态修改前拒绝。消费后即使前置审计失败或进程中断也不恢复批准；缺少执行回执时不自动重放。
 
+确认暂停时原操作尚未执行，提交同意答案也不自动执行。恢复后的 Agent 通过同一 invoke 重发准确工具和参数，权限层才匹配答案并执行。Runtime 从既有 pending_action 投影必需的 pending_operation 段；它不新建批准状态、不重复判定授权。拒绝、快照变化和消费后的再次操作仍走原检查；一次副作用可以对应确认前后两次工具调用。
+
 任务问答继续同一 Attempt、Session、输出目录与基线；retry 才产生新 Attempt。Scientific 工作交付与问答也通过同一个 invoke 恢复，答案和工作反馈不能混作同一次恢复材料。资源是否准备好仍须重新检查，口头回答不替代目录事实。
 
 <a id="module"></a>
@@ -341,7 +343,7 @@ LLM trace 的 `action_valid` 表示响应已解析出候选动作：单工具 pa
 
 - Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录，标明验证是否覆盖当前代码和环境。分析任务可以无修改完成，未执行验证不能被写成已通过。
 - Experiment 可分析已有结果；执行后由代码生成 execution_record。未恢复的真实命令失败会返回失败及诊断；只有同一 argv 的成功重跑可解除该失败，不同诊断命令不能覆盖，旧记录仍保留。
-- Scientific 校验意见、工件授权和已观察引用，并生成 observation_trace。
+- Scientific 校验意见、工件授权和已观察引用，并生成 observation_trace。完成检查复用共享种类集合，模型只能创建 SCIENTIFIC_ARTIFACT_KINDS 中排除系统/工具生成种类后的工件；已有输入证据必须引用其 ID，不能重新作为输出交付。输入/外来/未经登记或被改写的 Ref、重复 Ref 和重复 output_name 在原 AgentLoop 中反馈纠正；本 Session 新登记的合法工具 Ref 仍可原样交付。注册层的身份/hash/磁盘复验继续保留，未知故障不会被无限重试。
 
 Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：required_metric_keys 必须是 JSON 顶层有限数值（排除 bool）；required_artifact_paths、required_artifact_kinds、required_output_names 必须实际存在。require_successful_execution 需要可信的成功 execution_record 或覆盖当前代码的 verification_result；报告文字不计作执行证据。未明确要求的检查不会从 Agent 名称或任务文本猜测出来。
 

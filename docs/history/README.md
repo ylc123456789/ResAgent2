@@ -4,7 +4,7 @@
 
 ## 主线健康审查
 
-2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，随后在 `fix/code-health` 分阶段修复问答 shell、安装环境绑定、追加任务图校验、依赖失败传播和 Coding 超时交付，并清理无消费者的旧状态/辅助代码。产品与测试基线 `51c3238`，schema 14.0；本地 **1224 passed、1 skipped**，mock E2E 和生产装配的确定性原生调用整链通过。尚未合并，真实模型服务器复测待执行，不改写此前验收结论。原始发现见[主线代码健康审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，实施范围、验证边界和操作步骤见[收尾与测试交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)。
+2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地 **1237 passed、1 skipped**、mock 和公开入口确定性整链通过，新的真实模型整链待验收。分支尚未合并。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
 
 ## 最近已完成的主线
 

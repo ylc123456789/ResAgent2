@@ -72,8 +72,11 @@
 | 领域 `system` 段 | 当前 Agent 唯一 prompt 的职责与用法提示 | 始终必需，是最后一条 `user` 消息内的首段，不是 API `system` 消息 |
 | `history_checkpoint` 段 | 压力下生成的旧交互交接摘要 | 有检查点才出现，必需；仅用于定位/续做，当前状态与回答优先，不是证据 |
 | `runtime_feedback` 段 | 尚待处理的动作/参数/完成检查等拒绝信息 | 有反馈才出现，必需；每轮随当前领域上下文重建，解除规则由 Loop 管理 |
+| `pending_operation` 段 | Session.pending_action 的工具、准确参数和 action_id，明确该操作尚未执行 | 有待确认动作才出现，必需；不另存状态，消费批准后消失；要求依据当前 answer 决定是否重发 |
 
-原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
+原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；操作确认回执额外标记 `execution_status=not_executed`，避免把成功发出问题当作执行成功。不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
+
+批准本身不会执行工具。模型需按当前答案重发相同工具和参数，沿用原权限策略重验目标、消费批准后才执行；这是同一待执行操作的继续，不是第二次副作用。拒绝时不执行。`pending_operation` 只投影待处理快照，不自行把答案判成有效授权，也不对消费后执行结果未知的操作自动重放。
 
 Tool 返回 `ok=False` 的普通观察与 Loop 生成的持久拒绝反馈仍不是同一机制；不能假定每个失败工具的完整 stderr 都会自动进入 required 反馈段。receipt 历史和 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影可能呈现同一事实，两份内容都会计入总预算。
 
@@ -114,6 +117,8 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
 
 finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientific 其中必须包含 scientific_opinion JSON 工件。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
+
+Scientific 的提示与完成检查从共享工件契约派生允许新建的种类；已有输入证据通过 opinion.evidence_artifact_ids 引用，不在 finish 里重新交付为新工件。不支持的 kind、输入/外来/伪造 Ref 和重复输出在现有 Loop 内收到 runtime_feedback，使用同一剩余预算纠正；不是 Controller 失败后另起重试。注册层仍检查身份、hash 和磁盘内容。
 
 **work_brief 的用途分工：**
 
@@ -184,7 +189,7 @@ run_command 的回执包含实际命令、退出/超时状态、日志路径与�
 
 输入边界见 [WorkflowCompiler](CONTRACTS.md#compiler)。CLI / real E2E 仍用 `PromptLLMClient.next_action` 把编译 prompt 包成两个必需段：`system` 和 `compiler_request`，要求 JSON-only 输出；两入口的默认额度同源为128000，CLI仍可用 `RESAGENT2_COMPILER_CONTEXT_TOKENS` 单独覆盖。它复用客户端的旧分段注入路径，不使用 Agent 的原生工具历史或 `tools` 数组。
 
-compiler_request 包含当前 WorkRequest 的目标、证据要求、约束，可用 coding/experiment 模块说明，CompilationDraft schema，剩余任务数、逻辑工作区，以及存在时的结构纠错反馈。要求把同一 Agent 的检查、准备和执行保留在一个任务中，并用声明的 output_name 连接确有需要的跨任务产物。
+compiler_request 包含当前 WorkRequest 的目标、证据要求、约束，可用 coding/experiment 模块说明，CompilationDraft schema，剩余任务容量、逻辑工作区，以及存在时的结构纠错反馈。CLI 与 real E2E 使用各 Agent 类上的同一份 description，明确 Coding 可只解释代码，Experiment 可只分析已有结果、无需执行或准备环境。要求把同一 Agent 的提问、检查、准备和执行保留在一个任务中，并用声明的 output_name 连接确有需要的跨任务产物。任务容量明确是上限，不是应凑满的目标；单次操作的约束不能被改写成只准调用工具一次，确认后重发不等于重复执行。
 
 草图顶层只有 tasks；节点使用 instruction，不另列 goal/constraints/inputs 或业务模式。代码物化正式身份并校验，不额外发起语义复审。当前图历史主要用于物化、校验和剩余预算，不把全部旧 Task 和 Run 历史倒给编译模型。
 

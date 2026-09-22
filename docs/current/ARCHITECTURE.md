@@ -85,7 +85,7 @@ Capabilities 的四个目录是 `workspace/`、`artifacts/`、`environment/`、`
 
 `run_verification` 的命令规则、编辑 revision 和验证记录属于 Coding，放在 [verification.py](../../packages/agents/coding/src/resagent2_coding/verification.py)，与 Experiment 自有 `run_command` 对称；二者共用 Components 的 ProcessRunner。Runtime 自有 finish/ask_user 和 Scientific 的控制工具仍留在原模块，不为统一目录搬走领域控制。
 
-CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配。两者共享 PromptLLMClient 和 ScientificArtifactRegistration 等机制，但保留各自配置与测试目标，不合成隐藏的全局 bootstrap。
+CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配。两者共享 PromptLLMClient 和 ScientificArtifactRegistration 等机制，Compiler 使用的能力说明也直接取自各 Agent 的 description；保留各自配置与测试目标，不合成隐藏的全局 bootstrap。
 
 <a id="flow"></a>
 

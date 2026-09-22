@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import cast
@@ -11,7 +12,7 @@ from pydantic import BaseModel
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.environment import EnvironmentBinding, SetupCommandPolicy
-from resagent2_components.process import ProcessRunner, UnsafeCommandError, parse_command
+from resagent2_components.process import ProcessRunner, parse_command
 
 class RunSetupInput(RuntimeModel):
     """One shell-free dependency-installation command."""
@@ -73,17 +74,23 @@ class RunSetupTool:
             )
         # Any setup command may mutate the env even if it later fails, so the
         # previous audit is invalidated *before* the command runs.
-        command = args.command
+        argv = parse_command(args.command)
         argv_prefix = self.binding.argv_prefix()
-        if _is_conda_command(args.command):
+        if Path(argv[0]).name.lower() == "conda":
             # conda manages the env from the host: rebuild with the manager's
             # conda and the bound prefix, not the agent-named executable.
-            command = _conda_update_command(
-                args.command,
-                conda_exe=self.binding.manager.conda_exe,
-                prefix=self.binding.current.prefix,
-            )
+            argv = [self.binding.manager.conda_exe, "env", "update", "-p",
+                    str(self.binding.current.prefix), *argv[3:]]
             argv_prefix = None
+        else:
+            # A conda-run wrapper does not replace an explicit interpreter.
+            # Resolve pip through the bound Python, independent of PATH.
+            python = self.binding.current.prefix / (
+                "python.exe" if os.name == "nt" else "bin/python"
+            )
+            install_args = argv[3:] if argv[0] in {"python", "python3"} else argv[1:]
+            argv = [str(python), "-m", "pip", *install_args]
+        command = shlex.join(argv)
         index = int(state.memory.get("setup_count", 0)) + 1
         self.binding.invalidate()
         result = self.runner.run(
@@ -103,21 +110,3 @@ class RunSetupTool:
             ok=ok,
             memory_updates={"setup_count": index},
         )
-def _is_conda_command(command: str) -> bool:
-    try:
-        argv = parse_command(command)
-    except UnsafeCommandError:
-        return False
-    return bool(argv) and Path(argv[0]).name.lower() == "conda"
-
-
-def _conda_update_command(command: str, *, conda_exe: str, prefix: Path) -> str:
-    """Rebuild ``conda env update`` to use the manager's conda and the bound prefix.
-
-    The command has already passed the policy (argv[0] = conda, argv[1] = env,
-    argv[2] = update), so everything after ``update`` is the caller's own args
-    and the executable is whatever ``EnvironmentManager.conda_exe`` resolved.
-    """
-    argv = parse_command(command)
-    result = [conda_exe, "env", "update", "-p", str(prefix), *argv[3:]]
-    return shlex.join(result)

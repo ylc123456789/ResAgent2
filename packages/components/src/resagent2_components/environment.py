@@ -559,11 +559,15 @@ class SetupCommandPolicy:
 
     Default-deny. Only ``python -m pip install ...`` / ``pip install ...`` and
     ``conda env update -f ...`` are allowed; ``sudo``, ``conda create/remove``,
-    and explicit ``--prefix/-p/--name/-n/--target`` are forbidden. ``uv`` and
-    ``poetry`` are intentionally not supported yet (no bound-environment test).
+    and options selecting another installation target are forbidden. Python
+    and pip must use bare names: the tool selects the bound interpreter.
+    ``uv`` and ``poetry`` are not supported (no bound-environment test).
     """
 
-    _FORBIDDEN_FLAGS = {"--prefix", "-p", "--name", "-n", "--target"}
+    _FORBIDDEN_LONG_FLAGS = {
+        "--prefix", "--name", "--target", "--root", "--user", "--python",
+    }
+    _FORBIDDEN_SHORT_FLAGS = {"p", "n", "t"}
 
     def check(self, command: str) -> CommandPermissionDecision:
         try:
@@ -571,8 +575,13 @@ class SetupCommandPolicy:
         except UnsafeCommandError as error:
             return CommandPermissionDecision(allowed=False, reason=str(error))
         executable = Path(argv[0]).name.lower()
-        args = [argument.lower() for argument in argv[1:]]
-        flag = self._forbidden_flag(args)
+        if executable in {"python", "python3", "pip", "pip3"} and argv[0] != executable:
+            return CommandPermissionDecision(
+                allowed=False,
+                reason="use a bare python or pip name; the system selects the bound interpreter",
+            )
+        args = argv[1:]
+        flag = self._forbidden_flag(args, executable=executable)
         if flag is not None:
             return CommandPermissionDecision(
                 allowed=False,
@@ -613,10 +622,26 @@ class SetupCommandPolicy:
         )
 
     @staticmethod
-    def _forbidden_flag(args: list[str]) -> str | None:
+    def _forbidden_flag(args: list[str], *, executable: str) -> str | None:
         for argument in args:
-            if argument in SetupCommandPolicy._FORBIDDEN_FLAGS:
-                return argument
-            if argument.startswith(("--prefix=", "--name=", "--target=")):
-                return argument
+            if argument.startswith("--"):
+                option = argument.split("=", 1)[0]
+                # Both pip and conda accept unambiguous long-option prefixes.
+                # pip's exact --pre switch wins over the --prefix abbreviation.
+                if option == "--pre" and executable != "conda":
+                    continue
+                if len(option) > 2 and any(
+                    flag.startswith(option)
+                    for flag in SetupCommandPolicy._FORBIDDEN_LONG_FLAGS
+                ):
+                    return argument
+            elif argument.startswith("-"):
+                # Skip combinable switches, then inspect the first value-taking
+                # option. This catches -tDIR and -UtDIR without mistaking an
+                # index URL in -ihttps://... for another short option.
+                for option in argument[1:]:
+                    if option in SetupCommandPolicy._FORBIDDEN_SHORT_FLAGS:
+                        return argument
+                    if option not in "qvUIhVyd":
+                        break
         return None

@@ -1,5 +1,8 @@
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from resagent2_contracts import (
     AgentOwner,
@@ -75,9 +78,11 @@ class _FakeRunner:
     def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
         self.argv_prefixes: list = []
+        self.commands: list[str] = []
 
     def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
         self.argv_prefixes.append(argv_prefix)
+        self.commands.append(command)
         log_root = Path(log_dir)
         if not log_root.is_absolute():
             log_root = self.boundary.root / log_root
@@ -127,6 +132,44 @@ def test_setup_policy_forbids_destructive_and_prefix_commands() -> None:
     assert not policy.check("pip install --prefix /tmp numpy").allowed
     assert not policy.check("pip install -p /tmp numpy").allowed
     assert not policy.check("apt install curl").allowed
+
+
+@pytest.mark.parametrize("option", [
+    "--target /tmp/elsewhere", "--target=/tmp/elsewhere", "--tar=/tmp/elsewhere",
+    "-t /tmp/elsewhere", "-t/tmp/elsewhere", "-Ut/tmp/elsewhere",
+    "--prefix=/tmp/elsewhere", "--pref=/tmp/elsewhere", "-p/tmp/elsewhere",
+    "--root /tmp/elsewhere", "--root=/tmp/elsewhere", "--roo=/tmp/elsewhere",
+    "--user", "--us", "--python=/usr/bin/python3",
+])
+def test_pip_setup_rejects_installation_target_overrides(option) -> None:
+    assert not SetupCommandPolicy().check(f"pip install {option} numpy").allowed
+
+
+@pytest.mark.parametrize("option", [
+    "-n elsewhere", "-nelsewhere", "-qnelsewhere", "--name=elsewhere",
+    "-p /tmp/elsewhere", "-p/tmp/elsewhere", "--pre=/tmp/elsewhere",
+])
+def test_conda_setup_rejects_environment_overrides(option) -> None:
+    assert not SetupCommandPolicy().check(
+        f"conda env update {option} -f environment.yml"
+    ).allowed
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -m pip install -Urrequirements.txt --pre",
+    "pip3 install -vihttps://pypi.org/simple --root-user-action ignore numpy",
+    "pip install --no-user --upgrade --cache-dir /tmp/cache -e .",
+    "conda env update -f environment.yml --prune",
+])
+def test_setup_policy_preserves_normal_installs_and_download_options(command) -> None:
+    assert SetupCommandPolicy().check(command).allowed
+
+
+@pytest.mark.parametrize("executable", [
+    "/usr/bin/python3 -m pip", "./python -m pip", "/another/env/bin/pip", "./pip3",
+])
+def test_setup_policy_rejects_caller_selected_interpreters(executable) -> None:
+    assert not SetupCommandPolicy().check(f"{executable} install numpy").allowed
 
 
 # ── PrepareEnvironmentTool ─────────────────────────────────────────
@@ -268,6 +311,55 @@ def test_run_setup_success_invalidates_certification(tmp_path) -> None:
 
     assert observation.ok is True
     assert binding.certified is False
+
+
+@pytest.mark.parametrize("executable", ["python -m pip", "python3 -m pip", "pip", "pip3"])
+def test_pip_setup_executes_and_records_bound_interpreter(tmp_path, executable) -> None:
+    boundary = WorkspaceBoundary(
+        WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL,
+                       access=WorkspaceAccess(read_paths=["."], write_paths=["."]))
+    )
+    manager = _FakeManager(tmp_path / "envs with spaces")
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    runner = _FakeRunner(boundary)
+    tool = RunSetupTool(runner, binding, log_dir=str(tmp_path / "setup"), timeout_seconds=30)
+    command = f"{executable} install -r 'requirements dev.txt' --index-url https://example.org/simple"
+
+    observation = tool.execute(_state(), tool.input_model(command=command))
+
+    assert observation.ok
+    assert shlex.split(runner.commands[0]) == [
+        str(binding.current.prefix / "bin/python"), "-m", "pip", "install", "-r",
+        "requirements dev.txt", "--index-url", "https://example.org/simple",
+    ]
+    assert runner.argv_prefixes == [binding.argv_prefix()]
+    assert observation.value["command"] == runner.commands[0]
+
+
+@pytest.mark.parametrize("command", [
+    "pip install -t/tmp/elsewhere numpy", "pip install --user numpy",
+    "python -m pip install --root=/tmp/elsewhere numpy",
+    "/usr/bin/python3 -m pip install numpy",
+])
+def test_rejected_setup_never_runs_or_invalidates_environment(tmp_path, command) -> None:
+    boundary = WorkspaceBoundary(
+        WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL,
+                       access=WorkspaceAccess(read_paths=["."], write_paths=["."]))
+    )
+    manager = _FakeManager(tmp_path / "envs")
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    binding.certified = True
+    generation = binding.generation
+    runner = _FakeRunner(boundary)
+    tool = RunSetupTool(runner, binding, log_dir=str(tmp_path / "setup"), timeout_seconds=30)
+
+    observation = tool.execute(_state(), tool.input_model(command=command))
+
+    assert not observation.ok
+    assert runner.commands == []
+    assert binding.certified and binding.generation == generation
 
 
 # ── AuditEnvTool ───────────────────────────────────────────────────

@@ -16,6 +16,8 @@ from resagent2_orchestrator import (
     ResearchRun,
     WorkflowScheduler,
 )
+from tool_fixtures import WriteValueTool
+
 from resagent2_runtime import (
     AgentDefinition,
     AgentLoop,
@@ -26,7 +28,6 @@ from resagent2_runtime import (
     FinishTool,
     InMemorySessionStore,
     OpenAICompatibleClient,
-    WriteValueTool,
 )
 
 

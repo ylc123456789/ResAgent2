@@ -3,6 +3,8 @@ from resagent2_contracts import AgentPermissions
 from resagent2_contracts import ArtifactCandidate, QuestionDraft
 
 from resagent2_contracts import (AgentOwner, ErrorCode, ModuleError, ModuleStatus, AgentRequest, TaskBudget)
+from tool_fixtures import ReadValueTool, WriteValueTool
+
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -13,9 +15,7 @@ from resagent2_runtime import (
     FinishCandidate,
     FinishTool,
     InMemorySessionStore,
-    ReadValueTool,
     ScriptedLLMClient,
-    WriteValueTool,
     AskUserTool,
 )
 

@@ -8,10 +8,12 @@ from httpx import TransportError
 import pytest
 
 from resagent2_contracts import (AgentOwner, AgentPermissions, ErrorCode, ModuleStatus, AgentRequest, SessionStatus, TaskBudget)
+from tool_fixtures import WriteValueTool
+
 from resagent2_runtime import (
     AgentDefinition, AgentLoop, AllowListPermissionPolicy, AskUserTool,
     CompletionDecision, ContextSection, FinishTool, InMemorySessionStore,
-    JsonSessionStore, ModelProfile, OpenAICompatibleClient, WriteValueTool,
+    JsonSessionStore, ModelProfile, OpenAICompatibleClient,
 )
 from resagent2_runtime.context import ContextComposer
 from resagent2_runtime.models import NativeToolCall, ToolCallTurn, ToolObservation
@@ -547,7 +549,7 @@ def _writes(*values):
 
 def test_serial_batch_updates_state_and_pairs_distinct_receipts(setup):
     definition, store, requests, install = setup
-    from resagent2_runtime import ReadValueTool
+    from tool_fixtures import ReadValueTool
     definition = replace(
         definition, tools=(*definition.tools, ReadValueTool()),
         permission_policy=AllowListPermissionPolicy({"write_value", "read_value", "finish"}),

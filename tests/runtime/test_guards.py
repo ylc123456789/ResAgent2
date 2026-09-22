@@ -3,6 +3,8 @@ from resagent2_contracts import AgentPermissions
 import pytest
 
 from resagent2_contracts import (AgentOwner, ErrorCode, ModuleStatus, AgentRequest, TaskBudget)
+from tool_fixtures import WriteValueTool
+
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -16,7 +18,6 @@ from resagent2_runtime import (
     FinishTool,
     InMemorySessionStore,
     ScriptedLLMClient,
-    WriteValueTool,
 )
 
 

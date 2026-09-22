@@ -6,7 +6,7 @@
 
 Run 控制简化已完成修复轮定向功能复核（schema **13.0**，产品 `602ffee`，实测 `8b071e6a`，分支 `refactor/run-control`）：Coding 删除动作、批准恢复时环境核验两处缺陷关闭，本地/服务器 **1153 passed、1 skipped**。4 个真实模型场景覆盖 5 项功能；固定 Task 执行不等于 Scientific 完整 Run E2E。原始 Session 拒绝快照未保存、只读探针重跑覆盖旧状态等限制保留在[修复轮复核](reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。分支已推送、未合并，无需为记录勘误再跑模型/GPU。服务器仍使用固定 `projects/ResAgent2`。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，复现步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
 
-统一 Agent IO V2 已完成本地实现（schema **12.0**，分支 `refactor/unified-agent-entry`）：三个 Agent 共用单一 invoke 和报告/工件协议；本地 **1036 passed、1 skipped**，模拟 E2E 与 CLI 入口通过。代码已分段提交，尚未合并或推送；真实模型与 GPU 验收等待服务器启动。具体范围、提交和验证边界见 [本地验收记录](reviews/UNIFIED_AGENT_IO_V2_ACCEPTANCE_2026-09-20.md)。
+统一 Agent IO V2 已完成分阶段服务器验收（schema **12.0**，产品实测 `22347c5`，开发分支 `refactor/unified-agent-entry`）：三个 Agent 共用单一 invoke 和报告/工件协议；复测 **1071 passed、1 skipped**，完整 CUDA 场景与分析探针通过。repair 保留“自动谓词 FAIL、包装命令人工复核通过”，命令确认采用既有真实流程与新增确定性拒绝测试的组合证据；详见 [最终复核](reviews/UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md)。该实现已包含在当前 `refactor/run-control` 推送分支中，尚未合入主线。最初本地结果另保留于[本地验收记录](reviews/UNIFIED_AGENT_IO_V2_ACCEPTANCE_2026-09-20.md)。
 
 Tool / Components 职责整理已完成服务器四个小探针及原始证据复核（实测 `6672376`，产品 `4cdb725` / `54fab5c`），schema 10.0 不变。新增 Components，Capabilities 聚焦模型 Tool，Runtime 引擎不改；当前每个模型可调用 Tool 都有独立实现文件，`__init__.py` 只负责公开导出。分支 `refactor/tool-components` 尚未合并。设计见 [ADR-0015](decisions/0015-tool-components-boundary.md)，本地验证、29 次模型调用、文献阅读范围和报告勘误见 [最终复核与收尾](reviews/TOOL_COMPONENTS_ACCEPTANCE.md#verified-closeout)。四探针不代表重跑科研 L3。
 

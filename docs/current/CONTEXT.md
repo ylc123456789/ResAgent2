@@ -23,7 +23,7 @@
 
 `ResearchRequest.context` 只是用户提供的一段研究背景，不是本文所说的完整模型上下文。完整上下文还包含工具说明、控制状态、答案和读取结果。
 
-当前三个 Agent 共用原生工具调用协议。每次请求包含一条 API `system` 协议说明、Session 中检查点之后已经配对的 assistant/tool 消息、最后一条本轮重新组装的 `user` 领域上下文，以及独立的 `tools` 数组。领域上下文里的 `system` 仍是旧的职责文本段名，位于最后这条 `user` 消息内；旧轮次的完整领域 prompt 不会累积进历史。
+当前 CLI/真实 E2E 为三个 Agent 注入原生工具客户端；下文主要描述这条路径。每次请求包含一条 API `system` 协议说明、Session 中检查点之后已经配对的 assistant/tool 消息、最后一条本轮重新组装的 `user` 领域上下文，以及独立的 `tools` 数组。领域上下文里的 `system` 仍是职责文本段名，位于最后这条 `user` 消息内；旧轮次的完整领域 prompt 不会累积进历史。单独注入仅提供 next_action 的客户端时，仍走正文 JSON 路径；这不是原生输出失败后的降级策略。
 
 原生响应的 `reasoning_content` 会与该 assistant 回合、工具调用及 receipt 一起保存在 Session，近期回合在后续原生请求中原样续传；较早回合可以按下述边界进入有损摘要。它只是 Provider 协议连续性数据，不是科学证据，也不是新增的研究记忆组件；Session 的 `memory` 仍是代码维护的状态字典。
 
@@ -111,11 +111,13 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | `work_brief` | interpreter 将本次 work_feedback 的原需求、结果和未解决任务整理成简报 | 本次交付工作反馈时必需；不转存新状态 |
 | `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
-Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
+Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
 
 finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientific 其中必须包含 scientific_opinion JSON 工件。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
 
 **work_brief 的用途分工：**
+
+同次工作反馈还会以完整 `material_<artifact_id>` 出现；work_brief 是另一份用途投影，不替换原结构化材料，两者都计入输入额度。
 
 - `purpose` 是上一份工作需求的 objective / expected_evidence / constraints。
 - 完成结果的 `narrative` 是模块解释；`caveats` 是交付警告，只投影 code/message。
@@ -138,7 +140,7 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 | `task` | `instruction`、workspace_access、permissions、confirm_commands，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
 | `dataset_catalog` | 当前 invoke 解析的数据集视图与共享说明 | 必需 |
 | `material_<artifact_id>` | acceptance_requirements，以及本次 resume_artifact_ids 指定的 answer | 对已选材料必需；校验 Task/Attempt 归属 |
-| `verification_state` | 编辑版本、验证状态、环境代次对应的下一步建议 | 存在控制投影时必需；每步调用 derive_control_state |
+| `verification_state` | edit_revision、verification_revision、environment_certified、验证问题/是否过时及 suggested_next_action；代次比较在代码内完成，不直接展示 generation | 存在控制投影时必需；每步调用 derive_control_state |
 | `environment` | 实际 EnvironmentBinding 的 prepared/certified、Python 要求及已有环境身份 | 有绑定时必需；与工具使用同一绑定 |
 | `file_reads` / `artifact_reads` | 文件片段与工件片段，分别保留 | 各自导航框必需，正文共享空余额度 |
 | `command_results` | 每个执行工具最近一次有记录的命令结果；优先保留失败诊断 | 有命令结果才出现，必需；共享投影，不新增缓存 |
@@ -147,6 +149,8 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
 
 **验证状态的含义：**`verification_state.edited_since_verification` 比较 edit_revision 与 verification_revision，表示记录的编辑版本是否晚于验证版本。false 不表示本 Attempt 没有修改，也不代表实时 Git diff 为空。verification_issue、verification_stale 和 suggested_next_action 提示当前验证状态；新编辑、环境变动或恢复不会让旧验证自动覆盖当前代码。
+
+需要验证而绑定尚未认证时，建议动作是 run_verification，由获准执行的工具自动核验环境；不再要求模型先单独 audit_env。没有记录到编辑时 suggested_next_action 为 none，verification_stale 也可为 false，即使 verification_issue 是“未执行验证”；这些字段不强制纯分析任务运行命令。
 
 这些字段是确定性事实与建议，不是另一种业务模式。finalizer 生成验证工件，Scheduler 根据明确的验收要求判断是否必须成功执行。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
 
@@ -170,7 +174,7 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 
 调用开始不强制探测硬件或执行命令；需要时通过工具观察。环境绑定是工具和上下文共用的实际对象，原生历史中的旧 audit receipt 不能代替当前绑定。
 
-工具已经捕获并截断的命令 stdout/stderr 与 evidence_files 清单进入原生 receipt 历史，`command_results` 再投影有界诊断；证据文件正文不会因此自动读入。execution_record 由代码从真实事件生成；数值交付与成功执行等精确要求在 Scheduler 按要求工件检查，报告自报数字不算测量证据。
+run_command 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；数值交付与成功执行等精确要求在 Scheduler 按要求工件检查，报告自报数字不算测量证据。
 
 **源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/components/test_workspace_context.py)。
 
@@ -226,9 +230,9 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 ### 4.3 目录、环境、数据集的刷新频率不同
 
 - **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
-- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified 等当前绑定状态；环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。
+- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified、required_python；已有环境时再附 env_id、prefix、python_version。环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。完整 env_audit 保存在该次工具 value 和 Session memory，原生 receipt 可见；environment 段只投影当前绑定，不直接展开历史审计。
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
-- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料，历史工件仍保留。必需材料过大时明确超限，不静默截断结构化答案。
+- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料，历史工件仍保留。每个 material 段包含 artifact_id、kind、content；answer 的 content 保留原题、回答和可选动作快照，不是只展示一句 yes。要求工件不依赖 resume_artifact_ids，仍按类型自动装入。读取并注入材料不替代权限策略核对 pending_action 和单次批准；必需材料过大时明确超限，不静默截断结构化答案。
 
 资源字段、路径授权等公开约定仍以 [资源契约](CONTRACTS.md#resources)、[问答契约](CONTRACTS.md#questions) 为准。
 
@@ -244,6 +248,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 - 失败项展示命令、退出/超时状态和已捕获的 stdout_tail/stderr_tail；没有捕获到输出就明确说明，不编造根因。
 - 正文参与统一材料分配，空余空间优先借给诊断（priority=96），然后读取材料（80）、目录（62）。一个日志尾部仍最多2000字符；裁剪和未放入的结果数量明确标记。选中后按原始事件顺序呈现。额度很小时保留省略提示，不宣称全部根因始终可见。
 - 同一工具较新的命令结果取代投影中的旧结果，但不删除Session事件；后续普通读文件不会把最近的验证失败挤出这个段。
+- 该段只选择含合法 exit_code 的真实命令结果，不展开 env_audit。前置审计失败、无环境或等待批准均不是已执行命令，可能仍保留此前的命令诊断；本次阻断原因应结合最新 receipt、environment 和运行反馈读取。
 - 这些是历史执行诊断，不是当前状态或科学测量。验证是否仍有效，由 verification_state 与确定性验证记录说明；是否满足任务的成功执行要求由验收决定。
 
 此处没有IO、LLM摘要或第二份状态缓存。完整日志仍留原处，也不承诺有限摘录覆盖所有失败原因。[源码](../../packages/components/src/resagent2_components/context.py)与[共享投影测试](../../tests/components/test_workspace_context.py)。
@@ -280,6 +285,8 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 | 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
 | 调用次数/时间 | RunBudget 仅含 max_llm_calls 和 timeout_seconds；发送前持久占用，内部共享余额和截止时间 | Controller / Scheduler / Runtime 的共享 execution_budget 与 RunUsage |
 | 流程上限 | ExecutionLimits 的 max_tasks、max_attempts_per_task；step 仅记录动作时序 | Compiler / Scheduler，不另立消费预算 |
+
+执行预算与模型可见信息是两个边界：当前三个 Agent 的 builder 及共同运行段都不自动输出 TaskBudget 数值、Run 用量或实时剩余时间。Coding/Experiment 的 task 段展示明确权限、工作区范围和确认开关；Scientific 的 research 段只有 instruction。上述控制仍在代码中执行，不依赖模型自行记账。Compiler 的 compiler_request 展示剩余任务槽位，但不接收一份可分配的模型调用钱包。
 
 Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块上限”和“模型可用输入容量”的较小值；没有hook时使用模块上限，不猜Provider容量。原生路径先为完整 tools schema 和当前续传历史预留空间，再把剩余材料额度交给builder；Composer 随后仍按完整请求复核。输入压力先尝试下述最小压缩；没有可用前缀、schema/单个巨大回合/required 领域段仍装不下时，明确返回 `budget_exhausted`。不删除半个 assistant/tool pair，也不暗改上限。CLI注入Profile；real E2E有自己的装配，但原生Agent默认值同源，不能假定它继承CLI的环境变量覆盖。
 
@@ -336,4 +343,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 13.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 13.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

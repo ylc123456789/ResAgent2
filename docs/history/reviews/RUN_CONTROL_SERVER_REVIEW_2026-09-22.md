@@ -102,3 +102,11 @@ Session 证据位于 `cases/item3_two_commands/sessions/`：
 24 条模型 trace 均 retry_number=0，调用键唯一。三场景可完全对账：repair 5/5、delete 5/5、commands 9/9。readonly 的前次 3 条 trace 仍在，但同一 run_id/session_id 重跑覆盖了前次 Run/Session；最终保留的 2 条 usage 可精确匹配后两条 trace。不能把 5 条 trace 与最终 2 次占用当作同一 Run 的完整对账，也不能说所有失败状态均已保留。
 
 因此准确表述为：观测到 24 次模型调用；现存四份最终账本共 21 次成功占用且无 unknown；另 3 次历史调用缺少对应当时的持久状态。本轮继续复用 run_id 违反了交接要求，已作为测试记录缺陷保留，未发现由产品导致的计数丢失。后续重跑须使用新标识和独立目录，不能 reset 状态后追加到旧 trace。
+
+## 6. 合并前文档同步检查
+
+2026-09-22 更新远端引用后，`origin/main` 为 `f771a70e`，是当前开发分支祖先；`refactor/unified-agent-entry` 的 `c0add70` 也已包含。只读 merge-tree 检查无冲突，可直接将 `refactor/run-control` 合入主线，不需要先分别合并其父分支。本次检查未执行合并。
+
+按现有代码复核当前 22 份入口、规范、指南和模块文档：补齐 CONTRACTS 的预算/权限/恢复边界，CONTEXT 的实际模型可见字段及自动核验回执，架构和模块 README 的单次批准、环境核验及失败判据；修正旧答案上下文、Components 缺项、过时验收导航与服务器使用规则。按文档规则新增 [ADR-0016](../decisions/0016-unified-agent-io-and-run-controls.md)，明确旧决策的部分取代关系；历史正文与原始失败记录不改写。
+
+检查全部 78 份项目 Markdown 的相对文件链接（含新增 ADR），当前文档的章节锚点、19 个 bash 示例及其中 10 条 CLI 命令解析，均通过；6 个因源码迁移失效的历史定位链接已修复。git diff --check 通过。本次只改文档，产品仍是已验收的 `602ffee`，沿用本地/服务器 1153 passed / 1 skipped，不将文档检查称为再次执行完整产品测试。

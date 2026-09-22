@@ -46,7 +46,7 @@ Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，
 
 路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集、环境和依赖缓存继续按原有职责管理，不新增通用资源配额层。
 
-Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Compiler 生成一个任务草图，结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，历史验收不代表本次重构已完成真实服务器验证。
+Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Compiler 生成一个任务草图，结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，各提交的真实验证范围与记录限制见 [统一 IO 验收](docs/history/reviews/UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md) 和 [Run 控制验收](docs/history/reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。
 
 `report` 解释发现、结果与局限，较长说明可作为 `module_report` 工件交接；测量以原始证据为准。Controller 将原题与用户回答配对成 `answer` 工件，再恢复对应 Session。命令、验证与观察记录由原生 Agent 的确定性完成检查生成，上游只接收公共结果和工件，不读取下游私有 Session。
 

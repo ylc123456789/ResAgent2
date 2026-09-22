@@ -41,8 +41,8 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 
 | 字段 | 含义 |
 |---|---|
-| `budget: RunBudget` | 仅含 `max_llm_calls`、`timeout_seconds`，控制模型请求次数和有效运行时长 |
-| `execution_limits: ExecutionLimits` | `max_tasks=8`、`max_attempts_per_task=2`，限制任务图增长和重试，不是独立消费预算 |
+| `budget: RunBudget` | 必填；`max_llm_calls`、`timeout_seconds` 均为正整数，控制模型请求次数和有效运行时长 |
+| `execution_limits: ExecutionLimits` | `max_tasks=8` 限制累计图节点数；`max_attempts_per_task=2` 包含首次执行，不是另加两次重试；均为正整数 |
 | `permissions: RunPermissions` | 必填；`execute_commands`、`prepare_environment` 默认均为 False，可信入口负责明确授权 |
 | `confirm_commands: bool` | 默认 False；启用后，对权限允许的 Agent 顶层外部操作逐次询问 |
 
@@ -52,6 +52,8 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 
 Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套调用共享用量并取更早截止时间。TaskBudget 是当前余额的调用上限快照，不是第二份钱包。模型及文献 HTTP、退避、环境准备和受控子进程都受剩余时间约束；到期取消请求或终止进程树。本地取消不保证供应商停止计费，未知结果保留占用。
 
+当前 Scheduler 将 Run 剩余调用数和时间传给下一次 Agent 调用，没有预先给各 Task 分钱包；等待回答、重试或追加任务都不重置 Run 用量。脱离 Controller 单独调用原生 Agent 时，TaskBudget 只限制该次调用；需要跨调用累计时，由可信调用方绑定共享执行预算。
+
 调用者用 ArtifactImport 提交本地输入的 URI、kind、media_type、summary 和可选 expected_sha256。Controller 校验并冻结为已登记工件。数据集目录由部署环境提供，不是 ResearchRequest 的逐次路径参数。
 
 <a id="questions"></a>
@@ -60,11 +62,11 @@ Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套�
 
 `QuestionDraft` 的 `text` 必须包含回答所需背景，`requested_fields` 非空；`options` 可选。字段键使用 AnswerFieldName：1–64 个 ASCII 字母、数字或下划线，以字母开头。正文和选项放在值中，不放进机器键。工具 schema 在暂停前校验这些规则。
 
-Agent 返回 `needs_user_input`、paused Session 和指向 `question` 工件的 ControlSignal。Controller 分配并保存 PendingQuestion；用户只提交 `UserAnswer(question_id, values, answered_at)`。values 必须匹配保存的问题字段。
+Agent 返回 `needs_user_input`、paused Session 和指向 `question` 工件的 ControlSignal。Orchestrator 分配并保存 PendingQuestion；用户只提交 `UserAnswer(question_id, values, answered_at)`。values 的键集合必须等于保存的问题字段；options 是供用户选择的提示，不是额外的字符串枚举校验。
 
 Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。
 
-操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，过期问题或不匹配的回答在状态修改前拒绝。消费后崩溃而无回执不自动重放。
+操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，不再是当前待答问题的答案或字段不匹配的回答在状态修改前拒绝。消费后即使前置审计失败或进程中断也不恢复批准；缺少执行回执时不自动重放。
 
 任务问答继续同一 Attempt、Session、输出目录与基线；retry 才产生新 Attempt。Scientific 工作交付与问答也通过同一个 invoke 恢复，答案和工作反馈不能混作同一次恢复材料。资源是否准备好仍须重新检查，口头回答不替代目录事实。
 
@@ -97,7 +99,7 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | confirm_commands | 继承 Run 的逐次外部操作确认要求 |
 | parent_session_id、resume_artifact_ids | 恢复所属 Session，以及此次 answer 或 work_feedback 工件 ID |
 
-permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。`request_work=True` 只允许 Scientific；模型不能自行提高权限。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
+permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。当前 Controller 只给 Scientific `request_work=True`，不授予命令执行、环境准备或源工作区；Scheduler 给 Coding/Experiment 继承 Run 的两项操作授权和确认开关，并从已保存的工作区记录派生文件授权。任务图不携带自行扩权字段。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
 
 resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_session_id；仅允许 answer 或 work_feedback，同次不能混用。接收端另外校验工件内容中的 Run、Task/Attempt、Session 与当前调用一致。
 
@@ -110,7 +112,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 | status | ModuleStatus，确定性机器状态 |
 | report | 非空说明，表达发现、结果和局限 |
 | artifacts | ArtifactCandidate 或本次所属且已登记的 ArtifactRef |
-| session | 子模块拥有的 SessionRef |
+| session | 子模块拥有的 SessionRef；暂停控制结果必填，其他结果可为空；提供时其状态必须与结果对应 |
 | control | 只含 action 和工件定位，不复制业务正文 |
 | error、warnings | 结构化错误和非致命警告 |
 | llm_calls | 本次调用用量的诊断投影；严格非负整数，拒绝 bool；Run 以发送前持久占用为准 |
@@ -119,7 +121,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 
 完成状态不含 error/control；completed_with_warnings 必须有 warnings，completed 不能含 warnings。failed/blocked 必须有 error，不能含 control。needs_user_input/request_work 必须有对应 control 和 paused Session，不能含 error。
 
-接收端重新校验整个结果、Session 所有权、工件归属和实际消费。错误返回不能抹掉已发生调用或已登记工件；report 不能自行决定状态。
+接收端重新校验整个结果、Session 所有权、工件归属和恢复绑定，并登记本次已交付的答案。交付登记不证明自定义 Port 实际阅读或理解了材料；原生 Agent 通过必需上下文读取本次恢复工件。错误返回不能抹掉已发生调用或已登记工件；report 不能自行决定状态。
 
 <a id="payloads"></a>
 
@@ -243,6 +245,16 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
 
 `OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围，再检查工具自身命令约束与固定 argv 规则。常规受支持验证及直接工作区脚本可放行；内联解释器代码和未覆盖命令询问；裸 rm/rmdir、提权、shell 包装及明确破坏性系统操作拒绝。环境安装仍走受控环境 Tool。confirm_commands 为允许范围内的操作增加确认，不能把 deny 改为 allow；需确认的验证一次只提交一条命令。
+
+| 操作 | 所需操作授权 | 额外边界 |
+|---|---|---|
+| `prepare_environment` | `prepare_environment=True` | 可调用受控环境创建子进程，不要求 `execute_commands=True` |
+| `run_setup` | 两项权限均为 True | 完整可读写工作区及安装命令策略 |
+| `run_command` / `run_verification` | `execute_commands=True` | 已有绑定环境、完整可读写工作区及命令策略；使用已有环境不要求准备权限 |
+| 显式 `audit_env` | `execute_commands=True` | 已有绑定环境；执行固定诊断，不获得通用脚本权限 |
+| 文件读取、创建、修改及 Coding 的 `delete_path` | 对应 WorkspaceAccess 范围 | 模块必须提供该工具；不依赖命令或环境准备权限 |
+
+`confirm_commands=True` 对前四行顶层工具逐次询问，包括显式 `audit_env`。命令执行内部的自动环境核验属于已批准动作的前置检查，不另发问题。`confirm_commands=False` 仍保留固定规则要求的确认，例如非空目录递归删除或未覆盖的命令；它不等于自动批准所有操作。
 
 Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，更新编辑 revision 及验证新鲜度，不承诺原子回滚。删除文件中的内容仍用 replace_text。
 
@@ -400,7 +412,7 @@ class WorkspaceDescriptor:
 
 `WorkspaceSpec` 是逻辑来源声明，`location` 可包含仓库 URL 或本地来源路径，但不是 Attempt 的物理授权；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
 
-WorkspaceSpec/WorkspaceGrant 共用必填 access。路径是工作区相对前缀，不是 glob；允许列表 `[]` 表示无权限，`["."]` 表示全工作区。write_paths 必须包含于 read_paths，denied_paths 对读写优先拒绝。子授权只能收紧，不能清空父级排除项获得访问。工作区在 create_run 时解析并保存；后续模型只能引用已授权逻辑 ID，不能自填物理根路径。
+WorkspaceSpec/WorkspaceGrant 共用必填 access。路径是工作区相对前缀，不是 glob；允许列表 `[]` 表示无权限，`["."]` 表示全工作区。write_paths 必须包含于 read_paths，denied_paths 对读写优先拒绝。子授权只能收紧，不能清空父级排除项获得访问。工作区由可信组合根配置，在 create_run 时解析物理根并保存来源及权限；不是 ResearchRequest 的模型可写字段。后续调度使用 Run 中的记录，即使组合根配置改变也不扩大已有 Run 授权。仓库 materialize 仍在 Agent 调用准备阶段进行；模型只能引用已授权逻辑 ID，不能自填物理根路径。
 
 WorkspaceBoundary 每次检查真实路径、软链逃逸与授权；`.git`、`.resagent2` 受保护，`__pycache__`、`.pytest_cache` 等只是可忽略的普通缓存，可按写权限清理。系统输出目录、冻结工件、数据集和环境缓存由各自组件管理，不因此授予源目录写权限。
 
@@ -445,7 +457,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 - `EnvironmentSpec.python_version` 有值表示硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断；
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用），不同 Workspace/Run 隔离；`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`；
 - 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
-- 问答恢复不信任旧认证。获准命令执行前的自动核验使用同一 Run 截止时间，失败则不运行命令；这是该命令的固定前置检查，不新增模型调用或另一轮命令批准；
+- 问答恢复不信任旧认证。获准命令执行前的自动核验使用同一 Run 截止时间，失败则不运行命令；这是该命令的固定前置检查，不新增模型调用或另一轮命令批准。实际自动核验结果保存在该命令的 ToolObservation.value.env_audit 和 Session memory.env_audit；已有认证时不重复执行探针；
 - Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 

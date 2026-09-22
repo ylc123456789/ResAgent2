@@ -74,7 +74,9 @@ Protocol 描述方法形状，不保证实现守约。注入的进程内 ModuleP
 
 纯文档导航通常不需要。影响模型看到的 prompt、工具参数、上下文、编译或执行链时，需要在确定性测试后安排真实验收。
 
-保留准确 commit、干净 checkout、editable import 指针、模型和显式预算。CLI/E2E 是独立组合根，改装配不能只测其一。fresh workdir 保留成功/失败现场，不覆盖失败、不重跑到绿后只报最后一次。
+保留准确 commit、干净 checkout、editable import 指针、模型和显式预算。CLI/E2E 是独立组合根，改装配不能只测其一。每次重跑使用新 Run 标识和证据目录，保留成功/失败现场，不清空状态后向旧 trace 追加，也不重跑到绿后只报最后一次。
+
+当前服务器统一使用 `/root/autodl-tmp/projects/ResAgent2`，用 Git 分支管理产品版本；测试期间不拉取或切分支。脚本、状态、Session、trace 和产物集中在 `/root/autodl-tmp/resagent2/runs/<本轮目录>/`，不按每轮测试复制产品仓库。固定任务探针只证明所覆盖的 Agent/Task 行为，不能当作 Scientific 完整 Run 通过。
 
 验收不只是 rc=0：读原始请求/响应、Session 观测、stdout/stderr、工件和最终状态，核对目标行为是否发生。action_valid 不证明参数、执行或科学结论正确。
 

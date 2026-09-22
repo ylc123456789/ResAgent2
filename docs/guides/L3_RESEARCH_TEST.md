@@ -103,13 +103,12 @@ resagent2 show "$RUN_ID" --data-root "$ROOT/data"
 
 `12 / 2 / 200 / 14400` 是本案例运行前显式冻结的预算，不是产品默认值；当前 CLI 默认是 `8 / 2 / 200 / 7200`。正式运行中不临时提高这些额度。
 
-这里 `--timeout-seconds` 是整个 Run 的执行时间预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。LLM socket timeout 与 Run timeout 也不是一回事。依赖安装可能耗掉很大部分时间；显式暂停等待用户的时间单独计量、不计入此执行预算，所以 4 小时不是总墙钟硬截止。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/components/src/resagent2_components/process.py)。
+这里 `--timeout-seconds` 是整个 Run 的执行时间预算，执行工具使用当时剩余额度；**没有独立的 CLI“每次训练 timeout”参数**。单次模型 HTTP 总超时还须裁到 Run 剩余时间。依赖安装可能耗掉很大部分时间；显式暂停等待用户的时间单独计量、不计入此执行预算，所以 4 小时不是总墙钟硬截止。并不提供全 Run 货币硬预算或任意时刻精确抢占承诺。见 [预算与执行代码](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) 和 [进程执行](../../packages/components/src/resagent2_components/process.py)。
 
 若 paused：按下一节规则判断是否允许代答。先用 show 读取原题及实际 `requested_fields`；`ACTUAL_FIELD` 是占位符，不是固定字段名。多字段问题逐项用 `--field` 提交，不能猜字段名或改 Run JSON 绕过校验。
 
 ```bash
 resagent2 answer "$RUN_ID" --data-root "$ROOT/data" \
-  --workspace "$WORKSPACE" \
   --field 'ACTUAL_FIELD=真实回答'
 ```
 
@@ -118,11 +117,10 @@ resagent2 answer "$RUN_ID" --data-root "$ROOT/data" \
 核实没有活跃执行进程、且不是等待用户答案时，才使用：
 
 ```bash
-resagent2 resume "$RUN_ID" --data-root "$ROOT/data" \
-  --workspace "$WORKSPACE"
+resagent2 resume "$RUN_ID" --data-root "$ROOT/data"
 ```
 
-answer/resume 重传同一工作区，是为了兼容尚未物化工作区就暂停的正常路径；不是换一个工作区继续同一 Run。
+工作区与授权在创建 Run 时已解析并保存，answer/resume 直接沿用，无需重传；恢复时的配置不能换目录或扩大已有授权。
 
 ## 6. ask_user：测试 AI 只作有限的用户代理
 
@@ -166,7 +164,7 @@ answer/resume 重传同一工作区，是为了兼容尚未物化工作区就暂
 - **数字链路**：各次执行原始指标 → 冻结 artifacts → Scientific 读取 → 最终 statement/limitations。按实际设计核对 baseline/candidate、数据划分、seed、比例/百分数单位；不存在的重复或 test 结果不能补写。
 - **信息交接**：相关 module_report/residual_risks 是否读取和解释；只读 metrics 不代表已理解实验局限。见 [上下文](../current/CONTEXT.md) 与 [接口契约](../current/CONTRACTS.md)。
 - **停不下来时**：定位首次重复动作前后的完整 request/response，检查看到了什么、缺了什么；不得仅以“Flash 随机性”归因。保留所有失败，不重跑到绿覆盖首次结果。
-- **计量**：按主 trace 的 call_id 去重，累加每条 `retry_number + 1`，与 Run 的 `llm_calls_used` 比较；schema 补充记录不重复计数。分别报告 JSON/schema/HTTP/Task Attempt 层，沿用已有恢复机制，不借测试另修 JSON。
+- **计量**：以 Run.usage.requests 的持久请求占用为准，每个 call_id/retry_index 唯一；trace 按逻辑 call_id 去重，正常完成时累加 `retry_number + 1` 并逐键核对。schema 补充记录不重复计数；崩溃留下的 unknown 或 trace 差额单列，不能删除占用或补造旧状态。每次重跑使用新 Run 和独立目录；分别报告 JSON/schema/HTTP/Task Attempt 层，沿用已有恢复机制，不借测试另修 JSON。
 - **恢复记录**：同时检查 Session 的工具参数拒绝、命令失败和 completion_check 拒绝；trace 的 `action_valid=true` 仅说明对应动作解析边界通过，不能据此写“零错误”。最终自行恢复不等于没有发生过失败，恢复次数与终止结果分开记录。
 - **安全**：trace 目录 0700、文件 0600；用实际密钥定值检查泄漏但不打印密钥，不把 full trace 发布到公共 Git。
 

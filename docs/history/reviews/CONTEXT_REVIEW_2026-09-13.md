@@ -2,7 +2,7 @@
 
 日期：2026-09-13。产品基线：`fix/semantic-handoffs @ f2d4421b3a1cf94812b1da36aaf43488c225096c`。
 
-**归档说明：第 1–11 节保留最初仅分析、等待用户决定时的事实和候选，不代表当前实现。** 随后获批范围见第 12 节，最终验收与收尾见第 13 节；不把后来的结果改写到原始分析中。
+**归档说明：第 1–11 节保留最初仅分析、等待用户决定时的事实和候选，不代表当前实现。** 随后获批范围见第 12 节，最终验收与收尾见第 13 节；不把后来的结果改写到原始分析中。源码定位链接随目录迁移更新，旧符号名和正文仍反映当时语境。
 
 当前机制的完整参考见 [CONTEXT](../../current/CONTEXT.md)。接口字段仍由 [CONTRACTS](../../current/CONTRACTS.md) 定义。
 
@@ -54,7 +54,7 @@
 
 **需要的验证。** 同一条确定性轨迹覆盖“修改 → 验证失败 → 安装依赖 → audit → 需要重新验证 → 验证通过”；另测被建议的验证用法确实符合原权限策略。是否执行这些修改，仍待用户批准。
 
-**定位**：[derive_control_state / _verification_status](../../../packages/agents/coding/src/resagent2_coding/completion.py)、[MODIFY_PROMPT](../../../packages/agents/coding/src/resagent2_coding/context.py)、[命令策略](../../../packages/capabilities/src/resagent2_capabilities/process.py)、[控制测试](../../../tests/coding/test_control_state.py)、[验证有效性](../../../tests/coding/test_verification_validity.py)。
+**定位**：[derive_control_state / _verification_status](../../../packages/agents/coding/src/resagent2_coding/completion.py)、[MODIFY_PROMPT](../../../packages/agents/coding/src/resagent2_coding/context.py)、[命令策略](../../../packages/agents/coding/src/resagent2_coding/verification.py)、[控制测试](../../../tests/coding/test_control_state.py)、[验证有效性](../../../tests/coding/test_verification_validity.py)。
 
 <a id="c2"></a>
 
@@ -68,7 +68,7 @@
 
 **需要的验证。** 列目录后创建文件：旧清单保留，但不冒充实时；再次列目录后使用新的观察。若只改共享呈现，Coding/Experiment 应使用同一实现。
 
-**定位**：[recent_tool_listing](../../../packages/runtime/src/resagent2_runtime/context.py)、[workspace_context](../../../packages/capabilities/src/resagent2_capabilities/workspace_context.py)、[现有时序测试](../../../tests/e2e/test_workspace_read_history.py)。
+**定位**：[recent_tool_listing](../../../packages/runtime/src/resagent2_runtime/context.py)、[workspace_context](../../../packages/components/src/resagent2_components/context.py)、[现有时序测试](../../../tests/e2e/test_workspace_read_history.py)。
 
 <a id="c3"></a>
 
@@ -84,7 +84,7 @@
 
 **需要的验证。** 多命令中间失败、首尾成功；多个失败和长日志；无 stderr/超时情况。检查最终构造文本中关键失败可见、总量有界、原始记录未改，不能只断言某个 summary 字符串存在。
 
-**定位**：[Loop 预览](../../../packages/runtime/src/resagent2_runtime/loop.py)、[RunVerificationTool](../../../packages/capabilities/src/resagent2_capabilities/workspace_tools.py)、[预览测试](../../../tests/runtime/test_observation_previews.py)。
+**定位**：[Loop 预览](../../../packages/runtime/src/resagent2_runtime/loop.py)、[RunVerificationTool](../../../packages/agents/coding/src/resagent2_coding/verification.py)、[预览测试](../../../tests/runtime/test_observation_previews.py)。
 
 <a id="c4"></a>
 
@@ -100,7 +100,7 @@
 
 **需要的验证。** 放入一条与当前结论有关、且只存在于报告正文中的新风险；分别检查入口可见、实际读取、合理考虑。另测无关历史报告不被机械地全部读取。这个用例能区分“真正消费”与“复述任务里原有的限制”。
 
-**定位**：[interpreter](../../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[Scientific prompt](../../../packages/agents/scientific/src/resagent2_scientific/context.py)、[module_report](../../../packages/capabilities/src/resagent2_capabilities/module_report.py)、[现有交接测试](../../../tests/e2e/test_semantic_handoffs.py)。
+**定位**：[interpreter](../../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[Scientific prompt](../../../packages/agents/scientific/src/resagent2_scientific/context.py)、[module_report](../../../packages/components/src/resagent2_components/artifacts.py)、[现有交接测试](../../../tests/e2e/test_semantic_handoffs.py)。
 
 <a id="c5"></a>
 
@@ -126,7 +126,7 @@
 
 **需要的验证。** 构造两篇以上文献：发现前面的目标 → 读取后面的条目 → 能依据保留的线索回读目标，并保持来源正确。现有“驱动直接指定尾部行号”测试可验证可达性，但不足以覆盖这一过程。另测外部服务真实不可用且本地没有所需证据时仍诚实求助。
 
-**定位**：[文献流水线](../../current/CONTEXT.md#literature)、[literature.py](../../../packages/capabilities/src/resagent2_capabilities/literature.py)、[共享工作集](../../../packages/capabilities/src/resagent2_capabilities/workspace_context.py)、[已有范围测试](../../../tests/e2e/test_literature_artifact_windows.py)。
+**定位**：[文献流水线](../../current/CONTEXT.md#literature)、[literature.py](../../../packages/components/src/resagent2_components/literature/backends.py)、[共享工作集](../../../packages/components/src/resagent2_components/context.py)、[已有范围测试](../../../tests/e2e/test_literature_artifact_windows.py)。
 
 <a id="c6"></a>
 

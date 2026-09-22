@@ -1,3 +1,5 @@
+
+from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 import json
 """Exercise real analysis artifacts across native Agent and controller boundaries."""
 
@@ -104,17 +106,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
                 "limitations": [uncertainty], "evidence_artifact_ids": [report_id],
             })}]}},
     ])
-    scheduler = WorkflowScheduler(
-        bindings={WorkflowAgentKind.CODING: ModuleBinding(
-            owner=AgentOwner.CODING, port=CodingPort(),
-        )},
-        store=JsonRunStore(tmp_path / "runs"),
-        artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
-        workspaces={"ws_main": WorkspaceSpec(
-            workspace_id="ws_main", source_kind=WorkspaceSourceKind.LOCAL,
-            location=str(repo),
-        )},
-    )
+    scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=CodingPort())}, store=JsonRunStore(tmp_path / 'runs'), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     controller = ResearchController(
         scientific_port=ScientificAgent(
             scientific_client, store=JsonSessionStore(tmp_path / "scientific_sessions"),
@@ -126,12 +118,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             description="Read-only code analysis",
         )]),
     )
-    run = controller.create_run("run_handoffs", ResearchRequest(
-        goal="Explain the code, with the analysis available to subsequent work",
-        budget=RunBudget(
-            max_tasks=3, max_attempts_per_task=1, max_llm_calls=30, timeout_seconds=60,
-        ),
-    ))
+    run = controller.create_run('run_handoffs', ResearchRequest(goal='Explain the code, with the analysis available to subsequent work', budget=RunBudget(max_llm_calls=30, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=1)))
 
     assert run.status == RunStatus.COMPLETED, run.model_dump(mode="json")
     assert all(task.status == "completed" for task in run.workflow.tasks)

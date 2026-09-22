@@ -1,5 +1,7 @@
 """Resource refresh uses artifact inputs and persisted Sessions across processes."""
 
+from resagent2_contracts import AgentPermissions
+
 import json
 import subprocess
 import sys
@@ -11,7 +13,7 @@ import pytest
 from resagent2_components import DatasetCatalog, ResourceLayout, dataset_context, resolve_dataset_refs
 from resagent2_contracts import (
     AgentOwner, AgentRequest, ArtifactCandidate, TaskBudget, RecordedAnswer,
-    WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind, scientific_session_id, task_session_id,
+    WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind, scientific_session_id, task_session_id,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
@@ -74,17 +76,10 @@ def _probe(root, kind, phase):
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     if scientific:
-        request = AgentRequest(**common, instruction="Check availability without downloading data")
+        request = AgentRequest(**common, instruction='Check availability without downloading data', permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
         agent = ScientificAgent(client, store=sessions, resource_layout=layout)
     else:
-        request = AgentRequest(
-            **common, task_id="task_resources", attempt_number=1,
-            instruction="Inspect the provided resources",
-            workspace=WorkspaceGrant(
-                root=str(root / "repo"), mode=WorkspaceMode.READ_ONLY,
-                allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-            ), workspace_id="ws_resources", output_dir=str(root / "output"),
-        )
+        request = AgentRequest(**common, task_id='task_resources', attempt_number=1, instruction='Inspect the provided resources', workspace=WorkspaceGrant(root=str(root / 'repo'), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])), workspace_id='ws_resources', output_dir=str(root / 'output'), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
         cls = NativeExperimentAgent if kind == "experiment" else NativeCodingAgent
         agent = cls(client, store=sessions, resource_layout=layout)
     result = agent.invoke(request)
@@ -143,10 +138,7 @@ def test_scientific_invalid_resource_is_controlled_failure(tmp_path):
         {"datasets": [{"dataset_id": "x", "relative_path": "link"}]}, run_id="run_invalid",
     )
     client = ScriptedLLMClient([])
-    result = ScientificAgent(client, resource_layout=layout).invoke(AgentRequest(
-        run_id="run_invalid", agent=AgentOwner.SCIENTIFIC, input_artifacts=[ref],
-        instruction="No unsafe resource paths", budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
-    ))
+    result = ScientificAgent(client, resource_layout=layout).invoke(AgentRequest(run_id='run_invalid', agent=AgentOwner.SCIENTIFIC, input_artifacts=[ref], instruction='No unsafe resource paths', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
     assert result.status == "failed"
     assert result.error.code == "invalid_input"
     assert not client.contexts

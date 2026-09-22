@@ -18,12 +18,7 @@ from resagent2_runtime import AgentState, ScriptedLLMClient, ToolRegistry
 
 
 def request(*, artifacts=(), parent=None, resume=(), budget=10, request_work=True):
-    return AgentRequest(
-        run_id="run_example", agent=AgentOwner.SCIENTIFIC, instruction="Evaluate the method",
-        input_artifacts=list(artifacts), parent_session_id=parent, resume_artifact_ids=list(resume),
-        budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60),
-        permissions=AgentPermissions(request_work=request_work),
-    )
+    return AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=list(artifacts), parent_session_id=parent, resume_artifact_ids=list(resume), budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60), permissions=AgentPermissions(request_work=request_work, execute_commands=True, prepare_environment=True))
 
 
 def artifact(root, artifact_id="artifact_1", *, kind="experiment_result", content=None, session=None):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
+
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,15 +29,7 @@ from resagent2_cli.main import _specs_for_existing_run
 
 
 def _request(goal: str = "test goal") -> ResearchRequest:
-    return ResearchRequest(
-        goal=goal,
-        budget=RunBudget(
-            max_tasks=2,
-            max_attempts_per_task=1,
-            max_llm_calls=10,
-            timeout_seconds=60,
-        ),
-    )
+    return ResearchRequest(goal=goal, budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=1))
 
 
 def _run(status: RunStatus = RunStatus.COMPLETED) -> ResearchRun:
@@ -303,12 +297,7 @@ def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(
 ):
     workspace = tmp_path / "repo"
     workspace.mkdir()
-    source = WorkspaceSpec(
-        workspace_id="ws_main",
-        source_kind=WorkspaceSourceKind.LOCAL,
-        location=str(workspace),
-        environment=EnvironmentSpec(python_version="3.12"),
-    )
+    source = WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), environment=EnvironmentSpec(python_version='3.12'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     run = _run(RunStatus.PAUSED)
     run.workspaces["ws_main"] = WorkspaceRecord(
         workspace_id="ws_main",
@@ -319,7 +308,8 @@ def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(
     args = type(
         "Args",
         (),
-        {"workspace": str(workspace), "git": None, "python_version": None},
+        {"workspace": str(workspace), "git": None, "python_version": None,
+         "read_path": None, "write_path": None, "deny_path": [], "read_only": False},
     )()
 
     assert _specs_for_existing_run(args, run) == {"ws_main": source}

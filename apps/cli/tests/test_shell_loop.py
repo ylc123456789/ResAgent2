@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+
 import io
 import time
 from datetime import UTC, datetime
@@ -16,21 +18,7 @@ from resagent2_orchestrator import InMemoryRunStore, ResearchRun
 
 def _run(status):
     now = datetime.now(UTC)
-    return ResearchRun(
-        run_id="run_x",
-        request=ResearchRequest(
-            goal="g",
-            budget=RunBudget(
-                max_tasks=2,
-                max_attempts_per_task=1,
-                max_llm_calls=10,
-                timeout_seconds=60,
-            ),
-        ),
-        status=status,
-        created_at=now,
-        updated_at=now,
-    )
+    return ResearchRun(run_id='run_x', request=ResearchRequest(goal='g', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=1)), status=status, created_at=now, updated_at=now)
 
 
 class _SequenceStore:

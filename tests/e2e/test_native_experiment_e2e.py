@@ -1,3 +1,5 @@
+
+from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +31,7 @@ def _create_run(engine, run_id, request, proposal):
         ResearchRun(
             run_id=run_id,
             request=request,
+            workspaces=engine._resolve_workspaces(run_id),
             status=RunStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -133,13 +136,7 @@ class _NativeExperimentPort:
         tools = (
             PrepareEnvironmentTool(binding),
             AuditEnvTool(binding),
-            RunCommandTool(
-                runner,
-                binding,
-                confirm_before_experiment=False,
-                confirmed=True,
-                timeout_seconds=request.budget.timeout_seconds,
-            ),
+            RunCommandTool(runner, binding, timeout_seconds=request.budget.timeout_seconds),
             FinishTool(),
         )
         definition = AgentDefinition(
@@ -188,33 +185,8 @@ class _NativeExperimentPort:
 def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    scheduler = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=_NativeExperimentPort(AgentLoop(store=InMemorySessionStore())),
-            )
-        },
-        store=InMemoryRunStore(),
-        artifact_root=tmp_path / "artifacts",
-        data_root=tmp_path / "data",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(workspace),
-            )
-        },
-    )
-    request = ResearchRequest(
-        goal="Run the experiment",
-        budget=RunBudget(
-            max_tasks=1,
-            max_attempts_per_task=1,
-            max_llm_calls=10,
-            timeout_seconds=30,
-        ),
-    )
+    scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=_NativeExperimentPort(AgentLoop(store=InMemorySessionStore())))}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
+    request = ResearchRequest(goal='Run the experiment', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[

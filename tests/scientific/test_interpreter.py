@@ -1,5 +1,7 @@
 """Tests for the deterministic execution -> scientific work-brief interpreter."""
 
+from resagent2_contracts import AgentPermissions
+
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -456,11 +458,7 @@ def test_build_context_emits_single_work_brief_section(tmp_path) -> None:
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(), media_type="application/json",
         summary="Work feedback", metadata={"source_type": "controller_feedback"},
     )
-    turn = AgentRequest(
-        run_id="run_example", agent=AgentOwner.SCIENTIFIC, instruction="Evaluate the method",
-        input_artifacts=[ref], resume_artifact_ids=[ref.id], parent_session_id="session_x",
-        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60),
-    )
+    turn = AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=[ref], resume_artifact_ids=[ref.id], parent_session_id='session_x', budget=TaskBudget(max_llm_calls=10, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     sections = build_context(
         turn, _state(), datasets=resolve_dataset_refs(tmp_path, [
             DatasetRef(dataset_id="cifar10", relative_path="cifar-10"),

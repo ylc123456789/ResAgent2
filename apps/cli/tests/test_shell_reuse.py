@@ -15,7 +15,7 @@ def test_request_from_args_builds_request(tmp_path):
     )
     request = _request_from_args(args)
     assert request.goal == "g"
-    assert request.budget.max_tasks == 3
+    assert request.execution_limits.max_tasks == 3
     specs = _workspace_specs(args)
     assert specs["ws_main"].location == str(workspace.resolve())
 

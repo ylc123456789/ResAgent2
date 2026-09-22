@@ -1,5 +1,7 @@
 """Exercise native Agent assembly and real Runtime composition at read-pool capacity."""
 
+from resagent2_contracts import AgentPermissions
+
 import hashlib
 import json
 import subprocess
@@ -18,7 +20,7 @@ from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentOwner, ArtifactRef, WorkflowAgentKind, ErrorCode,
     ModuleStatus, AgentRequest, SessionStatus,
-    TaskBudget, WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind, task_session_id,
+    TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind, task_session_id,
 )
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_runtime import (
@@ -70,22 +72,11 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
         uri=frozen.as_uri(), sha256=hashlib.sha256(frozen.read_bytes()).hexdigest(),
         media_type="text/plain", summary="Previous code patch",
     )
-    grant = WorkspaceGrant(
-        root=str(root), mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-    )
+    grant = WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     baseline = GitWorkspace(WorkspaceBoundary(grant)).snapshot()
     coding = capability == WorkflowAgentKind.CODING
     session_id = task_session_id("run_capacity", "task_capacity", 1)
-    request = AgentRequest(
-        run_id="run_capacity", task_id="task_capacity", attempt_number=1,
-        parent_session_id=session_id, agent=AgentOwner(capability.value),
-        instruction="Review source and patch before modifying" if coding
-        else "Review source and patch before evaluating",
-        input_artifacts=[artifact], workspace=grant, workspace_id="ws_capacity",
-        output_dir=str(tmp_path / "outputs"),
-        budget=TaskBudget(max_llm_calls=2, timeout_seconds=30),
-    )
+    request = AgentRequest(run_id='run_capacity', task_id='task_capacity', attempt_number=1, parent_session_id=session_id, agent=AgentOwner(capability.value), instruction='Review source and patch before modifying' if coding else 'Review source and patch before evaluating', input_artifacts=[artifact], workspace=grant, workspace_id='ws_capacity', output_dir=str(tmp_path / 'outputs'), budget=TaskBudget(max_llm_calls=2, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     now = datetime.now(UTC)
     state = AgentState(
         session_id=session_id, agent_name="coding" if coding else "experiment",

@@ -1,5 +1,7 @@
 """Deterministic scientific -> execution -> evidence -> conclusion loop."""
 
+from resagent2_contracts import RunPermissions, ExecutionLimits
+
 import json
 import tempfile
 from pathlib import Path
@@ -66,8 +68,7 @@ def run_mock_e2e(*, workdir: Path | None = None):
     ]), store=InMemorySessionStore())
     controller = ResearchController(scientific_port=scientific, compiler=DeterministicWorkflowCompiler(proposal()),
                                     scheduler=scheduler, registry=registry())
-    return controller.create_run(RUN_ID, ResearchRequest(goal="Determine whether the method improves accuracy",
-        budget=RunBudget(max_tasks=5, max_attempts_per_task=3, max_llm_calls=50, timeout_seconds=60)))
+    return controller.create_run(RUN_ID, ResearchRequest(goal='Determine whether the method improves accuracy', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3)))
 
 
 def _summarize(run):

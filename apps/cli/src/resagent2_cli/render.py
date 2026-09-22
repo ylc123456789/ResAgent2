@@ -92,6 +92,7 @@ def render_final(run: Any) -> list[str]:
         f"Status: {run.status.value}",
         f"Goal: {run.request.goal}",
         f"LLM calls: {run.llm_calls_used}/{run.request.budget.max_llm_calls}",
+        "Request reservations: " + ", ".join(f"{key}={value}" for key, value in run.usage.outcomes.items()),
     ]
     if run.terminal_error is not None:
         lines.append(f"Error: {run.terminal_error.code.value}: {run.terminal_error.message}")

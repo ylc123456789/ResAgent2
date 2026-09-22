@@ -1,5 +1,7 @@
 """Deterministic checks for shared application state across multiple Runs."""
 
+from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
+
 import hashlib
 import json
 import subprocess
@@ -29,7 +31,7 @@ from resagent2_contracts import (
     SessionId,
     TaskBudget,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
     scientific_session_id,
     task_session_id,
@@ -45,13 +47,7 @@ from resagent2_scientific import ScientificAgent
 
 
 def _research():
-    return ResearchRequest(
-        goal="Check Run isolation",
-        budget=RunBudget(
-            max_tasks=2, max_attempts_per_task=1, max_llm_calls=10,
-            timeout_seconds=60,
-        ),
-    )
+    return ResearchRequest(goal='Check Run isolation', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=1))
 
 
 def test_task_session_identity_is_bounded_and_unambiguous():
@@ -126,17 +122,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
         resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
     )
     coding = agent_type is NativeCodingAgent
-    request = AgentRequest(
-        run_id="run_a", task_id="task_shared", attempt_number=1,
-        agent=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT,
-        instruction="Ask first",
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
-        workspace=WorkspaceGrant(
-            root=str(workspace), mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-        ),
-        workspace_id="ws_test", output_dir=str(tmp_path / "output"),
-    )
+    request = AgentRequest(run_id='run_a', task_id='task_shared', attempt_number=1, agent=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT, instruction='Ask first', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), workspace=WorkspaceGrant(root=str(workspace), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), workspace_id='ws_test', output_dir=str(tmp_path / 'output'), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     first = agent.invoke(request)
     second = agent.invoke(request.model_copy(update={"run_id": "run_b"}))
     assert first.status == second.status == ModuleStatus.NEEDS_USER_INPUT
@@ -200,11 +186,7 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     ])
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("must not read"))
     agent = ScientificAgent(client, registration_port=WrongResolver())
-    result = agent.invoke(AgentRequest(
-        agent=AgentOwner.SCIENTIFIC,
-        run_id="run_b", instruction="Check Run isolation",
-        budget=TaskBudget(max_llm_calls=3, timeout_seconds=30),
-    ))
+    result = agent.invoke(AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_b', instruction='Check Run isolation', budget=TaskBudget(max_llm_calls=3, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
     assert result.status == "completed"
     assert json.loads(next(item.content for item in result.artifacts if item.kind == "observation_trace"))["observed_artifact_ids"] == []
     assert "private evidence" not in client.contexts[-1].text
@@ -267,11 +249,7 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
-    result = agent.invoke(AgentRequest(
-        agent=AgentOwner.SCIENTIFIC,
-        run_id="run_a", instruction="Check Run isolation",
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
-    ))
+    result = agent.invoke(AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_a', instruction='Check Run isolation', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
     assert result.status == "completed"
     state = agent.store.load(result.session.id)
     assert client.artifact_id in state.memory["read_artifact_ids"]
@@ -301,10 +279,7 @@ def test_resumed_scientific_does_not_return_historical_input_refs(registration):
         }},
     ])
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
-    request = AgentRequest(
-        run_id="run_a", agent=AgentOwner.SCIENTIFIC, instruction="Review evidence",
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
-    )
+    request = AgentRequest(run_id='run_a', agent=AgentOwner.SCIENTIFIC, instruction='Review evidence', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     first = agent.invoke(request)
     ref = next(item for item in first.artifacts if isinstance(item, ArtifactRef))
     second = agent.invoke(request.model_copy(update={

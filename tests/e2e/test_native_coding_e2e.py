@@ -1,3 +1,5 @@
+
+from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 import subprocess
 import sys
 
@@ -17,7 +19,7 @@ from resagent2_contracts import (
     TaskStatus,
     WorkflowProposal,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
@@ -69,6 +71,7 @@ def _create_run(engine, run_id, request, proposal):
         ResearchRun(
             run_id=run_id,
             request=request,
+            workspaces=engine._resolve_workspaces(run_id),
             status=RunStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -111,33 +114,8 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
             ]
         )
     )
-    scheduler = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.CODING: ModuleBinding(
-                owner=AgentOwner.CODING,
-                port=coding,
-            )
-        },
-        store=InMemoryRunStore(),
-        artifact_root=tmp_path / "artifacts",
-        data_root=tmp_path / "data",
-        workspaces={
-            "ws_main": WorkspaceSpec(
-                workspace_id="ws_main",
-                source_kind=WorkspaceSourceKind.LOCAL,
-                location=str(repo),
-            )
-        },
-    )
-    request = ResearchRequest(
-        goal="Update one constant",
-        budget=RunBudget(
-            max_tasks=1,
-            max_attempts_per_task=1,
-            max_llm_calls=10,
-            timeout_seconds=30,
-        ),
-    )
+    scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=coding)}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
+    request = ResearchRequest(goal='Update one constant', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[
@@ -212,27 +190,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
         )
     )
 
-    request = AgentRequest(
-        run_id="run_resume",
-        task_id="task_code",
-        attempt_number=1,
-        agent=AgentOwner.CODING,
-        instruction="Change VALUE from 1 to 2",
-        budget=TaskBudget(max_llm_calls=20, timeout_seconds=60),
-        workspace=WorkspaceGrant(
-            root=str(repo),
-            mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."],
-            source=WorkspaceSourceKind.LOCAL,
-        ),
-        workspace_id="ws_main",
-        workspace_spec=WorkspaceSpec(
-            workspace_id="ws_main",
-            source_kind=WorkspaceSourceKind.LOCAL,
-            location=str(repo),
-        ),
-        output_dir=str(tmp_path / "out"),
-    )
+    request = AgentRequest(run_id='run_resume', task_id='task_code', attempt_number=1, agent=AgentOwner.CODING, instruction='Change VALUE from 1 to 2', budget=TaskBudget(max_llm_calls=20, timeout_seconds=60), workspace=WorkspaceGrant(root=str(repo), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), workspace_id='ws_main', workspace_spec=WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), output_dir=str(tmp_path / 'out'), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
     first = coding.invoke(request)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT

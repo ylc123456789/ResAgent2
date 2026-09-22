@@ -1,3 +1,5 @@
+
+from resagent2_contracts import RunPermissions, ExecutionLimits
 import json
 """Local ScriptedLLM validation of the Phase 7 real E2E scenario acceptance.
 
@@ -93,11 +95,7 @@ def test_direct_inconclusive(tmp_path) -> None:
         store=JsonSessionStore(tmp_path / "sci"),
     )
     controller = _controller(tmp_path, scientific)
-    request = ResearchRequest(
-        goal="Is the improvement causal or correlational?",
-        constraints=["Do not request experiments or additional work."],
-        budget=RunBudget(max_tasks=1, max_attempts_per_task=1, max_llm_calls=20, timeout_seconds=60),
-    )
+    request = ResearchRequest(goal='Is the improvement causal or correlational?', constraints=['Do not request experiments or additional work.'], budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
 
     run = controller.create_run("run_direct", request)
 
@@ -111,10 +109,7 @@ def test_ask_start_then_resume(tmp_path) -> None:
         tmp_path,
         ScientificAgent(ScriptedLLMClient([_ask_user()]), store=JsonSessionStore(sci_dir)),
     )
-    request = ResearchRequest(
-        goal="Compare two methods and report accuracy.",
-        budget=RunBudget(max_tasks=2, max_attempts_per_task=2, max_llm_calls=20, timeout_seconds=60),
-    )
+    request = ResearchRequest(goal='Compare two methods and report accuracy.', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=2))
     run = controller1.create_run("run_ask", request)
 
     assert _ask_start_succeeded(run)

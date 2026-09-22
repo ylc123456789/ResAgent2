@@ -1,5 +1,7 @@
 """Real Scientific assembly retains bounded evidence, not a second text cache."""
 
+from resagent2_contracts import AgentPermissions
+
 import hashlib
 import json
 
@@ -57,13 +59,7 @@ def _pause():
 
 
 def _turn(artifacts, *, parent=None):
-    return AgentRequest(
-        agent=AgentOwner.SCIENTIFIC,
-        run_id="run_scientific_capacity",
-        instruction="Review the supplied evidence before asking for approval",
-        input_artifacts=artifacts, parent_session_id=parent,
-        budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
-    )
+    return AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_scientific_capacity', instruction='Review the supplied evidence before asking for approval', input_artifacts=artifacts, parent_session_id=parent, budget=TaskBudget(max_llm_calls=10, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
 
 
 def _agent(client, store, **options):

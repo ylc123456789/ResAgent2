@@ -2,9 +2,8 @@
 
 Descriptions include class docstrings and guidance, not only input schemas.
 The fixture is a regression baseline, not permission to auto-update snapshots.
-Only control schemas changed from 678b03f: shared report/artifacts finish,
-question machine-key validation and scientific content-bearing controls.
-Workspace, artifact, literature, environment and execution tools retain hashes.
+Schema 13 updates control schema constants and adds the Coding delete_path tool.
+Other workspace, artifact, literature and environment tools retain their surface.
 """
 
 import hashlib
@@ -14,6 +13,7 @@ from pathlib import Path
 from resagent2_capabilities import (
     AuditEnvTool,
     CreateFileTool,
+    DeletePathTool,
     GitDiffTool,
     ListFilesTool,
     LiteratureSearchTool,
@@ -40,7 +40,7 @@ def tool_surface_fingerprints() -> dict[str, str]:
         "shared": (AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
                    LiteratureSearchTool, PrepareEnvironmentTool, ReadArtifactTool,
                    ReadFileTool, ReplaceTextTool, RunSetupTool, SearchTextTool),
-        "coding": (RunVerificationTool,),
+        "coding": (RunVerificationTool, DeletePathTool),
         "experiment": (RunCommandTool,),
         "runtime": (AskUserTool, FinishTool),
         "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool),

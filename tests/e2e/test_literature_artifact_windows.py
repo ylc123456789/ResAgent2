@@ -1,5 +1,7 @@
 """Actual search/freeze/read/context chain, with scripted decisions, no network."""
 
+from resagent2_contracts import AgentPermissions
+
 import hashlib
 import json
 from datetime import date
@@ -122,13 +124,7 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
         ),
         run_id=RUN_ID, source_type="conclusion_requirement",
     )
-    result = agent.invoke(AgentRequest(
-        run_id=RUN_ID,
-        agent=AgentOwner.SCIENTIFIC,
-        instruction="Read the final comparison's result",
-        input_artifacts=[requirement],
-        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
-    ))
+    result = agent.invoke(AgentRequest(run_id=RUN_ID, agent=AgentOwner.SCIENTIFIC, instruction="Read the final comparison's result", input_artifacts=[requirement], budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
     assert result.status == "completed"
     state = agent.store.load(result.session.id)
     read = next(e for e in state.events if e.tool == "read_artifact" and e.type == "observation")

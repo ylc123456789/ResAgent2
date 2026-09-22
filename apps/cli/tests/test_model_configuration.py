@@ -1,14 +1,21 @@
 """Deployment output headroom must not expand module input or retry policies."""
 
 from datetime import UTC, datetime
-from io import BytesIO
+import httpx
 import json
 
 import pytest
 
 from resagent2_cli import composition
 from resagent2_coding.models import CodingAction
-from resagent2_contracts import RunBudget, WorkRequest, WorkRequestDraft
+from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
+from resagent2_runtime.budget import execution_budget
+
+
+@pytest.fixture
+def model_config_scope():
+    with execution_budget(max_llm_calls=10, timeout_seconds=900):
+        yield
 from resagent2_experiment.models import ExperimentAction
 from resagent2_orchestrator import LLMWorkflowCompiler
 from resagent2_orchestrator.compiler import CompilationDraft
@@ -56,15 +63,15 @@ def test_real_e2e_compiler_uses_the_shared_cli_default(defaults, monkeypatch, tm
 
 
 @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])
-def test_cli_wire_uses_configured_output_cap_not_an_input_cap(defaults, monkeypatch, model):
+def test_cli_wire_uses_configured_output_cap_not_an_input_cap(defaults, monkeypatch, model, model_config_scope):
     monkeypatch.setenv("RESAGENT2_MODEL", model)
     seen = []
 
     def respond(request, *, timeout):
-        seen.append((json.loads(request.data), timeout))
-        return BytesIO(json.dumps({"choices": [{"message": {"content": '{"tool":"finish"}'}}]}).encode())
+        seen.append((json.loads(request.content), timeout))
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"tool":"finish"}'}}]}, request=request)
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     client = composition._client()
     client.next_action(ComposedContext(
         text="Return JSON", included_sections=["system"], omitted_sections=[], estimated_tokens=3,
@@ -99,12 +106,12 @@ def test_custom_model_can_override_capacity_output_and_timeout(defaults, monkeyp
 ])
 def test_invalid_capacity_configuration_fails_before_network(defaults, monkeypatch, key, value):
     monkeypatch.setenv(f"RESAGENT2_{key}", value)
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", lambda *a, **k: pytest.fail("no network"))
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", lambda *a, **k: pytest.fail("no network"))
     with pytest.raises(ValueError):
         composition._client()
 
 
-def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypatch, tmp_path):
+def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypatch, tmp_path, model_config_scope):
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "full")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "trace"))
     replies = iter([
@@ -115,25 +122,19 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     requests = []
 
     def respond(request, *, timeout):
-        requests.append((json.loads(request.data), timeout))
-        return BytesIO(json.dumps({
+        requests.append((json.loads(request.content), timeout))
+        return httpx.Response(200, json={
             "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(next(replies))}}],
             "usage": {"completion_tokens": 100},
-        }).encode())
+        }, request=request)
 
-    monkeypatch.setattr("resagent2_runtime.llm.urlopen", respond)
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     compiler_limit = composition._component_context_limit("compiler")
     compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=compiler_limit))
     now = datetime.now(UTC)
-    result = compiler.compile(WorkRequest(
-        id="work_config", run_id="run_config", scientific_session_id="session_config",
-        request=WorkRequestDraft(objective="Measure the method", expected_evidence=["Measured result"]),
-        created_at=now, updated_at=now,
-    ), current=None, registry=composition._registry(), budget=RunBudget(
-        max_tasks=1, max_attempts_per_task=1, max_llm_calls=2, timeout_seconds=60,
-    ), remaining_calls=2)
+    result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', expected_evidence=['Measured result']), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
     assert result.llm_calls == len(requests) == 1
-    assert all(body["max_tokens"] == 256_000 and timeout == 600 for body, timeout in requests)
+    assert all(body["max_tokens"] == 256_000 and 599 < timeout <= 600 for body, timeout in requests)
     rows = [json.loads(line) for line in (tmp_path / "trace/llm_traces.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     for row in rows:

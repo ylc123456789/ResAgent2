@@ -11,6 +11,8 @@ Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-res
 
 from __future__ import annotations
 
+from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
+
 import os
 import json
 import math
@@ -42,7 +44,7 @@ from resagent2_contracts import (
     VerificationResult,
     latest_command_results,
     WorkspaceGrant,
-    WorkspaceMode,
+    WorkspaceAccess,
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
@@ -333,8 +335,7 @@ def _repo(workdir: Path) -> Path:
 def _grant(repo: Path) -> WorkspaceGrant:
     return WorkspaceGrant(
         root=str(repo),
-        mode=WorkspaceMode.READ_WRITE,
-        allowed_paths=["."],
+        access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
         source=WorkspaceSourceKind.LOCAL,
     )
 
@@ -407,6 +408,7 @@ def _build_controller(workdir: Path, repo: Path | None):
             workspace_id="ws_main",
             source_kind=WorkspaceSourceKind.LOCAL,
             location=str(repo),
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
         )
     scheduler = WorkflowScheduler(
         bindings={
@@ -621,6 +623,7 @@ def run_code(workdir: Path) -> AgentResult:
         workspace=_grant(repo),
         workspace_id="ws_main",
         output_dir=str(workdir / "out"),
+        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
     )
     return _coding_agent(JsonSessionStore(workdir / "sessions"), resource_layout).invoke(request)
 
@@ -644,6 +647,7 @@ def run_experiment(workdir: Path) -> AgentResult:
         workspace=_grant(repo),
         workspace_id="ws_main",
         output_dir=str(workdir / "out"),
+        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
     )
     return _experiment_agent(
         JsonSessionStore(workdir / "sessions"), resource_layout
@@ -671,8 +675,10 @@ def run_full(workdir: Path) -> bool:
             "the baseline."
         ),
         budget=RunBudget(
-            max_tasks=4, max_attempts_per_task=2, max_llm_calls=200, timeout_seconds=3600
+            max_llm_calls=200, timeout_seconds=3600
         ),
+        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2),
     )
     controller, _ = _build_controller(workdir, repo)
     run = controller.create_run("run_full_real", request)
@@ -753,8 +759,10 @@ def run_direct(workdir: Path) -> bool:
             "the available evidence only."
         ],
         budget=RunBudget(
-            max_tasks=1, max_attempts_per_task=1, max_llm_calls=30, timeout_seconds=600
+            max_llm_calls=30, timeout_seconds=600
         ),
+        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     run = controller.create_run("run_direct", request)
     print(f"run status={run.status.value}")
@@ -772,8 +780,10 @@ def run_repair(workdir: Path) -> bool:
             "and rerun to obtain the accuracy."
         ),
         budget=RunBudget(
-            max_tasks=4, max_attempts_per_task=3, max_llm_calls=200, timeout_seconds=3600
+            max_llm_calls=200, timeout_seconds=3600
         ),
+        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=3),
     )
     controller, _ = _build_controller(workdir, repo)
     run = controller.create_run("run_repair", request)
@@ -802,8 +812,10 @@ def run_ask_start(workdir: Path) -> bool:
             "answers, finish and state the selected metric.",
         ],
         budget=RunBudget(
-            max_tasks=1, max_attempts_per_task=1, max_llm_calls=20, timeout_seconds=600
+            max_llm_calls=20, timeout_seconds=600
         ),
+        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     controller, _ = _build_controller(workdir, None)
     run = controller.create_run("run_ask", request)
@@ -848,8 +860,10 @@ def run_literature(workdir: Path) -> bool:
         ],
         required_evidence_kinds=["literature_search"],
         budget=RunBudget(
-            max_tasks=1, max_attempts_per_task=1, max_llm_calls=60, timeout_seconds=900
+            max_llm_calls=60, timeout_seconds=900
         ),
+        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     run = controller.create_run("run_literature", request)
     print(f"run status={run.status.value} artifacts={len(run.artifacts)}")

@@ -23,6 +23,7 @@ def _run(goal="g", status="running", llm_used=5, llm_max=200):
             goal=goal, budget=SimpleNamespace(max_llm_calls=llm_max)
         ),
         llm_calls_used=llm_used,
+        usage=SimpleNamespace(outcomes={"succeeded": llm_used, "failed": 0, "unknown": 0}),
         workflow=None,
         latest_scientific_assessment=None,
         pending_question=None,
@@ -113,6 +114,7 @@ def test_render_final_basic_summary():
     assert "Status: completed" in joined
     assert "Goal: my goal" in joined
     assert "LLM calls: 5/200" in joined
+    assert "Request reservations: succeeded=5, failed=0, unknown=0" in joined
 
 
 def test_render_final_prefers_final_opinion_without_changing_interim_history():

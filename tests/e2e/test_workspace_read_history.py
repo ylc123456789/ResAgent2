@@ -1,5 +1,7 @@
 """Native tool flow preserves the timing of reads across a successful edit."""
 
+from resagent2_contracts import AgentPermissions
+
 import json
 import subprocess
 
@@ -10,7 +12,7 @@ from resagent2_components.context import workspace_context
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     WorkflowAgentKind, ModuleStatus, AgentRequest, TaskBudget,
-    WorkspaceGrant, WorkspaceMode, WorkspaceSourceKind, task_session_id,
+    WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind, task_session_id,
 )
 from resagent2_runtime import InMemorySessionStore
 
@@ -62,16 +64,7 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
     ]
     client = _ActionClient(actions)
     store = InMemorySessionStore()
-    request = AgentRequest(
-        run_id="run_read_history", task_id="task_read_history", attempt_number=1,
-        agent="coding", instruction="Read the function before editing it",
-        workspace=WorkspaceGrant(
-            root=str(root), mode=WorkspaceMode.READ_WRITE,
-            allowed_paths=["."], source=WorkspaceSourceKind.LOCAL,
-        ),
-        workspace_id="ws_read_history", output_dir=str(tmp_path / "outputs"),
-        budget=TaskBudget(max_llm_calls=20, timeout_seconds=30),
-    )
+    request = AgentRequest(run_id='run_read_history', task_id='task_read_history', attempt_number=1, agent='coding', instruction='Read the function before editing it', workspace=WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), workspace_id='ws_read_history', output_dir=str(tmp_path / 'outputs'), budget=TaskBudget(max_llm_calls=20, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     agent = NativeCodingAgent(
         client, store=store,
         resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),

@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 import pytest
 
 from e2e import real_e2e
-from resagent2_contracts import RunBudget, WorkRequest, WorkRequestDraft
+from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
+from resagent2_runtime.budget import execution_budget
+
+
+@pytest.fixture
+def composition_scope():
+    with execution_budget(max_llm_calls=6, timeout_seconds=60):
+        yield
 from resagent2_orchestrator import CompilationError
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
@@ -16,7 +23,7 @@ from resagent2_runtime import (
 )
 
 
-def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
+def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path, composition_scope):
     client = ScriptedLLMClient([{"tool": "finish"}])
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
     controller, _ = real_e2e._build_controller(tmp_path, None)
@@ -39,7 +46,7 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("oversized", [False, True])
-def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, tmp_path, oversized):
+def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, tmp_path, oversized, composition_scope):
     """Actual compiler + composition adapter; no network or scripted judgment claim."""
     repeats = DEFAULT_AGENT_CONTEXT_TOKENS if oversized else 4000
     instructions = "Measure accuracy without changing code." + " detail" * repeats
@@ -56,10 +63,7 @@ def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, t
         request=WorkRequestDraft(objective=instructions, expected_evidence=["accuracy"]),
         created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
-    kwargs = dict(
-        current=None, registry=controller.registry,
-        budget=RunBudget(max_tasks=1, max_attempts_per_task=1, max_llm_calls=6, timeout_seconds=60),
-    )
+    kwargs = dict(current=None, registry=controller.registry, limits=ExecutionLimits())
     if oversized:
         with pytest.raises(CompilationError) as caught:
             controller.compiler.compile(request, **kwargs)

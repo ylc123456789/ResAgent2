@@ -36,6 +36,13 @@ from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 class NativeExperimentAgent:
     """Analyze results and execute authorized experiments through one protocol."""
 
+    description = (
+        "Analyze existing experimental results and metrics, or execute new experiments "
+        "under the granted permissions. Analysis can ask for missing metric definitions "
+        "and finish with a report and existing evidence; it requires no commands, "
+        "environment preparation or new measurements."
+    )
+
     def __init__(
         self, llm_client: LLMClient, *, store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,

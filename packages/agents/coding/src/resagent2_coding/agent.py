@@ -37,6 +37,11 @@ from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 class NativeCodingAgent:
     """Inspect and edit authorized code through a single Agent protocol."""
 
+    description = (
+        "Understand, explain, modify and verify code under the granted permissions. "
+        "Code inspection can finish with a report; changes and command execution are optional."
+    )
+
     def __init__(
         self, llm_client: LLMClient, *, store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,

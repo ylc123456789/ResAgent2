@@ -96,7 +96,12 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "Available execution Agents:",
         *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
         "Each Agent has one business mode. Keep its inspection, preparation and execution "
-        "inside the same task where possible. Scientific is never a graph node.",
+        "inside the same task where possible. Asking the user is part of a task, not a "
+        "separate workflow phase. Route existing-results analysis to Experiment even when "
+        "execution is forbidden. Scientific is never a graph node.",
+        "Preserve the work request's constraints on effects. A confirmation request is "
+        "not execution: one approved operation may require calling the same tool again "
+        "after approval. Do not turn a single intended operation into a one-tool-call limit.",
         "Return CompilationDraft. Use instruction as the only task text. Do not invent "
         "metric names, file paths, acceptance policies, permissions or runtime identities.",
         "Dependencies refer only to keys in this draft and require success. "
@@ -104,7 +109,7 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "Future input bindings select a logical output_name declared by a direct dependency. "
         "Use output_names only when an explicit cross-task handoff needs named outputs. "
         "Do not guess artifact IDs. Existing input_artifacts must already be supplied materials.",
-        f"Remaining tasks: {remaining}",
+        f"Remaining task capacity (an upper bound, not a target): {remaining}",
         "Logical workspaces: " + json.dumps([w.model_dump(mode="json") for w in workspaces]),
         "Draft schema: " + json.dumps(CompilationDraft.model_json_schema()),
     ]

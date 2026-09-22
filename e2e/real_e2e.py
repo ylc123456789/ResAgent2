@@ -382,16 +382,11 @@ def _registry() -> WorkflowAgentRegistry:
         definitions=[
             WorkflowAgentDefinition(
                 workflow_agent_kind=WorkflowAgentKind.CODING,
-                description=(
-                    "Change code to implement a feature or fix a bug; it already "
-                    "reads and diagnoses the code before editing."
-                ),
+                description=NativeCodingAgent.description,
             ),
             WorkflowAgentDefinition(
                 workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
-                description=(
-                    "Run an experiment and record its measured metrics and artifacts."
-                ),
+                description=NativeExperimentAgent.description,
             ),
         ]
     )

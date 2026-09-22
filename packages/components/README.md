@@ -8,10 +8,10 @@
 |---|---|
 | [workspace.py](src/resagent2_components/workspace.py) | 工作区授权、路径与软链边界 |
 | [permissions.py](src/resagent2_components/permissions.py)、[operations.py](src/resagent2_components/operations.py) | Run 操作授权、固定命令规则、allow/ask/deny 和单次确认匹配 |
-| [git.py](src/resagent2_components/git.py) | Git 快照与 Attempt 相对变化 |
-| [repo.py](src/resagent2_components/repo.py)、[snapshot.py](src/resagent2_components/snapshot.py) | 仓库物化；Git/非 Git 工作区变化观察 |
+| [git.py](src/resagent2_components/git.py) | Coding 使用的 GitBaseline、恢复与 Attempt 相对变化 |
+| [repo.py](src/resagent2_components/repo.py) | 仓库物化 |
 | [process.py](src/resagent2_components/process.py) | shell-free 命令解析/执行、凭据过滤、日志、进程树超时终止 |
-| [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、硬件检查、镜像配置、安装命令规则 |
+| [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、报告生成、媒体类型、登记接口形状 |
 | [context.py](src/resagent2_components/context.py)、[text.py](src/resagent2_components/text.py) | 共享读取/环境/诊断投影；文本窗口与长行呈现 |

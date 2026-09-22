@@ -23,7 +23,7 @@ ResAgent2 的顶层控制模块。
 - 按原始任务顺序稳定计算 ready Task 集合；
 - WorkflowAgentKind → ModuleBinding → ModulePort 路由；
 - Task/Attempt 状态机和自动 retry；
-- blocked/failed 后显式 repair 与 retry；
+- 失败任务按既有策略自动重试；Scientific 可通过后续 WorkRequest 安排修复；
 - PendingQuestion、UserAnswer 和 Session resume；
 - AgentRequest 的 instruction 与 input_artifacts；未来输入用 output_name 显式绑定上游成功 Attempt 的唯一产物；
 - answer、work_feedback、dataset_catalog 及验收要求的冻结工件交接；
@@ -35,7 +35,7 @@ ResAgent2 的顶层控制模块。
 
 Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 13.0，旧 Run 保留但不迁移或恢复。
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 14.0，旧 Run 保留但不迁移或恢复。
 
 Controller/Scheduler 给三个 Agent 与 Compiler 绑定同一请求用量和剩余期限。AgentResult.llm_calls 只用于诊断，不重复扣费；预算耗尽与超时按对应错误终止。操作批准沿用公开问答工件，不能改变 Run 权限。详见[运行控制契约](../../docs/current/CONTRACTS.md#research-request)。
 

@@ -12,6 +12,22 @@
 
 分段实现：`3bab62a` 控制契约；`d663b6d` 持久用量和共享期限；`05c4a78` 工作区、操作检查与单次批准；`b947261` CLI/E2E 集成。
 
+### 交接文件位置
+
+本文件是本轮测试交接的唯一正式文档，按项目规则保存在 `docs/history/reviews/`。导出的 bundle、`PRODUCT_COMMIT` 和 `SHA256SUMS` 放在项目内 `dist/handoffs/run-control-20260922/`；`dist/` 已被 Git 忽略，不提交生成物，也不在项目外保留文档副本。
+
+bundle 包含完整分支历史，无需 Git remote。将该生成物目录传到服务器后，在新的隔离目录执行：
+
+```bash
+sha256sum -c SHA256SUMS
+git clone --branch refactor/run-control run-control.bundle product
+# 先阅读 product/docs/history/reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md
+git -C product checkout --detach b947261446d3850cdc2fb048bba1279c379a9cd6
+git -C product status --short
+```
+
+分支顶端包含本说明；测试固定到上面的产品提交。测试脚本和证据按下文放入独立证据目录。
+
 ## 2. 本地已完成验证
 
 环境：WSL Ubuntu-D，Python 3.12，项目 Conda 环境 `ResAgent2`，`PYTHONNOUSERSITE=1`。
@@ -115,4 +131,3 @@ repair 的自动谓词仍按直接训练命令识别。复杂包装命令可能�
 逐项报告 PASS / FAIL / BLOCKED，并分开“程序谓词”和“人工语义复核”。计量对账以 Run usage 的请求占用为准：每个 call_id/retry_index 唯一；正常完成时与 trace 对账；崩溃或保存后未发送时可能出现 unknown 或 trace 差额，逐条解释，不删记录。占用数不冒充供应商账单。
 
 已知实现边界：同一 Run 串行、单执行者；批准消费与外部副作用不构成事务；宿主可信脚本执行不是 OS 沙箱。HTTP 取消不等待系统 DNS 线程，尚在 libc 中的解析可能后台结束，但其结果不会恢复已取消请求；本地取消也不保证供应商停止计费。
-

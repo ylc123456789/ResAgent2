@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from graphlib import TopologicalSorter
 from pathlib import Path
 from uuid import uuid4
 from pydantic import BaseModel
@@ -174,9 +175,6 @@ class WorkflowScheduler:
             number = len(task.attempts) + 1
             if number > run.request.execution_limits.max_attempts_per_task:
                 raise OrchestrationError("task attempt limit is exhausted")
-            task.input_artifacts = list(dict.fromkeys([
-                *task.input_artifacts, *self._resolve_future_artifact_bindings(run, task),
-            ]))
             attempt = Attempt(number=number, status=AttemptStatus.RUNNING,
                               started_at=datetime.now(UTC), acceptance_ref=task.acceptance_ref)
             task.attempts.append(attempt)
@@ -186,6 +184,10 @@ class WorkflowScheduler:
         run.status = RunStatus.RUNNING
         self._save(run)
         try:
+            if parent is None:
+                task.input_artifacts = list(dict.fromkeys([
+                    *task.input_artifacts, *self._resolve_future_artifact_bindings(run, task),
+                ]))
             request = self._module_request(run, task, attempt.number, parent_session_id=parent)
         except Exception as error:
             attempt.status = AttemptStatus.FAILED
@@ -371,12 +373,17 @@ class WorkflowScheduler:
             run.status = RunStatus.PAUSED
             return
         if run.workflow is not None:
-            for task in run.workflow.tasks:
-                failed = [self._task(run, key) for key in task.depends_on if self._task(run, key).status in {TaskStatus.FAILED, TaskStatus.BLOCKED}]
-                if task.status == TaskStatus.PENDING and failed:
+            tasks = {task.id: task for task in run.workflow.tasks}
+            for task_id in TopologicalSorter({key: task.depends_on for key, task in tasks.items()}).static_order():
+                task = tasks[task_id]
+                if task.status == TaskStatus.PENDING and any(
+                    tasks[key].status in {TaskStatus.FAILED, TaskStatus.BLOCKED} for key in task.depends_on
+                ):
                     task.status = TaskStatus.BLOCKED
             active = self._active_work_request(run)
-            if active and not self._ready_task_ids(run) and not any(task.status == TaskStatus.RUNNING for task in run.workflow.tasks):
+            active_tasks = [task for task in tasks.values() if active and task.work_request_id == active.id]
+            if active_tasks and all(task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED}
+                                    for task in active_tasks):
                 _transition_work_request(active, WorkRequestStatus.STABLE, workflow_revision=run.workflow.revision,
                                          outcome=self._build_work_outcome(run, active.id))
         run.status = RunStatus.RUNNING
@@ -392,7 +399,7 @@ class WorkflowScheduler:
             if task.work_request_id != work_request_id:
                 continue
             last = task.attempts[-1] if task.attempts else None
-            status = task.status.value if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED} else "blocked"
+            status = task.status.value
             error = last.error if last else None
             if status != "completed" and error is None:
                 error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message="dependency did not complete", retryable=False)

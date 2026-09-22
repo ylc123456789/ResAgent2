@@ -102,24 +102,17 @@ def test_candidate_rejects_empty_graph() -> None:
 
 
 def test_candidate_rejects_cross_request_dependency() -> None:
-    from resagent2_orchestrator.workflow_validation import validate_workflow_candidate
-
-    patch = WorkflowPatch(
-        work_request_id="work_2",
-        based_on_revision=1,
-        add_tasks=[
-            TaskProposal(
-                id="task_exp2",
-                work_request_id="work_2",
+    with pytest.raises(ValueError, match="unknown task"):
+        WorkflowPatch(
+            work_request_id="work_2",
+            based_on_revision=1,
+            add_tasks=[TaskProposal(
+                id="task_exp2", work_request_id="work_2",
                 workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
                 instruction="Rerun",
                 depends_on=["task_exp"],  # a prior work request's failed task
-
-            )
-        ],
-    )
-    with pytest.raises(ValueError, match="outside the current work request"):
-        validate_workflow_candidate(patch)
+            )],
+        )
 
 
 def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:

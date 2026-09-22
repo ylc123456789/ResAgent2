@@ -162,16 +162,19 @@ def test_materialization_assigns_ids_and_append_only_revision():
     assert current.model_dump() == before
 
 
-def test_future_binding_preserves_names_and_direct_dependencies():
+@pytest.mark.parametrize("appending", [False, True])
+def test_future_binding_preserves_names_and_direct_dependencies(appending):
     producer = raw_task("producer", output_names=["metrics"])
     consumer = raw_task("consumer", depends_on=["producer"],
         input_artifact_bindings=[dict(source_task="producer", output_selector="metrics")])
-    proposal = materialize(raw(producer, consumer))
-    assert proposal.tasks[1].input_artifact_bindings[0].source_task == "task_producer"
-    assert proposal.tasks[0].output_names == ["metrics"]
+    current = current_workflow() if appending else None
+    proposal = materialize(raw(producer, consumer), current=current)
+    tasks = proposal.add_tasks if appending else proposal.tasks
+    assert tasks[1].input_artifact_bindings[0].source_task == "task_producer"
+    assert tasks[0].output_names == ["metrics"]
     for changed in [consumer | {"depends_on": []}, consumer | {"input_artifact_bindings": [dict(source_task="producer", output_selector="unknown")]}]:
         with pytest.raises(ValueError):
-            materialize(raw(producer, changed))
+            materialize(raw(producer, changed), current=current)
 
 
 def test_valid_compile_uses_one_model_call_and_no_semantic_review():

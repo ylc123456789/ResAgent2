@@ -13,6 +13,7 @@ ALLOWED_IMPORT_ROOTS = {
     "dataclasses",
     "datetime",
     "enum",
+    "graphlib",
     "hashlib",
     "importlib",
     "json",

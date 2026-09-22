@@ -672,7 +672,7 @@ def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_sta
     run.workflow.tasks[0].status = old_status
     engine.store.save(run)
     before = engine.store.load(run.run_id).model_dump()
-    with pytest.raises(ValueError, match="outside the current work request"):
+    with pytest.raises(ValueError, match="unknown task"):
         engine.apply_patch(run.run_id, WorkflowPatch(
             work_request_id="work_next", based_on_revision=1,
             add_tasks=[task(

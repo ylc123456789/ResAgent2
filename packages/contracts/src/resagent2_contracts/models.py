@@ -759,10 +759,8 @@ class WorkflowPatch(ContractModel):
     add_tasks: list[TaskProposal] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_local_ids(self) -> WorkflowPatch:
-        added = [task.id for task in self.add_tasks]
-        if len(added) != len(set(added)):
-            raise ValueError("duplicate task id in add_tasks")
+    def validate_graph(self) -> WorkflowPatch:
+        _validate_task_graph(self.add_tasks)
         for task in self.add_tasks:
             if task.work_request_id != self.work_request_id:
                 raise ValueError(

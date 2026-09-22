@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 主线健康审查
+
+2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，确认问答 shell、安装环境绑定、追加任务图校验、依赖失败传播和 Coding 超时交付五处正确性问题，并列出无消费者的旧状态/辅助代码。当前仅完成审查，尚未实施修复；不改写此前分阶段验收结论。证据和下一步建议见[主线代码健康审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)。
+
 ## 最近已完成的主线
 
 Run 控制简化已完成修复轮定向功能复核，并将 `refactor/run-control@84063e4` 快进合入 **main**（schema **13.0**，产品 `602ffee`，实测 `8b071e6a`）：Coding 删除动作、批准恢复时环境核验两处缺陷关闭，本地/服务器 **1153 passed、1 skipped**。4 个真实模型场景覆盖 5 项功能；固定 Task 执行不等于 Scientific 完整 Run E2E。原始 Session 拒绝快照未保存、只读探针重跑覆盖旧状态等限制保留在[修复轮复核](reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。合并保留分段提交与开发分支，无需为记录勘误再跑模型/GPU。服务器仍使用固定 `projects/ResAgent2`。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，复现步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。

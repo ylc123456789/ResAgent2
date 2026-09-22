@@ -11,6 +11,8 @@ import httpx
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_cli.shell import Shell
 from resagent2_cli.composition import build_application
+from resagent2_coding import NativeCodingAgent
+from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import JsonRunStore
 from resagent2_orchestrator.handoffs import read_json
 
@@ -57,6 +59,11 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
         index = counts[role]
         if role == "compiler":
             assert index <= 2, body
+            prompt = "\n".join(message.get("content") or "" for message in body["messages"])
+            assert NativeCodingAgent.description in prompt
+            assert NativeExperimentAgent.description in prompt
+            assert "upper bound, not a target" in prompt
+            assert "not execution" in prompt
             kind = "coding" if index == 1 else "experiment"
             content = json.dumps({"tasks": [{
                 "key": kind, "workflow_agent_kind": kind, "workspace_id": "ws_main",
@@ -72,7 +79,11 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                     tool, args = work("Analyze existing baseline and candidate metrics; ask which metric")
                 elif index == 3:
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}
-                elif index == 4:
+                elif index in (4, 5):
+                    if index == 5:
+                        current = body["messages"][-1]["content"]
+                        assert "runtime_feedback" in current and "data" in current
+                        assert store.load(run_id).status != "failed"
                     tool, args = "finish", {"report": "The recorded candidate exceeds baseline by 0.07",
                         "artifacts": [{
                             "kind": "scientific_opinion", "path": "opinion.json",
@@ -83,6 +94,13 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                                 "limitations": ["Existing results only; no new experiment executed"],
                             }),
                         }]}
+                    if index == 4:
+                        # Same error as the real server run: trying to deliver input
+                        # evidence again. Reject inside the Agent so it can correct it.
+                        args["artifacts"].insert(0, {
+                            "kind": "data", "path": evidence_id(),
+                            "media_type": "application/json", "summary": "Existing input evidence",
+                        })
                 else:
                     raise AssertionError(body)
             elif role == "coding":
@@ -152,6 +170,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert final.llm_calls_used == len(requests) == sum(counts.values())
     assert final.llm_calls_used > used_before_answer
     assert set(counts) == {"scientific", "compiler", "coding", "experiment"}
+    assert counts["scientific"] == 5  # Rejected finish and correction share the same budget.
     assert final.usage.outcomes == {"succeeded": len(requests), "failed": 0, "unknown": 0}
     assert len(final.answers) == 2
     answers = [read_json(ref) for ref in final.artifacts.values() if ref.kind == "answer"]
@@ -161,4 +180,3 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert final.artifacts[final.final_report_artifact_id].kind == "final_report"
     assert hashlib.sha256(metrics.read_bytes()).hexdigest() == original_hash
     assert not any(ref.kind == "execution_record" for ref in final.artifacts.values())
-

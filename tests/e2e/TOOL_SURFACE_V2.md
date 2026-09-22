@@ -17,3 +17,7 @@ to the current fixture. The other tool schemas and descriptions remain unchanged
 execution-time environment auditing changes behavior, not the tool input shape.
 `test_delete_invoke.py` additionally compares the Coding action names with the tools
 actually advertised through the native protocol.
+
+Schema 14 only updates embedded public schema const/default values. Before
+updating the fixture, normalizing those exact values back to 13.0 reproduced
+every schema-13 fingerprint. No tool names, parameters or descriptions changed.

@@ -152,13 +152,24 @@ class NativeCodingAgent:
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory=initial_memory,
         )
-        if result.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED} and repository.changed_paths_since(baseline):
+        if result.status not in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
+            return result
+        try:
+            patch = repository.diff_since(baseline)
+        except (OSError, GitWorkspaceError) as error:
+            # Diagnostics must not replace a persisted failure or restart work
+            # whose workspace changes could not be inspected.
+            return result.model_copy(update={"error": result.error.model_copy(update={
+                "retryable": False,
+                "details": {**result.error.details, "diagnostic_patch_error": str(error)},
+            })})
+        if patch:
             error = result.error.model_copy(update={"retryable": False}) if result.error else None
             return result.model_copy(update={
                 "artifacts": [*result.artifacts, ArtifactCandidate(
                     kind="code_patch", path="failed_changes.patch", media_type="text/x-diff",
                     summary="Diagnostic patch from failed Coding attempt",
-                    metadata={"diagnostic": True}, content=repository.diff_since(baseline),
+                    metadata={"diagnostic": True}, content=patch,
                 )],
                 "error": error,
             })

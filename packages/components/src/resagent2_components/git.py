@@ -45,14 +45,17 @@ class GitWorkspace:
         accepted: tuple[int, ...] = (0,),
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        result = run_process(
-            ["git", *arguments],
-            cwd=self.boundary.root,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=env,
-        )
+        try:
+            result = run_process(
+                ["git", *arguments],
+                cwd=self.boundary.root,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+        except subprocess.SubprocessError as error:
+            raise GitWorkspaceError(str(error)) from error
         if result.returncode not in accepted:
             raise GitWorkspaceError(result.stderr.strip() or "git command failed")
         return result

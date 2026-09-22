@@ -18,4 +18,6 @@ delete_path 只装配到 Coding：普通授权文件或空目录可直接删除�
 
 完成时从实际 Git 增量生成 code_patch/code_change，从真实验证记录生成
 verification_result，记录其是否覆盖当前工作区。模型不能提交伪造的执行记录。
-失败仍保留真实诊断 patch。显式交付要求由 Scheduler 对登记后的 artifact 检查。
+失败在剩余期限内尽力收集真实诊断 patch；期限耗尽或 Git 诊断失败时，保留原错误、Session、
+调用计量与已有工件，在 error.details.diagnostic_patch_error 说明未能收集的原因，并禁止自动重试。
+显式交付要求由 Scheduler 对登记后的 artifact 检查。

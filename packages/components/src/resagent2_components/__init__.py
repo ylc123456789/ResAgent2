@@ -19,13 +19,11 @@ from .dataset import (
 )
 from .environment import (
     SetupCommandPolicy,
-    mirror_env_overrides,
     EnvironmentBinding,
     EnvironmentManager,
     EnvironmentManagerError,
     PreparedEnvironment,
     find_conda,
-    HardwareAudit,
 )
 from .git import (
     GitBaseline,
@@ -90,7 +88,6 @@ __all__ = [
     'GitBaseline',
     'GitWorkspace',
     'GitWorkspaceError',
-    'HardwareAudit',
     'MaterializedRepo',
     'PreparedEnvironment',
     'ProcessRunner',
@@ -108,7 +105,6 @@ __all__ = [
     'dataset_env_overrides',
     'find_conda',
     'media_type_for',
-    'mirror_env_overrides',
     'parse_command',
     'resolve_dataset_refs',
     'snapshot_workspace',

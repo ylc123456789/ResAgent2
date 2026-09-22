@@ -14,7 +14,6 @@ from resagent2_components import (
     DatasetResolutionError,
     EnvironmentManager,
     EnvironmentManagerError,
-    HardwareAudit,
     PreparedEnvironment,
     RepoMaterializer,
     RepoMaterializerError,
@@ -467,7 +466,7 @@ def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
         manager._delete_if_managed(outside)
 
 
-# ── DatasetCache / HardwareAudit ───────────────────────────────────
+# ── Dataset catalog ───────────────────────────────────────────────
 
 
 def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> None:
@@ -605,14 +604,6 @@ def test_dataset_catalog_rejects_symlink_escape_even_when_target_missing(tmp_pat
     (root / "catalog.json").write_text('{"x": "link"}', encoding="utf-8")
     with pytest.raises(DatasetResolutionError, match="escapes"):
         DatasetCatalog(root).references()
-
-
-def test_hardware_audit_returns_structured_summary() -> None:
-    info = HardwareAudit().collect()
-
-    assert "os" in info
-    assert "cpu_cores" in info
-    assert "gpus" in info
 
 
 def test_descendant_pids_finds_child_process() -> None:

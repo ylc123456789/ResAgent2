@@ -11,7 +11,6 @@ import pytest
 
 from resagent2_components import (
     GitWorkspace,
-    HardwareAudit,
     ResourceLayout,
     WorkspaceBoundary,
     WorkspaceSnapshot,
@@ -123,7 +122,6 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     client = _CaptureClient()
     # Deterministic hardware text only; real AgentDefinition, tools, prompts,
     # context builder, permission policy and AgentLoop remain unmodified.
-    monkeypatch.setattr(HardwareAudit, "text", lambda self: "CPU test host")
     options = {} if max_tokens is None else {"max_context_tokens": max_tokens}
     agent_class = NativeCodingAgent if coding else NativeExperimentAgent
     agent = agent_class(

@@ -5,8 +5,6 @@ from __future__ import annotations
 from .process import CommandPermissionDecision, UnsafeCommandError, parse_command, run_process
 from resagent2_runtime.budget import DeadlineExceededError
 
-import platform
-
 import hashlib
 import json
 import os
@@ -491,67 +489,6 @@ class EnvironmentBinding:
             "-p",
             str(self.current.prefix),
         ]
-
-
-class HardwareAudit:
-    """Collect a compact machine and GPU summary for agent context."""
-
-    def collect(self, *, timeout: int = 20) -> dict:
-        """Return a structured summary without configuring CUDA or scheduling GPUs."""
-        return {
-            "os": platform.platform(),
-            "cpu_cores": os.cpu_count() or 0,
-            "gpus": self._gpus(timeout),
-        }
-
-    def text(self, *, timeout: int = 20) -> str:
-        """Render the collected summary as a single prompt-safe string."""
-        info = self.collect(timeout=timeout)
-        gpus = info["gpus"]
-        gpu_line = "GPU: none visible" if not gpus else "GPU:\n" + "\n".join(gpus)
-        return f"OS: {info['os']}\nCPU cores: {info['cpu_cores']}\n{gpu_line}"
-
-    @staticmethod
-    def _gpus(timeout: int) -> list[str]:
-        exe = shutil.which("nvidia-smi")
-        if not exe:
-            return []
-        try:
-            result = run_process(
-                [
-                    exe,
-                    "--query-gpu=name,memory.total,driver_version",
-                    "--format=csv,noheader,nounits",
-                ],
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-            )
-        except DeadlineExceededError:
-            raise
-        except (OSError, subprocess.TimeoutExpired):
-            return []
-        if result.returncode != 0:
-            return []
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-# Best-effort mirror acceleration profiles. These are operational overrides
-# (never part of environment identity) and are intentionally small.
-_MIRROR_PROFILES: dict[str, dict[str, str]] = {
-    "none": {},
-    "cn": {
-        "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
-    },
-    "autodl": {
-        "PIP_INDEX_URL": "https://mirrors.cloud.tencent.com/pypi/simple",
-    },
-}
-
-
-def mirror_env_overrides(profile: str) -> dict[str, str]:
-    """Return mirror env overrides for a named profile (``none`` is a no-op)."""
-    return dict(_MIRROR_PROFILES.get(profile, {}))
 
 
 class SetupCommandPolicy:

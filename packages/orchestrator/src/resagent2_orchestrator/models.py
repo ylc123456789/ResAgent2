@@ -26,7 +26,6 @@ from resagent2_contracts import (
     WorkRequest,
     WorkRequestStatus,
     WorkspaceRecord,
-    TaskId,
 )
 
 
@@ -42,7 +41,6 @@ class CompletionViolationCode(StrEnum):
     INVALID_SESSION = "invalid_session"
     ACTIVE_CONTROL_STATE = "active_control_state"
     INVALID_OPINION = "invalid_opinion"
-    UNKNOWN_EVIDENCE = "unknown_evidence"
     UNOBSERVED_EVIDENCE = "unobserved_evidence"
     MISSING_EVIDENCE_KIND = "missing_evidence_kind"
     MISSING_LIMITATIONS = "missing_limitations"
@@ -90,7 +88,6 @@ class ResearchRun(OrchestratorModel):
     feedback_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
     scientific_report: str = ""
     answers: list[RecordedAnswer] = Field(default_factory=list)
-    answer_task_ids: dict[QuestionId, TaskId | None] = Field(default_factory=dict)
     workflow_history: list[Workflow] = Field(default_factory=list)
     scientific_session: SessionRef | None = None
     latest_scientific_assessment: ScientificAssessment | None = None

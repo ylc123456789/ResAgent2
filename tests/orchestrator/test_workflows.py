@@ -193,51 +193,6 @@ def test_parallel_ready_set_is_stable_and_dependency_driven() -> None:
     assert engine.ready_task_ids("run_parallel") == ["task_treatment"]
 
 
-def test_blocked_experiment_can_be_repaired_without_overwriting_attempts() -> None:
-    blocked = AgentResult(
-        status=ModuleStatus.BLOCKED,
-        report="Code repair required",
-        error=ModuleError(
-            code=ErrorCode.TOOL_FAILED,
-            message="Experiment cannot start",
-            retryable=False,
-        ),
-    )
-    engine = scheduler(
-        {
-            WorkflowAgentKind.EXPERIMENT: [blocked, completed("retry succeeded")],
-            WorkflowAgentKind.CODING: [completed("repair completed")],
-        }
-    )
-    proposal = WorkflowProposal(
-        work_request_id="work_legacy_initial",
-        tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
-    )
-    _create_run(engine, "run_repair", research_request(), proposal)
-
-    first = engine.run_until_stable("run_repair")
-    assert first.workflow.tasks[0].status == TaskStatus.BLOCKED
-
-    patched = engine.apply_patch(
-        "run_repair",
-        WorkflowPatch(
-            work_request_id="work_legacy_initial",
-            based_on_revision=1,
-            add_tasks=[task("task_repair", WorkflowAgentKind.CODING)],
-        ),
-    )
-    assert [item.revision for item in patched.workflow_history] == [1]
-    engine.run_until_stable("run_repair")
-    engine.retry_task("run_repair", "task_experiment")
-    final = engine.run_until_stable("run_repair")
-
-    experiment = next(item for item in final.workflow.tasks if item.id == "task_experiment")
-    assert experiment.status == TaskStatus.COMPLETED
-    assert [attempt.number for attempt in experiment.attempts] == [1, 2]
-    assert experiment.attempts[0].status.value == "blocked"
-    assert experiment.attempts[1].status.value == "completed"
-
-
 def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     question_result = AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
@@ -295,7 +250,6 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
     run.pending_question = None
     run.status = RunStatus.RUNNING
-    run.answer_task_ids[answer.question_id] = "task_experiment"
     engine.resume_task_in_place(run, "task_experiment")
     engine.store.save(run)
     final = engine.run_until_stable("run_question")
@@ -351,7 +305,6 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
     run = engine.store.load(first.run_id)
     run.answers.append(answer)
     system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
-    run.answer_task_ids[answer.question_id] = "task_experiment"
     run.pending_question = None
     run.status = RunStatus.RUNNING
     engine.resume_task_in_place(run, "task_experiment")
@@ -372,21 +325,13 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
     ))
 
 
-@pytest.mark.parametrize(
-    ("task_id", "attempt_number"),
-    [
-        ("task_" + "a" * 128, 1),
-        ("task_" + "a" * 128, 10**30),
-        ("task_" + "a" * 128, 10**128),
-    ],
-)
-def test_question_id_is_strictly_bounded(task_id: str, attempt_number: int) -> None:
+def test_question_id_is_strictly_bounded() -> None:
     from pydantic import TypeAdapter
 
     from resagent2_contracts import (QuestionId, ArtifactCandidate, ControlSignal)
     from resagent2_orchestrator.scheduler import _question_id
 
-    qid = _question_id(task_id, attempt_number)
+    qid = _question_id()
     assert TypeAdapter(QuestionId).validate_python(qid) == qid
 
 

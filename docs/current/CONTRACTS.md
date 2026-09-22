@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 13.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 14.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -465,9 +465,9 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 13.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 14.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
-本版保持统一 AgentRequest/AgentResult，预算与执行限制分开，Run 授权必填，工作区统一为 WorkspaceAccess，操作批准使用结构化单次快照。移除旧工作区 mode/allowed_paths 和实验全局确认字段，不保留兼容运行分支。
+本版保持统一 AgentRequest/AgentResult、预算与执行限制、WorkspaceAccess 和结构化单次批准机制。删除 ResearchRun 中已无消费者的 answer_task_ids；答案作用域仍由 RecordedAnswer 和冻结 answer 工件保存。schema 13 及更早 Run 不再支持恢复，不保留兼容读取分支。
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 

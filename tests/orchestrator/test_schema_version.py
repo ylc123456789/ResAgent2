@@ -16,7 +16,8 @@ from resagent2_contracts import (
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 
 
-def test_old_run_rejected_without_rewriting_file(tmp_path):
+@pytest.mark.parametrize("old_version", ["7.0", "13.0"])
+def test_old_run_rejected_without_rewriting_file(tmp_path, old_version):
     now = datetime.now(UTC)
     run = ResearchRun(run_id='run_schema', status=RunStatus.RUNNING, request=ResearchRequest(goal='Version boundary', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1)), created_at=now, updated_at=now)
     store = JsonRunStore(tmp_path)
@@ -24,7 +25,7 @@ def test_old_run_rejected_without_rewriting_file(tmp_path):
     assert store.load(run.run_id) == run
 
     path = tmp_path / "run_schema.json"
-    legacy = path.read_bytes().replace(f'"{SCHEMA_VERSION}"'.encode(), b'"7.0"')
+    legacy = path.read_bytes().replace(f'"{SCHEMA_VERSION}"'.encode(), f'"{old_version}"'.encode())
     path.write_bytes(legacy)
     with pytest.raises(ValidationError):
         store.load(run.run_id)

@@ -97,7 +97,6 @@ class ResearchController:
         run.pending_question_ref = None
         run.status = RunStatus.RUNNING
         if task_id:
-            run.answer_task_ids[answer.question_id] = task_id
             self.scheduler.resume_task_in_place(run, task_id)
         self._save(run)
         return self.run_until_stable(run_id)

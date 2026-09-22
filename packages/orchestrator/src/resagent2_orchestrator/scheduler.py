@@ -34,7 +34,7 @@ def _validate_answer(question, answer):
         raise OrchestrationError("answer is missing requested fields")
 
 
-def _question_id(task_id=None, attempt_number=None):
+def _question_id():
     return f"question_{uuid4().hex}"
 
 
@@ -339,16 +339,6 @@ class WorkflowScheduler:
         if changed:
             self._evaluate_run(run)
         return changed
-
-    def retry_task(self, run_id, task_id):
-        run = self.store.load(run_id)
-        task = self._task(run, task_id)
-        if task.status not in {TaskStatus.FAILED, TaskStatus.BLOCKED} or len(task.attempts) >= run.request.execution_limits.max_attempts_per_task:
-            raise OrchestrationError("task cannot be retried")
-        task.status = TaskStatus.PENDING
-        run.status = RunStatus.RUNNING
-        self._save(run)
-        return run.model_copy(deep=True)
 
     def apply_patch(self, run_id, patch):
         run = self.store.load(run_id)

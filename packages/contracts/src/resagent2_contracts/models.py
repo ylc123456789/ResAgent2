@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "13.0"
+SCHEMA_VERSION = "14.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["13.0"] = SCHEMA_VERSION
+    schema_version: Literal["14.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------

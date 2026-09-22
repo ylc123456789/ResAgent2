@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 13.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 14.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 

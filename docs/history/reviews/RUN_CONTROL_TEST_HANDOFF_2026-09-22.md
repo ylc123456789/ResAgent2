@@ -1,12 +1,12 @@
 # Run control schema 13 本地验收与服务器测试交接
 
-日期：2026-09-22。状态：首轮服务器验收发现两处产品缺陷及证据偏差，本文件用于修复后的定向复测。原轮次和勘误见[服务器复核记录](RUN_CONTROL_SERVER_REVIEW_2026-09-22.md)。
+日期：2026-09-22。状态：修复轮实测 `8b071e6a` 已完成，两个产品缺陷经定向功能复核关闭。服务器全量 1153 passed / 1 skipped；4 个真实模型场景覆盖 5 项功能。Session 原始快照缺口、只读断言修正、计量与方法限制见[修复轮复核](RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。以下保留作为复现规程，不表示还需重跑整轮。
 
 ## 1. 锁定版本与分支
 
 - 实现分支：`refactor/run-control`，直接从未合并的 `refactor/unified-agent-entry` / `c0add70` 派生。
 - 修复产品基线：`602ffeef597ba86a4bfa4de3c958caba9dddb9de`，schema `13.0`。测试使用分支最新提交，并记录实际 HEAD；产品基线必须是 HEAD 的祖先，不切到 detached HEAD。
-- 分支推送到 `origin/refactor/run-control`，未合并。原服务器验收对应 `29d3ab80`；下面的本地结果属于新修复，真实模型复测仍待执行。
+- 分支推送到 `origin/refactor/run-control`，未合并。原服务器验收对应 `29d3ab80`；修复后实测 `8b071e6a`，结论及覆盖边界以复核记录为准。
 - 不恢复 schema 12 的 Run。旧证据原样保留，新测试使用新的状态目录。
 - 方案：[Run 控制简化方案](RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)。
 
@@ -136,7 +136,7 @@ cat "$TEST_EVIDENCE_DIR/logs/import-paths.txt"
 
 ## 5. 小规模真实模型验收
 
-沿用已有模型配置与 trace 设置，记录 model、实际 HTTP 尝试、重试和 Run usage；不要把密钥写进命令记录或报告。每一项使用全新 Run，等待确认时由测试程序调用公开的 `controller.answer_question`。本次必须复测原 item1/2/3/4/6；item5 和 item7 已有原提交的通过证据，不必花模型或 GPU 再跑，报告标明未在新提交复测即可。
+沿用已有模型配置与 trace 设置，记录 model、实际 HTTP 尝试、重试和 Run usage；不要把密钥写进命令记录或报告。每一项使用全新 Run，等待确认时由测试程序调用公开的 `controller.answer_question`。原要求复测 item1/2/3/4/6，现已完成上述范围的功能复核；若将来重跑仍遵守这些要求。item5 和 item7 已有原提交的通过证据，不必花模型或 GPU 再跑，报告标明未在新提交复测即可。
 
 这些是能力探针：用小型固定任务明确 Coding/Experiment 角色及输入工件，可在测试脚本中通过正常 Task/Controller 入口固定任务图，以排除 Scientific 拆任务的随机性；Agent 本身仍使用真实模型和公开 invoke，不 mock 执行工具或环境审计。另列确定性测试时必须明确标记，不充作真实模型结果。
 
@@ -146,7 +146,7 @@ cat "$TEST_EVIDENCE_DIR/logs/import-paths.txt"
 | 目录清理确认 | 在隔离目录生成三个普通文件，请求递归清理。必须先暂停，question.action 含目标快照，批准前文件仍在；同一 Attempt/Session 恢复后只删除准确目标。另用确定性测试覆盖目标变化和部分删除，不靠改产品模拟。 |
 | 两次命令逐条批准（item3） | 固定 Experiment Task，全读写可信工作区，execute_commands=true、prepare_environment=true、confirm_commands=true。先有 prepared 环境；准备操作自身可能需要批准，单独留存，不能充作两个目标命令。标准库脚本用两个不同参数生成 marker。首条目标命令批准前两个 marker 均不存在；第一次批准只产生第一个；第二条目标命令单独批准才产生第二个。保存结构化 action、两份命令问题/答案、每次前后 marker 快照及真实执行记录。批准恢复时自动核验环境成功后应实际执行，不依赖反复 audit_env 问答。 |
 | 陈旧答案拒绝（item4） | 第二条目标命令 pending 时，经公开 answer_question 重交第一条命令答案。保存原始脚本、原始异常输出、拒绝前后 Run JSON 和全部 Session 原始字节快照以及 usage；必须拒绝且字节级不变，第二题仍 pending。随后提交正确第二题答案继续。拒绝调用不能触发模型。若未到达第二题，报告该路径未覆盖，不能仅凭最终态声明 PASS。 |
-| 只读分析（item6） | 固定 Experiment Task 或直接 NativeExperimentAgent.invoke，给两个已有 metrics 工件和只读源目录，关闭执行/环境准备权限。必须保存实际 Experiment Session、输出工件及结果；command_count=0，源文件 hash 不变，正确比较数值。Coding/Scientific 输出或空 Session 列表不能代替 Experiment 的通过证据。 |
+| 只读分析（item6） | 固定 Experiment Task 或直接 NativeExperimentAgent.invoke，给两个已有 metrics 工件和只读源目录，关闭执行/环境准备权限。必须保存实际 Experiment Session、完整报告和结果；未要求额外文件时纯分析可只交付报告。command_count=0，源文件 hash 不变，正确比较数值。Coding/Scientific 输出或空 Session 列表不能代替 Experiment 的通过证据。 |
 
 新脚本使用 schema 13：`RunBudget` 只有模型次数与时间；任务数/尝试数放在 `ExecutionLimits`；`permissions` 必填；工作区用 `WorkspaceAccess`；命令逐次确认用 `confirm_commands`。不要复制旧模式字段或旧全局确认开关。
 

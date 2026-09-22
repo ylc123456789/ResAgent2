@@ -42,11 +42,6 @@ from .repo import (
     RepoMaterializerError,
 )
 from .resources import ResourceLayout
-from .snapshot import (
-    WorkspaceObserver,
-    WorkspaceSnapshot,
-    snapshot_workspace,
-)
 from .workspace import (
     WorkspaceBoundary,
     WorkspacePermissionError,
@@ -97,9 +92,7 @@ __all__ = [
     'ResourceLayout',
     'UnsafeCommandError',
     'WorkspaceBoundary',
-    'WorkspaceObserver',
     'WorkspacePermissionError',
-    'WorkspaceSnapshot',
     'build_module_report',
     'dataset_context',
     'dataset_env_overrides',
@@ -107,6 +100,5 @@ __all__ = [
     'media_type_for',
     'parse_command',
     'resolve_dataset_refs',
-    'snapshot_workspace',
     'workspace_context',
 ]

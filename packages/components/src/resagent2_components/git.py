@@ -28,6 +28,20 @@ class GitBaseline:
 
     tree_hash: str
 
+    def to_memory(self) -> dict:
+        """Persist the Attempt baseline without copying workspace contents."""
+        return {"kind": "git", "tree_hash": self.tree_hash}
+
+    @classmethod
+    def from_memory(cls, value: object) -> "GitBaseline":
+        """Require a persisted Git baseline when resuming a Coding Attempt."""
+        if not isinstance(value, dict) or value.get("kind") != "git":
+            raise ValueError("missing Git baseline")
+        tree_hash = value.get("tree_hash")
+        if not isinstance(tree_hash, str) or not tree_hash:
+            raise ValueError("Git baseline is missing tree_hash")
+        return cls(tree_hash=tree_hash)
+
 
 class GitWorkspace:
     """Observe one existing repository without mutating its Git state."""

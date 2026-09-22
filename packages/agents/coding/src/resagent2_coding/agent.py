@@ -18,7 +18,7 @@ from resagent2_components import (
     EnvironmentManager, GitWorkspace, GitWorkspaceError, ProcessRunner,
     RegisteredArtifactReader, RepoMaterializer, RepoMaterializerError,
     ResourceLayout, WorkspaceBoundary, WorkspacePermissionError,
-    WorkspaceSnapshot, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
+    GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
@@ -91,19 +91,16 @@ class NativeCodingAgent:
                 RepoMaterializerError, DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
 
-        baseline = repository.snapshot()
         initial_memory: dict = {"edit_revision": 0}
         if request.parent_session_id is not None:
             try:
                 prior = self.loop.store.load(request.parent_session_id)
-                snapshot = WorkspaceSnapshot.from_memory(prior.memory.get("workspace_snapshot"))
+                baseline = GitBaseline.from_memory(prior.memory.get("workspace_snapshot"))
             except (OSError, ValueError, KeyError):
-                snapshot = None
-            if snapshot is None or snapshot.git_baseline is None:
                 return self._failure("Resumed Coding attempt has no persisted Git baseline", blocked=True)
-            baseline = snapshot.git_baseline
         else:
-            initial_memory["workspace_snapshot"] = WorkspaceSnapshot(tree_hash=baseline.tree_hash).to_memory()
+            baseline = repository.snapshot()
+            initial_memory["workspace_snapshot"] = baseline.to_memory()
 
         workspace_id = request.workspace_id or (
             request.workspace_spec.workspace_id if request.workspace_spec else "workspace"

@@ -20,7 +20,10 @@ def request(root, *, writable=False, **updates):
 
 
 @pytest.mark.parametrize("writable", [False, True])
-def test_existing_result_analysis_finishes_without_new_execution(tmp_path, writable):
+def test_existing_result_analysis_finishes_without_new_execution(tmp_path, monkeypatch, writable):
+    def reject_scan(*args, **kwargs):
+        raise AssertionError("analysis must not scan unrelated workspace files")
+    monkeypatch.setattr("resagent2_components.WorkspaceBoundary.iter_files", reject_scan)
     (tmp_path / "metrics.json").write_text('{"accuracy": 0.9}')
     client = ScriptedLLMClient([
         {"tool": "read_file", "arguments": {"path": "metrics.json"}},
@@ -31,7 +34,6 @@ def test_existing_result_analysis_finishes_without_new_execution(tmp_path, writa
     assert result.status == ModuleStatus.COMPLETED, result.report
     persisted = agent.loop.store.load(result.session.id)
     assert persisted.memory["command_count"] == 0
-    assert persisted.memory["experiment_success_count"] == 0
 
 
 def test_generic_finish_delivers_named_file(tmp_path):

@@ -210,9 +210,9 @@ LLM 草图只给逻辑 key、路由、instruction、依赖、逻辑工作区和�
 
 Scheduler 接受时将 output_names 合入 required_output_names，将非空验收要求冻结为 acceptance_requirements。WorkflowTask 与后续每个 Attempt 绑定同一个 acceptance_ref；请求把该 Ref 作为输入材料，不再复制一份可漂移的验收要求。
 
-`depends_on` 表示上游成功，是执行顺序约束。失败修复须在观察真实失败后提出新的 WorkRequest，追加修复与重跑任务。WorkflowPatch 只追加任务，绑定 based_on_revision，不改写历史 Attempt。
+`depends_on` 表示上游成功，是执行顺序约束。失败修复须在观察真实失败后提出新的 WorkRequest，追加修复与重跑任务。WorkflowPatch 只追加任务，绑定 based_on_revision，不改写历史 Attempt。Proposal/Patch 共用同一候选图校验，依赖只限本轮任务；依赖失败按拓扑顺序传播，当前工作轮任务全部终态后才生成稳定 WorkOutcome。
 
-`FutureArtifactBinding(source_task, output_selector)` 必须选择直接依赖声明的逻辑 output_name。上游成功后，Scheduler 从其最新成功 Attempt 查找唯一匹配 Ref，再加入下游 input_artifacts。缺失、重复、跨归属或尚未完成的来源均拒绝；模型不能预猜未来 ArtifactId。
+`FutureArtifactBinding(source_task, output_selector)` 必须选择直接依赖声明的逻辑 output_name。上游成功后，Scheduler 从其最新成功 Attempt 查找唯一匹配 Ref，再加入下游 input_artifacts。缺失、重复、跨归属或尚未完成的来源均拒绝；执行前解析失败会保留不可重试的 failed Attempt，不调用 Agent。模型不能预猜未来 ArtifactId。
 
 <a id="capabilities"></a>
 
@@ -240,7 +240,7 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Components，不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
 
-LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域指令、工件和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、WorkspaceSnapshot 留在 components，不变成 wire 消息。
+LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域指令、工件和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、GitBaseline 留在 components，不变成 wire 消息。
 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
 
@@ -281,7 +281,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | 入口 | 输入 → 输出 / 副作用 | 失败与边界 |
 |---|---|---|
 | [WorkspaceBoundary](../../packages/components/src/resagent2_components/workspace.py) | 工作区授权 + 相对路径 → 已检查 Path / 文件清单 | 路径与软链越界拒绝；不代替 OS 沙箱 |
-| [GitWorkspace](../../packages/components/src/resagent2_components/git.py)、[WorkspaceObserver](../../packages/components/src/resagent2_components/snapshot.py) | 工作区、Attempt 基线 → 变化路径 / patch / snapshot | 保持原基线与归属规则；不以模型说明推断修改 |
+| [GitWorkspace / GitBaseline](../../packages/components/src/resagent2_components/git.py) | 工作区、Attempt 基线 → 变化路径 / patch / snapshot | 保持原基线与归属规则；不以模型说明推断修改 |
 | [RepoMaterializer](../../packages/components/src/resagent2_components/repo.py) | 仓库来源、目标工作区 → MaterializedRepo，可准备仓库文件 | 来源/目录校验失败抛明确错误；不决定任务图 |
 | [ProcessRunner.run](../../packages/components/src/resagent2_components/process.py) | 命令、目录、超时和环境 → VerificationResult，落 stdout/stderr | shell 组合拒绝，超时终止进程树；结果是执行事实，不是科学结论。历史类型名不在本次调整 |
 | [EnvironmentManager / Binding](../../packages/components/src/resagent2_components/environment.py) | Run/workspace、Python 版本 → 环境及认证状态 | 环境失效/代次更新规则不变；SetupCommandPolicy 限制安装入口，Coding 验证策略不在这里 |
@@ -418,7 +418,9 @@ WorkspaceBoundary 每次检查真实路径、软链逃逸与授权；`.git`、`.
 
 当前进程使用宿主账户，shell-free 和固定命令规则不是 OS 沙箱。没有隔离后端时，仅完整可读写、无用户 denied_paths 的工作区允许通用脚本/验证/安装执行；只读或局部授权即使打开执行权限并批准也不能绕过。完整授权仅适合可信代码，不保证脚本无法访问宿主其他路径或元数据。
 
-components 提供一个内部 `WorkspaceSnapshot`（Git workspace 用 `GitBaseline` 的 tree hash，非 Git workspace 用有界 file-hash fallback）表达 Attempt 起点；Coding 的差异与验证新鲜度检查使用 Attempt 基线；环境或代码变动不能由旧验证冒充当前状态。
+Coding 失败后在原期限内尽力收集诊断 patch；诊断失败保留原结果的错误、Session、计量和已有工件，以 error.details.diagnostic_patch_error 说明原因，并禁止自动重试。
+
+Coding 使用 components 的内部 `GitBaseline.tree_hash` 表达 Attempt 起点；恢复时从 Session memory 恢复同一基线，不重新扫描为新起点。差异与验证新鲜度检查沿用此基线；环境或代码变动不能由旧验证冒充当前状态。Experiment 不生成启动快照，完成检查直接按 WorkspaceBoundary 校验文件路径。
 
 <a id="resources"></a>
 
@@ -459,6 +461,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 - 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
 - 问答恢复不信任旧认证。获准命令执行前的自动核验使用同一 Run 截止时间，失败则不运行命令；这是该命令的固定前置检查，不新增模型调用或另一轮命令批准。实际自动核验结果保存在该命令的 ToolObservation.value.env_audit 和 Session memory.env_audit；已有认证时不重复执行探针；
 - Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
+- run_setup 接受裸名 python/python3 -m pip install、pip/pip3 install 及 conda env update；pip 实际运行绑定环境的绝对 Python。拒绝调用者指定其他解释器、目标目录或用户安装位置（含参数缩写）。确认继续绑定原工具参数和环境前缀，执行记录保存实际构造命令；部署层 pip 配置、镜像与缓存仍为可信输入，不改变或禁用。安装构建脚本仍属于可信进程，不构成系统沙箱。
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 
 <a id="schema"></a>

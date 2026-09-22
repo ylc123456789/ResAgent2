@@ -8,7 +8,7 @@ import json
 import pytest
 
 from resagent2_contracts import AgentOwner, AgentRequest, TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
-from resagent2_components import WorkspaceBoundary, WorkspaceObserver
+from resagent2_components import WorkspaceBoundary
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_runtime import (
     AgentDefinition, AgentLoop, AgentState, AllowListPermissionPolicy,
@@ -51,7 +51,7 @@ def test_loop_returns_execution_record_for_success_and_failure(tmp_path, exit_co
         ]),
         context_builder=lambda *_: [],
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
-        completion_check=ExperimentCompletionCheck(WorkspaceObserver(boundary)),
+        completion_check=ExperimentCompletionCheck(boundary),
     )
     result = AgentLoop().run(definition, AgentRequest(run_id='run_records', task_id='task_records', attempt_number=1, agent=AgentOwner.EXPERIMENT, instruction='Run', budget=TaskBudget(max_llm_calls=3, timeout_seconds=10), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)), session_id='session_records')
     assert result.status == ("completed" if exit_code == 0 else "failed")
@@ -87,7 +87,7 @@ def test_only_successful_retry_of_same_command_resolves_failure(tmp_path, comman
             data=observation.model_dump(mode="json"), created_at=now,
         ))
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))
-    decision = ExperimentCompletionCheck(WorkspaceObserver(boundary)).evaluate(
+    decision = ExperimentCompletionCheck(boundary).evaluate(
         state, FinishCandidate(report="Recorded all outcomes"))
     assert decision.complete == (failed_command is None)
     if failed_command is not None:

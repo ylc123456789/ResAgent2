@@ -16,7 +16,7 @@ from resagent2_components import (
     ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
     EnvironmentManager, ProcessRunner, RegisteredArtifactReader,
     RepoMaterializer, RepoMaterializerError, ResourceLayout,
-    WorkspaceBoundary, WorkspaceObserver, WorkspacePermissionError,
+    WorkspaceBoundary, WorkspacePermissionError,
     dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_runtime import (
@@ -96,7 +96,6 @@ class NativeExperimentAgent:
             run_id=request.run_id, workspace_id=workspace_id,
             hard_constraint=request.environment_spec.python_version,
         )
-        observer = WorkspaceObserver(boundary)
         output_root = request.output_dir or str(boundary.root / ".resagent2" / request.task_id)
         runner = ProcessRunner(boundary)
         tools = (
@@ -123,14 +122,11 @@ class NativeExperimentAgent:
                 request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
-            completion_check=ExperimentCompletionCheck(observer, output_dir=request.output_dir),
+            completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),
             action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
         )
-        initial_memory = {"command_count": 0, "experiment_success_count": 0}
-        if request.parent_session_id is None:
-            initial_memory["workspace_snapshot"] = observer.snapshot().to_memory()
         return self.loop.run(
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
-            initial_memory=initial_memory,
+            initial_memory={"command_count": 0},
         )

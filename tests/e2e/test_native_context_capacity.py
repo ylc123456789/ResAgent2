@@ -13,7 +13,6 @@ from resagent2_components import (
     GitWorkspace,
     ResourceLayout,
     WorkspaceBoundary,
-    WorkspaceSnapshot,
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
@@ -83,7 +82,7 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
         run_id=request.run_id, task_id=request.task_id, attempt_number=1,
         status=SessionStatus.PAUSED, created_at=now, updated_at=now,
         memory={
-            "workspace_snapshot": WorkspaceSnapshot(tree_hash=baseline.tree_hash).to_memory(),
+            "workspace_snapshot": baseline.to_memory(),
             "read_paths": ["train.py"], "read_artifact_ids": [artifact.id],
             "hardware": "OS: test\nCPU cores: 4\nGPU: none visible",
             "repo": {"repo_url": str(root), "commit": "fixture"},
@@ -120,8 +119,8 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     store = InMemorySessionStore()
     store.save(state)
     client = _CaptureClient()
-    # Deterministic hardware text only; real AgentDefinition, tools, prompts,
-    # context builder, permission policy and AgentLoop remain unmodified.
+    # Real AgentDefinition, tools, prompts, context builder, permission policy
+    # and AgentLoop remain unmodified.
     options = {} if max_tokens is None else {"max_context_tokens": max_tokens}
     agent_class = NativeCodingAgent if coding else NativeExperimentAgent
     agent = agent_class(

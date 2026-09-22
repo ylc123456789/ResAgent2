@@ -138,14 +138,6 @@ class RunCommandTool:
             extra_env=self.extra_env,
         )
         memory_updates: dict = {"command_count": index, **audit_updates}
-        if (
-            classify_command(args.command) == "experiment"
-            and result.exit_code == 0
-            and not result.timed_out
-        ):
-            memory_updates["experiment_success_count"] = (
-                int(state.memory.get("experiment_success_count", 0)) + 1
-            )
         value = result.model_dump(mode="json")
         value.update(audit_updates)
         value["stdout_tail"] = self._tail(result.stdout_path)

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 
 from resagent2_contracts import AgentOwner, ArtifactCandidate, ErrorCode, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
-from resagent2_components import WorkspaceBoundary, WorkspaceObserver
+from resagent2_components import WorkspaceBoundary
 from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
 from resagent2_experiment.completion import ExperimentCompletionCheck
 
@@ -23,7 +23,7 @@ def state():
 
 
 def check(root):
-    return ExperimentCompletionCheck(WorkspaceObserver(WorkspaceBoundary(WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))))
+    return ExperimentCompletionCheck(WorkspaceBoundary(WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[]))))
 
 
 def evidence(path="metrics.json", **extra):

@@ -9,13 +9,13 @@ from resagent2_contracts import (
     ArtifactCandidate, ErrorCode, ModuleError, VerificationResult,
     SYSTEM_GENERATED_ARTIFACT_KINDS, latest_command_results,
 )
-from resagent2_components import WorkspaceObserver
+from resagent2_components import WorkspaceBoundary
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
 class ExperimentCompletionCheck:
-    def __init__(self, observer: WorkspaceObserver, *, output_dir: str | None = None) -> None:
-        self.observer = observer
+    def __init__(self, boundary: WorkspaceBoundary, *, output_dir: str | None = None) -> None:
+        self.boundary = boundary
         self.output_dir = Path(output_dir).resolve() if output_dir is not None else None
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
@@ -45,13 +45,13 @@ class ExperimentCompletionCheck:
             )
         for item in candidate.artifacts:
             if getattr(item, "content", None) is None and hasattr(item, "path"):
-                workspace_file = self.observer.boundary.root / item.path
+                workspace_file = self.boundary.root / item.path
                 output_file = (self.output_dir / item.path).resolve() if self.output_dir else None
                 if output_file is not None and output_file.is_file():
                     if not output_file.is_relative_to(self.output_dir) or workspace_file.exists():
                         raise PermissionError("Output artifact is outside its root or ambiguous")
                 else:
-                    self.observer.boundary.resolve_read_file(item.path)
+                    self.boundary.resolve_read_file(item.path)
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=artifacts,
         )

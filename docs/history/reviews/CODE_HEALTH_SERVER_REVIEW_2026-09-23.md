@@ -2,7 +2,7 @@
 
 日期：2026-09-23。分支：`fix/code-health`，尚未合并。上一轮服务器测试 HEAD：`b6258c7535cb721341ae265e976bb4b8f975babd`。本轮产品与测试提交：`9b425f2a6582e375efc0f5dc1e61cee759c0a10b`，schema 仍为 **14.0**。服务器须记录实际测试 HEAD；后续文档提交不等于重新验收。
 
-状态：根因修复与本地验证完成，新的真实模型整链待验收。本文件补充并接替[上一轮测试交接](CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)的当前状态与复测步骤；原报告和失败现场保持原样。当前规范已同步至 [CONTRACTS](../../current/CONTRACTS.md)、[CONTEXT](../../current/CONTEXT.md)、[ARCHITECTURE](../../current/ARCHITECTURE.md)及 [CLI README](../../../apps/cli/README.md)。
+状态：根因修复已完成服务器验收，实测 `2bad2d9a4aedcb7be377a148c541b8e5dd5c12ac`；全量回归 1237 passed / 1 skipped、mock 与真实模型公开入口整链通过。原始证据已独立复核，结论与边界见[验收收尾](#verified-closeout)。分支尚未合并。本文件补充并接替[上一轮测试交接](CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)的当前状态与复测步骤；原报告和失败现场保持原样。当前规范已同步至 [CONTRACTS](../../current/CONTRACTS.md)、[CONTEXT](../../current/CONTEXT.md)、[ARCHITECTURE](../../current/ARCHITECTURE.md)及 [CLI README](../../../apps/cli/README.md)。
 
 ## 1. 原始证据复核
 
@@ -127,3 +127,39 @@ resagent2 run --run-id run_health_root_fix_01 \
 交付 TEST_COMMIT、REPORT.md、results.json，以及命令/退出码、测试脚本、每次暂停与回答前后的 Run/Session 原文、answer/action 快照、完整 traces、源文件与冻结工件 hash。报告分别列出来源与依赖、回归、mock、真实整链；区分自动断言、人工复核、未覆盖项。结束记录 HEAD==TEST_COMMIT 和 git-status-after.txt。
 
 原始 `code-health-20260922` 证据不改写；这是一轮新测试。本轮验收目标是公开入口小型整链的可靠完成，不扩大为 GPU 训练或长任务能力声明。
+
+
+<a id="verified-closeout"></a>
+
+## 5. 2026-09-23 服务器验收复核与收尾
+
+测试 HEAD：`2bad2d9a4aedcb7be377a148c541b8e5dd5c12ac`，产品与测试基线仍为 `9b425f2`，schema **14.0**。新证据根：`/root/autodl-tmp/resagent2/runs/code-health-root-fix-20260923/`；独立 Run：`run_health_root_fix_01`，使用默认真实模型 deepseek-v4-flash。复核了 REPORT.md / results.json、原始回归日志、公开 CLI/Shell 脚本与退出码、三份 Run/Session 快照、完整 trace、工具观察和所有冻结工件。未运行新模型请求、修改产品或改写服务器证据。
+
+### 5.1 复核结果
+
+| 范围 | 原始证据与结论 |
+| --- | --- |
+| 环境与确定性验证 | 9/9 包解析到固定主仓库，pip check 干净；pytest **1237 passed / 1 skipped**，mock run_golden completed、artifacts=9；各退出码均为 0 |
+| 删除确认及恢复 | trace 第 5 次请求提交 delete_path，工具观察只发问题、value=null；第 6 次请求含 pending_operation、not_executed、原 action_id/工具/参数和答案，重发相同调用后观察为 Deleted obsolete。共 2 次提交、1 次实际删除；edit_revision=1，pending_action 最终清空 |
+| 目标与授权 | 批准前目录和两个文件仍在，快照 3 条目及文件 hash 与初始证据吻合；Session.pending_action、PendingQuestion.action 与 RecordedAnswer.action 一致。删除结果仅含 obsolete 与两个子文件，无剩余路径 |
+| 跨进程问答 | 新进程 Shell 回答批准，新进程 CLI 回答 metric_label=accuracy、baseline_is_first_value=yes；两个 Task 都各只有 1 个 Attempt，前后 Session ID 不变。启动退出码 3 表示 paused，Shell/CLI 回答退出码均为 0 |
+| 第二轮任务 | Scientific work_2 产生 workflow revision 2，最终恰为 1 个 Coding Task 与 1 个 Experiment Task；task_analyze_metrics_comparison 的 kind 和 Session.module 均为 experiment，指标问题在该任务内提出 |
+| 分析与证据 | Experiment.command_count=0，各 Session 无执行/安装/环境准备工具调用；metrics 源文件初始、两次暂停和最终 hash 均为 ebe1e4cb…，冻结 metrics 工件与源文件一致。值为 0.45 / 0.52，最终差值 +0.07 |
+| 最终交付 | Scientific 确实读取 artifact_analyze_metrics_comparison_1_2，并在 opinion 引用原 ID；未重新登记输入 data。Run completed、terminal_error=null、final_report 已登记；全部 18 份冻结工件的实际 SHA256 与注册值一致 |
+| 计量 | 20 条 trace 的 call_id:retry_number 唯一且与 Run.usage 请求键逐项一致，全部 succeeded、retry=0、无 unknown；Scientific 8、Coding 6、Experiment 4、Compiler 2。用量在删除暂停、指标暂停、最终分别为 5、14、20 |
+
+服务器 HEAD==TEST_COMMIT。受版本控制文件干净；存在未跟踪的 `.ipynb_checkpoints/`，不能写成工作树绝对没有未跟踪文件。没有合并或推送服务器仓库。
+
+### 5.2 报告补充与验证边界
+
+1. **真实整链成功，但不是全程零错误。** trace 第 19 次请求的 Scientific finish 使用 verdict=`supported`，已有完成检查拒绝；第 20 次收到 runtime_feedback 后改成 `supports`，在同一 Session 和预算内完成。它证明既有 opinion 枚举校验与反馈恢复有效。
+2. **新增非法 kind 检查的错误路径由确定性测试覆盖。** 这次真实模型没有再输出 `kind=data`，因此不能写成真实模型验证了非法 data 被拦截后纠正；本轮真实证据证明合法输出可以正常完成。非法 data/input Ref → 反馈 → 纠正，以及预算/连续错误终止，由 test_finish_validation 和公开入口 test_public_native_lifecycle 的原生调用回归覆盖。这符合 §4.2 预先规定的验收方式，不需要付费制造错误补测。
+3. **中间报告有一处算式文字错误。** Experiment 报告把 candidate−baseline 写成 `0.45 − 0.52 → +0.07`；该式的操作数顺序错误，正确为 `0.52 − 0.45 = +0.07`。同一报告的变量值和差值、冻结工件 metadata 及最终 Scientific opinion/final_report 均为正确值。保留这处模型生成文字瑕疵，不改写原证据；它不阻断本轮控制流程验收，也不等于输出文字已被逐句数学校验。
+4. **零修改行为与硬只读授权分别看待。** 本场景 Run 允许 Coding 删除文件，Experiment 遵守仅分析要求且源文件 hash 不变；不能据此声称本轮重验了硬只读文件权限。越界、重复批准、拒绝与预算等保护性边界继续由已有确定性测试覆盖。
+5. **测试范围是一个小型公开入口整链。** 新目标明确了批准后继续提交原操作，本轮证明这条场景按契约完成；不据此推断所有含糊目标都能正确编译、模型长期成功率或 GPU/科研长任务能力。
+
+### 5.3 收尾决定
+
+代码健康修复与本轮根因修复已完成约定范围的验收，未发现阻止合并的新产品缺陷，具备合并条件。三个 Agent 的单一调用/业务模式、共享预算、权限收窄与单次批准机制保持不变；contracts/context/architecture 已同步，无需新增架构或兼容层。
+
+本次收尾只更新项目内验收记录和历史导航，不修改产品或测试断言，也不重跑已通过的模型/GPU 测试。分支 `fix/code-health` 保留，**尚未合并**；服务器实际验收 SHA 始终记录为 `2bad2d9a`，后续文档提交不冒充重新验收。原失败轮 `code-health-20260922` 和本轮证据均原样保留。

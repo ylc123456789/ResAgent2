@@ -4,7 +4,7 @@
 
 ## 主线健康审查
 
-2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地 **1237 passed、1 skipped**、mock 和公开入口确定性整链通过，新的真实模型整链待验收。分支尚未合并。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
+2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地与服务器 **1237 passed、1 skipped**、mock 通过；服务器 `2bad2d9a` 的真实公开入口整链也通过，跨进程批准、Experiment 任务内问答和最终工件完成，20 次调用与账本一致。原始证据已复核，验收范围内具备合并条件；分支尚未合并。Scientific verdict 曾反馈纠正、非法 data 纠正由确定性覆盖及中间算式文字瑕疵均保留于[收尾与边界](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md#verified-closeout)。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
 
 ## 最近已完成的主线
 

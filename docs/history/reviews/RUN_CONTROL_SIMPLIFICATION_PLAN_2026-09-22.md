@@ -1,6 +1,8 @@
 # Run 预算、权限与操作检查简化方案
 
-日期：2026-09-22。状态：本地实现与确定性回归完成，真实模型验收待执行；产品提交和验证记录见[测试交接](RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
+收尾状态（2026-09-22）：实现与修复轮定向验收完成，已随 `refactor/run-control@84063e4` 合入 main；验证范围、记录限制及合并结果见[服务器复核](RUN_CONTROL_SERVER_REVIEW_2026-09-22.md)。下文保留实施时方案与状态快照。
+
+实施时记录（2026-09-22）：本地实现与确定性回归完成，真实模型验收待执行；产品提交和验证记录见[测试交接](RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
 
 基线：`refactor/unified-agent-entry`，`c0add70`，schema 12.0。实现分支：从该基线直接派生的 `refactor/run-control`，目标 schema 13.0。原分支保持未合并。
 

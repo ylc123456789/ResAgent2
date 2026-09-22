@@ -1,12 +1,12 @@
 # Run control schema 13 本地验收与服务器测试交接
 
-日期：2026-09-22。状态：修复轮实测 `8b071e6a` 已完成，两个产品缺陷经定向功能复核关闭。服务器全量 1153 passed / 1 skipped；4 个真实模型场景覆盖 5 项功能。Session 原始快照缺口、只读断言修正、计量与方法限制见[修复轮复核](RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。以下保留作为复现规程，不表示还需重跑整轮。
+日期：2026-09-22。状态：修复轮实测 `8b071e6a` 已完成，两个产品缺陷经定向功能复核关闭，`refactor/run-control@84063e4` 已合入 main。服务器全量 1153 passed / 1 skipped；4 个真实模型场景覆盖 5 项功能。Session 原始快照缺口、只读断言修正、计量与方法限制见[修复轮复核](RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。以下保留作为复现规程，不表示还需重跑整轮。
 
 ## 1. 锁定版本与分支
 
-- 实现分支：`refactor/run-control`，直接从未合并的 `refactor/unified-agent-entry` / `c0add70` 派生。
+- 实现分支：`refactor/run-control`，当时直接从尚未合并的 `refactor/unified-agent-entry` / `c0add70` 派生；现两轮实现已一并进入 main。
 - 修复产品基线：`602ffeef597ba86a4bfa4de3c958caba9dddb9de`，schema `13.0`。测试使用分支最新提交，并记录实际 HEAD；产品基线必须是 HEAD 的祖先，不切到 detached HEAD。
-- 分支推送到 `origin/refactor/run-control`，未合并。原服务器验收对应 `29d3ab80`；修复后实测 `8b071e6a`，结论及覆盖边界以复核记录为准。
+- 开发分支保留，日常更新使用 main。原服务器验收对应 `29d3ab80`；修复后实测 `8b071e6a`，结论及覆盖边界以复核记录为准，不把后续文档提交当成重新验收。
 - 不恢复 schema 12 的 Run。旧证据原样保留，新测试使用新的状态目录。
 - 方案：[Run 控制简化方案](RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)。
 
@@ -22,13 +22,13 @@
 cd /root/autodl-tmp/projects/ResAgent2
 git status --short
 git fetch origin
-git switch refactor/run-control
+git switch main
 git pull --ff-only
 git merge-base --is-ancestor 602ffeef597ba86a4bfa4de3c958caba9dddb9de HEAD
 git log -1 --oneline
 ```
 
-服务器已经建立本地跟踪分支，后续更新直接在该分支执行 `git pull --ff-only`。开始正式测试前确认受版本控制的文件没有本地修改；发现修改先核对，不自动覆盖、清理或 stash。未跟踪的 Notebook checkpoint 等旧文件不要当作本轮产物。
+后续在 main 执行 `git pull --ff-only`；如需复现历史验收，应明确选择对应测试 SHA 并记录。开始正式测试前确认受版本控制的文件没有本地修改；发现修改先核对，不自动覆盖、清理或 stash。未跟踪的 Notebook checkpoint 等旧文件不要当作本轮产物。
 
 同一轮测试期间保持代码提交和可编辑安装不变，不并行拉取、切分支或修改产品。开发有新提交时先结束当前轮次，再更新并建立下一轮证据目录。已经生成的 bundle 只是历史传输产物，本轮不再使用。
 

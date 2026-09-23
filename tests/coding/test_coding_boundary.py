@@ -10,6 +10,7 @@ ALLOWED_IMPORT_ROOTS = {
     "time",
     "resagent2_components",
     "__future__",
+    "datetime",
     "hashlib",
     "json",
     "pathlib",
@@ -18,6 +19,7 @@ ALLOWED_IMPORT_ROOTS = {
     "resagent2_contracts",
     "resagent2_runtime",
     "typing",
+    "uuid",
 }
 
 

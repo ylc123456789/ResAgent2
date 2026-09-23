@@ -1,6 +1,8 @@
 """One environment-generation validity rule drives guidance and completion."""
 
 import json
+import shlex
+import sys
 from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
@@ -18,6 +20,7 @@ from resagent2_components import (
     EnvironmentBinding,
     EnvironmentManagerError,
     PreparedEnvironment,
+    ProcessRunner,
     WorkspaceBoundary,
 )
 from resagent2_contracts import (
@@ -254,3 +257,57 @@ def test_latest_edit_and_workspace_digest_still_enforced(setup):
     setup.state.memory["edit_revision"] = 1
     setup.state.memory["verification_diff_sha256"] = "outdated"
     assert "Workspace changed" in finish(setup.check, setup.state)["issue"]
+
+
+@pytest.mark.parametrize("restore_session", [False, True])
+def test_reverification_preserves_logs_at_same_revision_and_timestamp(setup, monkeypatch, restore_session):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 23, 8, 0, tzinfo=UTC)
+
+    monkeypatch.setattr("resagent2_coding.verification.datetime", FixedDatetime)
+    source = setup.root / "test_probe.py"
+    source.write_text(
+        "import os, sys, unittest\n"
+        "class Probe(unittest.TestCase):\n"
+        "    def test_result(self):\n"
+        "        print(os.environ['VERIFY_LABEL'])\n"
+        "        print(os.environ['VERIFY_LABEL'], file=sys.stderr)\n"
+        "        self.assertEqual(os.environ['VERIFY_OK'], '1')\n",
+        encoding="utf-8",
+    )
+    original_source = source.read_bytes()
+
+    def verification(label, ok):
+        return RunVerificationTool(
+            ProcessRunner(setup.boundary), setup.repository,
+            log_root=str(setup.root / "verify"), timeout_seconds=30,
+            baseline=setup.baseline,
+            extra_env={"VERIFY_LABEL": label, "VERIFY_OK": str(ok)},
+        )
+
+    tool = verification("first-failed", 0)
+    arguments = tool.input_model(commands=[f"{shlex.quote(sys.executable)} -m unittest test_probe"])
+    first = tool.execute(setup.state, arguments)
+    assert not first.ok
+    setup.state.memory.update(first.memory_updates)
+    previous = first.value["results"][0]
+    old_logs = {key: Path(previous[key]).read_bytes() for key in ("stdout_path", "stderr_path")}
+    assert all(b"first-failed" in content for content in old_logs.values())
+
+    if restore_session:
+        setup.state = AgentState.model_validate_json(setup.state.model_dump_json())
+        tool = verification("second-passed", 1)
+    else:
+        tool.extra_env.update(VERIFY_LABEL="second-passed", VERIFY_OK="1")
+    second = tool.execute(setup.state, arguments)
+
+    assert second.ok
+    assert setup.state.memory["edit_revision"] == 1
+    assert source.read_bytes() == original_source
+    current = second.value["results"][0]
+    for key, content in old_logs.items():
+        assert previous[key] != current[key]
+        assert Path(previous[key]).read_bytes() == content
+        assert b"second-passed" in Path(current[key]).read_bytes()

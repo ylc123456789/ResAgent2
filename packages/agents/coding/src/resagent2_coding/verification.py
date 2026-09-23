@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -177,6 +179,9 @@ class RunVerificationTool:
                         memory_updates=audit_updates,
                     )
         revision = int(state.memory.get("edit_revision", 0))
+        # A code revision can be verified repeatedly, including after resume.
+        execution_id = f"{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}_{uuid4().hex}"
+        log_dir = f"{self.log_root}/revision_{revision}/{execution_id}"
 
         def _digest() -> str:
             diff = self.repository.diff_since(self.baseline)
@@ -197,10 +202,10 @@ class RunVerificationTool:
                         exit_code=1,
                         timed_out=True,
                         stdout_path=(
-                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stdout"
+                            f"{log_dir}/command_{index:02d}.stdout"
                         ),
                         stderr_path=(
-                            f"{self.log_root}/revision_{revision}/command_{index:02d}.stderr"
+                            f"{log_dir}/command_{index:02d}.stderr"
                         ),
                         duration_seconds=0.0,
                     )
@@ -209,7 +214,7 @@ class RunVerificationTool:
             results.append(
                 self.runner.run(
                     command,
-                    log_dir=f"{self.log_root}/revision_{revision}",
+                    log_dir=log_dir,
                     index=index,
                     timeout_seconds=remaining,
                     argv_prefix=argv_prefix,

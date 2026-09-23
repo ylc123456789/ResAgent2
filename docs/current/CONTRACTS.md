@@ -164,6 +164,8 @@ Scientific 的普通产物归属 Session，支持 literature_search、scientific
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
+Coding 每次实际验证使用独立日志目录（UTC 时间戳加唯一标识）。同一代码版本下重跑验证或恢复 Session 后再次验证，都保留各次 stdout/stderr；执行记录中的路径始终对应那次执行，不覆盖旧日志。
+
 报告用于解释；`module_report` 可保存需要下游分页读取的长说明。报告不替代原始测量、代码或文献。拿到 Ref 不代表已读正文，读过一次也不表示全文始终在模型上下文中。
 
 <a id="scientific"></a>

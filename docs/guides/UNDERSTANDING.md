@@ -65,9 +65,9 @@ AgentResult 的业务输出只有 report 和 artifacts，另有机器状态、�
 
 ### 第六步：Scientific 收到可理解的工作简报
 
-Scheduler 登记工件、保存结果，再形成 WorkOutcome。Controller 将它与原工作需求配对成 work_feedback 工件，用 resume_artifact_ids 标识本次交付。Scientific 内的 interpreter.render_work_brief 从该工件整理：做了什么，有什么结果/警告，为什么失败，有哪些证据可以读。
+Scheduler 登记工件、保存结果，再形成 WorkOutcome。Controller 保存原工作需求和执行事实；Orchestrator 内的 Interpreter 用代码整理累计科研目录，用 LLM 根据原始材料写带引用简报。Scientific 收到本轮新增材料和简报，随时可沿原 Artifact ID 查看确切证据。
 
-interpreter 是无状态纯函数，不再调用一次 LLM。它属于 Scientific，因为它决定“给 Scientific 看什么”，不拥有执行状态。
+底层登记表记录文件身份和来源；科研目录只是给人和 Scientific 查找材料的视图，不维护另一套文件或权限。Interpreter 不管 Run 状态、不调度任务，Controller 负责保存和恢复这次交付。
 
 Scientific 主动读取授权工件后判断结果是否支持假设，或还需下一轮工作。它不必替 Scheduler 抄回失败任务内部编号；报告里的执行问题由代码从 Run 核对。
 
@@ -113,7 +113,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 ### Run 怎样限制内部工作
 
-用户给整个 Run 设定模型请求次数、可用时间和操作授权。三个 Agent 与 Compiler 共用同一本用量账和剩余时间；新任务、问答恢复、格式纠正和模型重试都不能重新获得一份总预算。任务数与每任务尝试数是另外的执行限制，step 仅记录动作顺序，不再有一份独立步数预算。
+用户给整个 Run 设定模型请求次数、可用时间和操作授权。三个 Agent、Compiler 与 Interpreter 共用同一本用量账和剩余时间；新任务、问答恢复、格式纠正和模型重试都不能重新获得一份总预算。任务数与每任务尝试数是另外的执行限制，step 仅记录动作顺序，不再有一份独立步数预算。
 
 工作区通过可读、可写和排除路径控制范围，内部任务只能继承或收紧；执行命令与准备环境另有权限开关。固定安全规则检查具体操作，结果可以是允许、询问或拒绝。开启确认不会让被拒绝的操作变成可执行；当前没有 OS 沙箱，通用脚本只对完整授权的可信工作区开放。
 
@@ -142,7 +142,7 @@ Compiler 需要上下文和 LLM，不需要整个工具循环，因此只复用 
 | Run 怎么开始、恢复？ | [controller.py](../../packages/orchestrator/src/resagent2_orchestrator/controller.py) |
 | 需求怎么变成任务？ | [compiler.py](../../packages/orchestrator/src/resagent2_orchestrator/compiler.py) |
 | 谁选择 ready Task、记录 Attempt？ | [scheduler.py](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) |
-| Scientific 怎样看执行结果？ | [interpreter.py](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py) |
+| Scientific 怎样看执行结果？ | [interpreter.py](../../packages/orchestrator/src/resagent2_orchestrator/interpreter.py) |
 | Agent 怎样共享循环？ | [loop.py](../../packages/runtime/src/resagent2_runtime/loop.py) |
 | 文件、工件如何进入上下文？ | [components/context.py](../../packages/components/src/resagent2_components/context.py) |
 | 某字段是什么意思？ | [接口与契约](../current/CONTRACTS.md)，再查 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) |

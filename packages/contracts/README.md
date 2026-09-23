@@ -1,6 +1,6 @@
 # contracts
 
-跨模块稳定类型和接口。当前 wire schema 为 `14.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
+跨模块稳定类型和接口。当前 wire schema 为 `15.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
 
 三个 Agent 共同使用 `invoke(AgentRequest) -> AgentResult`。任务内容只有 `instruction` 和 `input_artifacts`；预算、权限、工作区和恢复定位保留明确控制字段。结果业务内容只有 `report + artifacts`，状态、控制动作、Session、错误和实际调用计量独立保存。
 

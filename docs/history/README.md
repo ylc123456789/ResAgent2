@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 科研目录与 Interpreter（未合并）
+
+2026-09-23 在同一 `fix/code-health` 分支实现科研目录与带引用的反向简报，schema **15.0**。产品 `b31648d`、专项回归 `42efaa1`，本地 **1269 passed、1 skipped**，mock completed。原产物登记表保持唯一权威，Interpreter 与 Compiler 并列，权限、预算和 Agent 单入口规则保留。真实模型与独立进程验收尚待服务器测试；本地 mock 不代表已通过真实语义验收。设计见 [ADR-0017](decisions/0017-research-index-and-work-interpreter.md)，测试步骤与证据要求见[本轮交接](reviews/RESEARCH_HANDOFF_TEST_2026-09-23.md)。此前 schema 14 的通过结论只适用于原测试提交。
+
 ## 主线健康审查
 
 2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地与服务器 **1237 passed、1 skipped**、mock 通过；服务器 `2bad2d9a` 的真实公开入口整链也通过，跨进程批准、Experiment 任务内问答和最终工件完成，20 次调用与账本一致。原始证据已复核，验收范围内具备合并条件；分支尚未合并。Scientific verdict 曾反馈纠正、非法 data 纠正由确定性覆盖及中间算式文字瑕疵均保留于[收尾与边界](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md#verified-closeout)。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。

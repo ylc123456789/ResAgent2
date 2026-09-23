@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **14.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **15.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -10,7 +10,7 @@
 
 ResAgent2 是整个项目的名字，**Orchestrator 只是其中的研究编排模块**。Scientific 负责科学判断，Orchestrator 负责需求翻译、调度和 Run 控制，Coding 和 Experiment 完成专业工作。
 
-系统围绕 LLM 的理解、推理和决策能力构建。Scientific 类似大脑；Compiler、Scheduler、Controller 负责翻译与协调，类似小脑和神经系统；Coding、Experiment 类似专业器官，它们也使用 LLM 自主选择具体工作步骤。代码提供工具和事实记录，执行预算与授权检查。正反向信息如何交接、LLM 与代码如何分工，见[三个总体设计目标](DESIGN_PRINCIPLES.md#1-三个总体设计目标)。
+系统围绕 LLM 的理解、推理和决策能力构建。Scientific 类似大脑；Compiler、Interpreter、Scheduler、Controller 负责翻译与协调，类似小脑和神经系统；Coding、Experiment 类似专业器官，它们也使用 LLM 自主选择具体工作步骤。代码提供工具和事实记录，执行预算与授权检查。正反向信息如何交接、LLM 与代码如何分工，见[三个总体设计目标](DESIGN_PRINCIPLES.md#1-三个总体设计目标)。
 
 <!-- 两张图共用深浅主题通用配色：中等明度蓝色连线/箭头/边框，深色文字配固定浅底；不依赖预览插件切换主题。 -->
 ```mermaid
@@ -27,11 +27,13 @@ flowchart TB
     Coding -->|任务结果| Scheduler
     Experiment -->|任务结果| Scheduler
     Scheduler -->|WorkOutcome| Controller
+    Controller --> Interpreter[Interpreter：科研目录和带引用简报]
+    Interpreter -->|反向交接材料| Controller
     Controller --> Report[最终验收与报告]
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
-Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime、components 与 capabilities。
+Compiler、Interpreter 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头表示业务数据流；具体调用由 Controller 协调。三个 Agent 内部共享 runtime、components 与 capabilities。
 
 三个 Agent 都采用 `invoke(AgentRequest) -> AgentResult`，每个模块只有一种业务模式。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；其余字段控制身份、权限、预算、工作区、Session 和恢复。问答、工作反馈、目录、精确验收要求都作为冻结工件交接。Workflow 同样保存 instruction，通过 coding / experiment 路由和显式工件绑定连接任务。
 
@@ -42,7 +44,7 @@ Compiler 和 Scheduler 位于 orchestrator 包内，不是额外 Agent。箭头�
 | 模块 | 它的工作 | 它不做什么 | 代码 / 接口 |
 |---|---|---|---|
 | `apps/cli` | 命令、交互监看、配置；装配 Controller、Agent 和资源 | 不自己调度 Task 或修改 Run 状态 | [composition.py](../../apps/cli/src/resagent2_cli/composition.py) / [用户入口](CONTRACTS.md#entry) |
-| `orchestrator` | Run 入口；编译、调度、预算、恢复、工件登记、最终验收 | 不直接改代码、跑实验或形成科学观点 | [包入口](../../packages/orchestrator/src/resagent2_orchestrator/) / [科学](CONTRACTS.md#scientific)、[编译](CONTRACTS.md#compiler)、[执行](CONTRACTS.md#module) |
+| `orchestrator` | Run 入口；双向翻译、调度、预算、恢复、工件登记、最终验收 | 不直接改代码、跑实验或形成科学观点 | [包入口](../../packages/orchestrator/src/resagent2_orchestrator/) / [科学](CONTRACTS.md#scientific)、[编译](CONTRACTS.md#compiler)、[执行](CONTRACTS.md#module) |
 | `agents/scientific` | 阅读证据、检索文献、提出工作需求或最终观点 | 不生成任务图，不选执行环境，不直接调用其他 Agent | [agent.py](../../packages/agents/scientific/src/resagent2_scientific/agent.py) / [ModulePort](CONTRACTS.md#scientific) |
 | `agents/coding` | 理解代码；或修改后验证，交付真实变更 | 不承担正式训练对比和科学结论 | [agent.py](../../packages/agents/coding/src/resagent2_coding/agent.py) / [ModulePort](CONTRACTS.md#module) |
 | `agents/experiment` | 分析已有结果、准备环境、运行实验并交付证据 | 不修改产品代码，不用 LLM 自报值代替指标 | [agent.py](../../packages/agents/experiment/src/resagent2_experiment/agent.py) / [ModulePort](CONTRACTS.md#module) |
@@ -70,7 +72,7 @@ flowchart TB
     Agents --> Contracts
     Orch[orchestrator] --> Contracts
     Orch -->|仅 runtime.budget| Runtime
-    Orch -->|仅 components.workspace| Components
+    Orch -->|路径边界与工件读取| Components
     Root[CLI / E2E 各自的组合根] --> Orch
     Root --> Agents
     Root --> Caps
@@ -79,7 +81,7 @@ flowchart TB
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
-Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。除 Contracts 外，它仅依赖 runtime.budget 的共享执行上下文和 components.workspace 的路径边界检查，不调用具体 Tool 或 Agent 实现。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
+Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。除 Contracts 外，它仅依赖 runtime.budget 的共享执行上下文和 Components 的路径边界和已登记工件读取，不调用具体 Tool 或 Agent 实现。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
 
 Runtime 不 import Components 或 Capabilities；Components 不 import Capabilities、Agent 或 Orchestrator；Capabilities 不 import Agent 或 Orchestrator。组件与 Tool **没有一一对应关系**，不建立注册器、适配器基类或自动映射。
 
@@ -98,12 +100,10 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 3. **编译当前一轮**：LLM 产生一个任务草图；代码分配身份、解析依赖和工作区，进行结构校验。解析或结构错误最多纠正一次，无额外语义复审调用。
 4. **接受并执行图**：Scheduler 校验候选图、绑定、预算和 revision 后接受；只执行依赖成功的 ready Task。已知代码前置条件先交 Coding，正式实验交 Experiment。
 5. **收集结果**：模块返回 AgentResult。Scheduler 接收报告、登记工件、按冻结要求验收并记录 Attempt，再构建 WorkOutcome 交回 Controller。跨任务输入按已声明 output_name 解析到上游成功 Attempt 的唯一工件。
-6. **解释与下一步**：Controller 将原需求与 WorkOutcome 配对成 work_feedback 工件；Scientific 的 [interpreter.py](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py) 从中投影工作简报。Scientific 读证据后决定继续、询问用户或完成。
-7. **正式完成**：Scientific 完成提议通过 Orchestrator 最终 gate 后，登记报告，再将 Run 标为 completed。
+6. **解释与下一步**：Controller 保存成对的 work_record；Orchestrator 的 Interpreter 生成累计科研目录及带引用简报。Controller 冻结 work_feedback，Scientific 通过原恢复入口接收本轮目录变化、简报和完整目录入口，再阅读原证据、判断下一步。
+7. **完成**：Scientific 提交 scientific_opinion；Controller 验证后生成最终报告并将 Run 记为 completed。
 
-interpreter 当前是 Scientific 内部的反馈呈现函数：它整理原需求、结果、证据入口、失败和警告，供 Scientific 的 LLM 理解。它不调用 LLM、不读写文件、不修改状态，也不作科学判断。Compiler 需要用 LLM 把需求翻译成任务；反向链路的科学理解由 Scientific 的 LLM 完成，两边不要求相同的实现方式。stderr 摘录只作执行诊断，summary 是模块解释，科学证据仍须通过授权工件读取。
-
-当前 Scientific 同时收到完整 work_feedback 和整理后的 work_brief，尚未完全屏蔽执行细节；两份内容也有重复。默认反馈范围、按需读取方式以及 interpreter 的职责或位置仍待讨论，见[当前实现与待讨论事项](DESIGN_PRINCIPLES.md#interpreter-current)。不能仅凭存在 interpreter 文件就认为双向交接目标已经全部满足。
+Interpreter 的固定代码整理来源与执行状态，LLM 根据授权材料解释本轮成果和局限。它不调度任务、不改 Run、不拥有独立 Session；Scientific 仍负责最终科学判断。原记录保留并可按需读取，默认上下文不再展开完整执行反馈或全量授权清单。
 
 发现、结果和局限通过 report 表达，需要下游分页读取的长说明可提交 `kind=module_report` 工件。解释与原始测量分别具有明确用途；工件经 Registry 冻结后按授权读取，报告文字不能替代实际命令回执、测量文件或已读文献。
 
@@ -115,7 +115,7 @@ interpreter 当前是 Scientific 内部的反馈呈现函数：它整理原需�
 | Scheduler 任务执行循环 | 选择 ready Task，处理 Attempt 和 retry | 本轮图稳定或需暂停 |
 | 每个 Agent 的 AgentLoop | 上下文 → 候选动作 → 工具 → 观测 → 完成检查 | 模块结束、请求工作或问用户 |
 
-Compiler 不是第四个 AgentLoop：它调用 LLM，但没有 Session 或工具循环；经 PromptLLMClient 复用上下文预算即可。
+Compiler 和 Interpreter 都不是额外 AgentLoop：它们调用 LLM，但没有 Session 或工具循环；经 PromptLLMClient 复用上下文预算即可。
 
 Compiler 要求最小可执行图，同一 Agent 的检查、准备和执行尽量保留在一个任务中。草图只表达 instruction、模块路由、依赖、工作区和工件交接，不编造具体指标键、文件路径、验收策略或权限。精确要求由确定性调用方显式提供，接受后冻结为 acceptance_requirements；普通任务中的语义证据要求仍保留在 instruction。
 
@@ -131,6 +131,7 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 | Workflow / Task / Attempt | 已接受任务图 / 任务 / 一次执行尝试 | Scheduler |
 | Session / events / memory / tool_turns | Agent 内部执行记录与原生工具协议续传 | Agent 与 runtime |
 | RunUsage / 执行截止时间 | 请求占用与结果 / 扣除人工等待后的剩余时长 | Run 持久记录；Runtime 向下传递并检查 |
+| 科研目录与反馈引用 | 目录可从登记表和执行事实重建；简报复用已冻结反馈，保存前中断才重新生成 | Controller 保存与交付 |
 | ArtifactRef 与冻结内容 | 有来源和 hash 的证据引用及文件 | Registry 登记；Controller/Scheduler 收入 Run |
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
@@ -147,6 +148,7 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 - Session 创建时固定工具协议身份：正文 JSON 为 `None`，OpenAI-compatible 原生身份由协议、endpoint、model 构成且不含 API key；自定义原生客户端须提供稳定身份。恢复拒绝 JSON↔原生切换和原生 endpoint/model 变化，不做迁移。
 - 原生 AgentLoop 先保存整批 call，逐项派发前记录 executing_call_id，结果按 call ID 配对。重启保留已完成回执；正在执行但缺回执的项记为 unknown outcome，后续项记为未开始；不自动重放。这只提供进程重启 checkpoint，不保证掉电持久化，也不承诺外部副作用 exactly-once。
 - 已接受图优先恢复；未接受编译可重做，但 LLM 不保证每次选择相同任务。
+- 已保存的 Interpreter 反馈按 WorkRequest 复用；保存前中断可以重做，但已花模型预算不退还。只有 Scientific 返回被接受后才消费该 WorkRequest。
 - 原生 Scientific 按工作请求或问题身份去重交付；不能推广成所有 Port/工具的自动幂等。
 - 单个 JSON 快照可原子替换，但 Run、Session、文件和命令不构成一个大事务。当前以单进程、单写入者为前提，不支持同一 Run 并发推进。
 - 中断不保证外部命令没发生；失败不自动回滚代码、依赖或全部文件。CLI 停止监看也不等于取消执行。
@@ -156,6 +158,10 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 <a id="evidence"></a>
 
 ## 5. 结果、证据与完成
+
+Run.artifacts 是唯一的产物登记表。科研目录 research_index 从已授权登记材料、工作目标及历次 Attempt 派生，按初始材料、Scientific 材料和工作需求分组，只保留原 Artifact ID 及展示字段。失败尝试不会被后续成功覆盖；目录不扫描未登记文件，也不递归收入目录、反馈和观察记录。work_record 保存原需求、执行结果和历次尝试，是无文件输出时仍可引用的执行事实。
+
+WorkRequest 稳定后，Interpreter 使用固定代码生成累计目录及变化，使用 LLM 阅读本轮相关文本材料并生成带引用简报。Controller 将反馈冻结，保存当前目录指针和 feedback_refs。Scientific 只在本轮接收时看到变化和简报，完整目录按需读取；初始输入、回答恢复及最终完成时会刷新目录，同轮检索所得文献先通过工具回执发现，下次刷新收入目录。解释不是测量，Scientific 仍需读取原材料形成观点。
 
 ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源、冻结内容并计算 hash 后，才产生 ArtifactRef。授权可以读不等于已经读，已经读过也不保证正文一直留在模型上下文。
 
@@ -176,11 +182,11 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 ## 6. 共享能力与上下文
 
-各 Agent 与 Compiler 的逐段构成、刷新时机、必需/可选选择及多层预算，统一查 [模型上下文](CONTEXT.md#modules)。本节只说明架构归属，不重复维护完整段表。
+各 Agent、Compiler 与 Interpreter 的逐段构成、刷新时机、必需/可选选择及多层预算，统一查 [模型上下文](CONTEXT.md#modules)。本节只说明架构归属，不重复维护完整段表。
 
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用与冻结 dataset_catalog 工件 → Agent 的实际可用性检查。缺所需资源复用 ask_user。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 
-RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；重试、格式纠正、Compiler 和摘要都占用余额。结果用量仅用于诊断，不二次扣费；中断留下的 unknown 占用不退款。嵌套调用只能收紧额度与截止时间，不能新开钱包。
+RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；重试、格式纠正、Compiler、Interpreter 和摘要都占用余额。结果用量仅用于诊断，不二次扣费；中断留下的 unknown 占用不退款。嵌套调用只能收紧额度与截止时间，不能新开钱包。
 
 Run 的操作授权与 WorkspaceAccess 是内部权限上限。Components 的 OperationPermissionPolicy 共用 allow / ask / deny 判定，文件和进程组件在执行前仍检查边界；领域命令约束保留在各自工具。ask 复用现有 question/answer 工件与 Session，批准绑定单次动作、参数、上下文和身份，派发前持久消费。Coding 的 delete_path 允许授权文件和空目录删除，非空目录使用待删除目标快照确认；不新增审批服务。
 
@@ -190,7 +196,7 @@ Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。模型/文献 HTTP、退避、环境操作和受控进程沿用 Run 截止时间，到期取消 HTTP 或终止进程树。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。验证与实验工具在操作获准后、命令执行前自动核验尚未认证的绑定，失败不执行；批准恢复不信任旧认证，也不要求模型为固定前置核验再走一轮确认。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
-- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用128000的默认输入额度，Compiler为无状态JSON编译，不使用Session压缩；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
+- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent、Compiler与Interpreter共用128000的默认输入额度；Compiler/Interpreter使用无状态JSON翻译，不使用Session压缩；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
 - 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[文献组件](../../packages/components/README.md#literature)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**

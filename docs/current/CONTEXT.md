@@ -44,12 +44,12 @@
 
 | 所在位置 | 负责什么 | 不负责什么 |
 |---|---|---|
-| Agent 的 context builder / Scientific interpreter | 领域信息的选择、组织和用途说明 | 不替代上层调度，不变更执行事实 |
+| Agent 的 context builder / Orchestrator Interpreter | 领域信息的选择、组织和用途说明 | 不替代上层调度，不变更执行事实 |
 | components 的共享投影 | 环境、数据集、读取材料等可复用内容 | 不决定科学结论，不保管第二份 Run |
 | runtime 的 Loop / Composer | 运行反馈、原生协议历史/检查点、工具 schema 与完整请求预算 | 不理解哪篇论文更重要，不自动总结或压缩研究发现 |
 | 外层组合根 | 注入模型、容量及模块配置 | 不负责每步阅读内容的选择 |
 
-**源码**：[Scientific context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[workspace_context](../../packages/components/src/resagent2_components/context.py)、[AgentLoop](../../packages/runtime/src/resagent2_runtime/loop.py)、[ContextComposer](../../packages/runtime/src/resagent2_runtime/context.py)。
+**源码**：[Scientific context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/orchestrator/src/resagent2_orchestrator/interpreter.py)、[workspace_context](../../packages/components/src/resagent2_components/context.py)、[AgentLoop](../../packages/runtime/src/resagent2_runtime/loop.py)、[ContextComposer](../../packages/runtime/src/resagent2_runtime/context.py)。
 
 ### 2.1 required、priority 与顺序不是一回事
 
@@ -106,12 +106,12 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `evidence_control_state` | 本 Session 已观察工件编号、当前请求中未观察的授权编号、尚待补读/撤回的引用 | 必需；每步根据请求和 memory 重算 |
+| `evidence_control_state` | 本 Session 已观察工件编号、尚待补读/撤回的引用 | 必需；每步根据请求和 memory 重算 |
 | `research` | 当前调用的 `instruction`，由 Controller 组合目标、假设、背景和约束 | 必需；来自当前请求 |
 | `dataset_catalog` | 同次数据集解析得到的可用/不可用 ID 与共享用法说明 | 必需；不是数据正文 |
-| `input_artifacts` | 当前请求的工件 id、kind、summary | 必需；是入口清单，不是工件正文 |
-| `material_<artifact_id>` | conclusion_requirements 等要求工件，以及 resume_artifact_ids 指定的 answer/work_feedback 全文 | 对已选材料必需；校验 hash、内容类型与归属 |
-| `work_brief` | interpreter 将本次 work_feedback 的原需求、结果和未解决任务整理成简报 | 本次交付工作反馈时必需；不转存新状态 |
+| `research_materials` | 当前累计科研目录入口；初次调用附初始目录变化；独立调用以同一结构组织传入材料 | 必需；之后按需用 read_artifact 读取完整目录 |
+| `material_<artifact_id>` | conclusion_requirements 及本次 answer 原题/回答全文 | 必需；校验 hash、内容类型与归属 |
+| `material_<feedback_id>` | 本次目录变化、带引用简报，以及完整目录/执行记录入口 | 仅本轮交付反馈时必需；不展开执行记录 |
 | `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
@@ -120,21 +120,17 @@ finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientifi
 
 Scientific 的提示与完成检查从共享工件契约派生允许新建的种类；已有输入证据通过 opinion.evidence_artifact_ids 引用，不在 finish 里重新交付为新工件。不支持的 kind、输入/外来/伪造 Ref 和重复输出在现有 Loop 内收到 runtime_feedback，使用同一剩余预算纠正；不是 Controller 失败后另起重试。注册层仍检查身份、hash 和磁盘内容。
 
-**work_brief 的用途分工：**
+**科研目录与简报的分工：**
 
-interpreter 只按已有字段整理信息，不调用 LLM，也不解释科学意义；含义和下一步由 Scientific 的 LLM 判断。
+Orchestrator 的 Interpreter 从已登记材料生成科研目录，按初始材料、Scientific 材料和工作需求组织；来源、尝试序号和实际状态由代码填入。路径、hash、权限仍只在底层登记表，目录不重新管理文件。
 
-同次工作反馈还会以完整 `material_<artifact_id>` 出现；work_brief 是另一份用途投影，不替换原结构化材料，两者都计入输入额度。因此，简报省略某个执行字段，不代表模型最终看不到该字段。当前没有实现严格的执行细节隔离；反馈范围和重复内容的处理仍待讨论，见[设计原则中的现状说明](DESIGN_PRINCIPLES.md#interpreter-current)。
+每轮稳定后，Controller 保存执行记录 work_record，再调用 Interpreter 的 LLM，根据本轮相关文本窗口生成每条带原 Artifact ID 引用的简报。简报和目录变化放在同一冻结 work_feedback，Scientific 仅在本轮交付时看到；完整累计目录按需读取。工作事实与简报分开：未解决任务等机器要求从原记录读取，不相信摘要是否提到了它们。回答恢复复用累计目录，不重放旧增量或重新解释旧轮次。
 
-- `purpose` 是上一份工作需求的 objective / expected_evidence / constraints。
-- 完成结果的 `narrative` 是模块解释；`caveats` 是交付警告，只投影 code/message。
-- `evidence` 给出可授权读取的 artifact_id、kind 和用途，不展开全部原始工件内容。
-- 失败/阻塞项保留原因；仅白名单投影 stderr_tail 的末尾最多 1000 字符为 `diagnostic_excerpt`，它用于执行诊断，不是科学证据。
-- `module_report` 用于代码答案、解释和残余风险。prompt 要求在依赖模块结果作结论前，阅读该结果相关的说明/局限报告（若存在）；“不是测量”不等于“可以忽略风险”。不要求遍读所有历史报告，也未添加确定性阅读门禁。
+Scientific 不再默认收到平铺 input_artifacts、完整 work_record 或旧 work_brief。AgentRequest 内的授权引用仍完整供读取和校验使用。同轮检索材料从文献工具回执发现，原 ID 可立即读取；下一次 Controller 刷新时收入累计目录。原文件、失败记录和模块报告可按需读取；默认简报不替代这些材料。
 
 当前 observed 集合来自成功 `read_artifact` **或** `literature_search` 的记录；它表示访问历史，不证明读过全文或当前仍能看到全部正文。仅列在授权清单里的编号不自动进入 observed。读过也不代表观点必然正确。
 
-**源码与测试**：[context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py)、[装配与回合](../../packages/agents/scientific/src/resagent2_scientific/agent.py)、[观察与完成检查](../../packages/agents/scientific/src/resagent2_scientific/completion.py)、[interpreter 测试](../../tests/scientific/test_interpreter.py)、[证据控制测试](../../tests/scientific/test_evidence_control.py)。
+**源码与测试**：[context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/orchestrator/src/resagent2_orchestrator/interpreter.py)、[装配与回合](../../packages/agents/scientific/src/resagent2_scientific/agent.py)、[观察与完成检查](../../packages/agents/scientific/src/resagent2_scientific/completion.py)、[Interpreter 测试](../../tests/orchestrator/test_work_interpreter.py)、[证据控制测试](../../tests/scientific/test_evidence_control.py)。
 
 <a id="coding"></a>
 
@@ -199,6 +195,16 @@ Compiler 没有 Session、工具读取工作集或 AgentLoop 的 runtime_feedbac
 
 **源码与测试**：[编译草图与校验](../../packages/orchestrator/src/resagent2_orchestrator/compiler.py)、[PromptLLMClient](../../packages/runtime/src/resagent2_runtime/llm.py)、[CLI 组合根](../../apps/cli/src/resagent2_cli/composition.py)、[E2E 组合根](../../e2e/real_e2e.py)、[编译器测试](../../tests/orchestrator/test_compiler.py)、[适配器测试](../../tests/runtime/test_prompt_client.py)。
 
+<a id="interpreter"></a>
+
+### 3.5 Interpreter：反向翻译，无独立会话
+
+输入和产物契约见[反向交接](CONTRACTS.md#interpreter)。生产入口注入独立 PromptLLMClient，使用 system/interpreter_request 必需段和 WorkBrief JSON 输出。默认输入上限同源为 128000 tokens，可用 RESAGENT2_INTERPRETER_CONTEXT_TOKENS 配置；调用、格式纠正和 HTTP 重试仍计入同一 Run。
+
+输入只包含本轮完整 WorkRecord、本轮相关目录条目及原始文本窗口，不把累计历史全文重复发送。每份文本最多读取 12000 字符，窗口保留 truncated 等信息；二进制内容不进入文本解释。窗口经过现有 Run 授权和整份 hash 校验，引用只允许当前真实提供的文本来源或执行记录。材料过多超过有效输入额度时明确失败，不默默丢弃必需结构，也不增加摘要循环。第一次 JSON/引用错误允许携带原因纠正一次，不作额外语义评审。
+
+Interpreter 没有 Session、工具循环或私有工作区；产出保存后由 Controller 重用。解释过程中读取的材料不计入 Scientific 的 observed。
+
 <a id="reads"></a>
 
 ## 4. 共享读取：工具结果与上下文工作集
@@ -239,7 +245,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 - **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
 - **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified、required_python；已有环境时再附 env_id、prefix、python_version。环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。完整 env_audit 保存在该次工具 value 和 Session memory，原生 receipt 可见；environment 段只投影当前绑定，不直接展开历史审计。
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
-- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料，历史工件仍保留。每个 material 段包含 artifact_id、kind、content；answer 的 content 保留原题、回答和可选动作快照，不是只展示一句 yes。要求工件不依赖 resume_artifact_ids，仍按类型自动装入。读取并注入材料不替代权限策略核对 pending_action 和单次批准；必需材料过大时明确超限，不静默截断结构化答案。
+- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料；Scientific 的工作反馈只展示科研目录变化及简报，历史工件仍保留。每个 material 段包含 artifact_id、kind、content；answer 的 content 保留原题、回答和可选动作快照，不是只展示一句 yes。要求工件不依赖 resume_artifact_ids，仍按类型自动装入。读取并注入材料不替代权限策略核对 pending_action 和单次批准；必需材料过大时明确超限，不静默截断结构化答案。
 
 资源字段、路径授权等公开约定仍以 [资源契约](CONTRACTS.md#resources)、[问答契约](CONTRACTS.md#questions) 为准。
 
@@ -283,8 +289,8 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 | 层次 | 当前默认或规则 | 由谁负责 |
 |---|---|---|
-| 模型可用输入容量 | 注入的 ModelProfile：窗口减预留输出和安全余量；Compiler 还扣 JSON action schema 说明 | 原生 LLM client 的预算 hook |
-| 模块输入上限 | Scientific / Coding / Experiment / Compiler 各128000 tokens；前三者覆盖完整序列化 `{messages, tools}`，Compiler保留JSON-only计量路径 | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模块参数可覆盖 |
+| 模型可用输入容量 | 注入的 ModelProfile：窗口减预留输出和安全余量；Compiler/Interpreter 还扣 JSON 输出 schema 说明 | LLM client 的预算 hook |
+| 模块输入上限 | Scientific / Coding / Experiment / Compiler / Interpreter 各128000 tokens；前三者覆盖完整序列化 `{messages, tools}`，Compiler/Interpreter保留JSON-only计量路径 | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模块参数可覆盖 |
 | 材料软水位 | 固定正文与最小导航框先入场；可伸缩材料扩展到整包80%，与压缩触发阈值同源 | ContextComposer + CONTEXT_TARGET_SHARE |
 | 材料起始份额 | 文件/工件/诊断/目录的相对权重16/16/4/1，只分配给已选入项；空余按96/80/62优先级借用 | ContextMaterial + ContextComposer |
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
@@ -297,7 +303,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 
 Loop在调用builder之前计算有效总额度：有ModelProfile时取“模块上限”和“模型可用输入容量”的较小值；没有hook时使用模块上限，不猜Provider容量。原生路径先为完整 tools schema 和当前续传历史预留空间，再把剩余材料额度交给builder；Composer 随后仍按完整请求复核。输入压力先尝试下述最小压缩；没有可用前缀、schema/单个巨大回合/required 领域段仍装不下时，明确返回 `budget_exhausted`。不删除半个 assistant/tool pair，也不暗改上限。CLI注入Profile；real E2E有自己的装配，但原生Agent默认值同源，不能假定它继承CLI的环境变量覆盖。
 
-Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列化后的 messages、tools 和 JSON 转义，而不只是领域渲染文本；客户端发送前还会以同一完整请求边界复核。这个算法是确定性粗估，不是模型 tokenizer 的精确计数，也不保证对中文等所有内容都高估；不能把 `estimated_tokens` 当实际 usage。Compiler 的 JSON action schema 说明仍在其旧路径中计量；无 Profile 时不提供同等模型容量保证。
+Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列化后的 messages、tools 和 JSON 转义，而不只是领域渲染文本；客户端发送前还会以同一完整请求边界复核。这个算法是确定性粗估，不是模型 tokenizer 的精确计数，也不保证对中文等所有内容都高估；不能把 `estimated_tokens` 当实际 usage。Compiler/Interpreter 的 JSON 输出 schema 说明仍在正文 JSON 路径中计量；无 Profile 时不提供同等模型容量保证。
 
 **只有整包输入上限是容量硬门槛。** 先原样放入职责、任务、问答、反馈、已有摘要等固定必需段，再保留材料的最小导航框；可选段仍按原优先级选入。材料在80%水位内先按相对权重分配，再按优先级使用剩余空间，不能借走其他材料已分到的一份。80%不是必需输入的拒绝线：必需内容超过它但未超过100%仍可容纳，并沿用历史压缩判断。
 
@@ -323,7 +329,7 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 摘要调用和 HTTP 重试计入同一 max_llm_calls，开始前至少留下两次额度（摘要与下一次动作）；不设置另一份摘要调用钱包。每次发送前持久占用，暂停恢复不重置余额，崩溃留下的 unknown 不退款；这不是供应商精确计费或 Run/Session/Provider 的跨系统事务。
 - 没有可选 summarize_history 的注入客户端仍可运行；真正装不下时明确失败。摘要失败不会悄悄换模型、增大预算或自动无限重试。
 
-这里新增的是一个共享检查点，不是分 Agent 的长期记忆、阅读笔记或向量检索。Compiler 没有 Session，不走压缩。压缩有损；它不保证避免所有循环、保留所有历史细节或节省每次调用费用。
+这里新增的是一个共享检查点，不是分 Agent 的长期记忆、阅读笔记或向量检索。Compiler/Interpreter 没有 Session，不走压缩。压缩有损；它不保证避免所有循环、保留所有历史细节或节省每次调用费用。
 
 **源码与测试**：[规划函数](../../packages/runtime/src/resagent2_runtime/compaction.py)、[Loop](../../packages/runtime/src/resagent2_runtime/loop.py)、[检查点模型](../../packages/runtime/src/resagent2_runtime/models.py)、[规划/传输测试](../../tests/runtime/test_compaction.py)、[循环/重启测试](../../tests/runtime/test_history_checkpoint.py)。服务器要求见[本轮验收单](../history/reviews/RUNTIME_CONTINUATION_ACCEPTANCE.md)。
 
@@ -350,4 +356,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 14.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 15.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

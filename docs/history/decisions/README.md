@@ -23,4 +23,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0015：Tool 与普通组件分离](0015-tool-components-boundary.md)
 - [ADR-0016：统一 Agent IO 与 Run 预算、授权](0016-unified-agent-io-and-run-controls.md)（注明旧模式、路径字段、结果协议与确认规则的部分取代关系）
 
+- [ADR-0017：科研目录与反向工作解释](0017-research-index-and-work-interpreter.md)（取代 Scientific 内纯投影及重复执行反馈呈现）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

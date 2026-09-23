@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 14.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 15.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -138,7 +138,7 @@ resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报�
 
 回答同意后，同一个 Agent 恢复并再次提交原操作，经过复验才真正执行；确认问题不是成功执行记录。用户仍只需通过 answer 回答，最终以实际工具回执和产物判断结果。
 
-三个 Agent、Compiler 及模型重试共用 Run 用量。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
+三个 Agent、Compiler、Interpreter 及模型重试共用 Run 用量。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
 
 ## 4. 数据集资源库
 
@@ -238,7 +238,8 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 - `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `128000`；
 - `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `128000`；
 - `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `128000`；
-- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `128000`，仍可单独覆盖；CLI与real E2E的Compiler默认值共用runtime常量。
+- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `128000`；
+- `RESAGENT2_INTERPRETER_CONTEXT_TOKENS`：默认 `128000`，限制反向工作简报输入；Compiler/Interpreter 和三个 Agent 共用 runtime 默认常量，可分别覆盖。
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，限制单次模型 HTTP 请求总时长。实际取它与 Run 当前剩余时间的较小值，通过 httpx 与可取消的总超时执行；每次重试重新计算余量，同时消耗请求次数。取消本地请求不保证供应商停止计算或计费，未知结果保留预算占用。
 
@@ -246,7 +247,7 @@ export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 
 Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不扩到256K、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入 action schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：Agent与Compiler默认均为128000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 继续通过 `PromptLLMClient.next_action` 使用旧分段、JSON-only 路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler/Interpreter 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent、Compiler与Interpreter默认均为128000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler/Interpreter 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 

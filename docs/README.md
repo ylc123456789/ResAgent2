@@ -19,7 +19,7 @@
 - [设计原则与架构约束](current/DESIGN_PRINCIPLES.md)：先说明 LLM 驱动、分层自主和双向信息交接，再列出十二条开发约束；明确开闭原则、依赖倒置、当前实现和待讨论事项。
 - [架构](current/ARCHITECTURE.md)：模块职责、调用方向、状态所有权和能力边界。
 - [模块接口与契约](current/CONTRACTS.md)：按调用边界把方法、输入输出、字段、失败和恢复约定放在一起。原 CONTRACTS 与 INTERFACES 已合并，不再维护独立接口卡。
-- [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment 和 Compiler 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。
+- [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment、Compiler 和 Interpreter 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。
 
 [上下文审查与方案演变](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 保留最初问题与随后获批的实现；[最终验收与边界](history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout) 记录真实回归、文献回放补验和报告勘误。历史候选不代替当前行为。
 

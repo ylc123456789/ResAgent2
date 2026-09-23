@@ -16,7 +16,7 @@
 
 ## 当前参考入口
 
-- [设计原则与架构约束](current/DESIGN_PRINCIPLES.md)：修改时要保持的职责、依赖方向和机制；开闭原则、依赖倒置的具体含义与评审检查。
+- [设计原则与架构约束](current/DESIGN_PRINCIPLES.md)：先说明 LLM 驱动、分层自主和双向信息交接，再列出十二条开发约束；明确开闭原则、依赖倒置、当前实现和待讨论事项。
 - [架构](current/ARCHITECTURE.md)：模块职责、调用方向、状态所有权和能力边界。
 - [模块接口与契约](current/CONTRACTS.md)：按调用边界把方法、输入输出、字段、失败和恢复约定放在一起。原 CONTRACTS 与 INTERFACES 已合并，不再维护独立接口卡。
 - [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment 和 Compiler 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。

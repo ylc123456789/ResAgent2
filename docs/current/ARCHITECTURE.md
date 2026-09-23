@@ -8,7 +8,9 @@
 
 ## 1. 总体结构
 
-ResAgent2 是整个项目的名字，**Orchestrator 只是其中的研究编排模块**。Scientific 负责科学判断，Orchestrator 负责把判断转成受控执行，Coding 和 Experiment 完成专业工作。
+ResAgent2 是整个项目的名字，**Orchestrator 只是其中的研究编排模块**。Scientific 负责科学判断，Orchestrator 负责需求翻译、调度和 Run 控制，Coding 和 Experiment 完成专业工作。
+
+系统围绕 LLM 的理解、推理和决策能力构建。Scientific 类似大脑；Compiler、Scheduler、Controller 负责翻译与协调，类似小脑和神经系统；Coding、Experiment 类似专业器官，它们也使用 LLM 自主选择具体工作步骤。代码提供工具和事实记录，执行预算与授权检查。正反向信息如何交接、LLM 与代码如何分工，见[三个总体设计目标](DESIGN_PRINCIPLES.md#1-三个总体设计目标)。
 
 <!-- 两张图共用深浅主题通用配色：中等明度蓝色连线/箭头/边框，深色文字配固定浅底；不依赖预览插件切换主题。 -->
 ```mermaid
@@ -99,7 +101,9 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 6. **解释与下一步**：Controller 将原需求与 WorkOutcome 配对成 work_feedback 工件；Scientific 的 [interpreter.py](../../packages/agents/scientific/src/resagent2_scientific/interpreter.py) 从中投影工作简报。Scientific 读证据后决定继续、询问用户或完成。
 7. **正式完成**：Scientific 完成提议通过 Orchestrator 最终 gate 后，登记报告，再将 Run 标为 completed。
 
-interpreter 属于 Scientific，因为它负责“Scientific 应怎样理解执行结果”，不改变执行事实。它无 LLM、无 IO、无状态，不是新服务。stderr 摘录只作执行诊断，summary 是解释性文字，科学证据仍须通过授权工件读取。
+interpreter 当前是 Scientific 内部的反馈呈现函数：它整理原需求、结果、证据入口、失败和警告，供 Scientific 的 LLM 理解。它不调用 LLM、不读写文件、不修改状态，也不作科学判断。Compiler 需要用 LLM 把需求翻译成任务；反向链路的科学理解由 Scientific 的 LLM 完成，两边不要求相同的实现方式。stderr 摘录只作执行诊断，summary 是模块解释，科学证据仍须通过授权工件读取。
+
+当前 Scientific 同时收到完整 work_feedback 和整理后的 work_brief，尚未完全屏蔽执行细节；两份内容也有重复。默认反馈范围、按需读取方式以及 interpreter 的职责或位置仍待讨论，见[当前实现与待讨论事项](DESIGN_PRINCIPLES.md#interpreter-current)。不能仅凭存在 interpreter 文件就认为双向交接目标已经全部满足。
 
 发现、结果和局限通过 report 表达，需要下游分页读取的长说明可提交 `kind=module_report` 工件。解释与原始测量分别具有明确用途；工件经 Registry 冻结后按授权读取，报告文字不能替代实际命令回执、测量文件或已读文献。
 

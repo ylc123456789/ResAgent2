@@ -1,89 +1,170 @@
 # 设计原则与架构约束
 
-本文回答：**修改功能或修复错误时，哪些职责、机制和流程必须保持。** 它汇总项目已经采用的设计，不新增框架，也不要求所有实现细节永远不变。
+本文说明两件事：**系统围绕什么目标设计，以及修改代码时必须保持哪些规则。** 人和 AI 参与开发时，都应先对照这些规则。
 
-[ARCHITECTURE](ARCHITECTURE.md) 说明当前模块和流程；[CONTRACTS](CONTRACTS.md) 定义接口、字段与行为；[CONTEXT](CONTEXT.md) 说明模型实际接收的信息。本文只维护跨功能的原则和检查方式，不重复字段表、状态表或测试轮次。历史 ADR 解释取舍，已被取代的旧字段和实现不因此恢复有效。
+本文中的“必须”是开发约束；“当前实现”说明代码已经做了什么；“待讨论”表示尚未决定或实现，不能当成已有能力。原则用于检查和指导改动，不表示可以顺便重构代码。
 
-## 1. 简洁、通用的具体含义
+模块和流程看 [ARCHITECTURE](ARCHITECTURE.md)，接口和字段看 [CONTRACTS](CONTRACTS.md)，模型实际收到的信息看 [CONTEXT](CONTEXT.md)。本文不重复维护这些细节。
 
-模块相对独立，是指调用方依靠公开契约，模块有自己的职责和状态，可以单独测试、替换具体实现；不是零依赖、每类一个包或每项功能都部署为服务。共享 contracts/runtime/components 是有意设计。
+## 1. 三个总体设计目标
 
-简单是同一事实、同一执行语义有明确归属，同一行为只有一条生产主线。通用是在真实相同的使用场景间复用已有组件；新共享抽象至少应有两个语义一致的消费者。只供一处使用的小函数可以留在原模块，不为扩展可能性预造基类、管理器、事件总线或插件发现系统。
+<a id="llm-first"></a>
 
-开闭原则（OCP）和依赖倒置（DIP）在这里服务于上述目标。它们约束依赖与修改范围，不是让所有类都多一层接口，也不是禁止修正既有代码。
+### 1.1 围绕 LLM 的能力构建系统
+
+LLM 是系统理解、推理和决策的核心。开发应帮助它获得准确的信息、使用合适的工具，并完成复杂任务。代码负责提供这些条件，以及可靠地执行和记录操作。
+
+判断一项工作交给谁，可以看它需要什么能力：
+
+| 问题 | 主要负责人 |
+| --- | --- |
+| 研究要解决什么问题，还需要哪些工作和证据 | Scientific 的 LLM |
+| 怎样把已提出的工作需求转成任务及依赖 | Compiler 的 LLM |
+| 怎样修改代码、分析实验结果、解释错误原因 | 对应专业 Agent 的 LLM |
+| 证据意味着什么，是否支持假设，下一步研究什么 | Scientific 的 LLM |
+| 请求是否超预算，路径是否获授权，答案是否对应当前问题 | 代码 |
+| 命令退出码、文件 hash、实际状态和调用记录是什么 | 代码读取事实并保存 |
+
+涉及含义、意图、因果或专业判断时，优先由职责对应的 LLM 处理。不要不断增加关键词匹配和特殊分支来代替这些判断。能直接从结构化事实得到的结果，例如退出码、字段匹配或预算余额，由代码处理。
+
+优先让已有 Agent 或 Compiler 完成自己的语义工作。只有已有职责确实无法承接时，才讨论新的 LLM 环节；不能每遇到一个问题就增加模型调用或新 Agent。
+
+代码校验负责确认执行和记录是否满足约定，不能据此宣称科学观点正确。LLM 的判断也不能改写实际执行记录，或绕过预算、授权和证据检查。
+
+例如，模型批准后反复列目录，应先检查它是否知道操作尚未执行、答案是否到达、任务指令是否冲突。应修正信息和反馈链，不添加“列目录三次后自动删除”这样的特例。
+
+<a id="layered-autonomy"></a>
+
+### 1.2 分工清楚，每层保留适当的自主性
+
+可以用人体作比喻，但实际职责以下表为准：
+
+| 比喻 | 项目模块 | 职责 |
+| --- | --- | --- |
+| 大脑 | Scientific Agent | 理解研究目标，提出假设和证据需求，阅读结果，形成科学判断 |
+| 翻译与协调系统，类似小脑和神经系统 | Compiler、Scheduler、Controller | Compiler 把需求转成任务；Scheduler 按依赖和约束执行任务；Controller 管理整个 Run 的往返过程 |
+| 专业器官或躯干 | Coding、Experiment Agent | 在代码和实验领域完成具体工作，并返回解释、证据和局限 |
+
+Coding 和 Experiment 本身也使用 LLM。上层交付目标、材料和约束，专业 Agent 在授权与预算内选择具体工具步骤。上层不应为所有任务预先写死操作顺序。
+
+Scientific 负责科学意义，不负责具体 Agent 调用、任务状态或环境绑定。Compiler 负责需求到任务的转换，不形成最终科学结论。Scheduler 根据已经接受的任务图和状态执行，不用固定规则代替科研决策。
+
+### 1.3 正向传递意图，反向返回可理解的结果
+
+架构的对称性首先是**两个方向都有明确的信息交接职责**：
+
+```text
+正向：科学目标和证据需求 → 翻译为任务 → 专业 Agent 执行
+反向：执行事实、解释和证据 → 对应原需求整理反馈 → Scientific 更新判断
+```
+
+两个方向都必须满足以下要求：
+
+- 正向保留目标、约束和证据需求。编译不能把“一次实际操作”误改成“只能调用一次工具”。
+- 反向说明原需求完成了哪些、哪些未完成，并保留失败、警告、局限和证据入口。
+- 每层通过公共输入输出合作。Scientific 无需依赖下游私有状态来理解结果，专业 Agent 无需代替 Scientific 决定研究结论。
+- 反馈整理不能悄悄改变事实。简报中的解释应能追溯到原报告或证据，不能把解释当成新的测量。
+
+对称性不要求两边目录相同、类的数量相同，或各调用一次 LLM。是否需要模型，取决于该步骤是否要做语义判断。证据编号用于追溯，应保留；任务编号和调度字段是否需要进入模型输入，应按用途决定。
+
+<a id="interpreter-current"></a>
+
+**当前实现与待讨论事项**
+
+| 项目 | 当前实现 |
+| --- | --- |
+| 正向链路 | Scientific 提出工作需求；Compiler 的 LLM 生成任务草图；代码分配身份、校验结构，再由 Scheduler 执行 |
+| 反向链路 | Scheduler 形成执行结果；Controller 与原需求配对，保存 work_feedback；Scientific 内部的 interpreter 整理 work_brief，再由 Scientific 的 LLM 理解结果并判断下一步 |
+| interpreter 的职责 | 复制原需求，整理报告、证据入口、失败和警告，并标明用途；它不调用 LLM、不读文件、不改状态，也不作科学判断 |
+| interpreter 的位置 | 当前放在 Scientific 内，作为该模块的反馈呈现函数；Compiler 放在 Orchestrator 内，因为它生成该模块管理的任务图 |
+| 当前的信息范围 | Scientific 同时收到完整 work_feedback 和 work_brief。简报没有替代完整反馈，因此当前并未完全屏蔽执行细节，且两份内容有重复 |
+
+待讨论的是：Scientific 默认需要哪些反馈，哪些执行细节可按需读取，以及是否需要调整 interpreter 的职责或位置。目前没有决定移动它、新增解释 Agent，或删除完整反馈。已有 interpreter 文件不等于所有反向语义交接目标都已实现；后续应按实际输入和模型消费情况检查。
 
 ## 2. 修改时保持的十二条约束
 
-| 原则 | 在本项目中的要求 | 需要警惕的改法 |
-| --- | --- | --- |
-| 1. 职责分离 | Scientific 判断与提出证据需求；Compiler 翻译当前工作请求；Scheduler 执行任务；Controller 负责 Run 闭环；CLI 只做入口与装配 | Scientific 直接生成执行图，CLI 自己改 Run 状态，Scheduler 根据文字决定科学结论 |
-| 2. 公共边界与依赖方向 | Agent 不直接互调；上游通过公开请求、结果、SessionRef 和工件交接；具体实现由外层组合根注入 | Orchestrator import 具体 Agent，Agent import 兄弟 Agent，读取下游私有 Session/memory 驱动调度 |
-| 3. 单一 Agent 协议 | 每个 Agent 只有 invoke(AgentRequest) → AgentResult 和一种业务模式；instruction/input_artifacts 表达任务，report/artifacts 表达结果 | 为分析、执行、批准恢复另开业务入口或 mode；权限允许写就强制写、允许执行就强制执行 |
-| 4. 共享机制、领域规则就地归属 | 三个 Agent 共用 AgentLoop；差异通过工具、上下文、权限和完成检查注入。Runtime 不理解具体科研任务；领域规则留在 Agent | 为单个 Agent 复制 Loop，或在共享 Loop 中按 Coding/Experiment 名称添加专用流程 |
-| 5. 模型提议，代码裁定 | 模型表达目标、动作和观点；代码管理身份、合法图、依赖、状态、授权、预算及完成判据 | 解析 report/summary 推断成功，模型自己修改 Attempt/Run 状态，绕过接收校验 |
-| 6. 状态与事实单一权威 | Run/WorkRequest、Task/Attempt、Session 各按既有所有权管理；目录登记、实际可用性、授权、环境绑定分别有明确来源 | 在 prompt、metadata 或另一个缓存里再维护一份权威状态；从磁盘有文件推断登记或执行成功 |
-| 7. 控制循环各司其职 | Controller 科学闭环、Scheduler 任务循环、AgentLoop 工具循环保持分工；Compiler 是无 Session 的有界编译器 | 合成超级循环；为纠错新增一套控制器；把 Compiler 变为长期对话 Agent |
-| 8. 问答与重试分开 | 回答继续同一 Task/Attempt/Session；真正失败重试才创建新 Attempt。原题、作用域、恢复材料和已消费身份必须匹配 | 通过新建任务/Session 来恢复问答，重复消费旧答案，恢复时重置预算、基线或工作区授权 |
-| 9. Run 是预算和权限上限 | 子调用继承或收紧同一调用余额、期限与授权；重试、纠错、压缩和 Compiler 都占用 Run 总账；人工等待按现有规则扣除 | 各模块各开钱包，新增隐形步数预算，批准扩大授权，缺数据集时擅自下载或静默替换数据集 |
-| 10. 副作用与批准可审计 | 权限检查与实际文件/进程边界仍有效；批准绑定当前精确操作，执行前持久消费。操作确认和执行回执区分；未知结果不自动重放 | 把问到同意当作已执行；复用一次批准执行其他命令；以“恢复”为名重复可能已经发生的副作用 |
-| 11. 证据与完成分层验证 | Registry 冻结工件并校验来源/hash；跨任务用显式 output_name 绑定；Agent 检查领域事实，接收端和 Run gate 检查各自边界 | 用模型自报数值代替测量，把可读当成已读，把 schema 合法或 exit 0 当成科学结论正确 |
-| 12. 修复保留真实失败与历史 | 失败、警告、消费与中断记录不丢；图按既有规则追加，不改写已执行历史；旧 schema 不兼容恢复，不保留无人需要的兼容路径 | 重试到绿后覆盖失败证据；为“恢复成功”清空预算/历史；只改生产者而遗漏接收、持久化或恢复链 |
+下面的规则用于落实三个总体目标。工件是供交接和追溯的文件或记录；其登记、冻结和读取规则由公共契约定义。
 
-这些要求约束的是语义，不锁死文件名、私有 helper 或无消费者的字段。删除重复包装、移动职责正确的代码、合并相同纯判据，可以让实现更简单；必须验证上述行为仍成立。新需求若确实改变这些边界，应明确形成设计决定、说明取代关系，并同步实现、契约和验证，不能藏在普通修复中。
+| 约束 | 必须保持的行为 |
+| --- | --- |
+| 1. 职责分离 | Scientific 判断研究问题，Compiler 翻译工作需求，Scheduler 执行任务，Controller 管 Run，CLI 提供用户入口并装配模块。不能在修复时悄悄转移职责。 |
+| 2. 公共接口和依赖方向 | Agent 不直接互调；上游只通过公共请求、结果、SessionRef 和工件交接，不读下游私有 Session/memory。具体实现由外层入口选择和注入。 |
+| 3. 每个 Agent 一种调用和业务模式 | 统一使用 invoke(AgentRequest) → AgentResult。任务由 instruction/input_artifacts 表达，结果用 report/artifacts 交付。分析、修改、执行和问答恢复不另设业务模式；可写不等于必须修改。 |
+| 4. 共享运行机制，保留专业判断 | 三个 Agent 共用 AgentLoop，装配各自工具、上下文、权限策略和完成检查。不复制循环，也不往共享循环中加入某个 Agent 的专用业务分支。 |
+| 5. LLM 处理语义，代码检查执行约束 | 需要理解意图、专业推理、诊断原因或解释证据的工作，优先由相应 LLM 完成；结构化事实能直接确定的问题由代码判断和反馈。身份、状态、图结构、预算、权限和记录一致性由代码检查。不能用报告文字推断机器状态，也不能用机器校验代替科学判断。 |
+| 6. 每项状态和事实有明确来源 | Run/WorkRequest、Task/Attempt、Session 按各自职责管理；授权、资源登记、实际可用性和环境绑定各有可信来源。摘要、提示和缓存不能再维护另一份独立的权威状态。 |
+| 7. 三层循环分工 | Controller 管研究往返，Scheduler 管任务执行，AgentLoop 管工具步骤。Compiler 没有长期 Session，只在有限调用内编译当前需求。不因纠错新增另一套控制流程。 |
+| 8. 回答继续原工作，重试另开尝试 | 任务 Agent 的回答继续同一 Task/Attempt/Session；Scientific 的回答继续同一 Run/Session。任务失败后的重试才创建新 Attempt。必须匹配原题和作用域，不能重复消费旧答案，或在恢复时重置预算、基线和授权。 |
+| 9. 内部预算和权限不超过 Run | 子调用只能继承或收紧 Run 的调用余额、期限和授权。Compiler、模型重试、纠错和压缩共用总账；人工等待按已有规则计算。资源不足时不能自行扩大授权或擅自替换数据集。 |
+| 10. 区分申请、批准和实际执行 | 批准绑定准确操作、参数、上下文和身份，执行前持久消费。执行仍需检查权限和目标；不能复用批准执行其他操作。结果未知时不自动重放可能已发生的副作用。 |
+| 11. 证据和完成按层检查 | 登记层校验来源并冻结工件，跨任务用显式 output_name 绑定；Agent 检查领域执行事实，接收端和 Run 最终检查各自规则。可读不等于已读，运行成功不等于假设成立。 |
+| 12. 保留失败、消耗和历史 | 保留失败、警告、用量和中断记录；任务图按规则追加，执行历史不改写。接口清理同步生产者和消费者；旧 schema 不兼容恢复，不留下无人需要的兼容路径。 |
 
-## 3. 依赖倒置怎样落实
+这些约束允许精简内部实现，例如删除无消费者字段、合并重复函数或调整文件位置。改动必须保持相应行为；确实需要改变设计时，应说明理由和取代关系，同步契约、实现与测试。不能只改文档来掩盖意外的行为变化。
 
-业务调用方向和源码 import 方向是两件事。Scheduler 运行时调用 Agent，但它在源码中只认识 ModulePort；CLI/E2E 组合根选择具体 Agent 并注入。Python 的 Protocol 允许结构化实现，具体 Agent 无需继承 Orchestrator 的基类。
+## 3. 模块独立、依赖倒置和开闭原则
 
-| 调用方依赖的约定 | 具体对象由谁提供 | 保持的边界 |
-| --- | --- | --- |
-| [ModulePort](../../packages/orchestrator/src/resagent2_orchestrator/ports.py) | CLI/E2E 注入 Scientific 和任务 Agent | 编排不 import 具体 Agent，不判断其实现类 |
-| [AgentDefinition / CompletionCheck / PermissionPolicy](../../packages/runtime/src/resagent2_runtime/loop.py) 与 [Tool](../../packages/runtime/src/resagent2_runtime/tools.py) | 各 Agent 组合已有工具和领域策略 | 通用 Loop 不承担领域工作流 |
-| [LLMClient](../../packages/runtime/src/resagent2_runtime/llm.py)、[SessionStore](../../packages/runtime/src/resagent2_runtime/store.py)、[RunStore](../../packages/orchestrator/src/resagent2_orchestrator/store.py) | 入口或调用方注入实现 | 模型调用和持久化通过既有接口替换，仍遵守行为契约 |
-| [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 组合根装配文献来源 | Scientific 无需知道供应商响应格式 |
-| [ArtifactRegistrationPort](../../packages/components/src/resagent2_components/artifacts.py) | 组合根注入 Orchestrator 的登记实现 | 文献 Tool 不反向 import Orchestrator；登记规则仍由 Registry 管理 |
+### 3.1 模块独立：通过约定合作
 
-完整依赖图及允许范围只在[模块边界](ARCHITECTURE.md#modules)维护。当前 Orchestrator 除 contracts 外，还明确使用 runtime.budget 与 components.workspace；这两个有限依赖已经属于现行设计，不能引用早期 ADR 的旧简写强行删除。
+模块有自己的职责和状态，可以单独测试、替换实现。共享 contracts/runtime/components 是有意设计；独立不要求零依赖、每类一个包或每个模块单独部署。
 
-Controller 与 Scheduler 是同一 Orchestrator 包内的协作对象，使用同一 store/registry 和必要私有 helper 不等于跨 Agent 读取私有状态。普通稳定组件也不必为了形式上的依赖倒置再套 Protocol。
+同一行为保留一条生产主线，优先使用已有组件。出现语义一致的重复需要时，再考虑提取共享机制；只用一次的小函数通常留在所属模块。已经明确属于公共运行机制的能力，仍按既有边界放置。不要为了可能的未来需求先造基类、管理器或插件框架。
 
-## 4. 开闭原则怎样落实
+### 3.2 依赖倒置：调用接口，由入口选择实现
 
-优先沿已存在的变化点扩展，避免每加一种能力就改所有 Agent 或核心 Loop。但当前系统有意保留有限的 Agent 类型、工具白名单和权限规则，不承诺任意新行为无需修改代码。
+Scheduler 要调用 Agent，但它在源码中只认识 ModulePort 这个公开调用约定。CLI/E2E 入口负责创建具体 Agent，并把它传给 Scheduler。这就是本项目依赖倒置的主要做法。
 
-| 变化 | 正常修改范围 | 不应顺带改变 |
-| --- | --- | --- |
-| 替换某个 Agent 实现 | 实现同一 ModulePort，在组合根接线，通过同一返回边界与流程测试 | Controller/Scheduler 增加针对新实现类的分支 |
-| 增加普通模型工具 | Tool/输入 schema、所属 Agent 的显式工具列表与动作 schema；按需要复用 Components | 通用 AgentLoop 的控制流程 |
-| 增加有副作用的操作 | 在上述基础上显式审查授权、目标快照、执行边界、失败及恢复；必要时修改共享权限策略 | 假定只注册工具就自动获得安全规则，或为了零改动允许未知操作 |
-| 替换模型、存储或文献源 | 现有接口的实现和组合根；遵守预算、协议身份、错误与持久化约定 | 把供应商分支散到所有 Agent，或在恢复时静默更换协议 |
-| 新增顶层 Agent 类型或公共字段 | 明确的职责/契约变更，同步枚举、生产接收端、装配、版本和测试 | 声称这是现有接口的无成本插件，或保留两套业务协议 |
+| 接口或注入位置 | 具体实现由谁提供 |
+| --- | --- |
+| [ModulePort](../../packages/orchestrator/src/resagent2_orchestrator/ports.py) | CLI/E2E 提供 Scientific 和任务 Agent |
+| [AgentDefinition / CompletionCheck / PermissionPolicy](../../packages/runtime/src/resagent2_runtime/loop.py)、[Tool](../../packages/runtime/src/resagent2_runtime/tools.py) | 各 Agent 装配工具和专业策略，通用循环调用这些约定 |
+| [LLMClient](../../packages/runtime/src/resagent2_runtime/llm.py)、[SessionStore](../../packages/runtime/src/resagent2_runtime/store.py)、[RunStore](../../packages/orchestrator/src/resagent2_orchestrator/store.py) | 入口或调用方提供模型和存储实现 |
+| [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 入口装配文献来源，Scientific 不处理供应商响应格式 |
+| [ArtifactRegistrationPort](../../packages/components/src/resagent2_components/artifacts.py) | 入口接入 Orchestrator 的登记实现，文献 Tool 不反向导入 Orchestrator |
 
-Capabilities、Components 不要求一一对应或强制逐层调用。领域 run_verification/run_command 留在各自 Agent，复用同一个 ProcessRunner；机制复用不等于领域规则也必须合并。
+Python 的 Protocol 描述接口形状，不要求具体实现继承同一个基类。替换实现还必须遵守身份、暂停、预算、失败和工件等行为约定，仅有同名方法不够。
 
-替换实现要满足相同的**行为**，仅有同名方法或 Protocol 类型检查还不够：身份、工件来源、暂停返回、预算计量和失败都必须守约。最小模型客户端与原生工具客户端、Compiler JSON 与 Agent 工具协议是底层传输差异，不是第二种 Agent 业务模式；Session 固定协议身份且不自动降级。
+完整依赖范围看[模块边界](ARCHITECTURE.md#modules)。当前 Orchestrator 除 contracts 外，还使用 runtime.budget 和 components.workspace；这两个有限依赖已经属于现行设计。Controller 与 Scheduler 同包内共用 store/registry 和必要辅助函数，也不等于跨 Agent 读取私有状态。稳定的普通组件不必再套一层接口。
 
-## 5. 每次变更怎样检查
+### 3.3 开闭原则：沿已有接口扩展，控制修改范围
 
-评审至少回答以下五项，受影响的项用具体代码和测试说明，未涉及的项也核对没有被旁路：
+替换实现或增加能力时，优先使用已有接口，避免修改所有调用方或核心循环。新增公共概念或安全规则，仍可能需要明确修改代码。
 
-1. **归属与依赖**：需求属于哪个模块？是否引入兄弟 Agent 调用、反向 import、私有状态读取或重复权威？新增依赖是否符合现有图？
-2. **扩展方式**：现有 Port、Tool、完成检查或普通函数能否表达？为什么需要修改共享机制？有没有新增 mode、兼容分支或只为一个补丁存在的框架？
-3. **完整流程**：沿生产者 → 校验 → 持久化 → 消费者 → 失败/问答/重启追踪；保持 Task/Attempt/Session、工件和单次消费语义。字段没有真实消费者就不要加入公共契约。
-4. **预算、授权与事实**：子调用是否只收紧？副作用前是否检查？失败/中断是否保留？数据、命令回执和观点是否各有来源？不能只检查正常成功路径。
-5. **验证与文档**：运行相应边界/行为/公开入口测试；影响模型输入或执行链时再安排真实验收。同步当前文档；重要取舍追加 ADR，阶段结果放 history/reviews。失败用例不能通过放宽断言消失。
+| 变化 | 正常修改范围 |
+| --- | --- |
+| 替换某个 Agent 实现 | 实现同一 ModulePort，在入口接线，通过相同的行为测试；总控不增加识别具体实现类的分支 |
+| 增加普通 Tool | Tool/输入 schema、所属 Agent 的显式工具列表和动作 schema；按需要复用 Components，不改通用循环的流程 |
+| 增加有副作用的操作 | 同时检查授权、目标快照、执行、失败和恢复；必要时修改共享权限策略，不能认为工具登记后就自动安全 |
+| 替换模型、存储或文献源 | 修改接口实现和入口装配；预算、协议身份、错误和持久化约定仍需保持 |
+| 新增顶层 Agent 类型或公共字段 | 明确职责与契约变化，同步枚举、生产者、消费者、装配、版本和测试；不保留两套业务协议 |
 
-自动测试按已有模块目录维护，不新增架构检查框架：包边界 AST 测试约束 import；contracts/接收边界测试约束协议；问答、预算、权限、工件、恢复和最终 gate 用行为测试；公开入口整链检查真实装配。具体命令见[开发与验证](../guides/DEVELOPMENT.md#local-checks)与[测试目录](../../tests/README.md)。
+Capabilities 是模型工具入口，Components 是普通操作与共享呈现。两者不要求一一对应或强制逐层调用。Coding 的 run_verification 与 Experiment 的 run_command 各自保留专业规则，共用 ProcessRunner。
 
-静态 import 检查不证明全部运行期语义，确定性脚本响应不证明模型永远正确，一次真实 Run 也不证明通用成功率。当前保证仍限于单 Run 单写入者、现有授权边界和持久化机制；没有 OS 沙箱、全局事务或副作用 exactly-once 的承诺。
+最小模型客户端与原生工具客户端、Compiler JSON 与 Agent 工具调用，是底层调用协议的区别，不是 Agent 的业务模式。Session 固定自己的协议身份，恢复时不能自动降级或静默换协议。
 
-## 6. 设计来源
+## 4. 每次修改怎样检查
 
-- [ADR-0001](../history/decisions/0001-monorepo-and-module-boundaries.md)：逻辑模块边界与独立测试；旧专用输入输出已由统一协议取代。
-- [ADR-0002](../history/decisions/0002-shared-agentic-loop.md)：共享 Loop 与注入差异。
-- [ADR-0007](../history/decisions/0007-scientific-control-and-workflow-compilation.md)：科学判断、工作请求、图编译、确定性调度和最终 gate 分离。
-- [ADR-0011](../history/decisions/0011-stabilization-schema-3.md) / [0012](../history/decisions/0012-state-recovery-boundaries.md)：单一控制面、状态权威与恢复边界；具体旧字段和计量实现以后续契约为准。
-- [ADR-0015](../history/decisions/0015-tool-components-boundary.md)：Tool 与普通组件分离，不引入对应类层级。
-- [ADR-0016](../history/decisions/0016-unified-agent-io-and-run-controls.md)：统一 Agent IO、Run 总账与权限上限、精确单次批准。
+评审应回答以下问题，并给出受影响代码和验证依据：
 
-本页是这些现行原则的统一入口，不是新架构决策。实现与原则发生冲突时应记录具体差异，再修实现或提出有理由的设计调整；不能仅靠改文档把意外退化合法化。
+1. **问题性质**：这是语义理解问题，还是事实、权限、状态等执行问题？是否交给了正确的 LLM 或代码环节？有没有用特殊规则掩盖信息缺失？
+2. **职责与依赖**：模块是否仍各管自己的事？是否出现 Agent 互调、反向导入、读取别人私有状态或重复保存权威事实？
+3. **双向交接**：目标和约束是否准确向下传递？结果、证据、失败和局限是否对应原需求返回？不能只看某个转换函数，要检查完整模型输入及实际消费。
+4. **扩展方式**：已有接口、Tool、完成检查或普通函数能否完成修改？有没有新业务模式、兼容分支、重复循环或无实际需求的框架？
+5. **完整流程**：追踪生产、校验、保存、消费、失败、问答和重启。身份、基线、批准消费、预算和授权是否延续正确？
+6. **验证与文档**：运行受影响的边界和行为测试；改动模型输入或执行链时再安排真实验收。同步当前文档；重要取舍追加 ADR，阶段结果放 history/reviews。不能放宽断言来消除失败。
+
+已有包边界测试检查 import，契约测试检查接口，行为测试检查预算、权限、恢复、证据和完成；公开入口整链检查模块组合后的流程。命令见[开发与验证](../guides/DEVELOPMENT.md#local-checks)和[测试目录](../../tests/README.md)。
+
+静态依赖检查不证明所有行为正确，固定模型响应的测试不证明真实模型总会正确选择，一次真实 Run 也不证明通用成功率。当前仍以单 Run 单写入者为前提；权限检查不是操作系统沙箱，持久化也不保证所有外部副作用恰好发生一次。
+
+## 5. 设计来源与维护
+
+- [ADR-0001](../history/decisions/0001-monorepo-and-module-boundaries.md)：模块边界与独立测试；旧专用输入输出已由统一协议取代。
+- [ADR-0002](../history/decisions/0002-shared-agentic-loop.md)：共享循环，通过注入表达差异。
+- [ADR-0007](../history/decisions/0007-scientific-control-and-workflow-compilation.md)：科学判断、需求翻译、确定性调度和最终验收分离。
+- [ADR-0011](../history/decisions/0011-stabilization-schema-3.md) / [0012](../history/decisions/0012-state-recovery-boundaries.md)：单一控制面、状态来源和恢复边界；具体旧字段与计量方法以后续契约为准。
+- [ADR-0014](../history/decisions/0014-semantic-handoffs.md)：完整解释与原题配对，区分报告解释和原始证据。
+- [ADR-0015](../history/decisions/0015-tool-components-boundary.md)：模型工具与普通组件分开，不增加成对的类层级。
+- [ADR-0016](../history/decisions/0016-unified-agent-io-and-run-controls.md)：统一 Agent IO、Run 总预算与授权、准确的单次批准。
+
+本文明确总体设计目标，并汇总仍有效的规则。历史 ADR 中已被取代的字段、接口和实现不会因此重新生效。发现目标与实现有差距时，应记录差距，再决定具体改动；不能把设计目标写成已经实现或验证的能力。

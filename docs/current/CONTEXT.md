@@ -122,7 +122,9 @@ Scientific 的提示与完成检查从共享工件契约派生允许新建的种
 
 **work_brief 的用途分工：**
 
-同次工作反馈还会以完整 `material_<artifact_id>` 出现；work_brief 是另一份用途投影，不替换原结构化材料，两者都计入输入额度。
+interpreter 只按已有字段整理信息，不调用 LLM，也不解释科学意义；含义和下一步由 Scientific 的 LLM 判断。
+
+同次工作反馈还会以完整 `material_<artifact_id>` 出现；work_brief 是另一份用途投影，不替换原结构化材料，两者都计入输入额度。因此，简报省略某个执行字段，不代表模型最终看不到该字段。当前没有实现严格的执行细节隔离；反馈范围和重复内容的处理仍待讨论，见[设计原则中的现状说明](DESIGN_PRINCIPLES.md#interpreter-current)。
 
 - `purpose` 是上一份工作需求的 objective / expected_evidence / constraints。
 - 完成结果的 `narrative` 是模块解释；`caveats` 是交付警告，只投影 code/message。

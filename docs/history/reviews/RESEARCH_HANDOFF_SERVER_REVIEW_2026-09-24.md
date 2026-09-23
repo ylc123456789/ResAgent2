@@ -1,8 +1,8 @@
 # 科研目录与 Interpreter：服务器证据复核
 
-日期：2026-09-24。分支 `fix/code-health`，产品 `b31648d1`，回归基线 `42efaa16`，服务器测试 HEAD `36360f85adac71496823122149da91699aaa902f`，schema 15.0。依据[验收计划](RESEARCH_HANDOFF_TEST_2026-09-23.md)。
+日期：2026-09-24。分支 `fix/code-health`，产品 `b31648d1`，回归基线 `42efaa16`，服务器测试 HEAD `36360f85adac71496823122149da91699aaa902f`，schema 15.0。依据[验收计划](RESEARCH_HANDOFF_TEST_2026-09-23.md)。最新补测复核见[第 5 节](#supplement-review)；前四节保留原轮发现。
 
-## 1. 结论与范围
+## 1. 原轮结论与范围
 
 **核心功能和真实 CUDA 训练链已有通过证据；不能把原计划所有项目写成无保留通过。** 本次只读复核服务器文件和本地代码，另做无模型的完成检查机制复现；没有修改产品、服务器报告、Run/Session 或原始现场，没有重跑模型/GPU，没有合并。
 
@@ -62,7 +62,7 @@ Experiment 完成检查本来就先查 `output_dir / candidate.path`，找不到
 
 真正的 literal-repeat 原始文件给出 0.4402/0.4869 与 0.4469/0.5224，但因上述交付失败未成为登记证据。这些文件可供测试人员诊断，不能追认 Scientific 当时已读、已引用或已用于结论。
 
-## 4. 仍需补齐或明确标为未覆盖
+## 4. 原轮缺项与补测要求
 
 1. **Experiment 任务内指标问答恢复**：本轮该问题由 Scientific 在派工前提出。Scientific 跨进程问答和 Coding 硬确认已覆盖，但不能代替计划 §5 的 Experiment 指标问答。GPU 场景有 Experiment 命令确认，证明另一条恢复路径；不能混同任务内业务提问。如需关闭完整 §5，只补一个小型真实 Experiment 只读指标提问/新进程回答探针，不需要 GPU，保留独立 Run 与原始快照。
 2. **GPU 监看**：本次证据根未找到与训练时间/PID 对应的 GPU 利用率、显存和进程采样；报告与 verify-gpu-chain.json 也没有该验收项。现有源码、环境、进程执行和 metrics 强烈支持真实 CUDA 训练，但计划 §6.4 的独立监看证据仍缺。先定位是否另存；若未保存，应如实标记不可补溯，不用当前 nvidia-smi 截图代替过去的运行证据。
@@ -70,3 +70,53 @@ Experiment 完成检查本来就先查 `output_dir / candidate.path`，找不到
 4. **报告勘误**：纠正输出路径根因、区分磁盘保留与已登记产物、把 seed sweep 与原协议分开，解释统计比较不能单独定位非确定性来源。不要更改旧 Run/Session、补登记旧产物或把失败 Attempt 改成成功。
 
 不要求现在重跑整套 GPU 或重新安装环境。先补已有材料和报告，再决定是否需要小范围复测。分支保持未合并；本记录不宣布全部验证和失败处理问题已经关闭。
+
+<a id="supplement-review"></a>
+
+## 5. 补测独立复核（2026-09-24）
+
+**脚本留存与 GPU 独立采样已补齐；Experiment 任务问答的底层恢复已验证，但补测绕过了公开回答入口。** 未发现本轮 Interpreter 产品改动的新缺陷，不能把自定义的 16/16、14/14 直接解释为所有原计划要求均已闭环。本节只读复核，没有重跑模型、训练或安装，没有修改服务器原报告、Run、Session 和登记工件。
+
+服务器仍为 `36360f85adac71496823122149da91699aaa902f`，受控文件干净，存在未跟踪的 `.ipynb_checkpoints/`。以下路径均相对于同一证据根。
+
+### 5.1 原始脚本：留存缺口关闭，来源表述收窄
+
+`probes/scripts/` 实际有 **33 个文件：31 个脚本、1 份目标文本和 SCRIPT_INDEX.md**。31 个脚本包括原轮 23 个、补测 8 个。不是“33 个脚本另加清单”。关键 `verify_public_chain.py`、`verify_gpu_chain.py`、`probe_interpreter.py` 均已补交。
+
+归档的 32 个非清单文件与服务器 `/tmp/` 同名副本逐份 hash 一致；本地也有 32 个同名文件（包含清单，不含 import_check.py），与归档一致。这能证明现存副本一致；“从未修改、一次成稿即用”的历史来源仍是测试方说明，不能靠当前副本独立证明。
+
+两个原链路 verifier 读取证据、输出检查 JSON，并用非零退出码表示检查失败。Interpreter fixture 脚本只打印检查布尔值，没有失败退出，因此其退出 0 本身不构成通过依据；原简报、输入、引用和 trace 已经独立复核，不必为此再调用模型。初始化和快照脚本会覆盖同名现场，归档脚本不应直接在旧目录重跑。
+
+### 5.2 Experiment 问答：机制通过，公开入口仍未覆盖
+
+`cases/experiment-qa/` 原始快照、Session、trace 和冻结工件支持以下事实，已重新直接检查：
+
+- run-phase.json 中 Run paused，Task/Attempt 为 needs_user_input；task_exp_qa 类型及 Session.module 均为 experiment。真实 ask_user 的问题和 primary_metric/better_direction 与 pending_question 一致。
+- 回答后同 Task、Attempt 1、Session 延续，Task completed，原账本 3 个键保留并增加 1 个；4 条 trace 与最终账本逐键一致。
+- 工具仅 list_files/read_file/ask_user/finish；初始 Git 版本、当前 metrics.json、冻结 evidence 字节相同，登记 hash 正确。报告和工件正确表达 accuracy、higher_is_better、0.45/0.52/+0.07。
+
+但 `probe_experiment_qa_verify.py:24` 的 `att['status'] == 'needs_user_input' or True` 是恒真条件。Session 检查也只查 ID 字串，预算检查只比最终数量。不能原样采用“16 个有效检查全部通过”；现有快照足够做有实际判断作用的前后比较，无需重跑模型。
+
+更重要的是，`probe_experiment_qa_answer.py:55–84` 手写答案校验、RecordedAnswer、工件登记、清 pending、resume_task_in_place 和 scheduler._save，再调用 Scheduler 循环；没有调用 `controller.answer_question` 或 CLI。这基本复制了产品回答逻辑，能够验证 Scheduler/Runtime 恢复，但无法替代公开入口的装配与 Controller 续跑验证。固定任务可避免 Scientific 规划随机性，不应靠复制回答处理代码来隔离流程。
+
+独立 run/answer 脚本、清单和 trace sequence 重启支持跨进程执行说明；没有保存两次启动的进程 ID/命令日志。这个定向 Run 保持 running、任务 completed 符合测试边界，不算公开整链 completed。
+
+若要求关闭原计划中公开回答入口的这项覆盖，只需一个新建的轻量问答用例：允许固定 Experiment 任务，回答必须在新进程经生产 Controller.answer_question 或 CLI 进入，不手写恢复状态，不替换回答后的 Controller 循环；保存进程日志和前后快照。不需要 GPU，也不必再跑整套公开链。当前材料已足以确认底层恢复机制通过。
+
+### 5.3 GPU 独立采样：训练成立，计量和封存需补记
+
+`cases/gpu-monitor/` 的最终 Experiment Task completed。原命令为 `python train.py --epochs 1 --seed 0`，exit 0，duration=23.2042 秒；stdout、源 metrics 和冻结 metrics 一致：baseline=0.4321、candidate=0.4582、device=cuda。train.py 与原 GPU 链最终 SE 代码 hash 一致；三个登记工件 hash 均正确。
+
+Session 中 run_command 动作/回执时间为 **2026-09-23 22:03:31.135–22:03:56.136 UTC**。CSV 的 24 个非零利用率样本在 **22:03:39.881–22:03:55.077 UTC**，全部落在命令时间窗内；进程样本为 PID 10146/python，峰值利用率 95%、总显存 1535 MiB。结合执行日志和源码，独立 GPU 活动证据足够，不需要再跑训练。采样未保存该 PID 的完整命令行或父进程关系，不应把时间关联描述为额外取得了进程树证据。
+
+采样脚本每轮 sleep 0.5 秒，加上 nvidia-smi 开销，实测间隔中位数约 **0.652 秒**。非零首末时间差为 **15.196 秒**；验证器按 `(24-1)*0.5` 算出的 11.5 秒不是实测时间跨度。GPU 忙碌时段短于整个命令执行时间正常，应按真实时间戳比较，不要求二者等长。
+
+补测内部实际存在重跑：同一 run_gpu_monitor 的 trace 有 **20 条独立调用，前 14 条旧轮、后 6 条最终轮**，全部 retry=0。现存 Run 的 6 个账本键与后 6 条完全匹配；前 14 条 trace 与 resume.log 仍在，但先前 Run/Session 未单独保留。最终脚本以固定 Run ID 重新初始化，所以不能写成整个 GPU 补测仅 6 次调用或全部 trace 与最终账本一致。它与原 132 次 GPU 公开链相互独立。
+
+复核时采样器仍在后台运行、CSV 继续追加空闲样本，verify-gpu-monitor.json 中 275 行只是早先读取的数量。需要停止本轮遗留采样器后封存 CSV，再生成只读核验与 hash；保持原采样和旧验证结果，不重写旧结果冒充原始验收。
+
+### 5.4 收尾范围
+
+后续只需整理已有证据、修正恒真检查/计量/采样时间口径；若坚持原计划全部入口覆盖，再补 5.2 的公开回答入口小用例。无需重装、GPU 重训或产品改动。新测试使用独立 Run ID 和目录，保留原轮失败。
+
+测试方 REPORT_SUPPLEMENT.md 仍写“结果在 attempt、校验只在 repo 找”，应勘误为第 2 节已复现的候选文件名错误；完成检查支持两种目录，问题是可纠正的路径错误被终止处理，以及失败测量未登记。本项继续留给后续 validation 设计讨论，不算被本次补测修复。分支继续不合并。

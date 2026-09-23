@@ -625,7 +625,7 @@ class Attempt(ContractModel):
 
 
 class TaskProposal(ContractModel):
-    """Scientific suggestion for one logical task, before scheduler acceptance."""
+    """Compiler-produced proposal for one logical task, before scheduler acceptance."""
 
     id: TaskId
     work_request_id: WorkRequestId

@@ -4,7 +4,7 @@
 
 ## 科研目录与 Interpreter（未合并）
 
-2026-09-23 在同一 `fix/code-health` 分支实现科研目录与带引用的反向简报，schema **15.0**。产品 `b31648d`、专项回归 `42efaa1`，本地 **1269 passed、1 skipped**，mock completed。原产物登记表保持唯一权威，Interpreter 与 Compiler 并列，权限、预算和 Agent 单入口规则保留。真实模型与独立进程验收尚待服务器测试；本地 mock 不代表已通过真实语义验收。设计见 [ADR-0017](decisions/0017-research-index-and-work-interpreter.md)，测试步骤与证据要求见[本轮交接](reviews/RESEARCH_HANDOFF_TEST_2026-09-23.md)。此前 schema 14 的通过结论只适用于原测试提交。
+2026-09-23 在同一 `fix/code-health` 分支实现科研目录与带引用的反向简报，schema **15.0**。产品 `b31648d`、专项回归 `42efaa1`，本地 **1269 passed、1 skipped**，mock completed。原产物登记表保持唯一权威，Interpreter 与 Compiler 并列，权限、预算和 Agent 单入口规则保留。真实模型与独立进程验收尚待服务器测试；验收计划已加入公开 CLI 驱动的真实 CUDA baseline/candidate 完整训练整链，沿用已有数据和下载缓存。本地 mock 不代表已通过真实语义或 GPU 验收。设计见 [ADR-0017](decisions/0017-research-index-and-work-interpreter.md)，测试步骤与证据要求见[本轮交接](reviews/RESEARCH_HANDOFF_TEST_2026-09-23.md)。此前 schema 14 的通过结论只适用于原测试提交。
 
 ## 主线健康审查
 

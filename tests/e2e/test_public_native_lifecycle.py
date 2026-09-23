@@ -1,4 +1,4 @@
-"""Public CLI -> native Agents -> Compiler -> answers -> final report, without a model service."""
+"""Public CLI -> native Agents -> Compiler/Interpreter -> answers -> final report."""
 
 import hashlib
 import io
@@ -53,13 +53,14 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
         body = json.loads(request.content)
         requests.append(body)
         names = {tool["function"]["name"] for tool in body.get("tools", [])}
-        role = ("compiler" if not names else "scientific" if "request_work" in names
+        prompt = "\n".join(message.get("content") or "" for message in body["messages"])
+        role = ("interpreter" if not names and "stateless ResAgent2 Work Interpreter" in prompt
+                else "compiler" if not names else "scientific" if "request_work" in names
                 else "coding" if "delete_path" in names else "experiment")
         counts[role] += 1
         index = counts[role]
         if role == "compiler":
             assert index <= 2, body
-            prompt = "\n".join(message.get("content") or "" for message in body["messages"])
             assert NativeCodingAgent.description in prompt
             assert NativeExperimentAgent.description in prompt
             assert "upper bound, not a target" in prompt
@@ -71,13 +72,41 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
             }]})
             message = {"content": content}
             finish = "stop"
+        elif role == "interpreter":
+            assert index <= 2, body
+            payloads = [json.loads(line) for line in prompt.splitlines() if line.startswith("{")]
+            payload = next(value for value in payloads if "work_record_artifact_id" in value)
+            record_id = payload["work_record_artifact_id"]
+            record = payload["work_record"]
+            assert record["run_id"] == run_id
+            assert record["work_request_id"] == f"work_{index}"
+            assert record["attempts"][0]["status"] == "completed"
+            assert all(source["artifact_id"] in {
+                entry["artifact_id"]
+                for group in payload["research_index"]["groups"]
+                for entry in group["artifacts"]
+            } for source in payload["source_windows"])
+            if index == 2:
+                metrics_source = next(
+                    source for source in payload["source_windows"] if source["artifact_id"] == evidence_id()
+                )
+                assert json.loads(metrics_source["content"]) == {"baseline": 0.45, "candidate": 0.52}
+            message = {"content": json.dumps({"statements": [{
+                "text": f"INTERPRETED_ROUND_{index}: the requested work completed; inspect its recorded results.",
+                "artifact_ids": [record_id],
+            }]})}
+            finish = "stop"
         else:
             if role == "scientific":
                 if index == 1:
                     tool, args = work("Remove the obsolete source directory with approval")
                 elif index == 2:
+                    assert "INTERPRETED_ROUND_1" in prompt
                     tool, args = work("Analyze existing baseline and candidate metrics; ask which metric")
                 elif index == 3:
+                    assert "INTERPRETED_ROUND_2" in prompt
+                    # Interpreter reads do not satisfy Scientific's own evidence observation.
+                    assert evidence_id() not in store.load(run_id).scientific_observed_artifact_ids
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}
                 elif index in (4, 5):
                     if index == 5:
@@ -157,6 +186,8 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert second.workflow.tasks[0].attempts[0].session.id == coding_session
     experiment_session = second.workflow.tasks[1].attempts[0].session.id
     used_before_answer = second.llm_calls_used
+    first_feedback = second.feedback_refs["work_1"]
+    assert counts["interpreter"] == 1
 
     # The one-shot CLI rebuilds the entire application again from durable state.
     assert cli(["answer", run_id, "--field", "metric=accuracy", "--data-root", str(data)]) == EXIT_COMPLETED
@@ -169,7 +200,8 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert all(work.status == "consumed" for work in final.work_requests)
     assert final.llm_calls_used == len(requests) == sum(counts.values())
     assert final.llm_calls_used > used_before_answer
-    assert set(counts) == {"scientific", "compiler", "coding", "experiment"}
+    assert set(counts) == {"scientific", "compiler", "coding", "experiment", "interpreter"}
+    assert counts["interpreter"] == 2
     assert counts["scientific"] == 5  # Rejected finish and correction share the same budget.
     assert final.usage.outcomes == {"succeeded": len(requests), "failed": 0, "unknown": 0}
     assert len(final.answers) == 2
@@ -180,3 +212,27 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert final.artifacts[final.final_report_artifact_id].kind == "final_report"
     assert hashlib.sha256(metrics.read_bytes()).hexdigest() == original_hash
     assert not any(ref.kind == "execution_record" for ref in final.artifacts.values())
+
+    assert final.feedback_refs["work_1"] == first_feedback
+    assert set(final.feedback_refs) == {"work_1", "work_2"}
+    for round_number, feedback_ref in enumerate(final.feedback_refs.values(), start=1):
+        feedback = read_json(feedback_ref)
+        assert feedback["brief"]["statements"] == [{
+            "schema_version": feedback["schema_version"],
+            "text": f"INTERPRETED_ROUND_{round_number}: the requested work completed; inspect its recorded results.",
+            "artifact_ids": [feedback["work_record_artifact_id"]],
+        }]
+        groups = feedback["index_changes"]["groups"]
+        assert f"work_{round_number}" in {group["key"] for group in groups}
+        if round_number == 2:
+            assert "work_1" not in {group["key"] for group in groups}
+        assert final.artifacts[feedback["index_artifact_id"]].kind == "research_index"
+        assert final.artifacts[feedback["work_record_artifact_id"]].kind == "work_record"
+
+    index = read_json(final.research_index_ref)
+    assert {"work_1", "work_2"} <= {group["key"] for group in index["groups"]}
+    indexed_ids = {
+        entry["artifact_id"] for group in index["groups"] for entry in group["artifacts"]
+    }
+    assert evidence_id() in indexed_ids
+    assert read_json(first_feedback)["work_record_artifact_id"] in indexed_ids

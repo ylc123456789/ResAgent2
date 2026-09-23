@@ -11,6 +11,7 @@ from resagent2_contracts import (
     AgentOwner,
     AgentResult,
     ArtifactCandidate,
+    Attempt,
     ConclusionRequirements,
     ControlSignal,
     ModuleError,
@@ -24,8 +25,11 @@ from resagent2_contracts import (
     WorkRequestDraft,
     WorkTaskOutcome,
     WorkflowAgentRegistry,
+    WorkflowAgentDefinition,
+    Workflow,
+    WorkflowTask,
 )
-from resagent2_orchestrator import JsonRunStore, ResearchController, ResearchRun, WorkflowScheduler
+from resagent2_orchestrator import DeterministicWorkInterpreter, JsonRunStore, ResearchController, ResearchRun, WorkflowScheduler
 from resagent2_orchestrator.handoffs import system_artifact
 
 
@@ -36,14 +40,27 @@ def candidate(kind, data):
 
 def prepared(tmp_path):
     now = datetime.now(UTC)
-    controller = ResearchController(scientific_port=None, compiler=None,
+    controller = ResearchController(interpreter=DeterministicWorkInterpreter(), scientific_port=None, compiler=None,
         scheduler=WorkflowScheduler(bindings={}, store=JsonRunStore(tmp_path/"runs"), artifact_root=tmp_path/"artifacts"),
-        registry=WorkflowAgentRegistry(definitions=[]))
+        registry=WorkflowAgentRegistry(definitions=[
+            WorkflowAgentDefinition(workflow_agent_kind="experiment"),
+        ]))
     session = SessionRef(id="session_scientific_run_boundary", module="scientific", status="paused",
         state_uri="session://session_scientific_run_boundary", created_at=now, updated_at=now)
     run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', expected_evidence=['result']), status='stable', workflow_revision=1, outcome=WorkOutcome(work_request_id='work_1', workflow_revision=1, summary='Executed', tasks=[WorkTaskOutcome(task_id='task_one', status='completed', summary='Done')]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
         "conclusion_requirements", ConclusionRequirements())
+    run.workflow = Workflow(
+        run_id=run.run_id, revision=1, created_from="work_1",
+        tasks=[WorkflowTask(
+            id="task_one", work_request_id="work_1", workflow_agent_kind="experiment",
+            instruction="Run", status="completed",
+            attempts=[Attempt(
+                number=1, status="completed", started_at=now, finished_at=now, report="Done",
+            )],
+        )],
+    )
+    controller._prepare_research_handoff(run)
     request = controller._scientific_request(run)
     controller.scheduler.store.save(run)
     return controller, run, request

@@ -34,6 +34,7 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
     DeterministicWorkflowCompiler,
     InMemoryRunStore,
     LLMWorkflowCompiler,
@@ -170,6 +171,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal, patch),
         scheduler=scheduler,
@@ -250,6 +252,7 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=LLMWorkflowCompiler(
             _ScriptedCompilerLLM([_proposal_draft(), _repair_draft()])

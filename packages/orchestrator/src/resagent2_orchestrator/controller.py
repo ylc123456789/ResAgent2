@@ -9,14 +9,15 @@ from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ConclusionRequirements,
     DatasetRef, ErrorCode, ModuleError, ModuleStatus, ObservationTrace, PendingQuestion,
-    QuestionDraft, RecordedAnswer, ResearchRequest, RunStatus, ScientificAssessment,
+    QuestionDraft, RecordedAnswer, ResearchRequest, ResearchIndex, RunStatus, ScientificAssessment,
     SessionRef, SessionStatus, TaskBudget, UserAnswer, WorkFeedback, WorkRequest,
-    WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, WorkspaceDescriptor,
+    WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, WorkspaceDescriptor, WorkRecord, WorkAttemptRecord,
     scientific_session_id,
 )
 from .compiler import CompilationError
 from .completion import FinalReportRenderer, ScientificCompletionValidator
 from .handoffs import read_json, receive_artifacts, system_artifact
+from .interpreter import WorkInterpreter, build_research_index, research_index_changes, validate_brief
 from .models import ResearchRun
 from .ports import ModulePort
 from .scheduler import _question_id, _transition_work_request, _validate_answer
@@ -45,10 +46,11 @@ def _scientific_instruction(request: ResearchRequest) -> str:
 
 class ResearchController:
     """Coordinate Scientific reasoning, execution feedback and user pauses."""
-    def __init__(self, *, scientific_port: ModulePort, compiler, scheduler, registry,
+    def __init__(self, *, scientific_port: ModulePort, compiler, scheduler, registry, interpreter: WorkInterpreter,
                  gate=None, report_renderer=None, dataset_ref_source=None):
         self.scientific_port = scientific_port
         self.compiler = compiler
+        self.interpreter = interpreter
         self.scheduler = scheduler
         self.registry = registry
         self.gate = gate or ScientificCompletionValidator(registry)
@@ -120,11 +122,18 @@ class ResearchController:
                 continue
             self._bind_initial_scientific_session(run)
             try:
+                self._prepare_research_handoff(run)
+                if run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
+                    raise DeadlineExceededError("Run execution-time budget exhausted")
+                if run.llm_calls_used >= run.request.budget.max_llm_calls:
+                    raise BudgetExhaustedError("Run LLM-call budget exhausted")
                 request = self._scientific_request(run)
                 self._save(run)
             except Exception as error:
                 run = self.scheduler.store.load(run_id)
-                return self._fail_run(run, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error) or type(error).__name__, retryable=False))
+                code = (ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else
+                        ErrorCode.BUDGET_EXHAUSTED if isinstance(error, BudgetExhaustedError) else ErrorCode.CONTRACT_ERROR)
+                return self._fail_run(run, ModuleError(code=code, message=str(error) or type(error).__name__, retryable=False))
             with execution_budget(max_llm_calls=request.budget.max_llm_calls,
                                   timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
                                   usage=RunUsagePort(run, self.scheduler.store)):
@@ -147,20 +156,59 @@ class ResearchController:
                                                      {"datasets": [ref.model_dump(mode="json") for ref in run.dataset_refs]})
             self._save(run)
 
+    def _research_index(self, run):
+        index = build_research_index(
+            run_id=run.run_id, artifacts=self._authorized_artifacts(run),
+            work_requests=run.work_requests, tasks=run.workflow.tasks if run.workflow else (),
+        )
+        return index, system_artifact(self.scheduler.artifact_registry, run, "research_index", index)
+
+    def _prepare_research_handoff(self, run):
+        """Persist one complete handoff; replay never regenerates an accepted brief."""
+        active = self._active_work_request(run)
+        if active is None or active.status != WorkRequestStatus.STABLE:
+            _, run.research_index_ref = self._research_index(run)
+            self._save(run)
+            return
+        if active.id in run.feedback_refs:
+            return
+        previous = read_json(run.research_index_ref, ResearchIndex) if run.research_index_ref else None
+        record = WorkRecord(
+            run_id=run.run_id, work_request_id=active.id,
+            session_id=active.scientific_session_id, previous_work_request=active.request,
+            work_outcome=active.outcome, unresolved_task_outcomes=self._unresolved_tasks(run),
+            attempts=[WorkAttemptRecord(
+                task_id=task.id, attempt_number=attempt.number, status=attempt.status,
+                summary=attempt.report, artifact_ids=attempt.artifact_ids, error=attempt.error,
+            ) for task in run.workflow.tasks if task.work_request_id == active.id for attempt in task.attempts],
+        )
+        record_ref = system_artifact(self.scheduler.artifact_registry, run, "work_record", record,
+                                     session_id=active.scientific_session_id)
+        index, index_ref = self._research_index(run)
+        changes = research_index_changes(previous, index)
+        with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
+                              timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
+                              usage=RunUsagePort(run, self.scheduler.store)):
+            brief = self.interpreter.interpret(record_ref=record_ref, index=index,
+                                               artifacts=self._authorized_artifacts(run))
+        # This boundary also checks injected implementations, not only the production LLM.
+        validate_brief(brief, {entry.artifact_id for group in index.groups for entry in group.artifacts})
+        feedback = WorkFeedback(
+            run_id=run.run_id, work_request_id=active.id, session_id=active.scientific_session_id,
+            work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
+            index_changes=changes, brief=brief,
+        )
+        ref = system_artifact(self.scheduler.artifact_registry, run, "work_feedback", feedback,
+                              session_id=active.scientific_session_id)
+        run.feedback_refs[active.id] = ref
+        run.research_index_ref = index_ref
+        self._save(run)
+
     def _scientific_request(self, run):
         active = self._active_work_request(run)
         resume_refs = []
         if active and active.status == WorkRequestStatus.STABLE:
-            feedback = WorkFeedback(run_id=run.run_id, work_request_id=active.id,
-                                    session_id=active.scientific_session_id, previous_work_request=active.request,
-                                    work_outcome=active.outcome, unresolved_task_outcomes=self._unresolved_tasks(run))
-            ref = system_artifact(self.scheduler.artifact_registry, run, "work_feedback", feedback,
-                                  session_id=active.scientific_session_id)
-            prior = run.feedback_refs.get(active.id)
-            if prior is not None and prior != ref:
-                raise ValueError("work feedback changed after binding")
-            run.feedback_refs[active.id] = ref
-            resume_refs.append(ref)
+            resume_refs.append(run.feedback_refs[active.id])
         else:
             pending = {answer.question_id for answer in self._pending_answers(run)}
             for ref in run.artifacts.values():
@@ -245,6 +293,8 @@ class ResearchController:
             else:
                 return self._fail_run(run, result.error)
             accepted.scientific_session = result.session or accepted.scientific_session
+            if accepted.status == RunStatus.COMPLETED:
+                _, accepted.research_index_ref = self._research_index(accepted)
             self._save(accepted)
             return accepted
         except Exception as error:
@@ -317,11 +367,14 @@ class ResearchController:
 
     def _authorized_artifacts(self, run):
         current = {ref.id for ref in run.feedback_refs.values()}
-        return [ref for ref in run.artifacts.values()
+        refs = [ref for ref in run.artifacts.values()
                 if ref.kind not in {"answer", "work_feedback", "dataset_catalog", "conclusion_requirements", "acceptance_requirements"}
                 or ref.id in current
                 or (ref.kind == "answer" and ref.session_id == run.scientific_session.id)
                 or ref == run.dataset_catalog_ref or ref == run.conclusion_requirements_ref]
+        # Historical snapshots remain readable. The final index ref is the current
+        # reading entry, without adding a second domain field to AgentRequest.
+        return sorted(refs, key=lambda ref: ref == run.research_index_ref)
 
     def _unresolved_tasks(self, run):
         if not run.workflow:

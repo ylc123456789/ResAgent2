@@ -39,6 +39,7 @@ from resagent2_contracts import (
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
     ArtifactRegistry, InMemoryRunStore, JsonRunStore, ResearchController, ResearchRun,
     ScientificArtifactRegistration, WorkflowScheduler,
 )
@@ -88,6 +89,7 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
         artifact_root=tmp_path / "artifacts",
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=agent, compiler=UnusedCompiler(), scheduler=scheduler,
         registry=WorkflowAgentRegistry(definitions=[]),
     )

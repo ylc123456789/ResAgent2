@@ -225,6 +225,7 @@ def test_stale_first_answer_cannot_change_second_command_or_session(case):
         WorkflowAgentRegistry,
     )
     from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
         JsonRunStore, OrchestrationError, ResearchController, ResearchRun,
     )
 
@@ -256,6 +257,7 @@ def test_stale_first_answer_cannot_change_second_command_or_session(case):
         raise AssertionError("Stale answers must never resume execution")
 
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=SimpleNamespace(invoke=forbidden),
         compiler=SimpleNamespace(compile=forbidden),
         scheduler=SimpleNamespace(store=run_store, resume_task_in_place=forbidden),

@@ -29,7 +29,8 @@ def system_artifact(registry, run, kind, data, *, session_id=None, task_id=None,
     content = data.model_dump(mode="json") if hasattr(data, "model_dump") else data
     ref = registry.register_system_artifact(
         ArtifactCandidate(kind=kind, path=f"{kind}.json", media_type="application/json",
-                          summary=kind.replace("_", " "), content=json.dumps(content, ensure_ascii=False, sort_keys=True)),
+                          summary=kind.replace("_", " "), content=json.dumps(content, ensure_ascii=False, sort_keys=True,
+                                             indent=2 if kind in {"research_index", "work_record", "work_feedback"} else None)),
         run_id=run.run_id, source_type=source, session_id=session_id,
         task_id=task_id, attempt_number=attempt_number,
     )

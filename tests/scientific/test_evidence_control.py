@@ -47,13 +47,14 @@ def test_unobserved_evidence_filters_real_reads():
     ) == ["artifact_b"]
 
 
-def test_control_state_distinguishes_access_from_observation():
+def test_control_state_does_not_repeat_private_authorization_catalog():
     request = SimpleNamespace(input_artifacts=[
         SimpleNamespace(id="artifact_a"), SimpleNamespace(id="artifact_b"),
     ])
     control = _evidence_control_state(request, _state({"read_artifact_ids": ["artifact_a"]}))
     assert control["observed_artifact_ids"] == ["artifact_a"]
-    assert control["unobserved_authorized_artifact_ids"] == ["artifact_b"]
+    assert "unobserved_authorized_artifact_ids" not in control
+    assert "artifact_b" not in json.dumps(control)
 
 
 def test_empty_control_state_requires_no_read():

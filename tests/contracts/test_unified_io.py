@@ -9,7 +9,7 @@ import resagent2_contracts as contracts
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ArtifactCandidate,
     ArtifactRef, ControlSignal, ModuleError, QuestionDraft, RecordedAnswer,
-    SessionRef, TaskBudget, TaskProposal, WorkFeedback, WorkOutcome,
+    SessionRef, TaskBudget, TaskProposal, WorkFeedback, WorkRecord, WorkOutcome,
     WorkRequestDraft, WorkTaskOutcome, WorkflowProposal,
 )
 
@@ -160,19 +160,19 @@ def test_recorded_answer_retains_question_snapshot_and_exact_scope():
             RecordedAnswer(**(data | changes))
 
 
-def test_work_feedback_requires_paired_request_and_matching_outcome():
+def test_work_record_requires_paired_request_and_matching_outcome():
     data = dict(
         run_id="run_test", session_id="session_test", work_request_id="work_test",
         previous_work_request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]),
         work_outcome=WorkOutcome(work_request_id="work_test", workflow_revision=1, summary="Done",
             tasks=[WorkTaskOutcome(task_id="task_test", status="completed", summary="Measured")]),
     )
-    assert WorkFeedback(**data).work_outcome.work_request_id == "work_test"
+    assert WorkRecord(**data).work_outcome.work_request_id == "work_test"
     for missing in ["previous_work_request", "work_outcome"]:
         with pytest.raises(ValidationError):
-            WorkFeedback(**{key: value for key, value in data.items() if key != missing})
+            WorkRecord(**{key: value for key, value in data.items() if key != missing})
     with pytest.raises(ValidationError, match="must match"):
-        WorkFeedback(**(data | {"work_request_id": "work_other"}))
+        WorkRecord(**(data | {"work_request_id": "work_other"}))
 
 
 def test_graph_rejects_scientific_and_unknown_named_output():

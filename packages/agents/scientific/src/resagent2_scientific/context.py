@@ -8,11 +8,13 @@ from resagent2_components import (
     DatasetAvailability, RegisteredArtifactReader, dataset_context,
     read_artifact_json, request_materials_context, workspace_context,
 )
-from resagent2_contracts import AgentRequest, WorkFeedback
+from resagent2_contracts import (
+    AgentRequest, ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup,
+    SYSTEM_ARTIFACT_KINDS,
+)
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 
 from .completion import SCIENTIFIC_FINISH_ARTIFACT_KINDS, _observed_artifact_ids
-from .interpreter import render_work_brief
 
 
 SCIENTIFIC_PROMPT = f"""You are the Scientific Agent: the scientific brain of one research run.
@@ -51,7 +53,7 @@ request that change before the experiment that needs it.
 Do not run a known-broken experiment merely to rediscover its stated problem.
 Distinguish known prerequisites from hypothetical failures: if no problem is
 known, request execution first; request repair only after that failure is observed.
-Preserve unmet constraints. Diagnose blocking items using diagnostic_excerpt
+Preserve unmet constraints. Diagnose blocked work using the cited work records
 and actual evidence. Retry only after stating what relevant condition changed.
 
 Use only datasets in dataset_catalog. Ask for missing datasets; never invent a
@@ -59,10 +61,15 @@ path, download a dataset, or silently substitute one.
 
 Read and cite registered evidence of the kinds required by the supplied
 conclusion_requirements artifact. Authorized imported evidence counts.
-Work feedback lists execution outcomes and artifact IDs; listing an ID does not
-mean you have observed its contents. Read evidence before citing it.
-Narratives are explanatory only, diagnostic_excerpt is execution diagnosis only,
-and delivery caveats are not evidence. Never cite an unread artifact.
+The research index groups available materials by their original work objective.
+Use its artifact ID with read_artifact for the complete directory when needed.
+Current work feedback supplies index changes and a cited Interpreter brief.
+The brief is an explanation, not measured evidence or your scientific judgment.
+Read its original sources when a claim or limitation matters to your decision.
+An index entry or brief citation does not mean you observed the source contents.
+Reading the index or brief never counts as reading the original evidence.
+Work records preserve execution facts for diagnosis; do not infer machine state
+from explanatory prose. Never cite an unread artifact.
 A short result preview is not proof of support for a claim.
 An observed id records past access, not that its full contents remain visible.
 Use read_artifact with the needed start_line/end_line range;
@@ -79,14 +86,34 @@ on the scientific conclusion. Do not fabricate evidence or machine state.
 
 def _evidence_control_state(request: AgentRequest, state: AgentState) -> dict:
     observed = _observed_artifact_ids(state)
-    authorized = [artifact.id for artifact in request.input_artifacts]
     pending = state.memory.get("pending_citation_artifact_ids", [])
     return {
         "observed_artifact_ids": observed,
-        "unobserved_authorized_artifact_ids": sorted(set(authorized) - set(observed)),
         "pending_citation_artifact_ids": pending,
         "required_next_action": "read_artifact_or_remove_citation" if pending else "none",
     }
+
+
+def _research_materials(request: AgentRequest, reader: RegisteredArtifactReader) -> dict:
+    indexes = [ref for ref in request.input_artifacts if ref.kind == "research_index"]
+    # The caller places the current snapshot last; prior snapshots stay authorized
+    # so historical feedback links remain readable without entering the prompt.
+    value = {"index_artifact_id": indexes[-1].id if indexes else None}
+    if indexes:
+        index = read_artifact_json(reader, indexes[-1].id, ResearchIndex)
+        if index.run_id != request.run_id:
+            raise ValueError("research index belongs to another Run")
+        if request.parent_session_id is None:
+            value["index_changes"] = index.model_dump(mode="json")
+    else:
+        # Standalone invocations use the same directory shape for their supplied materials.
+        entries = [ResearchArtifactEntry.from_ref(ref) for ref in request.input_artifacts
+                   if ref.kind not in SYSTEM_ARTIFACT_KINDS and ref.kind != "observation_trace"]
+        index = ResearchIndex(run_id=request.run_id, groups=[ResearchIndexGroup(
+            key="inputs", title="Supplied research materials", artifacts=entries,
+        )] if entries else [])
+        value["index_changes"] = index.model_dump(mode="json")
+    return value
 
 
 def build_context(
@@ -111,32 +138,12 @@ def build_context(
             priority=98, required=True,
         ),
         ContextSection(
-            name="input_artifacts",
-            content=json.dumps([
-                {"id": item.id, "kind": item.kind, "summary": item.summary}
-                for item in request.input_artifacts
-            ]),
+            name="research_materials",
+            content=json.dumps(_research_materials(request, reader)),
             priority=95, required=True,
         ),
         *request_materials_context(request),
     ]
-    for ref in request.input_artifacts:
-        if ref.kind != "work_feedback" or ref.id not in request.resume_artifact_ids:
-            continue
-        feedback = read_artifact_json(reader, ref.id, WorkFeedback)
-        sections.append(ContextSection(
-            name="work_brief",
-            content=json.dumps({
-                "artifact_id": ref.id,
-                **render_work_brief(
-                    work_outcome=feedback.work_outcome,
-                    previous_work_request=feedback.previous_work_request,
-                    unresolved_task_outcomes=feedback.unresolved_task_outcomes,
-                    authorized_artifacts=request.input_artifacts,
-                ),
-            }),
-            priority=90, required=True,
-        ))
     sections.extend(workspace_context(
         state, max_context_tokens=max_context_tokens, include_files=False,
     ))

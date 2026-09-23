@@ -17,6 +17,7 @@ from resagent2_contracts import (
 )
 from resagent2_coding import NativeCodingAgent
 from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
     CompilationResult, JsonRunStore, ModuleBinding, ResearchController,
     WorkflowScheduler,
 )
@@ -108,6 +109,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     ])
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=CodingPort())}, store=JsonRunStore(tmp_path / 'runs'), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
             scientific_client, store=JsonSessionStore(tmp_path / "scientific_sessions"),
             resource_layout=layout,
@@ -131,7 +133,9 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
         assert uncertainty in context.text
         assert "artifact_reads" in context.included_sections
     assert report_id in scientific_client.contexts[1].text
-    assert "module_explanation" in scientific_client.contexts[1].text
+    assert '"kind": "module_report"' in scientific_client.contexts[1].text
+    assert '"index_changes"' in scientific_client.contexts[1].text
+    assert '"work_outcome"' not in scientific_client.contexts[1].text
     assert run.final_opinion.statement == answer
     assert run.final_opinion.limitations == [uncertainty]
 

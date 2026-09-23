@@ -38,7 +38,8 @@ def test_orchestrator_imports_only_shared_control_and_no_specific_agents() -> No
             if isinstance(node, ast.Import):
                 imported_roots.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                if node.module in {"resagent2_runtime.budget", "resagent2_components.workspace"}:
+                if node.module in {"resagent2_runtime.budget", "resagent2_components.workspace",
+                                   "resagent2_components.artifacts", "resagent2_components.materials"}:
                     continue
                 imported_roots.add(node.module.split(".")[0])
     assert imported_roots <= ALLOWED_IMPORT_ROOTS

@@ -6,12 +6,12 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner, AgentRequest, AgentResult, ArtifactCandidate, ConclusionRequirements,
-    ErrorCode, ModuleError, ModuleStatus, ObservationTrace, ScientificAssessment, WorkFeedback,
+    ErrorCode, ModuleError, ModuleStatus, ObservationTrace, ScientificAssessment, WorkFeedback, WorkRecord,
     scientific_session_id,
 )
 from resagent2_components import (
     ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader,
-    ResourceLayout, read_artifact_json, request_dataset_refs, resolve_dataset_refs,
+    ResourceLayout, read_artifact_json, read_request_material, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_capabilities import LiteratureSearchTool, ReadArtifactTool
 from resagent2_runtime import (
@@ -77,11 +77,19 @@ class ScientificAgent:
                     requirements.extend(
                         read_artifact_json(reader, ref.id, ConclusionRequirements).required_evidence_kinds
                     )
-                elif ref.kind == "work_feedback" and ref.id in request.resume_artifact_ids:
-                    feedback = read_artifact_json(reader, ref.id, WorkFeedback)
-                    if feedback.run_id != request.run_id or feedback.session_id != session_id:
-                        raise ValueError("Work feedback does not belong to this invocation")
-                    unresolved = feedback.unresolved_task_outcomes
+            feedback_refs = [ref for ref in request.input_artifacts if ref.kind == "work_feedback"]
+            if feedback_refs:
+                current = next((ref for ref in feedback_refs if ref.id in request.resume_artifact_ids),
+                               feedback_refs[-1])
+                feedback = WorkFeedback.model_validate(read_request_material(request, current, reader=reader))
+                record_ref = reader.resolve_ref(feedback.work_record_artifact_id)
+                if record_ref is None or record_ref.kind != "work_record" or record_ref.session_id != session_id:
+                    raise ValueError("Work feedback has no authorized work record for this session")
+                record = read_artifact_json(reader, record_ref.id, WorkRecord)
+                if (record.run_id != request.run_id or record.session_id != session_id
+                        or record.work_request_id != feedback.work_request_id):
+                    raise ValueError("Work record does not belong to this feedback")
+                unresolved = record.unresolved_task_outcomes
         except (OSError, ValueError, KeyError, TypeError) as error:
             return self._failure(str(error))
         key = self._idempotency_key(request)

@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, ErrorCode,
-    ScientificOpinion, TaskBudget, WorkFeedback, WorkOutcome, WorkRequestDraft,
+    ScientificOpinion, TaskBudget, WorkFeedback, WorkRecord, WorkOutcome, WorkRequestDraft,
+    ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup, WorkBrief, CitedStatement,
     WorkTaskOutcome, scientific_session_id,
 )
 from resagent2_scientific import ScientificAgent
@@ -33,7 +34,8 @@ def artifact(root, artifact_id="artifact_1", *, kind="experiment_result", conten
         kwargs.update(producer=AgentOwner.EXPERIMENT, task_id="task_exp", attempt_number=1)
     else:
         sources = {"conclusion_requirements": "conclusion_requirement",
-                   "work_feedback": "controller_feedback", "answer": "controller_answer"}
+                   "work_feedback": "controller_feedback", "answer": "controller_answer",
+                   "work_record": "controller_work_record", "research_index": "research_index"}
         kwargs.update(producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": sources.get(kind, "import")})
         if session:
             kwargs["session_id"] = session
@@ -72,7 +74,7 @@ def ask():
 
 def feedback(root, session, *, unresolved=()):
     draft = WorkRequestDraft(objective="Run experiment", expected_evidence=["accuracy"])
-    value = WorkFeedback(
+    record = WorkRecord(
         run_id="run_example", work_request_id="work_round1", session_id=session,
         previous_work_request=draft,
         work_outcome=WorkOutcome(
@@ -81,13 +83,29 @@ def feedback(root, session, *, unresolved=()):
         ),
         unresolved_task_outcomes=list(unresolved),
     )
-    return artifact(root, "artifact_feedback", kind="work_feedback", session=session,
-                    content=value.model_dump(mode="json"))
+    record_ref = artifact(root, "artifact_record", kind="work_record", session=session,
+                          content=record.model_dump(mode="json"))
+    index = ResearchIndex(run_id="run_example", groups=[ResearchIndexGroup(
+        key="work_round1", title="Run experiment",
+        artifacts=[ResearchArtifactEntry.from_ref(record_ref)],
+    )])
+    index_ref = artifact(root, "artifact_index", kind="research_index",
+                         content=index.model_dump(mode="json"))
+    value = WorkFeedback(
+        run_id="run_example", work_request_id="work_round1", session_id=session,
+        work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
+        index_changes=index, brief=WorkBrief(statements=[CitedStatement(
+            text="The work record describes the outcome.", artifact_ids=[record_ref.id],
+        )]),
+    )
+    feedback_ref = artifact(root, "artifact_feedback", kind="work_feedback", session=session,
+                            content=value.model_dump(mode="json"))
+    return [record_ref, index_ref, feedback_ref]
 
 
-def test_work_feedback_requires_paired_request():
+def test_work_record_requires_paired_request():
     with pytest.raises(ValidationError):
-        WorkFeedback.model_validate({
+        WorkRecord.model_validate({
             "run_id": "run_example", "work_request_id": "work_one",
             "session_id": "session_one",
             "work_outcome": {"work_request_id": "work_one", "workflow_revision": 1,
@@ -205,8 +223,8 @@ def test_feedback_resume_reuses_session_and_is_idempotent(tmp_path):
     client = ScriptedLLMClient([work(), finish(), finish(verdict="supports", evidence=["artifact_wrong"])])
     agent = ScientificAgent(client)
     first = agent.invoke(request())
-    ref = feedback(tmp_path, first.session.id)
-    resumed = request(artifacts=[ref], parent=first.session.id, resume=[ref.id])
+    refs = feedback(tmp_path, first.session.id)
+    resumed = request(artifacts=refs, parent=first.session.id, resume=[refs[-1].id])
     result = agent.invoke(resumed)
     duplicate = agent.invoke(resumed)
     assert result.status == duplicate.status == "completed"
@@ -257,8 +275,8 @@ def test_failed_work_requires_limitation_in_opinion(tmp_path):
         task_id="task_failed", status="failed", summary="Crashed",
         error=ModuleError(code=ErrorCode.TOOL_FAILED, message="Crashed", retryable=False),
     )
-    ref = feedback(tmp_path, first.session.id, unresolved=[unresolved])
-    result = agent.invoke(request(artifacts=[ref], parent=first.session.id, resume=[ref.id]))
+    refs = feedback(tmp_path, first.session.id, unresolved=[unresolved])
+    result = agent.invoke(request(artifacts=refs, parent=first.session.id, resume=[refs[-1].id]))
     assert result.status == "failed"
 
 

@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "14.0"
+SCHEMA_VERSION = "15.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["14.0"] = SCHEMA_VERSION
+    schema_version: Literal["15.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +241,8 @@ SYSTEM_ARTIFACT_PROVENANCE = {
     "conclusion_requirements": ("conclusion_requirement", frozenset({"run"})),
     "dataset_catalog": ("dataset_catalog", frozenset({"run"})),
     "work_feedback": ("controller_feedback", frozenset({"session"})),
+    "work_record": ("controller_work_record", frozenset({"session"})),
+    "research_index": ("research_index", frozenset({"run"})),
     "work_request": ("controller_work_request", frozenset({"session"})),
     "answer": ("controller_answer", frozenset({"session", "attempt"})),
     "question": ("controller_question", frozenset({"session", "attempt"})),
@@ -1190,7 +1192,18 @@ class ScientificOpinion(ContractModel):
         return self
 
 
-class WorkFeedback(ContractModel):
+class WorkAttemptRecord(ContractModel):
+    """Public execution facts from one attempt, including failed retry history."""
+
+    task_id: TaskId
+    attempt_number: int = Field(ge=1)
+    status: AttemptStatus
+    summary: str
+    artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    error: ModuleError | None = None
+
+
+class WorkRecord(ContractModel):
     """One system-paired work request and outcome, stored as artifact content."""
 
     run_id: RunId
@@ -1199,11 +1212,82 @@ class WorkFeedback(ContractModel):
     previous_work_request: WorkRequestDraft
     work_outcome: WorkOutcome
     unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
+    attempts: list[WorkAttemptRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_pair(self) -> WorkFeedback:
+    def validate_pair(self) -> WorkRecord:
         if self.work_request_id != self.work_outcome.work_request_id:
-            raise ValueError("work_feedback work_request_id must match work_outcome")
+            raise ValueError("work_record work_request_id must match work_outcome")
+        return self
+
+
+class ResearchArtifactEntry(ContractModel):
+    """Navigation to an original artifact, never a second storage/authority record."""
+
+    artifact_id: ArtifactId
+    kind: NonEmptyStr
+    summary: NonEmptyStr
+    output_name: OutputName | None = None
+    attempt_number: int | None = Field(default=None, ge=1)
+    execution_status: AttemptStatus | None = None
+
+    @classmethod
+    def from_ref(cls, ref: ArtifactRef, **source):
+        return cls(artifact_id=ref.id, kind=ref.kind, summary=ref.summary,
+                   output_name=ref.output_name, attempt_number=ref.attempt_number, **source)
+
+
+class ResearchIndexGroup(ContractModel):
+    """Materials organized by an existing work request or by input origin."""
+
+    key: NonEmptyStr
+    title: NonEmptyStr
+    artifacts: list[ResearchArtifactEntry] = Field(default_factory=list)
+
+
+class ResearchIndex(ContractModel):
+    """Rebuildable Scientific view; changes use the same shape with changed entries only."""
+
+    run_id: RunId
+    groups: list[ResearchIndexGroup] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_entries(self):
+        keys = [group.key for group in self.groups]
+        ids = [entry.artifact_id for group in self.groups for entry in group.artifacts]
+        if len(keys) != len(set(keys)) or len(ids) != len(set(ids)):
+            raise ValueError("research index has duplicate groups or artifact ids")
+        return self
+
+
+class CitedStatement(ContractModel):
+    """An Interpreter explanation with references to its supplied source materials."""
+
+    text: NonEmptyStr
+    artifact_ids: list[ArtifactId] = Field(min_length=1)
+
+
+class WorkBrief(ContractModel):
+    """Explanatory prose, not measured evidence or the final scientific judgment."""
+
+    statements: list[CitedStatement] = Field(min_length=1)
+
+
+class WorkFeedback(ContractModel):
+    """Frozen reverse handoff; raw execution facts remain in the referenced record."""
+
+    run_id: RunId
+    work_request_id: WorkRequestId
+    session_id: SessionId
+    work_record_artifact_id: ArtifactId
+    index_artifact_id: ArtifactId
+    index_changes: ResearchIndex
+    brief: WorkBrief
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.index_changes.run_id != self.run_id:
+            raise ValueError("work feedback index belongs to another Run")
         return self
 
 

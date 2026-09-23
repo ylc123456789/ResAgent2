@@ -3,6 +3,7 @@
 from .evidence import latest_command_results, missing_required_evidence_kinds
 from .identifiers import scientific_session_id, task_session_id
 from .models import (
+    WorkAttemptRecord, ResearchArtifactEntry, ResearchIndexGroup, ResearchIndex, CitedStatement, WorkBrief, WorkRecord,
     SCHEMA_VERSION,
     SCIENTIFIC_ARTIFACT_KINDS, SYSTEM_ARTIFACT_KINDS, SYSTEM_ARTIFACT_PROVENANCE,
     SYSTEM_GENERATED_ARTIFACT_KINDS,
@@ -25,6 +26,7 @@ from .models import (
 )
 
 __all__ = [
+    "WorkAttemptRecord", "ResearchArtifactEntry", "ResearchIndexGroup", "ResearchIndex", "CitedStatement", "WorkBrief", "WorkRecord",
     "SCHEMA_VERSION", "latest_command_results", "missing_required_evidence_kinds", "scientific_session_id",
     "SCIENTIFIC_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_PROVENANCE",
     "SYSTEM_GENERATED_ARTIFACT_KINDS",

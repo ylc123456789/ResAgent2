@@ -32,6 +32,7 @@ from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import (
     JsonRunStore,
     LLMWorkflowCompiler,
+    LLMWorkInterpreter,
     ModuleBinding,
     ResearchController,
     ScientificArtifactRegistration,
@@ -113,6 +114,15 @@ def _compiler_client(*, max_context_tokens: int) -> PromptLLMClient:
     )
 
 
+def _interpreter_client(*, max_context_tokens: int) -> PromptLLMClient:
+    return PromptLLMClient(
+        _client(),
+        system_prompt="You are the stateless ResAgent2 Work Interpreter.",
+        max_context_tokens=max_context_tokens,
+        section_name="interpreter_request",
+    )
+
+
 def _registry() -> WorkflowAgentRegistry:
     return WorkflowAgentRegistry(
         definitions=[
@@ -148,6 +158,7 @@ def build_application(
     experiment_context_tokens = _component_context_limit("experiment")
     scientific_context_tokens = _component_context_limit("scientific")
     compiler_context_tokens = _component_context_limit("compiler")
+    interpreter_context_tokens = _component_context_limit("interpreter")
 
     scheduler = WorkflowScheduler(
         bindings={
@@ -194,6 +205,9 @@ def build_application(
         scientific_port=scientific,
         compiler=LLMWorkflowCompiler(
             _compiler_client(max_context_tokens=compiler_context_tokens)
+        ),
+        interpreter=LLMWorkInterpreter(
+            _interpreter_client(max_context_tokens=interpreter_context_tokens)
         ),
         scheduler=scheduler,
         registry=registry,

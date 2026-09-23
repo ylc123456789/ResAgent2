@@ -23,6 +23,7 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
     DeterministicWorkflowCompiler,
     JsonRunStore,
     ResearchController,
@@ -58,6 +59,7 @@ def _controller(workdir: Path, scientific: ScientificAgent) -> ResearchControlle
         artifact_root=workdir / "artifacts",
     )
     return ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(
             WorkflowProposal(

@@ -29,6 +29,7 @@ from resagent2_contracts import (
     TaskProposal,
     UserAnswer,
     WorkFeedback,
+    WorkRecord,
     WorkRequest,
     WorkRequestDraft,
     WorkRequestStatus,
@@ -39,6 +40,7 @@ from resagent2_contracts import (
     WorkflowProposal,
 )
 from resagent2_orchestrator import (
+    DeterministicWorkInterpreter,
     CompilationError,
     CompilationResult,
     DeterministicWorkflowCompiler,
@@ -278,6 +280,7 @@ def build_controller(
         store=InMemorySessionStore(),
     )
     return ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=compiler,
         scheduler=scheduler,
@@ -378,6 +381,7 @@ def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
 
     scheduler = WorkflowScheduler(bindings={}, store=store)
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=_CrashAfterScientificCheckpoint(),
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -405,6 +409,7 @@ def test_completion_gate_violations_are_persisted() -> None:
 
     scheduler = WorkflowScheduler(bindings={}, store=InMemoryRunStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=_InvalidCompletionPort(),
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -478,6 +483,7 @@ def test_multiple_serial_work_cycles(tmp_path) -> None:
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_cycle_compiler(),
         scheduler=scheduler,
@@ -517,6 +523,7 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
     ]
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_cycle_compiler(),
         scheduler=scheduler,
@@ -698,6 +705,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -756,6 +764,7 @@ def test_task_question_resume_does_not_consume_attempt_budget() -> None:
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -803,6 +812,7 @@ def test_compilation_failure_fails_run() -> None:
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_FailingCompiler(),
         scheduler=scheduler,
@@ -838,7 +848,9 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
             feedback = read_json(feedback_ref, WorkFeedback)
             assert feedback.work_request_id == "work_1"
             assert feedback.session_id == completed_session.id
-            assert feedback.work_outcome.tasks[0].task_id == "task_experiment"
+            record_ref = next(ref for ref in request.input_artifacts if ref.id == feedback.work_record_artifact_id)
+            record = read_json(record_ref, WorkRecord)
+            assert record.work_outcome.tasks[0].task_id == "task_experiment"
             assert feedback_ref.id in request.resume_artifact_ids
             return AgentResult(status='completed', session=completed_session, llm_calls=1, report="Scientific conclusion", artifacts=[ArtifactCandidate(kind="scientific_opinion", path="opinion.json", media_type="application/json", summary="Conclusion", content=ScientificOpinion(verdict=ScientificVerdict.INCONCLUSIVE, statement='Execution completed without decisive evidence.').model_dump_json()), ArtifactCandidate(kind="observation_trace", path="observations.json", media_type="application/json", summary="Observed", content=json.dumps({"observed_artifact_ids": []}))])
 
@@ -895,6 +907,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
         accepted.work_requests[0].workflow_revision = accepted.workflow.revision
     store.save(accepted)
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=_FinishingPort(),
         compiler=_MustNotCompile(),
         scheduler=scheduler,
@@ -934,6 +947,7 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
     )
     compiler = CountingCompiler()
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
             ScriptedLLMClient([request_work_action(), request_work_action()]),
             store=InMemorySessionStore(),
@@ -990,6 +1004,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_cycle_compiler(),
         scheduler=scheduler,
@@ -1031,6 +1046,7 @@ def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
     ]
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_cycle_compiler(),
         scheduler=scheduler,
@@ -1075,6 +1091,7 @@ def test_forged_observed_artifact_is_rejected() -> None:
         store=InMemoryRunStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=_ForgingPort(),
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -1102,6 +1119,7 @@ def test_run_total_llm_budget_exhaustion() -> None:
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=_cycle_compiler(),
         scheduler=scheduler,
@@ -1130,6 +1148,7 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -1164,6 +1183,7 @@ def _build_recoverable_controller(
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=session_store)
     return ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -1315,6 +1335,7 @@ def test_budget_overrun_does_not_complete(tmp_path) -> None:
     )
     scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -1383,6 +1404,7 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
     )
     store.save(recovered_state)
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=_FinishingPort(),
         compiler=DeterministicWorkflowCompiler(proposal("work_1"), patch=None),
         scheduler=scheduler,
@@ -1414,6 +1436,7 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
         store=InMemoryRunStore(),
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
             ScriptedLLMClient([request_work_action(), finish_action()]),
             store=InMemorySessionStore(),
@@ -1457,6 +1480,7 @@ def test_failed_compiler_usage_comes_from_reservations(tmp_path, usage_known) ->
         data_root=tmp_path / "runs",
     )
     controller = ResearchController(
+        interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
             ScriptedLLMClient([request_work_action()]),
             store=InMemorySessionStore(),

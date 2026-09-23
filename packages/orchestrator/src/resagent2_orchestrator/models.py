@@ -85,6 +85,7 @@ class ResearchRun(OrchestratorModel):
     pending_question_ref: ArtifactRef | None = None
     conclusion_requirements_ref: ArtifactRef | None = None
     dataset_catalog_ref: ArtifactRef | None = None
+    research_index_ref: ArtifactRef | None = None
     feedback_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
     scientific_report: str = ""
     answers: list[RecordedAnswer] = Field(default_factory=list)

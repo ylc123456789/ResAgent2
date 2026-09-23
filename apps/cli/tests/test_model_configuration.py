@@ -8,7 +8,7 @@ import pytest
 
 from resagent2_cli import composition
 from resagent2_coding.models import CodingAction
-from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
+from resagent2_contracts import ExecutionLimits, WorkBrief, WorkRequest, WorkRequestDraft
 from resagent2_runtime.budget import execution_budget
 
 
@@ -29,7 +29,7 @@ def defaults(monkeypatch):
         "CONTEXT_WINDOW", "RESERVED_OUTPUT_TOKENS", "CONTEXT_SAFETY_MARGIN_TOKENS",
         "LLM_TIMEOUT_SECONDS", "MODEL", "API_BASE", "API_KEY_ENV", "LLM_TRACE_LEVEL",
         "LLM_TRACE_DIR", "SCIENTIFIC_CONTEXT_TOKENS", "CODING_CONTEXT_TOKENS",
-        "EXPERIMENT_CONTEXT_TOKENS", "COMPILER_CONTEXT_TOKENS",
+        "EXPERIMENT_CONTEXT_TOKENS", "COMPILER_CONTEXT_TOKENS", "INTERPRETER_CONTEXT_TOKENS",
     ):
         monkeypatch.delenv(f"RESAGENT2_{name}", raising=False)
     monkeypatch.setenv("RESAGENT2_API_KEY_ENV", "TEST_CONFIG_KEY")
@@ -41,6 +41,7 @@ def defaults(monkeypatch):
     ("coding", CodingAction, 128_000),
     ("experiment", ExperimentAction, 128_000),
     ("compiler", CompilationDraft, 128_000),
+    ("interpreter", WorkBrief, 128_000),
 ])
 def test_output_headroom_preserves_every_module_input_limit(defaults, component, action_type, limit):
     client = composition._client()
@@ -52,14 +53,47 @@ def test_output_headroom_preserves_every_module_input_limit(defaults, component,
     assert client.context_budget(action_type, limit) == limit
 
 
-def test_real_e2e_compiler_uses_the_shared_cli_default(defaults, monkeypatch, tmp_path):
+@pytest.mark.parametrize("component", ["compiler", "interpreter"])
+def test_real_e2e_translation_uses_the_shared_cli_default(defaults, monkeypatch, tmp_path, component):
     from e2e import real_e2e
 
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: ScriptedLLMClient([]))
     controller, _ = real_e2e._build_controller(tmp_path, None)
 
+    assert getattr(controller, component)._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
+    assert composition._component_context_limit(component) == DEFAULT_AGENT_CONTEXT_TOKENS
+
+
+def test_cli_interpreter_has_independent_client_and_context_limit(defaults, monkeypatch, tmp_path):
+    monkeypatch.setenv("RESAGENT2_INTERPRETER_CONTEXT_TOKENS", "16000")
+    app = composition.build_application(data_root=tmp_path)
+    compiler = app.controller.compiler._client
+    interpreter = app.controller.interpreter._client
+
+    assert interpreter is not compiler
+    assert interpreter._client is not compiler._client
+    assert interpreter._client.model_profile == compiler._client.model_profile
+    assert interpreter._max_context_tokens == 16000
+    assert interpreter._section_name == "interpreter_request"
+    assert compiler._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid"])
+def test_invalid_interpreter_context_limit_fails_before_network(defaults, monkeypatch, value):
+    monkeypatch.setenv("RESAGENT2_INTERPRETER_CONTEXT_TOKENS", value)
+    with pytest.raises(ValueError):
+        composition._component_context_limit("interpreter")
+
+
+def test_real_e2e_interpreter_honors_its_context_limit(defaults, monkeypatch, tmp_path):
+    from e2e import real_e2e
+
+    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: ScriptedLLMClient([]))
+    monkeypatch.setenv("RESAGENT2_INTERPRETER_CONTEXT_TOKENS", "16000")
+    controller, _ = real_e2e._build_controller(tmp_path, None)
+
+    assert controller.interpreter._client._max_context_tokens == 16000
     assert controller.compiler._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
-    assert composition._component_context_limit("compiler") == DEFAULT_AGENT_CONTEXT_TOKENS
 
 
 @pytest.mark.parametrize("model", ["deepseek-v4-flash", "deepseek-v4-pro"])

@@ -17,4 +17,4 @@
 
 边界见 [接口与契约](../docs/current/CONTRACTS.md)，历史验收见 [记录索引](../docs/history/README.md)。
 
-工具与组件边界由各包依赖测试约束；[test_tool_surface.py](e2e/test_tool_surface.py) 固定整理前模型可见 schema、docstring 和 guidance 的指纹，不应为使测试通过自动更新基线。
+[设计原则](../docs/current/DESIGN_PRINCIPLES.md)的依赖方向由各包 AST 边界测试保护，三个 Agent 均有独立检查；接口形状之外的预算、授权、恢复与证据仍须行为测试。工具与组件边界由各包依赖测试约束；[test_tool_surface.py](e2e/test_tool_surface.py) 固定整理前模型可见 schema、docstring 和 guidance 的指纹，不应为使测试通过自动更新基线。

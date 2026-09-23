@@ -6,6 +6,8 @@
 
 2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地与服务器 **1237 passed、1 skipped**、mock 通过；服务器 `2bad2d9a` 的真实公开入口整链也通过，跨进程批准、Experiment 任务内问答和最终工件完成，20 次调用与账本一致。原始证据已复核，验收范围内具备合并条件；分支尚未合并。Scientific verdict 曾反馈纠正、非法 data 纠正由确定性覆盖及中间算式文字瑕疵均保留于[收尾与边界](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md#verified-closeout)。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
 
+2026-09-23 又对当前分支做[架构与流程不变量复核](reviews/ARCHITECTURE_INVARIANTS_REVIEW_2026-09-23.md)：检查模块独立、依赖倒置、开闭原则的适用边界及控制/恢复/预算/权限/证据流程，未发现本分支破坏核心设计；补齐 Scientific 包边界测试和 TaskProposal 旧说明，汇总[设计原则](../current/DESIGN_PRINCIPLES.md)。本地 1238 passed / 1 skipped，mock 通过；执行逻辑未变，服务器实测仍为上段提交，分支继续不合并。
+
 ## 最近已完成的主线
 
 Run 控制简化已完成修复轮定向功能复核，并将 `refactor/run-control@84063e4` 快进合入 **main**（schema **13.0**，产品 `602ffee`，实测 `8b071e6a`）：Coding 删除动作、批准恢复时环境核验两处缺陷关闭，本地/服务器 **1153 passed、1 skipped**。4 个真实模型场景覆盖 5 项功能；固定 Task 执行不等于 Scientific 完整 Run E2E。原始 Session 拒绝快照未保存、只读探针重跑覆盖旧状态等限制保留在[修复轮复核](reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。合并保留分段提交与开发分支，无需为记录勘误再跑模型/GPU。服务器仍使用固定 `projects/ResAgent2`。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，复现步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。

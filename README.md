@@ -92,7 +92,7 @@ python -m pytest tests apps/cli/tests
 
 统一从 [文档导航](docs/README.md) 进入：
 
-- [当前实现与规范](docs/current/ARCHITECTURE.md)：架构、[模块接口与契约](docs/current/CONTRACTS.md)，以及 [模型实际看到的上下文](docs/current/CONTEXT.md)。
+- [当前实现与规范](docs/current/ARCHITECTURE.md)：[设计原则](docs/current/DESIGN_PRINCIPLES.md)、架构、[模块接口与契约](docs/current/CONTRACTS.md)，以及 [模型实际看到的上下文](docs/current/CONTEXT.md)。
 - [决策与历史](docs/history/README.md)：为什么这样设计、各轮计划和验收，不代替现行规则。
 - [入门与实践](docs/guides/README.md)：从一次任务理解系统，再学习使用和开发。
 
@@ -100,10 +100,8 @@ python -m pytest tests apps/cli/tests
 
 ## 开发约束
 
-- 同一行为保留一条生产主线；不添加仅为历史兼容存在的分支。
-- Agent 之间不直接互调，上游不读下游私有 Session；跨模块需求经 Orchestrator 处理。
-- 至少有两个语义一致的使用者，再抽取新的共享机制；已有组件优先复用。
-- 不把类型合法当成业务正确；接收端检查公共契约，领域完成检查验证真实执行依据。
+修改前对照 [设计原则与架构约束](docs/current/DESIGN_PRINCIPLES.md)：不仅核对单一 Agent 协议，还要检查职责、依赖倒置、扩展方式、状态、预算、权限、恢复和证据闭环。已有实现细节可以精简，核心行为不能在普通修复中被悄悄改变。
+
 - 不在仓库保存 SSH 私钥、API key 或服务器凭据。
 
 旧项目保留作需求、实现经验和回归样本来源，不整仓复制，也不是当前生产执行的依赖。

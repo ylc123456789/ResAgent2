@@ -56,7 +56,7 @@ def request_materials_context(request: AgentRequest) -> list[ContextSection]:
         value = read_request_material(request, ref, reader=reader)
         if ref.kind == "work_feedback":
             value = {key: value[key] for key in (
-                "index_artifact_id", "work_record_artifact_id", "index_changes", "brief",
+                "index_artifact_id", "work_record_artifact_id", "brief",
             )}
         sections.append(ContextSection(
             name=f"material_{ref.id}", content=json.dumps({"artifact_id": ref.id, "kind": ref.kind, "content": value}),

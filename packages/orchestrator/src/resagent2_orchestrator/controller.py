@@ -17,7 +17,7 @@ from resagent2_contracts import (
 from .compiler import CompilationError
 from .completion import FinalReportRenderer, ScientificCompletionValidator
 from .handoffs import read_json, receive_artifacts, system_artifact
-from .interpreter import WorkInterpreter, build_research_index, research_index_changes, validate_brief
+from .interpreter import WorkInterpreter, build_research_index, validate_brief
 from .models import ResearchRun
 from .ports import ModulePort
 from .scheduler import _question_id, _transition_work_request, _validate_answer
@@ -161,6 +161,8 @@ class ResearchController:
             run_id=run.run_id, artifacts=self._authorized_artifacts(run),
             work_requests=run.work_requests, tasks=run.workflow.tasks if run.workflow else (),
         )
+        if run.research_index_ref and read_json(run.research_index_ref, ResearchIndex) == index:
+            return index, run.research_index_ref
         return index, system_artifact(self.scheduler.artifact_registry, run, "research_index", index)
 
     def _prepare_research_handoff(self, run):
@@ -171,8 +173,11 @@ class ResearchController:
             self._save(run)
             return
         if active.id in run.feedback_refs:
+            # An interrupted Scientific turn may already have registered new materials.
+            # Refresh navigation while reusing the committed brief and its original sources.
+            _, run.research_index_ref = self._research_index(run)
+            self._save(run)
             return
-        previous = read_json(run.research_index_ref, ResearchIndex) if run.research_index_ref else None
         record = WorkRecord(
             run_id=run.run_id, work_request_id=active.id,
             session_id=active.scientific_session_id, previous_work_request=active.request,
@@ -185,7 +190,6 @@ class ResearchController:
         record_ref = system_artifact(self.scheduler.artifact_registry, run, "work_record", record,
                                      session_id=active.scientific_session_id)
         index, index_ref = self._research_index(run)
-        changes = research_index_changes(previous, index)
         with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
                               timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
                               usage=RunUsagePort(run, self.scheduler.store)):
@@ -196,7 +200,7 @@ class ResearchController:
         feedback = WorkFeedback(
             run_id=run.run_id, work_request_id=active.id, session_id=active.scientific_session_id,
             work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-            index_changes=changes, brief=brief,
+            brief=brief,
         )
         ref = system_artifact(self.scheduler.artifact_registry, run, "work_feedback", feedback,
                               session_id=active.scientific_session_id)
@@ -368,9 +372,8 @@ class ResearchController:
     def _authorized_artifacts(self, run):
         current = {ref.id for ref in run.feedback_refs.values()}
         refs = [ref for ref in run.artifacts.values()
-                if ref.kind not in {"answer", "work_feedback", "dataset_catalog", "conclusion_requirements", "acceptance_requirements"}
+                if ref.kind not in {"work_feedback", "dataset_catalog", "conclusion_requirements", "acceptance_requirements"}
                 or ref.id in current
-                or (ref.kind == "answer" and ref.session_id == run.scientific_session.id)
                 or ref == run.dataset_catalog_ref or ref == run.conclusion_requirements_ref]
         # Historical snapshots remain readable. The final index ref is the current
         # reading entry, without adding a second domain field to AgentRequest.

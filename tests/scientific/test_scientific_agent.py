@@ -94,7 +94,7 @@ def feedback(root, session, *, unresolved=()):
     value = WorkFeedback(
         run_id="run_example", work_request_id="work_round1", session_id=session,
         work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-        index_changes=index, brief=WorkBrief(statements=[CitedStatement(
+        brief=WorkBrief(statements=[CitedStatement(
             text="The work record describes the outcome.", artifact_ids=[record_ref.id],
         )]),
     )

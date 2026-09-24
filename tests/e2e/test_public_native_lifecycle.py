@@ -11,10 +11,12 @@ import httpx
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_cli.shell import Shell
 from resagent2_cli.composition import build_application
+from resagent2_components import RegisteredArtifactReader
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import JsonRunStore
 from resagent2_orchestrator.handoffs import read_json
+from resagent2_scientific import ScientificAgent
 
 
 def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch):
@@ -32,12 +34,35 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     run_id = "run_public_chain"
     counts = Counter()
     requests = []
+    scientific_requests = []
+    round_answer_ids = {}
+    handoff_indexes = {}
     monkeypatch.setenv("RESAGENT2_MODEL", "chain-test")
     monkeypatch.setenv("RESAGENT2_API_BASE", "https://example.invalid/v1")
     monkeypatch.setenv("RESAGENT2_API_KEY_ENV", "CHAIN_TEST_KEY")
     monkeypatch.setenv("CHAIN_TEST_KEY", "test-only")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "off")
     monkeypatch.setenv("RESAGENT2_RESOURCE_ROOT", str(tmp_path / "resources"))
+
+    invoke_scientific = ScientificAgent.invoke
+
+    def capture_scientific(self, request):
+        scientific_requests.append(request)
+        return invoke_scientific(self, request)
+
+    monkeypatch.setattr(ScientificAgent, "invoke", capture_scientific)
+
+    def answer_ref(field):
+        return next(ref for ref in store.load(run_id).artifacts.values()
+                    if ref.kind == "answer" and field in read_json(ref)["requested_fields"])
+
+    def assert_answer_read(body, call_id, field):
+        receipt = json.loads(next(message["content"] for message in body["messages"]
+                                  if message.get("tool_call_id") == call_id))
+        ref = answer_ref(field)
+        assert receipt["ok"] is True
+        assert receipt["value"]["artifact_id"] == ref.id
+        assert json.loads(receipt["value"]["content"]) == read_json(ref)
 
     def evidence_id():
         run = store.load(run_id)
@@ -86,18 +111,46 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                 for group in payload["research_index"]["groups"]
                 for entry in group["artifacts"]
             } for source in payload["source_windows"])
+            answer_sources = [source for source in payload["source_windows"] if source["kind"] == "answer"]
+            assert len(answer_sources) == 1
+            answer_source = answer_sources[0]
+            expected_answer = answer_ref("approve" if index == 1 else "metric")
+            assert answer_source["artifact_id"] == expected_answer.id
+            assert json.loads(answer_source["content"]) == read_json(expected_answer)
+            round_answer_ids[index] = expected_answer.id
             if index == 2:
+                # The full Scientific directory retains round 1, but the brief's
+                # sources stay within this round and its explicitly supplied inputs.
+                assert "work_1" not in {group["key"] for group in payload["research_index"]["groups"]}
+                assert round_answer_ids[1] not in {
+                    source["artifact_id"] for source in payload["source_windows"]
+                }
                 metrics_source = next(
                     source for source in payload["source_windows"] if source["artifact_id"] == evidence_id()
                 )
                 assert json.loads(metrics_source["content"]) == {"baseline": 0.45, "candidate": 0.52}
             message = {"content": json.dumps({"statements": [{
                 "text": f"INTERPRETED_ROUND_{index}: the requested work completed; inspect its recorded results.",
-                "artifact_ids": [record_id],
+                "artifact_ids": [record_id, expected_answer.id],
             }]})}
             finish = "stop"
         else:
             if role == "scientific":
+                current_context = body["messages"][-1]["content"]
+                payloads = [json.loads(line) for line in current_context.splitlines() if line.startswith("{")]
+                materials = next(value for value in payloads if "index_artifact_id" in value and "index" in value)
+                current_request = scientific_requests[-1]
+                reader = RegisteredArtifactReader(current_request.input_artifacts, run_id=run_id)
+                entries = [entry for group in materials["index"]["groups"] for entry in group["artifacts"]]
+                indexed_ids = {entry["artifact_id"] for entry in entries}
+                # Verify every rendered directory entry against precisely the
+                # references delivered to this real Scientific invocation.
+                for artifact_id in indexed_ids:
+                    assert reader.read_text(artifact_id)["artifact_id"] == artifact_id
+                if index in (2, 3):
+                    handoff_indexes[index - 1] = materials["index"]
+                    assert materials["index"] == json.loads(reader.read_text(materials["index_artifact_id"])["content"])
+                    assert round_answer_ids[index - 1] in indexed_ids
                 if index == 1:
                     tool, args = work("Remove the obsolete source directory with approval")
                 elif index == 2:
@@ -105,11 +158,23 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                     tool, args = work("Analyze existing baseline and candidate metrics; ask which metric")
                 elif index == 3:
                     assert "INTERPRETED_ROUND_2" in prompt
+                    previous_ids = {entry["artifact_id"] for group in handoff_indexes[1]["groups"]
+                                    for entry in group["artifacts"]}
+                    assert previous_ids <= indexed_ids
+                    assert set(round_answer_ids.values()) <= indexed_ids
+                    assert {"work_1", "work_2"} <= {group["key"] for group in materials["index"]["groups"]}
                     # Interpreter reads do not satisfy Scientific's own evidence observation.
                     assert evidence_id() not in store.load(run_id).scientific_observed_artifact_ids
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}
-                elif index in (4, 5):
-                    if index == 5:
+                elif index == 4:
+                    tool, args = "read_artifact", {"artifact_id": answer_ref("approve").id}
+                elif index == 5:
+                    assert_answer_read(body, "call_scientific_4", "approve")
+                    tool, args = "read_artifact", {"artifact_id": answer_ref("metric").id}
+                elif index in (6, 7):
+                    if index == 6:
+                        assert_answer_read(body, "call_scientific_5", "metric")
+                    if index == 7:
                         current = body["messages"][-1]["content"]
                         assert "runtime_feedback" in current and "data" in current
                         assert store.load(run_id).status != "failed"
@@ -123,7 +188,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                                 "limitations": ["Existing results only; no new experiment executed"],
                             }),
                         }]}
-                    if index == 4:
+                    if index == 6:
                         # Same error as the real server run: trying to deliver input
                         # evidence again. Reject inside the Agent so it can correct it.
                         args["artifacts"].insert(0, {
@@ -202,13 +267,15 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert final.llm_calls_used > used_before_answer
     assert set(counts) == {"scientific", "compiler", "coding", "experiment", "interpreter"}
     assert counts["interpreter"] == 2
-    assert counts["scientific"] == 5  # Rejected finish and correction share the same budget.
+    # Two original paired-answer reads, plus the rejected finish and its correction.
+    assert counts["scientific"] == 7
+    assert len(scientific_requests) == 3
     assert final.usage.outcomes == {"succeeded": len(requests), "failed": 0, "unknown": 0}
     assert len(final.answers) == 2
     answers = [read_json(ref) for ref in final.artifacts.values() if ref.kind == "answer"]
     assert {answer["question_text"] for answer in answers} == {first.pending_question.text, second.pending_question.text}
     assert final.final_opinion.evidence_artifact_ids == [evidence_id()]
-    assert evidence_id() in final.scientific_observed_artifact_ids
+    assert {evidence_id(), *round_answer_ids.values()} <= set(final.scientific_observed_artifact_ids)
     assert final.artifacts[final.final_report_artifact_id].kind == "final_report"
     assert hashlib.sha256(metrics.read_bytes()).hexdigest() == original_hash
     assert not any(ref.kind == "execution_record" for ref in final.artifacts.values())
@@ -220,12 +287,18 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
         assert feedback["brief"]["statements"] == [{
             "schema_version": feedback["schema_version"],
             "text": f"INTERPRETED_ROUND_{round_number}: the requested work completed; inspect its recorded results.",
-            "artifact_ids": [feedback["work_record_artifact_id"]],
+            "artifact_ids": [feedback["work_record_artifact_id"], round_answer_ids[round_number]],
         }]
-        groups = feedback["index_changes"]["groups"]
-        assert f"work_{round_number}" in {group["key"] for group in groups}
-        if round_number == 2:
-            assert "work_1" not in {group["key"] for group in groups}
+        assert "index_changes" not in feedback
+        snapshot = read_json(final.artifacts[feedback["index_artifact_id"]])
+        assert snapshot == handoff_indexes[round_number]
+        groups = {group["key"]: group for group in snapshot["groups"]}
+        for previous_round in range(1, round_number + 1):
+            ids = {entry["artifact_id"] for entry in groups[f"work_{previous_round}"]["artifacts"]}
+            assert round_answer_ids[previous_round] in ids
+            assert read_json(final.feedback_refs[f"work_{previous_round}"])["work_record_artifact_id"] in ids
+        indexed_ids = {entry["artifact_id"] for group in groups.values() for entry in group["artifacts"]}
+        assert set(feedback["brief"]["statements"][0]["artifact_ids"]) <= indexed_ids
         assert final.artifacts[feedback["index_artifact_id"]].kind == "research_index"
         assert final.artifacts[feedback["work_record_artifact_id"]].kind == "work_record"
 
@@ -234,5 +307,5 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     indexed_ids = {
         entry["artifact_id"] for group in index["groups"] for entry in group["artifacts"]
     }
-    assert evidence_id() in indexed_ids
+    assert {evidence_id(), *round_answer_ids.values()} <= indexed_ids
     assert read_json(first_feedback)["work_record_artifact_id"] in indexed_ids

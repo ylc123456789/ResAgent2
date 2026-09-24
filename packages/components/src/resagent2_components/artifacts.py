@@ -10,9 +10,15 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId
+from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId, SYSTEM_ARTIFACT_KINDS
 
 from .text import MAX_READ_CHARS, slice_text_lines, wrap_text_lines
+
+
+def research_artifacts(artifacts: list[ArtifactRef]) -> list[ArtifactRef]:
+    """Select research materials once for directory construction and its readers."""
+    excluded = (SYSTEM_ARTIFACT_KINDS - {"work_record", "answer"}) | {"observation_trace"}
+    return [ref for ref in artifacts if ref.kind not in excluded]
 
 
 class ArtifactReadError(ValueError):

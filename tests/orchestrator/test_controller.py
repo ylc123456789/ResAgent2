@@ -744,7 +744,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
     final_context = scientific.llm_client.contexts[-1]
     task_answer_ids = [ref.id for ref in resumed_request.input_artifacts if ref.kind == "answer"]
     assert all(f"material_{key}" not in final_context.included_sections for key in task_answer_ids)
-    assert all(key not in final_context.text for key in task_answer_ids)
+    assert all(key in final_context.text for key in task_answer_ids)  # Discoverable, not replayed as a resume answer.
 
 
 def test_task_question_resume_does_not_consume_attempt_budget() -> None:
@@ -1310,8 +1310,14 @@ def test_paired_answers_keep_task_and_scientific_scopes():
     assert controller._pending_answers(completed) == [answers[0]]
     scientific_request = controller._scientific_request(completed)
     assert scientific_request.resume_artifact_ids == [refs[0].id]
-    assert refs[1] not in scientific_request.input_artifacts
-    assert refs[2] not in scientific_request.input_artifacts
+    assert refs[1] in scientific_request.input_artifacts
+    assert refs[2] in scientific_request.input_artifacts
+    from resagent2_components import RegisteredArtifactReader, read_request_material, ArtifactReadError
+    reader = RegisteredArtifactReader(scientific_request.input_artifacts, run_id=completed.run_id)
+    for ref, answer in zip(refs[1:], answers[1:]):
+        assert json.loads(reader.read_text(ref.id)["content"])["question_text"] == answer.question_text
+        with pytest.raises(ArtifactReadError, match="resumed invocation"):
+            read_request_material(scientific_request, ref)
     completed.delivered_answer_ids = [answers[0].question_id]
     assert controller._pending_answers(completed) == []
     assert controller._scientific_request(completed).resume_artifact_ids == []

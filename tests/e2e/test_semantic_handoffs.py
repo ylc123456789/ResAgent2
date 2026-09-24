@@ -134,7 +134,13 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
         assert "artifact_reads" in context.included_sections
     assert report_id in scientific_client.contexts[1].text
     assert '"kind": "module_report"' in scientific_client.contexts[1].text
-    assert '"index_changes"' in scientific_client.contexts[1].text
+    context_payloads = [json.loads(line) for line in scientific_client.contexts[1].text.splitlines()
+                        if line.startswith("{")]
+    materials = next(value for value in context_payloads if "index_artifact_id" in value and "index" in value)
+    assert materials["index"]["run_id"] == run.run_id
+    assert report_id in {entry["artifact_id"] for group in materials["index"]["groups"]
+                         for entry in group["artifacts"]}
+    assert '"index_changes"' not in scientific_client.contexts[1].text
     assert '"work_outcome"' not in scientific_client.contexts[1].text
     assert run.final_opinion.statement == answer
     assert run.final_opinion.limitations == [uncertainty]

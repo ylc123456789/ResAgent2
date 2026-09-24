@@ -9,11 +9,11 @@ import json
 from typing import Protocol
 
 from pydantic import BaseModel
-from resagent2_components.artifacts import RegisteredArtifactReader
+from resagent2_components.artifacts import RegisteredArtifactReader, research_artifacts
 from resagent2_components.materials import read_artifact_json
 from resagent2_contracts import (
     ArtifactRef, CitedStatement, ResearchArtifactEntry, ResearchIndex,
-    ResearchIndexGroup, SYSTEM_ARTIFACT_KINDS, WorkBrief, WorkRecord, WorkRequest,
+    ResearchIndexGroup, RecordedAnswer, WorkBrief, WorkRecord, WorkRequest,
 )
 from resagent2_runtime.budget import current_budget, invoke_model
 
@@ -39,15 +39,18 @@ def build_research_index(*, run_id: str, artifacts: list[ArtifactRef],
     for work in work_requests:
         groups[work.id] = ResearchIndexGroup(key=work.id, title=work.request.objective)
     task_map = {task.id: task for task in tasks}
-    for ref in artifacts:
+    reader = RegisteredArtifactReader(artifacts, run_id=run_id)
+    for ref in research_artifacts(artifacts):
         if ref.run_id != run_id:
             raise ValueError("research index cannot include a foreign Run artifact")
-        # Do not recursively index derived handoffs, authorization or observation records.
-        if ref.kind in (SYSTEM_ARTIFACT_KINDS - {"work_record"}) or ref.kind == "observation_trace":
-            continue
+        if ref.kind == "answer":
+            answer = read_artifact_json(reader, ref.id, RecordedAnswer)
+            if (answer.run_id, answer.task_id, answer.attempt_number, answer.session_id) != (
+                    ref.run_id, ref.task_id, ref.attempt_number, ref.session_id):
+                raise ValueError("answer provenance does not match its reference")
         status = None
         if ref.kind == "work_record":
-            record = read_artifact_json(RegisteredArtifactReader([ref], run_id=run_id), ref.id, WorkRecord)
+            record = read_artifact_json(reader, ref.id, WorkRecord)
             if record.run_id != run_id or record.session_id != ref.session_id:
                 raise ValueError("work record provenance does not match its reference")
             key = record.work_request_id
@@ -56,7 +59,7 @@ def build_research_index(*, run_id: str, artifacts: list[ArtifactRef],
             if task is None:
                 raise ValueError("registered task artifact has no source task")
             attempt = next((a for a in task.attempts if a.number == ref.attempt_number), None)
-            if attempt is None or ref.id not in attempt.artifact_ids:
+            if attempt is None or (ref.kind != "answer" and ref.id not in attempt.artifact_ids):
                 raise ValueError("registered artifact has no source attempt binding")
             key, status = task.work_request_id, attempt.status
         else:
@@ -65,21 +68,6 @@ def build_research_index(*, run_id: str, artifacts: list[ArtifactRef],
             raise ValueError("registered artifact has no source work request")
         groups[key].artifacts.append(ResearchArtifactEntry.from_ref(ref, execution_status=status))
     return ResearchIndex(run_id=run_id, groups=[group for group in groups.values() if group.artifacts])
-
-
-def research_index_changes(previous: ResearchIndex | None, current: ResearchIndex) -> ResearchIndex:
-    """Changed entries retain their original IDs and source groups."""
-    if previous is not None and previous.run_id != current.run_id:
-        raise ValueError("cannot compare research indexes from different Runs")
-    old = {group.key: group for group in previous.groups} if previous else {}
-    changed = []
-    for group in current.groups:
-        prior = old.get(group.key)
-        entries = {entry.artifact_id: entry for entry in prior.artifacts} if prior else {}
-        additions = [entry for entry in group.artifacts if entries.get(entry.artifact_id) != entry]
-        if additions or (prior is not None and prior.title != group.title):
-            changed.append(group.model_copy(update={"artifacts": additions}))
-    return ResearchIndex(run_id=current.run_id, groups=changed)
 
 
 def validate_brief(brief: WorkBrief, allowed_ids: set[str]) -> WorkBrief:
@@ -117,8 +105,8 @@ class LLMWorkInterpreter:
         indexed = {entry.artifact_id for group in index.groups for entry in group.artifacts}
         source_ids = list(dict.fromkeys([
             record_ref.id, *record.previous_work_request.input_artifact_ids,
-            *(key for attempt in record.attempts for key in attempt.artifact_ids),
-            *(key for task in record.work_outcome.tasks for key in task.artifact_ids),
+            *(entry.artifact_id for group in index.groups if group.key == record.work_request_id
+              for entry in group.artifacts),
         ]))
         sources = []
         for artifact_id in source_ids:
@@ -152,6 +140,7 @@ class LLMWorkInterpreter:
         }
         prompt = (
             "Translate this completed round of work into a concise scientific work brief. "
+            "Describe only this round of work, using earlier inputs only as supporting context. "
             "Explain what was achieved, what failed, and the evidence and limitations relative "
             "to the original objective. Do not schedule tasks or decide the final scientific verdict. "
             "Return WorkBrief: every statement must cite supplied source artifact IDs. "

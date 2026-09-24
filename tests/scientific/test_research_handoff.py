@@ -76,19 +76,26 @@ def handoff(root, *, session=SESSION, unresolved=()):
         artifacts=[ResearchArtifactEntry.from_ref(ref) for ref in (data, record_ref)],
     )])
     index_ref = freeze(root, "artifact_index", "research_index", index.model_dump(mode="json"))
-    changes = ResearchIndex(run_id=RUN, groups=[ResearchIndexGroup(
-        key="work_measure", title="Measure accuracy", artifacts=[ResearchArtifactEntry.from_ref(data)],
-    )])
     feedback = WorkFeedback(
         run_id=RUN, work_request_id="work_measure", session_id=session,
         work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-        index_changes=changes, brief=WorkBrief(statements=[CitedStatement(
+        brief=WorkBrief(statements=[CitedStatement(
             text="The measurement is available, with the recorded limitations.",
             artifact_ids=[data.id, record_ref.id],
         )]),
     )
     feedback_ref = freeze(root, "artifact_feedback", "work_feedback", feedback.model_dump(mode="json"), session=session)
     return [data, record_ref, index_ref, feedback_ref]
+
+
+def with_indexed_answer(root, refs, answer):
+    index = ResearchIndex.model_validate_json((root / "artifact_index.json").read_text())
+    index.groups.append(ResearchIndexGroup(
+        key="scientific", title="Scientific decisions",
+        artifacts=[ResearchArtifactEntry.from_ref(answer)],
+    ))
+    latest = freeze(root, "artifact_answer_index", "research_index", index.model_dump(mode="json"))
+    return [*refs, answer, latest]
 
 
 def sections(turn):
@@ -114,8 +121,10 @@ def test_first_invocation_presents_directory_not_flat_authorization(tmp_path):
     rendered = sections(initial)
     material = json.loads(rendered["research_materials"])
     assert material["index_artifact_id"] == refs[2].id
-    assert material["index_changes"]["groups"][0]["title"] == "Measure accuracy"
+    assert material["index"]["groups"][0]["title"] == "Measure accuracy"
     assert "input_artifacts" not in rendered
+    assert all(ref.uri not in rendered["research_materials"] for ref in refs)
+    assert all(ref.sha256 not in rendered["research_materials"] for ref in refs)
     assert "work_brief" not in rendered
     assert "task_private" not in json.dumps(rendered)
     assert "workflow_revision" not in json.dumps(rendered)
@@ -126,35 +135,37 @@ def test_direct_materials_use_same_research_index_shape(tmp_path):
     rendered = sections(request([data]))
     material = json.loads(rendered["research_materials"])
     assert material["index_artifact_id"] is None
-    index = ResearchIndex.model_validate(material["index_changes"])
+    index = ResearchIndex.model_validate(material["index"])
     assert index.groups[0].key == "inputs"
     assert index.groups[0].artifacts[0].artifact_id == data.id
 
 
-def test_feedback_presents_only_current_changes_and_cited_brief(tmp_path):
+def test_feedback_presents_full_directory_once_and_current_cited_brief(tmp_path):
     refs = handoff(tmp_path)
     rendered = sections(request(refs, parent=SESSION, resume=[refs[-1].id]))
     navigation = json.loads(rendered["research_materials"])
-    assert navigation == {"index_artifact_id": refs[2].id}
+    assert navigation["index_artifact_id"] == refs[2].id
+    assert {entry["artifact_id"] for group in navigation["index"]["groups"]
+            for entry in group["artifacts"]} == {refs[0].id, refs[1].id}
     material = json.loads(rendered[f"material_{refs[-1].id}"])["content"]
-    assert {entry["artifact_id"] for group in material["index_changes"]["groups"]
-            for entry in group["artifacts"]} == {refs[0].id}
+    assert set(material) == {"index_artifact_id", "work_record_artifact_id", "brief"}
     assert material["brief"]["statements"][0]["artifact_ids"] == [refs[0].id, refs[1].id]
     assert "work_outcome" not in material
     assert "task_private" not in json.dumps(rendered)
     assert "workflow_revision" not in json.dumps(rendered)
 
 
-def test_answer_resume_does_not_repeat_previous_delta_or_brief(tmp_path):
+def test_answer_resume_keeps_full_directory_without_repeating_previous_brief(tmp_path):
     refs = handoff(tmp_path)
     answer = freeze(tmp_path, "artifact_answer", "answer", {
         "run_id": RUN, "session_id": SESSION, "question_id": "question_metric",
         "question_text": "Which metric matters?", "requested_fields": ["metric"],
         "values": {"metric": "accuracy"}, "answered_at": datetime.now(UTC).isoformat(),
     }, session=SESSION)
-    rendered = sections(request([*refs, answer], parent=SESSION, resume=[answer.id]))
+    rendered = sections(request(with_indexed_answer(tmp_path, refs, answer), parent=SESSION, resume=[answer.id]))
     assert f"material_{refs[-1].id}" not in rendered
-    assert "index_changes" not in json.loads(rendered["research_materials"])
+    directory = json.loads(rendered["research_materials"])["index"]
+    assert directory["groups"][0]["title"] == "Measure accuracy"
     assert "Which metric matters?" in rendered[f"material_{answer.id}"]
     assert "accuracy" in rendered[f"material_{answer.id}"]
 
@@ -213,7 +224,6 @@ def test_feedback_material_keeps_scope_and_hash_checks(tmp_path, mismatch):
         original = json.loads((tmp_path / "artifact_feedback.json").read_text())
         if mismatch == "run":
             original["run_id"] = "run_other"
-            original["index_changes"]["run_id"] = "run_other"
         else:
             original["session_id"] = "session_other"
         feedback = freeze(tmp_path, feedback.id, "work_feedback", original, session=SESSION)
@@ -246,7 +256,7 @@ def test_latest_work_record_still_controls_completion_after_answer(tmp_path):
         "question_text": "Which metric?", "requested_fields": ["metric"],
         "values": {"metric": "accuracy"}, "answered_at": datetime.now(UTC).isoformat(),
     }, session=first.session.id)
-    result = agent.invoke(request([*refs, answer], parent=first.session.id, resume=[answer.id]))
+    result = agent.invoke(request(with_indexed_answer(tmp_path, refs, answer), parent=first.session.id, resume=[answer.id]))
     assert result.status == "completed"
     assert "State at least one limitation" in client.contexts[-1].text
     assert "material_artifact_feedback" not in client.contexts[-1].included_sections
@@ -271,13 +281,58 @@ def test_invalid_raw_record_stops_before_model_invocation(tmp_path, invalid):
     assert client.contexts == []
 
 
-def test_current_directory_does_not_hide_historical_snapshot(tmp_path):
+def test_resumed_handoff_shows_full_history_and_only_current_brief(tmp_path):
     refs = handoff(tmp_path)
-    historical = refs[2]
-    latest = freeze(tmp_path, "artifact_new_index", "research_index", ResearchIndex(run_id=RUN).model_dump(mode="json"))
-    turn = request([*refs, latest], parent=SESSION)
-    rendered = sections(turn)
-    assert json.loads(rendered["research_materials"]) == {"index_artifact_id": latest.id}
+    previous_data = freeze(tmp_path, "artifact_previous_data", "experiment_result", {"accuracy": 0.7})
+    previous_index = ResearchIndex(run_id=RUN, groups=[ResearchIndexGroup(
+        key="work_baseline", title="Measure the baseline",
+        artifacts=[ResearchArtifactEntry.from_ref(previous_data)],
+    )])
+    historical = freeze(tmp_path, "artifact_previous_index", "research_index", previous_index.model_dump(mode="json"))
+    current_index = ResearchIndex.model_validate_json((tmp_path / "artifact_index.json").read_text())
+    full_index = ResearchIndex(run_id=RUN, groups=[*previous_index.groups, *current_index.groups])
+    latest = freeze(tmp_path, "artifact_full_index", "research_index", full_index.model_dump(mode="json"))
+    feedback = WorkFeedback.model_validate_json((tmp_path / "artifact_feedback.json").read_text())
+    feedback.index_artifact_id = latest.id
+    feedback_ref = freeze(tmp_path, "artifact_feedback", "work_feedback", feedback.model_dump(mode="json"), session=SESSION)
+    turn = request(
+        [previous_data, historical, *refs[:-1], feedback_ref, latest],
+        parent=SESSION, resume=[feedback_ref.id],
+    )
+    current = state()
+    rendered = {section.name: section.content for section in build_context(turn, current)}
+    navigation = json.loads(rendered["research_materials"])
+    assert navigation == {"index_artifact_id": latest.id, "index": full_index.model_dump(mode="json")}
+    assert [group["title"] for group in navigation["index"]["groups"]] == [
+        "Measure the baseline", "Measure accuracy",
+    ]
+    material = json.loads(rendered[f"material_{feedback_ref.id}"])["content"]
+    assert material["brief"] == feedback.brief.model_dump(mode="json")
+    assert material["brief"]["statements"][0]["artifact_ids"] == [refs[0].id, refs[1].id]
+    assert "index" not in material
+    assert "index_changes" not in json.dumps(rendered)
+    assert "input_artifacts" not in rendered
     assert historical.id not in rendered["research_materials"]
+    assert all(ref.uri not in json.dumps(rendered) for ref in turn.input_artifacts)
+    assert all(ref.sha256 not in json.dumps(rendered) for ref in turn.input_artifacts)
+    assert _observed_artifact_ids(current) == []
     reader = RegisteredArtifactReader(turn.input_artifacts, run_id=RUN)
-    assert json.loads(reader.read_text(historical.id)["content"])["groups"][0]["title"] == "Measure accuracy"
+    assert json.loads(reader.read_text(historical.id)["content"])["groups"][0]["title"] == "Measure the baseline"
+    tool = ReadArtifactTool(reader)
+    observation = tool.execute(current, tool.input_model(artifact_id=previous_data.id))
+    current.memory.update(observation.memory_updates)
+    assert json.loads(observation.value["content"]) == {"accuracy": 0.7}
+    assert _observed_artifact_ids(current) == [previous_data.id]
+
+
+@pytest.mark.parametrize("mismatch", ["missing_ref", "unindexed_ref", "metadata"])
+def test_directory_must_match_its_readable_registered_materials(tmp_path, mismatch):
+    refs = handoff(tmp_path)
+    if mismatch == "missing_ref":
+        refs = refs[1:]
+    elif mismatch == "unindexed_ref":
+        refs.append(freeze(tmp_path, "artifact_extra", "data", {"value": 1}))
+    else:
+        refs[0] = refs[0].model_copy(update={"summary": "A different registered summary"})
+    with pytest.raises(ValueError, match="research index.*match"):
+        sections(request(refs, parent=SESSION))

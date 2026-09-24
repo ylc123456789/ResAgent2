@@ -8,9 +8,9 @@ from resagent2_components import (
     DatasetAvailability, RegisteredArtifactReader, dataset_context,
     read_artifact_json, request_materials_context, workspace_context,
 )
+from resagent2_components.artifacts import research_artifacts
 from resagent2_contracts import (
     AgentRequest, ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup,
-    SYSTEM_ARTIFACT_KINDS,
 )
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 
@@ -61,9 +61,9 @@ path, download a dataset, or silently substitute one.
 
 Read and cite registered evidence of the kinds required by the supplied
 conclusion_requirements artifact. Authorized imported evidence counts.
-The research index groups available materials by their original work objective.
-Use its artifact ID with read_artifact for the complete directory when needed.
-Current work feedback supplies index changes and a cited Interpreter brief.
+The complete research index groups available materials by their original work
+objective, including prior rounds. Read original files by their artifact IDs.
+Current work feedback supplies a cited Interpreter brief for the latest round.
 The brief is an explanation, not measured evidence or your scientific judgment.
 Read its original sources when a claim or limitation matters to your decision.
 An index entry or brief citation does not mean you observed the source contents.
@@ -95,6 +95,7 @@ def _evidence_control_state(request: AgentRequest, state: AgentState) -> dict:
 
 
 def _research_materials(request: AgentRequest, reader: RegisteredArtifactReader) -> dict:
+    materials = {ref.id: ref for ref in research_artifacts(request.input_artifacts)}
     indexes = [ref for ref in request.input_artifacts if ref.kind == "research_index"]
     # The caller places the current snapshot last; prior snapshots stay authorized
     # so historical feedback links remain readable without entering the prompt.
@@ -103,16 +104,20 @@ def _research_materials(request: AgentRequest, reader: RegisteredArtifactReader)
         index = read_artifact_json(reader, indexes[-1].id, ResearchIndex)
         if index.run_id != request.run_id:
             raise ValueError("research index belongs to another Run")
-        if request.parent_session_id is None:
-            value["index_changes"] = index.model_dump(mode="json")
+        entries = {entry.artifact_id: entry for group in index.groups for entry in group.artifacts}
+        if entries.keys() != materials.keys():
+            raise ValueError("research index does not match the available materials")
+        for artifact_id, entry in entries.items():
+            ref = reader.resolve_ref(artifact_id)
+            if ref is None or entry != ResearchArtifactEntry.from_ref(ref, execution_status=entry.execution_status):
+                raise ValueError("research index entry does not match its registered artifact")
     else:
         # Standalone invocations use the same directory shape for their supplied materials.
-        entries = [ResearchArtifactEntry.from_ref(ref) for ref in request.input_artifacts
-                   if ref.kind not in SYSTEM_ARTIFACT_KINDS and ref.kind != "observation_trace"]
+        entries = [ResearchArtifactEntry.from_ref(ref) for ref in materials.values()]
         index = ResearchIndex(run_id=request.run_id, groups=[ResearchIndexGroup(
             key="inputs", title="Supplied research materials", artifacts=entries,
         )] if entries else [])
-        value["index_changes"] = index.model_dump(mode="json")
+    value["index"] = index.model_dump(mode="json")
     return value
 
 

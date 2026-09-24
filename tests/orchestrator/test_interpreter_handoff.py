@@ -270,3 +270,40 @@ def test_historical_indexes_stay_readable_while_current_entry_is_last(tmp_path):
     for ref in refs:
         if ref.kind == "research_index":
             assert RegisteredArtifactReader(refs, run_id=RUN_ID).read_text(ref.id)["content"]
+
+
+def test_restart_syncs_new_registered_material_without_regenerating_brief(tmp_path):
+    from resagent2_components import RegisteredArtifactReader
+    from resagent2_components.artifacts import research_artifacts
+    from resagent2_contracts import ResearchIndex
+
+    first_client = BriefClient()
+    engine = controller(tmp_path, first_client, AskingScientific(crash=True))
+    stable_run(engine)
+    with pytest.raises(ProcessCrash):
+        engine.run_until_stable(RUN_ID)
+    interrupted = engine.scheduler.store.load(RUN_ID)
+    original_feedback = interrupted.feedback_refs[WORK_ID]
+    original_index = interrupted.research_index_ref
+    literature = engine.scheduler.artifact_registry.register_scientific(
+        ArtifactCandidate(kind="literature_search", path="search.txt", media_type="text/plain",
+                          summary="Literature registered before the process exited", content="A source"),
+        run_id=RUN_ID, session_id=SESSION_ID,
+    )
+    interrupted.artifacts[literature.id] = literature
+    engine.scheduler.store.save(interrupted)
+    replay_client, scientific = BriefClient(), AskingScientific()
+    resumed = controller(tmp_path, replay_client, scientific)
+    paused = resumed.run_until_stable(RUN_ID)
+    request = scientific.requests[0]
+    index = read_json(paused.research_index_ref, ResearchIndex)
+    indexed = {entry.artifact_id for group in index.groups for entry in group.artifacts}
+    assert literature.id in indexed
+    assert indexed == {ref.id for ref in research_artifacts(request.input_artifacts)}
+    assert paused.research_index_ref != original_index
+    assert original_index in request.input_artifacts
+    assert paused.feedback_refs[WORK_ID] == original_feedback
+    assert replay_client.prompts == [] and paused.llm_calls_used == 1
+    reader = RegisteredArtifactReader(request.input_artifacts, run_id=RUN_ID)
+    assert reader.read_text(literature.id)["content"] == "A source"
+    assert reader.read_text(original_index.id)["content"]

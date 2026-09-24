@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "15.0"
+SCHEMA_VERSION = "16.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["15.0"] = SCHEMA_VERSION
+    schema_version: Literal["16.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -1246,7 +1246,7 @@ class ResearchIndexGroup(ContractModel):
 
 
 class ResearchIndex(ContractModel):
-    """Rebuildable Scientific view; changes use the same shape with changed entries only."""
+    """Complete, rebuildable Scientific view over the original registered materials."""
 
     run_id: RunId
     groups: list[ResearchIndexGroup] = Field(default_factory=list)
@@ -1281,14 +1281,7 @@ class WorkFeedback(ContractModel):
     session_id: SessionId
     work_record_artifact_id: ArtifactId
     index_artifact_id: ArtifactId
-    index_changes: ResearchIndex
     brief: WorkBrief
-
-    @model_validator(mode="after")
-    def validate_scope(self):
-        if self.index_changes.run_id != self.run_id:
-            raise ValueError("work feedback index belongs to another Run")
-        return self
 
 
 class ConclusionRequirements(ContractModel):

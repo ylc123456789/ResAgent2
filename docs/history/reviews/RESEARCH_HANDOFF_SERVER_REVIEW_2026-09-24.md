@@ -1,6 +1,6 @@
 # 科研目录与 Interpreter：服务器证据复核
 
-日期：2026-09-24。分支 `fix/code-health`，产品 `b31648d1`，回归基线 `42efaa16`，服务器测试 HEAD `36360f85adac71496823122149da91699aaa902f`，schema 15.0。依据[验收计划](RESEARCH_HANDOFF_TEST_2026-09-23.md)。最新补测复核见[第 5 节](#supplement-review)；前四节保留原轮发现。
+日期：2026-09-24。分支 `fix/code-health`，产品 `b31648d1`，回归基线 `42efaa16`，服务器测试 HEAD `36360f85adac71496823122149da91699aaa902f`，schema 15.0。依据[验收计划](RESEARCH_HANDOFF_TEST_2026-09-23.md)。最终收尾见[第 6 节](#verified-closeout)；前五节保留原轮发现与分阶段补测记录。
 
 ## 1. 原轮结论与范围
 
@@ -120,3 +120,40 @@ Session 中 run_command 动作/回执时间为 **2026-09-23 22:03:31.135–22:03
 后续只需整理已有证据、修正恒真检查/计量/采样时间口径；若坚持原计划全部入口覆盖，再补 5.2 的公开回答入口小用例。无需重装、GPU 重训或产品改动。新测试使用独立 Run ID 和目录，保留原轮失败。
 
 测试方 REPORT_SUPPLEMENT.md 仍写“结果在 attempt、校验只在 repo 找”，应勘误为第 2 节已复现的候选文件名错误；完成检查支持两种目录，问题是可纠正的路径错误被终止处理，以及失败测量未登记。本项继续留给后续 validation 设计讨论，不算被本次补测修复。分支继续不合并。
+
+<a id="verified-closeout"></a>
+
+## 6. 公开入口补测与最终收尾（2026-09-24）
+
+**三项验收缺口已关闭，科研目录与 Interpreter 本轮功能验收可以收尾。测试 AI 无需继续补跑。** 结论综合原公开链、真实 CUDA 训练、失败材料探针和定向补测，不表示某一条 Run 独自覆盖所有场景，也不表示历史失败处理问题已修复。服务器产品实测仍为 `36360f85`、schema 15.0；本次只读核对原始证据，未修改产品或服务器现场，未调用模型/GPU，分支未合并。
+
+### 6.1 公开回答入口已覆盖
+
+新证据在 `cases/experiment-qa-cli/`，Run 为 `run_experiment_qa_cli`。初始脚本创建固定 Experiment 任务，并补齐真实 WorkRequest、conclusion_requirements 与 Scientific Session 的运行绑定。这是有明确夹具的定向集成测试，未覆盖 Scientific 初始规划；初始规划由原公开整链覆盖。
+
+回答脚本实际调用独立 `resagent2 answer` CLI，进入产品 `controller.answer_question`，没有手写回答登记、恢复状态或替换 Controller 循环。对原始状态、trace、Session 和工件的独立检查确认：
+
+- 暂停问题属于 Experiment 的 task_exp_qa / Attempt 1，字段为 metric_name、better_direction；任务 Session.module=experiment。
+- 回答后同 Task、Attempt、Session 延续。原 3 个账本键及状态全部保留，最终为 14 个；全部 trace 的 call_id:retry 与账本逐键一致、唯一、retry=0、succeeded。14 次分别为 Experiment 5 次、Interpreter 2 次、Scientific 7 次，不能都算作 Experiment 调用。
+- Experiment 未执行命令或修改源文件，metrics.json 以原内容交付，0.45/0.52/+0.07 分析正确。全部 17 份登记工件逐份 hash 一致。
+- work_1 consumed，work_record、research_index、work_feedback 已冻结，Scientific 读取证据。第二次通过 CLI 回答 Scientific 澄清后，Run completed、verdict supports、artifact_final_report 登记，无 terminal_error。
+
+Scientific finish 曾因非法 opinion 字段、错拼引用得到反馈并纠正，最终合法完成；通过不表示中间从未报错。这里的 supports 只支持按用户确认指标对既存数字作比较，不支持统计显著性、因果或可重复改进；最终报告明确保留这些限制。
+
+两个回答使用同一个重定向日志路径，最后一次 answer-cli.log 覆盖了第一次暂停输出；前后状态、两份真实答案工件和完整 trace 仍保留。独立脚本/CLI 调用路径与原始记录支持跨进程恢复结论，但没有完整进程 ID 清单，不把它写成进程身份审计。无需为这个留证瑕疵再跑模型。
+
+### 6.2 验证器、GPU 计量和封存已核对
+
+- 旧 scheduler 直连用例新增 verify-experiment-qa-v2.json，旧脚本保留；恒真条件已去除，暂停状态和 Session 改用前后快照比较。独立复核进一步确认 3→4 的原账本键与状态确实保留，不仅比较计数。
+- GPU 补测完整 trace 为 20 次，前轮 14 次与最终轮 6 次分别记载；最终 6 键与账本完全一致。旧轮 Run/Session 未独立留存的限制仍在，不追认全程账本完整。
+- GPU 采样器已不存在；封存 CSV 为 100698 字节、2633 行（含表头），SHA256 为 `05948c347ea88ba09b9ac1ee6607ae9eb6fa535443b123a36df9f6b96d72c6a3`，与 gpu-monitor-final.json 一致。实际间隔均值约 0.651 秒，非零首末跨度 15.196 秒、24 个非零样本、峰值 95% / 1535 MiB，训练时间关联沿用第 5.3 节的独立核查。
+- 归档新增 5 个脚本后，现有 36 个脚本、目标文本、清单，共 38 个文件；新增 5 脚本均与服务器 /tmp 同名副本一致。
+
+服务器结果已补上 CLI 用例、10/10 的 v2 结果、20 次 GPU 计量与候选文件名错误。报告部分段落仍保留旧“16/16”、旧脚本数量和按 0.5 秒描述的文字；results.json 也仍有“同 seed 约 3pp 非确定性”的旧结论。阅读时以第 3 节的协议区分、第 5–6 节及新增 v2/final 文件为准；这些文字差异不要求重跑测试。
+
+### 6.3 留给后续设计的问题
+
+1. **validation 的错误分类和失败材料交付**：不存在的候选文件名使 Attempt 直接失败；可纠正反馈和失败测量登记仍未解决。原失败现场保留，详见第 2 节，按既有约定后续讨论，不在此次验收中改政策。
+2. **任务答案的跨层可发现性**：本次 Scientific 再次询问同一指标，且声称旧答案未登记。这个说法不正确：任务答案 artifact_system_answer_7d7927886fed_746c194d 实际已登记且 hash 正确，只是未出现在 Scientific 当时的目录和请求中。科研目录按既定规则过滤问答等系统工件，Controller 的授权材料只向 Scientific 提供其自身 Session 的 answer，任务摘要只转述了任务答案；Scientific 又把 question.action=null 错读成“没有答案”。action 表示待批准操作，并非答案字段，答案保存在独立 answer.values 中。以后讨论如何让 Scientific 找到相关用户事实时，应同时考虑工件可发现性和模型理解，不能把它归为数据丢失。这不影响公开回答入口和本轮反向交接验收通过，也不要求测试 AI 重演。
+
+本轮完成的是已约定功能和补测范围的验收；保留上述已知边界，开发分支继续未合并。

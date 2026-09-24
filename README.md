@@ -36,7 +36,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `15.0`（`SCHEMA_VERSION="15.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `16.0`（`SCHEMA_VERSION="16.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 

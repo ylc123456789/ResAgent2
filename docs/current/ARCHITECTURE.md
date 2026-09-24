@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **15.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **16.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -100,7 +100,7 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 3. **编译当前一轮**：LLM 产生一个任务草图；代码分配身份、解析依赖和工作区，进行结构校验。解析或结构错误最多纠正一次，无额外语义复审调用。
 4. **接受并执行图**：Scheduler 校验候选图、绑定、预算和 revision 后接受；只执行依赖成功的 ready Task。已知代码前置条件先交 Coding，正式实验交 Experiment。
 5. **收集结果**：模块返回 AgentResult。Scheduler 接收报告、登记工件、按冻结要求验收并记录 Attempt，再构建 WorkOutcome 交回 Controller。跨任务输入按已声明 output_name 解析到上游成功 Attempt 的唯一工件。
-6. **解释与下一步**：Controller 保存成对的 work_record；Orchestrator 的 Interpreter 生成累计科研目录及带引用简报。Controller 冻结 work_feedback，Scientific 通过原恢复入口接收本轮目录变化、简报和完整目录入口，再阅读原证据、判断下一步。
+6. **解释与下一步**：Controller 保存成对的 work_record；Orchestrator 的 Interpreter 生成累计科研目录及带引用简报。Controller 冻结 work_feedback，Scientific 通过原恢复入口接收本轮带引用简报和更新后的完整目录，再通过现有工具阅读原证据、判断下一步。
 7. **完成**：Scientific 提交 scientific_opinion；Controller 验证后生成最终报告并将 Run 记为 completed。
 
 Interpreter 的固定代码整理来源与执行状态，LLM 根据授权材料解释本轮成果和局限。它不调度任务、不改 Run、不拥有独立 Session；Scientific 仍负责最终科学判断。原记录保留并可按需读取，默认上下文不再展开完整执行反馈或全量授权清单。
@@ -159,9 +159,9 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 
 ## 5. 结果、证据与完成
 
-Run.artifacts 是唯一的产物登记表。科研目录 research_index 从已授权登记材料、工作目标及历次 Attempt 派生，按初始材料、Scientific 材料和工作需求分组，只保留原 Artifact ID 及展示字段。失败尝试不会被后续成功覆盖；目录不扫描未登记文件，也不递归收入目录、反馈和观察记录。work_record 保存原需求、执行结果和历次尝试，是无文件输出时仍可引用的执行事实。
+Run.artifacts 是唯一的产物登记表。科研目录 research_index 从已授权登记材料、工作目标及历次 Attempt 派生，按初始材料、Scientific 材料和工作需求分组，只保留原 Artifact ID 及展示字段。失败尝试不会被后续成功覆盖；完整问答按原 Task/Attempt 或 Scientific 归属收入目录，不作为 Agent 自报产出。目录不扫描未登记文件，也不递归收入目录、反馈和观察记录。work_record 保存原需求、执行结果和历次尝试，是无文件输出时仍可引用的执行事实。
 
-WorkRequest 稳定后，Interpreter 使用固定代码生成累计目录及变化，使用 LLM 阅读本轮相关文本材料并生成带引用简报。Controller 将反馈冻结，保存当前目录指针和 feedback_refs。Scientific 只在本轮接收时看到变化和简报，完整目录按需读取；初始输入、回答恢复及最终完成时会刷新目录，同轮检索所得文献先通过工具回执发现，下次刷新收入目录。解释不是测量，Scientific 仍需读取原材料形成观点。
+WorkRequest 稳定后，Interpreter 使用固定代码生成累计目录，使用 LLM 阅读本轮相关文本材料（包括本轮问答）并生成带引用简报。Controller 将反馈冻结，保存当前目录指针和 feedback_refs。Scientific 接收本轮简报及最新完整目录正文，不再接收目录增量。目录条目与底层读取共用登记来源，子任务答案也可按原 ID 读取；答案用于批准和恢复时的作用域不变。初始输入、回答恢复及最终完成沿用原目录刷新机制。解释不是测量，Scientific 仍需读取原材料形成观点。
 
 ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源、冻结内容并计算 hash 后，才产生 ArtifactRef。授权可以读不等于已经读，已经读过也不保证正文一直留在模型上下文。
 

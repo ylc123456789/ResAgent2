@@ -109,9 +109,9 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | `evidence_control_state` | 本 Session 已观察工件编号、尚待补读/撤回的引用 | 必需；每步根据请求和 memory 重算 |
 | `research` | 当前调用的 `instruction`，由 Controller 组合目标、假设、背景和约束 | 必需；来自当前请求 |
 | `dataset_catalog` | 同次数据集解析得到的可用/不可用 ID 与共享用法说明 | 必需；不是数据正文 |
-| `research_materials` | 当前累计科研目录入口；初次调用附初始目录变化；独立调用以同一结构组织传入材料 | 必需；之后按需用 read_artifact 读取完整目录 |
+| `research_materials` | 最新完整科研目录正文及原件读取入口；独立调用以同一结构组织传入材料 | 必需；累计保留历史条目，不裁成增量；原件按 ID 用 read_artifact 读取 |
 | `material_<artifact_id>` | conclusion_requirements 及本次 answer 原题/回答全文 | 必需；校验 hash、内容类型与归属 |
-| `material_<feedback_id>` | 本次目录变化、带引用简报，以及完整目录/执行记录入口 | 仅本轮交付反馈时必需；不展开执行记录 |
+| `material_<feedback_id>` | 本轮带引用简报，以及对应目录/执行记录引用 | 仅本轮交付反馈时必需；完整目录只在 research_materials 展示，不展开执行记录 |
 | `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
@@ -122,9 +122,9 @@ Scientific 的提示与完成检查从共享工件契约派生允许新建的种
 
 **科研目录与简报的分工：**
 
-Orchestrator 的 Interpreter 从已登记材料生成科研目录，按初始材料、Scientific 材料和工作需求组织；来源、尝试序号和实际状态由代码填入。路径、hash、权限仍只在底层登记表，目录不重新管理文件。
+Orchestrator 的 Interpreter 从已登记材料生成科研目录，按初始材料、Scientific 材料和工作需求组织；来源、尝试序号和实际状态由代码填入。成对问答沿用 answer 原件，按保存的作用域归组。路径、hash、权限仍只在底层登记表，目录不重新管理文件。索引和原件读取共用登记来源，Scientific 能读取目录里的子任务答案；阅读不等于批准或恢复。
 
-每轮稳定后，Controller 保存执行记录 work_record，再调用 Interpreter 的 LLM，根据本轮相关文本窗口生成每条带原 Artifact ID 引用的简报。简报和目录变化放在同一冻结 work_feedback，Scientific 仅在本轮交付时看到；完整累计目录按需读取。工作事实与简报分开：未解决任务等机器要求从原记录读取，不相信摘要是否提到了它们。回答恢复复用累计目录，不重放旧增量或重新解释旧轮次。
+每轮稳定后，Controller 保存执行记录 work_record，再调用 Interpreter 的 LLM，根据本轮相关文本窗口（包括本轮成对问答）生成每条带原 Artifact ID 引用的简报。简报只解释本轮工作，和目录引用保存在冻结 work_feedback；Scientific 在本轮交付时接收简报，并在 research_materials 收到更新后的完整累计目录。工作事实与简报分开：未解决任务等机器要求从原记录读取，不相信摘要是否提到了它们。回答恢复继续展示完整目录，不重放旧简报或重新解释旧轮次。
 
 Scientific 不再默认收到平铺 input_artifacts、完整 work_record 或旧 work_brief。AgentRequest 内的授权引用仍完整供读取和校验使用。同轮检索材料从文献工具回执发现，原 ID 可立即读取；下一次 Controller 刷新时收入累计目录。原文件、失败记录和模块报告可按需读取；默认简报不替代这些材料。
 
@@ -201,7 +201,7 @@ Compiler 没有 Session、工具读取工作集或 AgentLoop 的 runtime_feedbac
 
 输入和产物契约见[反向交接](CONTRACTS.md#interpreter)。生产入口注入独立 PromptLLMClient，使用 system/interpreter_request 必需段和 WorkBrief JSON 输出。默认输入上限同源为 128000 tokens，可用 RESAGENT2_INTERPRETER_CONTEXT_TOKENS 配置；调用、格式纠正和 HTTP 重试仍计入同一 Run。
 
-输入只包含本轮完整 WorkRecord、本轮相关目录条目及原始文本窗口，不把累计历史全文重复发送。每份文本最多读取 12000 字符，窗口保留 truncated 等信息；二进制内容不进入文本解释。窗口经过现有 Run 授权和整份 hash 校验，引用只允许当前真实提供的文本来源或执行记录。材料过多超过有效输入额度时明确失败，不默默丢弃必需结构，也不增加摘要循环。第一次 JSON/引用错误允许携带原因纠正一次，不作额外语义评审。
+输入只包含本轮完整 WorkRecord、本轮相关目录条目及原始文本窗口，包括按 Task/Attempt 归属找到的本轮成对问答，不把累计历史全文重复发送。每份文本最多读取 12000 字符，窗口保留 truncated 等信息；二进制内容不进入文本解释。窗口经过现有 Run 授权和整份 hash 校验，引用只允许当前真实提供的文本来源或执行记录。材料过多超过有效输入额度时明确失败，不默默丢弃必需结构，也不增加摘要循环。第一次 JSON/引用错误允许携带原因纠正一次，不作额外语义评审。
 
 Interpreter 没有 Session、工具循环或私有工作区；产出保存后由 Controller 重用。解释过程中读取的材料不计入 Scientific 的 observed。
 
@@ -245,7 +245,7 @@ start_line/end_line 记录请求边界，未指定时可以是 null；它们不�
 - **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
 - **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified、required_python；已有环境时再附 env_id、prefix、python_version。环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。完整 env_audit 保存在该次工具 value 和 Session memory，原生 receipt 可见；environment 段只投影当前绑定，不直接展开历史审计。
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
-- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料；Scientific 的工作反馈只展示科研目录变化及简报，历史工件仍保留。每个 material 段包含 artifact_id、kind、content；answer 的 content 保留原题、回答和可选动作快照，不是只展示一句 yes。要求工件不依赖 resume_artifact_ids，仍按类型自动装入。读取并注入材料不替代权限策略核对 pending_action 和单次批准；必需材料过大时明确超限，不静默截断结构化答案。
+- **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域；builder 展示 resume_artifact_ids 指定的本次材料；Scientific 的工作反馈展示本轮简报，完整累计目录在 research_materials 单独展示，历史工件仍保留。每个 material 段包含 artifact_id、kind、content；answer 的 content 保留原题、回答和可选动作快照，不是只展示一句 yes。要求工件不依赖 resume_artifact_ids，仍按类型自动装入。读取并注入材料不替代权限策略核对 pending_action 和单次批准；必需材料过大时明确超限，不静默截断结构化答案。
 
 资源字段、路径授权等公开约定仍以 [资源契约](CONTRACTS.md#resources)、[问答契约](CONTRACTS.md#questions) 为准。
 
@@ -356,4 +356,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 15.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 16.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

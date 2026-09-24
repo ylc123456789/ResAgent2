@@ -18,6 +18,7 @@ observation_trace 由工具记录确定性生成；模型不能自行填报观�
 持久化结果，重复反馈不重新消耗 LLM 调用。
 
 Scientific 只消费 Orchestrator 的 [Interpreter](../../orchestrator/src/resagent2_orchestrator/interpreter.py)
-交付的科研目录入口、本轮变化和带引用简报；它不生成另一份目录或简报。机器侧仍检查
+交付的最新完整科研目录和本轮带引用简报；它不生成另一份目录或简报。目录中的完整问答
+可按原 ID 读取，阅读答案不消费批准或改变恢复范围。机器侧仍检查
 授权和执行事实，原证据可通过 read_artifact 按需读取。读目录不等于读到其引用的证据。
 共享 workspace_context 投影真实阅读片段，超出上下文预算时保留分页入口。

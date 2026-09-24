@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 15.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 16.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -65,7 +65,7 @@ Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套�
 
 Agent 返回 `needs_user_input`、paused Session 和指向 `question` 工件的 ControlSignal。Orchestrator 分配并保存 PendingQuestion；用户只提交 `UserAnswer(question_id, values, answered_at)`。values 的键集合必须等于保存的问题字段；options 是供用户选择的提示，不是额外的字符串枚举校验。
 
-Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。
+Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。完整问答也作为本 Run 的材料进入科研目录，Scientific 可以按原 ID 读取。阅读历史答案不消费批准、不恢复原任务，也不改变答案的作用域。
 
 操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，不再是当前待答问题的答案或字段不匹配的回答在状态修改前拒绝。消费后即使前置审计失败或进程中断也不恢复批准；缺少执行回执时不自动重放。
 
@@ -187,7 +187,7 @@ Scientific 同样接收 AgentRequest 并返回 AgentResult，使用同一 prompt
 
 `WorkOutcome` 记录 work_request_id、workflow_revision、summary 和每项 WorkTaskOutcome；后者保留任务状态、解释、工件 ID、错误和 warnings。失败/阻塞项必须有错误，成功项不含错误。
 
-Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本轮历次 Attempt 配对为 `WorkRecord`，冻结为 work_record。`WorkFeedback` 保存这些材料的反向交付：run_id、work_request_id、session_id、work_record_artifact_id、index_artifact_id、index_changes 和 brief。它不再复制完整执行记录。反馈保存在 feedback_refs[work_request_id]，Scientific 仍通过原 invoke 和 resume_artifact_ids 接收。
+Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本轮历次 Attempt 配对为 `WorkRecord`，冻结为 work_record。`WorkFeedback` 保存这些材料的反向交付：run_id、work_request_id、session_id、work_record_artifact_id、index_artifact_id 和 brief。它不再复制完整执行记录。反馈保存在 feedback_refs[work_request_id]，Scientific 仍通过原 invoke 和 resume_artifact_ids 接收。
 
 <a id="interpreter"></a>
 
@@ -196,12 +196,13 @@ Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本�
 `WorkInterpreter.interpret(*, record_ref, index, artifacts) -> WorkBrief` 是注入 Controller 的普通 Python 接口，不是第四个 Agent。生产实现为 LLMWorkInterpreter；DeterministicWorkInterpreter 仅显式用于测试，生产没有固定文本降级路径。
 
 - `ResearchIndex(run_id, groups)`：group 含 key、title 和 artifacts。key 使用现有 WorkRequest ID 或 inputs/scientific 分组；条目含原 artifact_id、kind、summary、output_name 及可用的 attempt_number/execution_status。不复制 uri、sha256、权限或新的产物身份。
-- 索引由授权登记表、原工作需求、Task/Attempt 关系确定性生成。失败尝试与成功尝试材料都保留；未提交/未登记文件不在范围内。research_index、work_feedback、question/answer、要求和观察记录不收入目录；work_record 用于执行事实。
-- `index_changes` 使用相同 ResearchIndex 结构，只含新增或变化条目。当前完整目录由 ResearchRun.research_index_ref 指向；冻结版本不覆盖。历史目录也在授权材料中，Controller 将当前目录排在这些目录引用的最后；Scientific 只将最后一个目录作为默认入口。控制层重建目录并计算差异，不维护第二份可变产物账本。
-- `WorkBrief.statements` 每条含 text 和非空 artifact_ids。Interpreter 校验引用确实来自本次读取的文本窗口或完整执行记录；二进制材料只导航，不假装已理解。正文窗口明确截断，每份最多 12000 字符，不能基于未提供内容作断言。
+- 索引由登记材料、原工作需求、Task/Attempt 关系确定性生成。失败尝试与成功尝试材料都保留；未提交/未登记文件不在范围内。成对问答 answer 按保存的 Task/Attempt 归入对应工作，Scientific 问答归入 scientific 组；答案仍是 Controller 保存的用户信息，不冒充 Agent 输出。research_index、work_feedback、单独的 question、要求和观察记录不收入目录；work_record 用于执行事实。
+- 当前完整目录由 ResearchRun.research_index_ref 指向；冻结版本不覆盖。每次构建 Scientific 上下文时，research_materials 展示选定的最新完整目录正文；不再计算或交付目录增量。WorkFeedback 只保留目录引用，不复制目录正文。
+- 索引与读取以同一组登记引用为基础：索引条目必须属于当前 Run、对应登记原件且在 Scientific 可读范围内。子任务 answer 不再因 Task/Attempt 作用域被阅读过滤；恢复材料仍单独校验作用域。简报引用必须在完整索引中可定位、可读取。原件缺失、归属不符或 hash 错误明确失败，不静默丢弃条目。
+- `WorkBrief.statements` 每条含 text 和非空 artifact_ids。简报只说明本轮 WorkRequest 的工作、结果、失败和局限，不累积重写历史总结。本轮相关材料包含任务内成对问答。Interpreter 校验引用确实来自本次读取的文本窗口或完整执行记录；二进制材料只导航，不假装已理解。正文窗口明确截断，每份最多 12000 字符，不能基于未提供内容作断言。
 - Interpreter 只有两版以内的结构化草稿；第二版带第一版的解析/引用错误。它使用同一 Run 的调用预算、截止时间与 trace，不读私有 Session，不执行工具或调度任务。引用检查不保证语义正确。
-- Controller 在 STABLE 后准备反馈，保存后复用，不提前将 WorkRequest 标记为 CONSUMED。仍由 Scientific 有效返回后消费。保存前崩溃可以重新解释，已产生模型消费保留。简报耗尽最后一次额度时先保存完整交付，再以 budget_exhausted 阻止 Scientific 调用。
-- Scientific 模型默认收到目录入口、当前增量和简报；机器侧仍检查原记录的归属及未解决事实。目录生成和 Interpreter 阅读不会增加 Scientific 的 observed 集合，读取目录也不等于读到其引用的证据。
+- Controller 在 STABLE 后准备反馈，保存后复用，不提前将 WorkRequest 标记为 CONSUMED。恢复时如已有新登记材料，只同步完整目录，不重新生成已保存简报；目录未变则复用原快照。仍由 Scientific 有效返回后消费。保存前崩溃可以重新解释，已产生模型消费保留。简报耗尽最后一次额度时先保存完整交付，再以 budget_exhausted 阻止 Scientific 调用。
+- WorkRequest 交接时，Scientific 模型收到最新完整目录正文、本轮带引用简报及原件读取入口，不再额外展开底层登记表；其他上下文保持原样。机器侧仍检查原记录的归属及未解决事实。目录生成和 Interpreter 阅读不会增加 Scientific 的 observed 集合，展示目录也不等于读到其引用的证据。完整目录是必需上下文，超过输入额度时明确失败，不静默降为增量。
 
 <a id="opinion"></a>
 
@@ -489,9 +490,9 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 15.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 16.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
-本版保持统一 AgentRequest/AgentResult、预算与执行限制、WorkspaceAccess 和结构化单次批准机制。删除 ResearchRun 中已无消费者的 answer_task_ids；答案作用域仍由 RecordedAnswer 和冻结 answer 工件保存。schema 13 及更早 Run 不再支持恢复，不保留兼容读取分支。
+本版保持统一 AgentRequest/AgentResult、预算与执行限制、WorkspaceAccess 和结构化单次批准机制。WorkFeedback 不再含 index_changes；Scientific 接收完整科研目录，成对问答可按原 ID 阅读，恢复作用域仍由 RecordedAnswer 和冻结 answer 工件校验。schema 15 及更早 Run 不支持恢复，不保留兼容读取分支。
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 

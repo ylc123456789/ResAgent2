@@ -29,7 +29,7 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 
 `render(chars)` 负责来源、截断/省略语义；Composer 不自行切开代码、JSON或工具调用/回执。文件、工件、诊断、目录通过 components 共用此机制，不给三个Agent分别写分配器。最终仍放不下就走现有超限失败，不增加自动暂停或摘要重试。字符估算不是供应商的精确token数。规则与例子见[上下文预算](../../docs/current/CONTEXT.md#budgets)。
 
-三个 Agent 通过 Components 的材料读取/校验函数从正式工件取得验收要求及本次恢复材料；Scientific 工作反馈只呈现目录变化和简报，依据 `resume_artifact_ids` 选择 answer/work_feedback 并校验作用域。原题与回答作为必需材料交给同一 ContextComposer 计量，装不下明确失败，不静默遗漏。Runtime 不负责工件读取或问题路由；历史 `ask_user [ok]` 只表示问题已发出，不能代替原题、真实回答或前提已满足的证据。
+三个 Agent 通过 Components 的材料读取/校验函数从正式工件取得验收要求及本次恢复材料；Scientific 工作反馈呈现本轮简报，完整科研目录由 Scientific 上下文单独展示；依据 `resume_artifact_ids` 选择 answer/work_feedback 并校验作用域。原题与回答作为必需材料交给同一 ContextComposer 计量，装不下明确失败，不静默遗漏。Runtime 不负责工件读取或问题路由；历史 `ask_user [ok]` 只表示问题已发出，不能代替原题、真实回答或前提已满足的证据。
 
 非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler/Interpreter 都使用它；runtime 不认识编译或解释业务。
 

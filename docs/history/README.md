@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 完整科研目录与问答阅读（未合并）
+
+2026-09-24 在 `fix/code-health` 继续收敛 WorkRequest 交接：本轮带引用简报保持原职责，Scientific 收到更新后的完整科研目录；子任务成对问答按原来源入目录，并打通原件读取。schema **16.0** 删除 index_changes，不保留旧反馈兼容；登记表仍为唯一来源，批准与恢复作用域不变。当前处于实现与验证阶段，服务器尚未验收；见 [ADR-0018](decisions/0018-complete-index-and-paired-answers.md) 与[服务器验收计划](reviews/COMPLETE_INDEX_QA_TEST_2026-09-24.md)。此前 schema 15 的结果保留在下一节，不能代替本轮测试。
+
 ## 科研目录与 Interpreter（未合并）
 
 2026-09-23 在同一 `fix/code-health` 分支实现科研目录与带引用的反向简报，schema **15.0**。产品 `b31648d`、专项回归 `42efaa1`，本地 **1269 passed、1 skipped**，mock completed。原产物登记表保持唯一权威，Interpreter 与 Compiler 并列，权限、预算和 Agent 单入口规则保留。服务器 `36360f85` 已完成两条公开整链（27/132 次请求）和 CUDA 完整训练，核心目录/简报/引用通过独立复核；后续 CLI 定向补测已验证 Experiment 任务问答和完整 Controller 续跑（14 次调用、completed），GPU 采样封存、脚本留存和核验整理完成，三处验收缺口关闭。候选文件名错误的失败处理、任务答案的跨层可发现性作为后续设计事项保留。见[服务器复核与最终收尾](reviews/RESEARCH_HANDOFF_SERVER_REVIEW_2026-09-24.md#verified-closeout)，不把测试方通过计数等同于计划全部覆盖。设计见 [ADR-0017](decisions/0017-research-index-and-work-interpreter.md)，测试步骤与证据要求见[本轮交接](reviews/RESEARCH_HANDOFF_TEST_2026-09-23.md)。此前 schema 14 的通过结论只适用于原测试提交。

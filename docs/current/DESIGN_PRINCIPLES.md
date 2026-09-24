@@ -77,7 +77,8 @@ Scientific 负责科学意义，不负责具体 Agent 调用、任务状态或�
 | 反向 | Controller 收集已登记材料及历次尝试事实；Interpreter 的代码生成科研目录，LLM 生成带引用简报；Controller 保存后交给 Scientific |
 | 产物权威 | Run.artifacts 是唯一登记表，负责原产物身份与来源；科研目录只是可重新生成的导航，不复制路径、hash 或权限 |
 | 状态归属 | Controller 保存当前目录和每轮反馈引用；Interpreter 不修改 Run、不管理 Session、不调度任务 |
-| 默认呈现 | Scientific 看到科研目录入口、本轮变化和简报；底层授权引用仍供工具和校验使用，不再自动展开整份登记表或执行记录 |
+| 默认呈现 | 每轮工作交接提供最新完整科研目录和本轮带引用简报；底层登记引用供工具读取和校验，不再额外展开整份登记表或执行记录 |
+| 阅读闭环 | 目录、简报引用和原件读取使用同一登记来源；完整问答也可追溯。阅读答案不等于消费批准或恢复任务 |
 
 Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的解释不替代 Scientific 的最终判断，引用有效也不证明语义正确。目录和简报不授予权限；读目录不等于读到原证据。验证分层与失败处理仍是后续讨论，不在这一改动中重做。
 
@@ -168,5 +169,6 @@ Capabilities 是模型工具入口，Components 是普通操作与共享呈现�
 - [ADR-0015](../history/decisions/0015-tool-components-boundary.md)：模型工具与普通组件分开，不增加成对的类层级。
 - [ADR-0016](../history/decisions/0016-unified-agent-io-and-run-controls.md)：统一 Agent IO、Run 总预算与授权、准确的单次批准。
 - [ADR-0017](../history/decisions/0017-research-index-and-work-interpreter.md)：派生科研目录与带引用简报；取代 ADR-0014 中 Interpreter 位于 Scientific 内、仅作固定投影的实现选择。
+- [ADR-0018](../history/decisions/0018-complete-index-and-paired-answers.md)：每轮交接展示完整目录，打通成对问答的索引、引用和阅读；取代 ADR-0017 的增量展示选择。
 
 本文明确总体设计目标，并汇总仍有效的规则。历史 ADR 中已被取代的字段、接口和实现不会因此重新生效。发现目标与实现有差距时，应记录差距，再决定具体改动；不能把设计目标写成已经实现或验证的能力。

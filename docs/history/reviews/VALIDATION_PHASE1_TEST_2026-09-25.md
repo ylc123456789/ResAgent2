@@ -1,6 +1,6 @@
 # Validation 阶段 1：服务器定向复测
 
-状态：测试方已报告阶段 1 服务器验收通过（2026-09-25），实测产品提交 `8fc0e79`，schema 16.0。报告与本计划范围核对一致；主开发本轮尚未独立读取服务器原始证据。验收结果及来源见 §6。
+状态：阶段 1 服务器验收通过，主开发已独立复核原始证据（2026-09-25）。实测产品提交 `8fc0e79`，schema 16.0。测试方报告见 §6；后续独立复核、验证器断言补核及覆盖边界见 §7。
 
 ## 1. 范围
 
@@ -74,7 +74,7 @@ git diff --check
 
 **依据测试方提交的报告，阶段 1 验收通过；没有新增必补测试。**
 
-本节的信息来自用户转交的服务器测试报告。主开发已对照本计划及当前确定性测试核对覆盖范围；本轮通过本机已有 SSH 配置访问服务器时认证失败，未读取原始 REPORT.md、验证脚本、Session 或 trace。因此，本节不宣称原始证据已独立复核，也不对验证器实现作未经读取的保证。
+本节记录首次收尾时收到的测试方报告。当时主开发已对照本计划及确定性测试核对覆盖范围，但 SSH 认证失败，尚未读取原始证据。随后使用用户指定的 SSH 身份连接成功，已追加 §7 的独立复核；保留本节原始信息来源，不把后来的复核倒写成此前已完成。
 
 | 验收项 | 测试方报告结果 |
 | --- | --- |
@@ -98,6 +98,44 @@ git diff --check
 
 `/root/autodl-tmp/resagent2/runs/validation-phase1-20260925/`
 
-测试方报告目录内含 REPORT.md、results.json、probes/scripts/ 的 5 份脚本，以及 cases/completion-coding/、cases/completion-experiment/ 的 state、session、trace、final-run.json。验证器名为 verify_completion_feedback.py。后续若独立读取原始证据，应另补复核记录，不能把本节来源说明改写成此前已经复核。
+测试方报告目录内含 REPORT.md、results.json、probes/scripts/ 的 5 份脚本，以及 cases/completion-coding/、cases/completion-experiment/ 的 state、session、trace、final-run.json。验证器名为 verify_completion_feedback.py。后续独立读取原始证据的结果追加在 §7；本节保留测试方报告来源。
 
 阶段 2 的 Run 级明确产物存在要求、阶段 3 的新增运行前检查仍未实现。阶段 1 的通过结论不包含这两部分。
+
+
+<a id="independent-review"></a>
+
+## 7. 原始证据独立复核（2026-09-25）
+
+使用用户指定的 SSH 身份连接成功后，主开发直接读取 TEST_COMMIT、REPORT.md、results.json、探针与验证脚本、两个 Session、完整 trace、Run 状态及冻结工件，并执行额外只读断言。没有重新调用模型，没有修改服务器产品或原始证据。独立审查也确认探针通过正式 build_application 装配，无 mock 完成检查、登记或手工推进完成状态。
+
+**结论：原始证据支持阶段 1 通过，没有发现产品缺陷，无需追加服务器测试。**
+
+两条探针均确认以下事实：
+
+| 项目 | 独立复核 |
+| --- | --- |
+| 真实拒绝 | Session sequence 1 为错名 finish；sequence 3 为 completion_check observation，ok=false、completion_check=rejected，含 artifact_path_missing 与错名 |
+| 反馈与纠正 | 第二次模型请求的 runtime_feedback 段确有诊断；sequence 4–7 为 list_files/read_file，sequence 8 为正确 finish |
+| 原工作延续 | 每个 Run 只有一个 Task、一个 Attempt、一个 Session；所有 trace 的 Run/Session/Agent 身份相符，Task/Attempt/Session completed |
+| 协议记录 | 3 个 tool_turns，每个 call ID 唯一且有对应回执；无未完成 executing_call_id，最终 runtime_feedback 和 pending_action 均为空 |
+| 产物归属 | 每个 Run 恰好一件 metrics，producer 分别为 coding/experiment，Run/Task/Attempt 身份正确，source_path=metrics.json、source_root=workspace |
+| 内容与基线 | 冻结内容、当前源文件、测试工作区 Git HEAD 的 metrics.json 三者字节一致，sha256 为 5aa2ebba82a2c5f8e86eab9e15e49c4e13071b7536667588a2d4efa752f1cb23 |
+| 计量 | 每条 trace 的 attempts[].retry_number 均为 0；call_id:retry_number 列表长度和去重长度均为 3，与 usage.requests 的键逐条一致，状态全 succeeded |
+| 保存一致性 | final-run.json 与 RunStore 文件内容相同；两份测试工作区 Git 状态干净 |
+| 测试与产品 | pytest 原日志 1291 passed / 1 skipped，mock completed / 13 工件，各检查退出码 0；9 包导入正确、pip check 通过；服务器 HEAD 仍为 8fc0e79，受控文件干净 |
+
+finish 工具回执中的 ok=true 只表示提交了候选，回执明确标记 finish_proposed_not_yet_accepted；后续 completion_check 拒绝事件才是完成校验结果。不能仅看工具成功回执判定第一次提交已被接受。
+
+### 验证器断言补核
+
+原 verify_completion_feedback.py 的通过结论成立，但以下断言不足以单独证明报告中的全部说法，已用原始证据和只读断言补足：
+
+- 原计量对账先转换为 set，可能掩盖重复；本次额外检查列表长度等于去重长度，并要求每行 Run/Session/Agent 身份一致。
+- 原 tool_turns >= 2 没有直接验证拒绝；本次检查 completion_check 的 ok、诊断值及先拒绝后纠正的事件顺序。
+- 原 kind 允许 data/evidence/metrics，未检查 source_root 或 Attempt 终态；本次精确核对为 metrics、workspace、completed。
+- 原 source_unchanged 的 hash 部分对同一现存文件重复计算，属于冗余自比；其固定初始文本比较仍有效，所以整条并非恒真。本次进一步比较 Git 初始文件、当前文件和冻结文件的原始字节。
+
+原脚本和 40/40 结果保留，不覆盖。以后复用该验证器时应强化上述断言；当前验收不依赖再次执行模型或让测试 AI 新开 Run。
+
+范围仍是固定 Scheduler 任务探针，Run running 为预期；未宣称 Scientific 自规划整链或 GPU 在本轮重测。阶段 2、3 仍按原方案后续推进，分支未合并。

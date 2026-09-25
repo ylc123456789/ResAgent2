@@ -4,7 +4,7 @@
 
 ## Validation 分阶段修改（未合并）
 
-2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。报告与计划范围一致，无新增必补测试；本轮原始服务器证据尚未独立读取，来源与固定任务覆盖边界见 [验收结果](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#6-服务器验收结果2026-09-25)。后续 Run 级明确产物要求与新增运行前检查尚未实现，见 [分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
+2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。原始 Session、trace、脚本、账本和冻结工件已独立复核，支持通过；验证器弱断言已离线补核，无新增必补测试。结果与固定任务覆盖边界见 [独立复核](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。后续 Run 级明确产物要求与新增运行前检查尚未实现，见 [分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
 
 ## 完整科研目录与问答阅读（未合并）
 

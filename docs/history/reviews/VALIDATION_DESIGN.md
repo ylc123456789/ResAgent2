@@ -1,0 +1,300 @@
+# ResAgent2 Validation 修改方案
+
+状态：阶段 0 已完成源码盘点；阶段 1 实施中。阶段 2、3 后续分阶段推进。
+
+本文定义 Validation 的职责、边界、分阶段改动和验收方式。2026-09-25 开始按阶段实施；各阶段的代码与测试结果记录在本文末尾。保持 Agent 调用模式和 Scientific、Compiler、Interpreter、Scheduler、子 Agent 的职责。
+
+## 1. 目标
+
+Validation 的目标是确认系统能否安全、真实、可追溯地接受一个任务结果。
+
+Validation 不负责证明科研结论正确，也不负责替 Agent 或用户解决问题。
+
+固定代码只检查能够直接确认的事实：
+
+- 数据结构和协议是否正确；
+- Run、Task、Attempt、Session 和 Artifact 是否对应；
+- 路径、权限、工作区和哈希是否正确；
+- 执行记录是否真实完整；
+- 状态转换是否合法；
+- 用户或 Compiler 明确声明的产物要求是否满足。
+
+以下内容暂不由固定 Validation 判断：
+
+- Coding 是否真正解决了自然语言问题；
+- Experiment 的实验设计是否合理；
+- 结果是否足以支持科学结论；
+- Scientific 的判断是否客观正确；
+- 报告是否对复杂证据作出了正确的专业解释。
+
+这些内容由 Agent 基于实际证据判断，并通过报告、Artifact 引用和限制说明表达。
+
+## 2. 编译器类比
+
+ResAgent2 中的 Agent 任务可以按下面的流程理解：
+
+```text
+自然语言任务
+    |
+    v
+Scientific / Compiler 翻译
+    |
+    v
+WorkRequest 和可执行任务
+    |
+    v
+运行前检查
+    |
+    v
+Agent 执行
+    |
+    v
+产物登记
+    |
+    v
+运行后检查
+    |
+    v
+接受结果或报告问题
+```
+
+运行前 Validation 类似编译器的语法、类型和链接检查。发现任务协议、依赖或权限错误时，不启动本次 Agent 执行。
+
+运行后 Validation 类似执行后的结果检查。Agent 可能已经运行，但如果结果不符合系统协议，就不能把它标记为合法完成。
+
+这个类比不表示固定代码能够验证科学语义。固定代码只验证协议、来源、状态和可观察事实。
+
+## 3. 现有架构中的职责
+
+| 模块 | Validation 相关职责 |
+| --- | --- |
+| Scientific | 负责科研目标、任务规划和科学判断 |
+| Compiler | 把 Scientific 已提出的 WorkRequest 翻译成可执行任务；保留原目标和约束 |
+| Coding / Experiment | 执行任务并提交结果与候选产物 |
+| ArtifactRegistry | 登记产物，检查归属、路径、哈希和可读性 |
+| Runtime | 执行权限、工作区、预算和工具调用守卫 |
+| Scheduler / Controller | 调用 Validation，推进、恢复、暂停或终止流程 |
+| Interpreter | 整理执行结果和证据，不负责替代 Validation |
+
+不新增每个 Agent 自己的 Validator，也不新增第二种 Agent 调用模式。所有 Agent 仍然使用统一的自然语言任务和运行上下文。
+
+## 4. 统一诊断格式
+
+Validation 只需要一种统一的诊断格式。实现时应优先复用现有 Contracts 和错误处理机制，不建立平行异常体系。
+
+建议包含以下字段：
+
+```text
+code       必填，机器可识别的稳定错误码
+message    必填，给 Agent、用户和日志看的说明
+subject    可选，问题涉及的文件、Artifact、Task 或其他对象
+refs       可选，相关 Run、Task、Attempt 或 Artifact 引用
+```
+
+`subject` 不是必填字段。文件不存在时可以写 `metrics.json`，但状态转换错误可能没有单一主体，此时省略 `subject`，使用 `refs` 说明范围。
+
+Validation 本身不返回 `retryable`、`fatal` 等调度策略。是否恢复、重试、暂停或终止由 Scheduler 根据现有流程和错误码决定，避免把流程策略写进公共检查器。
+
+空诊断表示通过。一个结果可以包含多个诊断，但每个诊断应说明一个具体问题。
+
+## 5. 明确要求的最小实现（阶段 2，尚未实现）
+
+源码盘点确认：`ConclusionRequirements` 是 Controller 创建的 **Run 级最终要求**，当前只有 `required_evidence_kinds`。它不是 WorkRequest/Task 字段。Task 已有独立的 `TaskAcceptanceSpec`；生产 Compiler 不生成任意 acceptance policy，只为明确的跨任务交接声明逻辑输出名。
+
+后续只在现有 Run 级 `conclusion_requirements` 中扩展最小的产物存在要求。检查通过同一 Run 的登记表，具体字段和匹配规则要在阶段 2 明确，并同步输入入口、Scientific 反馈、最终 gate、schema 和测试。
+
+例如用户明确要求交付 `metrics.json`，才记录这一精确要求；用户只说“比较两个模型”时不能推断文件名。固定代码不解析自然语言，不让 Compiler 猜测用户要求。统一 Agent 入口仍是 `instruction + input_artifacts`。
+
+不把 Run 要求搬到 Task，不把阶段 2 的拟议字段误写成现有接口，不建立第二套兼容要求。
+
+## 6. 分阶段修改
+
+### 阶段 0：梳理现有检查
+
+目标是确认当前行为和调用边界，不改变运行结果。
+
+工作内容：
+
+1. 列出 Contracts、Runtime、ArtifactRegistry、Scheduler、Controller 和各完成入口中的现有检查。
+2. 标记每个检查属于运行前守卫、运行后检查、Artifact 事实检查或业务语义判断。
+3. 找出重复实现、不同入口行为不一致和没有测试覆盖的检查。
+4. 为关键现有行为补确定性测试。
+5. 更新项目内 Validation 设计说明，保持术语和错误边界一致。
+
+这一阶段不把所有代码搬进一个大 Validator，也不为了统一命名而大范围重构。
+
+### 阶段 1：Agent 完成后的固定 Validation
+
+实际已有两道不同职责的完成边界，无须新增入口：
+
+- 原生 Agent 的 `AgentLoop → CompletionCheck.evaluate`：在 Session 完成前检查候选输出。可修正的提交错误通过已有 `CompletionDecision` 返回，原 Session 继续。
+- 接收端 `receive_artifacts / check_acceptance / ScientificCompletionValidator`：验证公开结果、冻结工件、检查最终状态。仍独立检查可替换 ModulePort，不能信任模型或前一道检查已经通过。
+
+统一指的是相同事实使用同一规则，不是把不同层的职责塞进一个函数。优先提取 ArtifactRegistry 已有的文件来源解析到 Components，由 Agent 完成检查与登记共同使用。Runtime 不反向导入 Components。
+
+第一版只检查：
+
+- 返回结果结构；
+- Run、Task、Attempt、Session 的一致性；
+- 候选 Artifact 是否存在；
+- Artifact 是否属于当前 Run；
+- 路径是否在授权工作区；
+- 哈希是否能验证；
+- 报告引用是否指向已登记 Artifact；
+- 完成状态转换是否合法。
+
+Artifact 的登记、哈希和读取继续由 ArtifactRegistry 负责，完成 Validation 只调用公共接口，不复制一套文件系统逻辑。
+
+处理顺序：
+
+```text
+LLM 提交 finish 候选
+    → CompletionCheck 检查
+    → 可修正错误：runtime_feedback，原 Session 继续
+    → 通过：返回统一 AgentResult
+    → 接收端校验、登记、检查已有明确要求
+    → 通过后推进 Task / Run 完成状态
+```
+
+两道边界间文件仍可能变化，所以登记层继续检查。接收端拒绝时保留已有证据并沿既有错误路径处理，不为了纠错另开一个 Agent 调用模式。
+
+检查失败时保留 Attempt、trace、失败产物和诊断，不把任务标记为合法完成。恢复、重试、暂停和终止继续使用现有 Scheduler 机制。
+
+### 阶段 2：`required_artifacts` 检查
+
+在 Run 级最终完成边界中接入 `conclusion_requirements` 的产物存在要求。现阶段尚无 `required_artifacts` 字段；阶段 2 再最小扩展。
+
+检查必须通过 ArtifactRegistry 查询同一 Run 的登记结果，不直接绕过登记表访问文件系统。这样可以保证要求、索引、登记表和实际读取范围一致。
+
+缺少要求产物时返回：
+
+```text
+code: required_artifact_missing
+message: required artifact was not produced
+subject: metrics.json
+```
+
+该结果不能把 Run 标记为完成，但不删除已经产生的失败材料。Agent 或用户负责决定补交产物、修改任务或结束任务。
+
+这一阶段只验证产物存在和可登记，不验证产物内容的科学含义。
+
+### 阶段 3：新的运行前 Validation
+
+完成后的检查稳定后，再补充统一的运行前检查：
+
+- WorkRequest 结构是否可执行；
+- 明确要求的输入 Artifact 是否存在；
+- Task、Attempt、Session 和 Run 是否一致；
+- 权限、工作区和资源范围是否允许；
+- 任务依赖是否满足；
+- 工具和参数是否符合协议。
+
+运行前检查失败时，不启动本次 Agent 执行，只返回诊断。现有权限、预算、路径和命令确认守卫在所有阶段继续生效，不等待本阶段才启用。
+
+## 7. 失败处理边界
+
+Validation 发现问题后只报告问题，不替 Agent 或用户解决问题。
+
+需要区分以下情况：
+
+- 命令真实执行但返回非零退出码：这是一次真实失败执行，应保留记录；
+- 缺少明确要求的产物：结果不能完成，返回可处理诊断；
+- Artifact 归属错误、路径越权、哈希不匹配或身份错误：结果不能接受，保留现场并使用现有致命错误路径；
+- 科学结论可能不充分：不由固定 Validation 判定，由 Scientific 在报告中表达 `supports`、`refutes` 或 `inconclusive`。
+
+不要为每种失败新增一个 Run 状态。优先复用现有的错误、暂停、恢复和终止机制。
+
+## 8. 不应做的修改
+
+本方案明确不做以下事情：
+
+- 不增加 LLM Validator 作为当前必经步骤；
+- 不让固定代码判断科研结论是否正确；
+- 不为 Coding、Experiment、Scientific 分别实现三套 Validation；
+- 不让 Validation 直接修改 Run、Artifact 或用户答案；
+- 不让 Validation 自己决定重试策略；
+- 不把自然语言要求复制成另一套 Agent 输入协议；
+- 不保留新旧两套检查路径作为兼容层；
+- 不为了验证而放宽权限、预算或批准消费规则。
+
+## 9. 测试计划
+
+### 阶段 0 测试
+
+- 现有完成路径行为保持不变；
+- 现有权限、预算、批准和恢复测试继续通过；
+- 各检查入口和错误处理路径有确定性覆盖。
+
+### 阶段 1 测试
+
+- 合法结果通过；
+- 结构错误被拒绝；
+- Task、Attempt、Session 或 Run 归属错误被拒绝；
+- Artifact 缺失、越权、哈希变化和错误引用被拒绝；
+- 非零退出码的真实失败记录被保留；
+- Validation 失败时不会错误推进完成状态。
+
+### 阶段 2 测试
+
+- `required_artifacts` 存在时通过；
+- `required_artifacts` 缺失时返回明确诊断；
+- 要求只匹配同一 Run 的登记产物；
+- 产物登记表、索引和读取入口保持一致；
+- 不要求时不额外推断文件名。
+
+### 阶段 3 测试
+
+- 运行前非法任务不会启动 Agent 工具；
+- 缺少输入 Artifact 时不会创建真实执行记录；
+- 权限、工作区和预算守卫仍然有效；
+- 合法任务的调用模式和状态流程不变。
+
+每个阶段先跑确定性测试和 mock E2E，再跑真实模型整链。GPU 测试只在公共调度或资源检查代码实际改动后加入，不把 GPU 训练作为纯协议改动的必要前置条件。
+
+## 10. 分段提交建议
+
+按以下顺序提交，保持每次提交可独立审查：
+
+1. `document validation boundaries and characterize current behavior`
+2. `add shared post-completion validation`
+3. `validate required artifacts from conclusion requirements`
+4. `add preflight task validation`
+
+每次提交都删除被替代的重复路径，不保留旧接口兼容层。全部阶段通过回归和服务器验收后，再考虑合并目标分支。
+
+## 11. 完成标准
+
+本方案完成后，系统应满足：
+
+- 每个 Agent 仍只有一种调用和工作模式；
+- 所有 Agent 继续使用已有 CompletionCheck；共享事实检查只有一份实现，接收端按职责重新校验；
+- Validation 只验证协议、事实、归属、状态和明确要求；
+- `conclusion_requirements` 只增加最小的产物存在检查；
+- 运行前和运行后错误都能被清楚报告；
+- Agent 或用户负责解决问题，Validation 不替代业务判断；
+- 失败证据、产物索引、登记表和读取权限保持一致；
+- 不出现重复 Validator、兼容层或同一功能的多套逻辑。
+
+## 12. 阶段 0 源码盘点（2026-09-25）
+
+基线：`fix/code-health@8159404`，schema 16.0。
+
+| 现有检查 | 所在代码 | 保留职责 |
+| --- | --- | --- |
+| 请求、结果、状态字段组合 | contracts/models.py | 结构和跨字段一致性 |
+| 工具参数、预算、批准、反馈、Session | runtime/loop.py 与共享权限组件 | 原执行与恢复守卫 |
+| Coding / Experiment / Scientific 完成判断 | agents/*/completion.py | 已有 CompletionCheck，分别读取专业事实 |
+| 候选文件来源、冻结和哈希 | orchestrator/artifacts.py | 工件登记权威 |
+| 结果归属、部分工件保留、明确 Task 要求 | orchestrator/handoffs.py、scheduler.py | 接收检查，通过后再完成 Task |
+| 最终观点、引用、任务终态 | orchestrator/completion.py、controller.py | Run 最终完成，不能证明语义正确 |
+
+实际发现：
+
+1. Experiment 对缺失候选文件直接抛异常，AgentLoop 因而终止 Session，绕过已有可修正反馈。
+2. Coding 不检查候选文件，类似错误直到登记阶段才结束 Attempt。
+3. Experiment 和 Registry 各自解析候选文件，规则存在两处实现。
+4. Scientific 已有可修正反馈；输出名唯一性可与任务 Agent 共享。
+5. Experiment 返回失败执行记录时，如果错误候选排在前面，增量登记可能先失败，尚未保存执行记录。应先交付真实执行记录，保留原错误。
+6. 原文把 conclusion requirements 当作 Task 字段不准确；已按实际 Run 级绑定修正，阶段 1 不扩展要求接口。
+
+阶段 1 范围：共享候选文件和输出名事实检查、接回现有反馈、保留失败执行记录。已有 acceptance policy、科学观点检查、运行前守卫保持各自职责。先完成本地与服务器定向验收，再推进后续要求和运行前阶段。

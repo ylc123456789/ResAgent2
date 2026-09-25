@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## Validation 分阶段修改（未合并）
+
+2026-09-25 在 `fix/code-health` 开始梳理固定 validation。阶段 0 源码盘点与阶段边界见 [修改方案](reviews/VALIDATION_DESIGN.md)。先处理完成候选的事实检查和原 Session 反馈，再推进 Run 级明确产物要求与新的运行前检查；不增加 LLM Validator 或第二种 Agent 调用模式。
+
 ## 完整科研目录与问答阅读（未合并）
 
 2026-09-24 在 `fix/code-health` 继续收敛 WorkRequest 交接：本轮带引用简报保持原职责，Scientific 收到更新后的完整科研目录；子任务成对问答按原来源入目录，并打通原件读取。schema **16.0** 删除 index_changes，不保留旧反馈兼容；登记表仍为唯一来源，批准与恢复作用域不变。当前处于实现与验证阶段，服务器尚未验收；见 [ADR-0018](decisions/0018-complete-index-and-paired-answers.md) 与[服务器验收计划](reviews/COMPLETE_INDEX_QA_TEST_2026-09-24.md)。此前 schema 15 的结果保留在下一节，不能代替本轮测试。

@@ -1,6 +1,6 @@
 # ResAgent2 Validation 修改方案
 
-状态：阶段 0 已完成源码盘点；阶段 1 本地与服务器验收完成，原始证据已独立复核通过。阶段 2 源码已实现，schema 17.0，等待服务器验收；阶段 3 尚未实现。本轮未运行任何测试。
+状态：阶段 0 已完成源码盘点；阶段 1 本地与服务器验收完成，原始证据已独立复核通过。阶段 2 已完成实现与服务器验收，schema 17.0，原始证据已独立复核；阶段 3 尚未实现。
 
 本文定义 Validation 的职责、边界、分阶段改动和验收方式。2026-09-25 开始按阶段实施；各阶段的代码与测试结果记录在本文末尾。保持 Agent 调用模式和 Scientific、Compiler、Interpreter、Scheduler、子 Agent 的职责。
 
@@ -97,7 +97,7 @@ Validation 本身不返回 `retryable`、`fatal` 等调度策略。是否恢复�
 
 空诊断表示通过。一个结果可以包含多个诊断，但每个诊断应说明一个具体问题。
 
-## 5. 明确要求的最小实现（阶段 2，源码已实现、待服务器验收）
+## 5. 明确要求的最小实现（阶段 2，已验收）
 
 `ConclusionRequirements` 是 Controller 创建的 **Run 级最终要求**。schema 17.0 在它与 `ResearchRequest` 中增加 `required_artifacts: list[OutputName]`，默认空；CLI `run` 与交互 shell `/run` 共用可重复的 `--required-artifact NAME`。Controller 创建 Run 时冻结要求，不从 goal、context、constraints 或文件名推断要求。
 
@@ -164,7 +164,7 @@ LLM 提交 finish 候选
 
 ### 阶段 2：`required_artifacts` 检查
 
-在 Run 级最终完成边界接入 `conclusion_requirements.required_artifacts` 的明确存在要求。源码已按 §5 实现，schema 升为 17.0；本轮验收尚未执行。
+在 Run 级最终完成边界接入 `conclusion_requirements.required_artifacts` 的明确存在要求。源码已按 §5 实现，schema 升为 17.0；服务器验收已完成，结果与证据见 §15。
 
 检查必须通过 ArtifactRegistry 查询同一 Run 的登记结果，不直接绕过登记表访问文件系统。这样可以保证要求、索引、登记表和实际读取范围一致。
 
@@ -246,7 +246,7 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 - 产物登记表、索引和读取入口保持一致；存在检查不增加观察记录；
 - 不要求时不额外推断文件名，原 evidence kind 的观察/引用规则独立通过回归。
 
-本轮全部测试在服务器由专门测试 AI 执行，包括全量 pytest、mock、真实 CLI 整链及 Scientific 缺失反馈定向探针。
+本轮全部测试在服务器执行，包括全量 pytest、mock、真实 CLI 整链及 Scientific 缺失反馈定向探针。
 
 ### 阶段 3 测试
 
@@ -328,7 +328,7 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 后续阶段保持原边界：阶段 2 只做 Run 级 conclusion_requirements 的明确产物存在检查，先落实精确匹配语义与输入来源，再同步生产者、消费者及 schema；阶段 3 再整理新的运行前检查。任务入口、LLM 的语义职责和已有权限/预算/恢复流程不因此改变。
 
 
-## 15. 阶段 2 实施与待验收（2026-09-25）
+## 15. 阶段 2 实施与验收（2026-09-25）
 
 - `ResearchRequest` 和 `ConclusionRequirements` 新增默认空的 `required_artifacts: list[OutputName]`，Controller 冻结要求；CLI/shell 使用同源的可重复参数。
 - Components 提供共享授权登记输出查询，Scientific CompletionCheck 与 Registry 复用；最终 gate 经 Registry 再检查实际交付，缺失诊断含稳定 code/message/subject。
@@ -336,4 +336,10 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 - 当前公共 schema 为 17.0；旧 schema 16 及更早 Run 不支持恢复，不迁移或改写历史状态。§12–14 的 schema 16.0 与阶段 1 验收数值是历史事实，保持原样。
 - 已同步现行接口、上下文、架构和 CLI 文档。阶段 3 新的运行前 Validation 尚未实现。
 
-**验证状态：待服务器验收。** 用户指定所有测试在服务器上由专门 AI 执行；本轮本地仅源码/文档编辑与静态审查，没有运行 pytest、mock、真实模型或其他测试。服务器尚未开启，当前地址与 SSH 端口尚未提供；没有本轮测试结果，也没有验收完成结论。工具 schema 指纹须在服务器受控生成、比较并审查，不能以自动刷新基线或放宽断言掩盖差异。
+**验证状态：服务器验收通过。** 产品提交 `f93a4e910e18fbb688969a061a2a75a9783303d1` 的 mock 与两个真实模型场景由测试 AI 执行，原始 Run、Session、trace、usage 和冻结文件已独立复核。mock completed，13/13 工件 hash 一致；正常交付与缺失后补交分别为 12、8 次调用，两个真实 Run 各 14/14 工件 hash 一致。缺失拒绝确实进入下一次真实请求的 runtime_feedback，随后在同一 Scientific Session 内 request_work、登记、阅读并完成；Experiment 使用自己的 Session。
+
+首轮全量回归为 1376 passed、3 failed、1 skipped。`0ed21c660341570201b271f059b218431d9d3e31` 仅补齐过期回答测试桩的既有 artifact_registry 依赖，并更新受控审查后的工具指纹，没有修改产品逻辑或原测试断言。两份完整 schema 对比确认 19 个工具中仅 4 个工具的 7 处 schema_version 字段发生 const/default 16.0→17.0 变化。修复提交在服务器重新确认 9 包导入来源、pip check 并执行全量回归，结果 **1379 passed、1 skipped、0 failed**，退出码 0。
+
+原始真实场景证据在 `/root/autodl-tmp/resagent2/runs/validation-phase2-20260925/`，mock 在同级 `phase2-mock-20260925-214651/`；修复后全量回归在同级 `validation-phase2-retest-0ed21c6-20260925-141124/`，包含精确提交、环境检查、日志与退出码。原始记录保留，两轮证据按提交区分；本地没有运行产品测试。
+
+验收覆盖明确交付及一次受控缺失后的恢复，不证明重复运行可靠性或科学结论有效性。正常场景还经历了未读引用与非法 verdict 的纠正；HTTP 调用成功或无重试不表示领域动作首次即通过。阶段 2 收尾，阶段 3 继续按原范围另行推进。

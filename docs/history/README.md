@@ -4,7 +4,7 @@
 
 ## Validation 分阶段修改（未合并）
 
-2026-09-25 在 `fix/code-health` 开始梳理固定 validation。阶段 0 源码盘点与阶段边界见 [修改方案](reviews/VALIDATION_DESIGN.md)。先处理完成候选的事实检查和原 Session 反馈，再推进 Run 级明确产物要求与新的运行前检查；不增加 LLM Validator 或第二种 Agent 调用模式。
+2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。报告与计划范围一致，无新增必补测试；本轮原始服务器证据尚未独立读取，来源与固定任务覆盖边界见 [验收结果](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#6-服务器验收结果2026-09-25)。后续 Run 级明确产物要求与新增运行前检查尚未实现，见 [分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
 
 ## 完整科研目录与问答阅读（未合并）
 

@@ -1,6 +1,6 @@
 # Validation 阶段 1：服务器定向复测
 
-状态：本地实现完成，服务器尚未执行。分支 `fix/code-health`，schema 16.0。本地基线为 1291 passed / 1 skipped，mock completed、13 工件。
+状态：测试方已报告阶段 1 服务器验收通过（2026-09-25），实测产品提交 `8fc0e79`，schema 16.0。报告与本计划范围核对一致；主开发本轮尚未独立读取服务器原始证据。验收结果及来源见 §6。
 
 ## 1. 范围
 
@@ -68,3 +68,36 @@ git diff --check
 报告分别写明全量回归、mock、两种真实 Agent 探针的结果与限制。原始脚本全部留存，验证器必须核对字段内容、ID、时序与 hash，不用恒真条件。
 
 本轮不改模型上下文结构、命令执行或资源装配，不要求重跑 GPU 训练；既有 GPU 验收不能替代本轮候选反馈证据。暂不合并，不清理历史证据。
+
+
+## 6. 服务器验收结果（2026-09-25）
+
+**依据测试方提交的报告，阶段 1 验收通过；没有新增必补测试。**
+
+本节的信息来自用户转交的服务器测试报告。主开发已对照本计划及当前确定性测试核对覆盖范围；本轮通过本机已有 SSH 配置访问服务器时认证失败，未读取原始 REPORT.md、验证脚本、Session 或 trace。因此，本节不宣称原始证据已独立复核，也不对验证器实现作未经读取的保证。
+
+| 验收项 | 测试方报告结果 |
+| --- | --- |
+| 冻结与环境 | HEAD 全程 8fc0e79，schema 16.0，9/9 包从主仓库导入，pip check 通过 |
+| 确定性回归 | 1291 passed / 1 skipped |
+| mock 整链 | completed，13 工件，最终报告登记 |
+| Coding 真实模型定向探针 | 20/20 PASS，3 次模型调用 |
+| Experiment 真实模型定向探针 | 20/20 PASS，3 次模型调用 |
+| 计量 | 两个 Run 各自 trace/usage 3:3 逐条对账，无 retry，账本全 succeeded |
+| 工作树 | 受控文件干净；仅未跟踪 .ipynb_checkpoints/，未修改产品、合并或推送 |
+
+两种 Agent 均先提交不存在的 metrics_typo.json，下一次请求收到 artifact_path_missing 与错名，随后查阅工作区并提交真实 metrics.json。报告确认 Task/Attempt/Session 保持同一身份，拒绝和成功历史保留，最终清空 runtime_feedback，Session 与 Task completed。原件按 workspace 来源登记，内容和 sha256 与只读源文件一致；没有执行命令或修改源文件。
+
+这两条是固定单任务 fixture，使用真实 Native Agent、Scheduler、模型与登记链；没有 WorkRequest/Scientific 收尾，Run 留在 running 属于预期。它们证明完成候选反馈与纠正链，不代表 Scientific 自规划整链，也不估计模型自然犯错率。请求明确要求先提交错名，是为稳定触发本轮检查。
+
+缺文件纠正属于完成检查拒绝，不是 HTTP retry 或 usage 失败。因此“账本全 succeeded”与“第一次 finish 被拒绝”并不矛盾。
+
+歧义文件、重复输出名、越权、预算耗尽、真实失败执行记录和原 TOOL_FAILED 的保留，沿用本轮确定性回归覆盖。测试计划没有要求真实模型重复每一种异常，也没有要求本轮 GPU 测试，不追加测试任务。
+
+证据根目录：
+
+`/root/autodl-tmp/resagent2/runs/validation-phase1-20260925/`
+
+测试方报告目录内含 REPORT.md、results.json、probes/scripts/ 的 5 份脚本，以及 cases/completion-coding/、cases/completion-experiment/ 的 state、session、trace、final-run.json。验证器名为 verify_completion_feedback.py。后续若独立读取原始证据，应另补复核记录，不能把本节来源说明改写成此前已经复核。
+
+阶段 2 的 Run 级明确产物存在要求、阶段 3 的新增运行前检查仍未实现。阶段 1 的通过结论不包含这两部分。

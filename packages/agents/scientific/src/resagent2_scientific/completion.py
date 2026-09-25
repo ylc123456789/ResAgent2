@@ -13,6 +13,7 @@ from resagent2_contracts import (
     SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
 from resagent2_components import RegisteredArtifactReader, read_artifact_json
+from resagent2_components.artifacts import ArtifactCandidateError, check_output_names
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
@@ -101,7 +102,10 @@ class ScientificCompletionCheck:
 
     def _output_error(self, state: AgentState, candidate: FinishCandidate) -> str | None:
         returned_ids = set()
-        output_names = set()
+        try:
+            check_output_names(candidate.artifacts)
+        except ArtifactCandidateError as error:
+            return f"{error.code}: {error}"
         for item in candidate.artifacts:
             if isinstance(item, ArtifactRef):
                 registered = self._resolve_artifact(item.id) if self._resolve_artifact else None
@@ -125,8 +129,4 @@ class ScientificCompletionCheck:
                     + ". Cite existing evidence IDs in scientific_opinion.evidence_artifact_ids; "
                     "tool and system records are returned automatically"
                 )
-            if item.output_name is not None:
-                if item.output_name in output_names:
-                    return "Use a unique output_name for each output artifact"
-                output_names.add(item.output_name)
         return None

@@ -1,4 +1,4 @@
-"""Read-only access to immutable, registered ArtifactRefs."""
+"""Shared output facts and read-only access to registered ArtifactRefs."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId, SYSTEM_ARTIFACT_KINDS
+from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId, WorkspaceGrant, SYSTEM_ARTIFACT_KINDS
+
+from .workspace import WorkspaceBoundary, WorkspacePermissionError
 
 from .text import MAX_READ_CHARS, slice_text_lines, wrap_text_lines
 
@@ -19,6 +21,67 @@ def research_artifacts(artifacts: list[ArtifactRef]) -> list[ArtifactRef]:
     """Select research materials once for directory construction and its readers."""
     excluded = (SYSTEM_ARTIFACT_KINDS - {"work_record", "answer"}) | {"observation_trace"}
     return [ref for ref in artifacts if ref.kind not in excluded]
+
+
+class ArtifactCandidateError(ValueError):
+    """A submitted output can be corrected by its author, without changing policy."""
+
+    def __init__(self, code: str, message: str, *, subject: str | None = None):
+        self.code = code
+        self.subject = subject
+        super().__init__(message)
+
+
+def check_output_names(artifacts) -> None:
+    """Logical names must identify exactly one output."""
+    names = set()
+    for item in artifacts:
+        if item.output_name is not None:
+            if item.output_name in names:
+                raise ArtifactCandidateError(
+                    "duplicate_output_name", f"Use a unique output_name for each output artifact: {item.output_name}",
+                    subject=item.output_name,
+                )
+            names.add(item.output_name)
+
+
+def resolve_artifact_source(
+    path: str, *, grant: WorkspaceGrant | None, output_dir: str | None = None,
+) -> tuple[str, Path, Path]:
+    """Resolve one file under the same authorized roots at finish and registration.
+
+    Missing or ambiguous submitted files are correctable. Authorization errors
+    and other IO failures propagate; they are never converted into acceptance.
+    """
+    if grant is None and output_dir is None:
+        raise WorkspacePermissionError("workspace-file ArtifactCandidate requires a workspace grant")
+    roots = []
+    if grant is not None:
+        roots.append(("workspace", Path(grant.root).resolve(strict=True)))
+    if output_dir is not None:
+        roots.append(("output_dir", Path(output_dir).resolve()))
+    matches = [(label, root, (root / path).resolve())
+               for label, root in roots if (root / path).is_file()]
+    if len(matches) != 1:
+        raise ArtifactCandidateError(
+            "artifact_path_missing" if not matches else "artifact_path_ambiguous",
+            f"artifact path is missing or ambiguous across authorized roots: {path}",
+            subject=path,
+        )
+    label, root, source = matches[0]
+    if not source.is_file() or not source.is_relative_to(root):
+        raise WorkspacePermissionError("artifact path is outside workspace or not a file")
+    if label == "workspace":
+        source = WorkspaceBoundary(grant).resolve_read_file(path)
+    return label, root, source
+
+
+def check_task_output_artifacts(artifacts, *, grant, output_dir=None) -> None:
+    """Check submitted names and file facts; registration supplies provenance."""
+    check_output_names(artifacts)
+    for item in artifacts:
+        if isinstance(item, ArtifactCandidate) and item.content is None:
+            resolve_artifact_source(item.path, grant=grant, output_dir=output_dir)
 
 
 class ArtifactReadError(ValueError):

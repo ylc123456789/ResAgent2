@@ -171,6 +171,8 @@ Experiment 的测量来自提交的原始结果工件，report 是模块解释�
 
 Coding 可以只分析，Experiment 可以只解读已有结果；是否必须执行或提交指定文件，由明确的验收要求决定。Coding 根据实际差异生成 patch 和验证记录，Experiment 根据真实回执生成执行记录，Scientific 根据实际读取生成观察记录。模型候选不能提交 execution_record、verification_result 或 observation_trace。
 
+完成检查复用既有 AgentLoop → CompletionCheck → runtime_feedback。Coding/Experiment 的候选文件与登记共用 Components 的解析规则，可修正提交错误在同一 Session 中反馈；权限和预算边界继续生效。ArtifactRegistry 仍在接收结果时重新校验并冻结，防止两道检查间文件改变。
+
 两级完成检查职责不同：
 
 - Agent completion check 生成本次变更、验证/实验命令和观察记录，校验领域事实；Scheduler 根据冻结要求验收实际交付。

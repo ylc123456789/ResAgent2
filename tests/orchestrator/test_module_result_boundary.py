@@ -168,3 +168,53 @@ def test_registration_failure_preserves_diagnostics_calls_and_prior_artifact(tmp
     persisted = engine.run_until_stable(run.run_id)
     assert persisted.llm_calls_used == 9
     assert persisted.workflow.tasks[0].warnings == result.warnings
+
+
+def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(tmp_path):
+    """Finalizer ordering and incremental reception preserve the original failure."""
+    from resagent2_components import WorkspaceBoundary
+    from resagent2_contracts import WorkspaceAccess, WorkspaceGrant
+    from resagent2_experiment.completion import ExperimentCompletionCheck
+    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
+
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_boundary", agent_name="experiment",
+        owner="experiment", run_id="run_boundary", task_id="task_boundary",
+        attempt_number=1, created_at=now, updated_at=now,
+    )
+    state.events.append(AgentEvent(
+        sequence=1, step=1, type="observation", tool="run_command", created_at=now,
+        data={"ok": False, "value": {
+            "command": "python train.py", "exit_code": 7, "timed_out": False,
+            "stdout_path": "train.stdout", "stderr_path": "train.stderr",
+            "stderr_tail": "training failed", "duration_seconds": 0.1,
+        }},
+    ))
+    check = ExperimentCompletionCheck(WorkspaceBoundary(WorkspaceGrant(
+        root=str(tmp_path), source="local", access=WorkspaceAccess(read_paths=["."]),
+    )))
+    decision = check.evaluate(state, FinishCandidate(
+        report="Training failed before producing metrics",
+        artifacts=[ArtifactCandidate(
+            kind="data", path="absent.json", media_type="application/json",
+            summary="Requested but absent output",
+        )],
+    ))
+    result = AgentResult(
+        status="failed", report=decision.report, artifacts=decision.artifacts,
+        error=decision.failure, session=_session(SessionStatus.FAILED),
+    )
+    engine, run, attempt = _execute(tmp_path, result)
+    assert run.workflow.tasks[0].status == "failed"
+    assert attempt.error.code == ErrorCode.TOOL_FAILED
+    assert attempt.error.details["exit_code"] == 7
+    assert attempt.error.details["stderr_tail"] == "training failed"
+    assert "absent.json" in attempt.error.details["artifact_registration_error"]
+    assert attempt.error.retryable is False
+    assert len(attempt.artifact_ids) == 1
+    record = run.artifacts[attempt.artifact_ids[0]]
+    assert record.kind == "execution_record"
+    assert read_json(record)["results"][0]["exit_code"] == 7
+    assert engine.load(run.run_id).artifacts[record.id] == record

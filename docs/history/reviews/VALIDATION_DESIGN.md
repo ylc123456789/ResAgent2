@@ -1,6 +1,6 @@
 # ResAgent2 Validation 修改方案
 
-状态：阶段 0 已完成源码盘点；阶段 1 实施中。阶段 2、3 后续分阶段推进。
+状态：阶段 0 已完成源码盘点；阶段 1 本地实现完成，待服务器定向验收。阶段 2、3 后续分阶段推进。
 
 本文定义 Validation 的职责、边界、分阶段改动和验收方式。2026-09-25 开始按阶段实施；各阶段的代码与测试结果记录在本文末尾。保持 Agent 调用模式和 Scientific、Compiler、Interpreter、Scheduler、子 Agent 的职责。
 
@@ -298,3 +298,16 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 6. 原文把 conclusion requirements 当作 Task 字段不准确；已按实际 Run 级绑定修正，阶段 1 不扩展要求接口。
 
 阶段 1 范围：共享候选文件和输出名事实检查、接回现有反馈、保留失败执行记录。已有 acceptance policy、科学观点检查、运行前守卫保持各自职责。先完成本地与服务器定向验收，再推进后续要求和运行前阶段。
+
+
+## 13. 阶段 1 实施结果（2026-09-25）
+
+- Components 新增普通候选文件解析函数，直接提取 Registry 原规则；Registry 与 Coding/Experiment 完成检查共同使用。
+- 三个 Agent 共用输出名唯一性检查。局部候选错误使用内部 ArtifactCandidateError（code、message、可选 subject），沿现有 CompletionDecision/report 反馈，无新对外 schema。
+- 删除 Experiment 自有的候选路径分支；Coding 接入同样检查并接收现有 output_dir。
+- Experiment 的真实执行记录先于模型候选登记，避免后续缺文件时丢失已发生的失败执行。
+- 未新增 Agent 模式、循环、Validator 服务或兼容层；未修改 Scheduler/Controller 状态机、TaskAcceptanceSpec 或 ConclusionRequirements。
+- 已同步 ARCHITECTURE、CONTRACTS、CONTEXT、DESIGN_PRINCIPLES。schema 保持 16.0。
+- 服务器定向测试见 [阶段 1 复测说明](VALIDATION_PHASE1_TEST_2026-09-25.md)。阶段 2、3 尚未实现。
+
+本地验证：最终全量 `python -m pytest tests apps/cli/tests -q` 为 **1291 passed / 1 skipped**；`python -m e2e.mock_e2e` 为 completed、13 工件、final_report 已登记；`git diff --check` 通过。新增原生反馈链测试 10 项、执行记录落盘测试 1 项，原有缺文件测试改为核对拒绝和具体诊断。独立 diff 审查未发现阻断问题。未运行真实模型或服务器/GPU，本结果不代替服务器验收。

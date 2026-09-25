@@ -60,8 +60,12 @@ def test_report_preserves_limits_without_claiming_measurement(tmp_path):
 
 
 def test_missing_file_is_not_delivered(tmp_path):
-    with pytest.raises((OSError, PermissionError)):
-        check(tmp_path).evaluate(state(), FinishCandidate(report="Done", artifacts=[evidence()]))
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(report="Done", artifacts=[evidence()]))
+    assert not decision.complete
+    assert decision.failure is None
+    assert decision.artifacts == []
+    assert "artifact_path_missing" in decision.report
+    assert "metrics.json" in decision.report
 
 
 def test_output_directory_file_is_checked_without_requiring_writable_source(tmp_path):
@@ -98,12 +102,14 @@ def test_failed_finish_preserves_verified_execution_error(tmp_path, exit_code, t
             "duration_seconds": 0.1,
         }},
     ))
-    candidate = FinishCandidate(report="Training failed")
+    candidate = FinishCandidate(report="Training failed", artifacts=[evidence("missing.json")])
     decision = check(tmp_path).evaluate(current, candidate)
     assert decision.failure.code == ErrorCode.TOOL_FAILED
     assert decision.failure.details["stderr_tail"] == "real error"
     assert decision.failure.details["exit_code"] == exit_code
     assert not decision.complete
+    assert decision.artifacts[0].kind == "execution_record"
+    assert decision.artifacts[1].path == "missing.json"
 
 
 def test_unexecuted_failure_text_is_not_command_evidence(tmp_path):

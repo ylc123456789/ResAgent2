@@ -145,7 +145,7 @@ class NativeCodingAgent:
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=CodingCompletionCheck(
-                repository, boundary, baseline=baseline, env_binding=binding,
+                repository, boundary, baseline=baseline, env_binding=binding, output_dir=request.output_dir,
             ),
             action_type=CodingAction, max_context_tokens=self.max_context_tokens,
         )

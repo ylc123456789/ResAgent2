@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from resagent2_contracts import ArtifactCandidate, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
 from resagent2_components import EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, media_type_for
+from resagent2_components.artifacts import ArtifactCandidateError, check_task_output_artifacts
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
@@ -16,11 +17,13 @@ class CodingCompletionCheck:
     def __init__(
         self, repository: GitWorkspace, boundary: WorkspaceBoundary, *,
         baseline: GitBaseline, env_binding: EnvironmentBinding | None = None,
+        output_dir: str | None = None,
     ) -> None:
         self.repository = repository
         self.boundary = boundary
         self.baseline = baseline
         self.env_binding = env_binding
+        self.output_dir = output_dir
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
@@ -66,6 +69,12 @@ class CodingCompletionCheck:
                     "issue": issue if issue else (None if fresh else "Workspace changed after verification"),
                 }),
             ))
+        try:
+            check_task_output_artifacts(
+                artifacts, grant=self.boundary.grant, output_dir=self.output_dir,
+            )
+        except ArtifactCandidateError as error:
+            return CompletionDecision(complete=False, report=f"{error.code}: {error}")
         return CompletionDecision(complete=True, report=candidate.report, artifacts=artifacts)
 
 

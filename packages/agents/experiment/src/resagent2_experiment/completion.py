@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from resagent2_contracts import (
     ArtifactCandidate, ErrorCode, ModuleError, VerificationResult,
     SYSTEM_GENERATED_ARTIFACT_KINDS, latest_command_results,
 )
 from resagent2_components import WorkspaceBoundary
+from resagent2_components.artifacts import ArtifactCandidateError, check_task_output_artifacts
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
 class ExperimentCompletionCheck:
     def __init__(self, boundary: WorkspaceBoundary, *, output_dir: str | None = None) -> None:
         self.boundary = boundary
-        self.output_dir = Path(output_dir).resolve() if output_dir is not None else None
+        self.output_dir = output_dir
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
@@ -28,7 +28,7 @@ class ExperimentCompletionCheck:
         artifacts = list(candidate.artifacts)
         records = self._execution_records(state)
         if records:
-            artifacts.append(ArtifactCandidate(
+            artifacts.insert(0, ArtifactCandidate(
                 kind="execution_record", path="execution_record.json",
                 media_type="application/json", summary="Recorded experiment command outcomes",
                 content=json.dumps({"results": records}),
@@ -43,15 +43,12 @@ class ExperimentCompletionCheck:
                     code=ErrorCode.TOOL_FAILED, message=message, retryable=False, details=evidence,
                 ),
             )
-        for item in candidate.artifacts:
-            if getattr(item, "content", None) is None and hasattr(item, "path"):
-                workspace_file = self.boundary.root / item.path
-                output_file = (self.output_dir / item.path).resolve() if self.output_dir else None
-                if output_file is not None and output_file.is_file():
-                    if not output_file.is_relative_to(self.output_dir) or workspace_file.exists():
-                        raise PermissionError("Output artifact is outside its root or ambiguous")
-                else:
-                    self.boundary.resolve_read_file(item.path)
+        try:
+            check_task_output_artifacts(
+                artifacts, grant=self.boundary.grant, output_dir=self.output_dir,
+            )
+        except ArtifactCandidateError as error:
+            return CompletionDecision(complete=False, report=f"{error.code}: {error}")
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=artifacts,
         )

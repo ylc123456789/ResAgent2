@@ -359,6 +359,12 @@ LLM trace 的 `action_valid` 表示响应已解析出候选动作：单工具 pa
 
 ## 7. 完成与验收
 
+固定完成检查只验证协议、归属和可观察事实；不证明任务语义或科研结论正确。原生 Agent 仍在既有 `CompletionCheck.evaluate` 中完成检查，接收端继续独立校验公开结果和登记状态。
+
+Coding/Experiment 和 ArtifactRegistry 共用 Components 的 `resolve_artifact_source`：候选文件必须在授权 workspace 或本 Attempt 的 output_dir 中唯一定位。缺失或歧义文件、重复 output_name 返回现有 `runtime_feedback`，原 Task/Attempt/Session 继续修改提交；三个 Agent 共用输出名唯一性检查。反馈带稳定 code 和具体文件/名称，未新增对外诊断 schema。连续失败上限、预算和超时继续生效。
+
+越权、IO 异常和登记时的证据损坏不转成可接受结果；接收端错误沿现有失败路径处理。Experiment 已发生的失败执行优先返回原 TOOL_FAILED 和 execution_record，记录排在候选前面，使后续某候选登记失败时仍保留执行事实。不会自动修改文件名、忽略候选或把失败训练改成成功。
+
 统一的 finish 只提交 `report` 和 `artifacts`。它是完成提议，不能自行设置最终 status 或提交另一套机器结果。
 
 - Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录，标明验证是否覆盖当前代码和环境。分析任务可以无修改完成，未执行验证不能被写成已通过。
@@ -442,7 +448,7 @@ WorkspaceBoundary 每次检查真实路径、软链逃逸与授权；`.git`、`.
 
 Coding 失败后在原期限内尽力收集诊断 patch；诊断失败保留原结果的错误、Session、计量和已有工件，以 error.details.diagnostic_patch_error 说明原因，并禁止自动重试。
 
-Coding 使用 components 的内部 `GitBaseline.tree_hash` 表达 Attempt 起点；恢复时从 Session memory 恢复同一基线，不重新扫描为新起点。差异与验证新鲜度检查沿用此基线；环境或代码变动不能由旧验证冒充当前状态。Experiment 不生成启动快照，完成检查直接按 WorkspaceBoundary 校验文件路径。
+Coding 使用 components 的内部 `GitBaseline.tree_hash` 表达 Attempt 起点；恢复时从 Session memory 恢复同一基线，不重新扫描为新起点。差异与验证新鲜度检查沿用此基线；环境或代码变动不能由旧验证冒充当前状态。Experiment 不生成启动快照；Coding/Experiment 完成检查与登记共用文件来源解析，workspace 文件仍由 WorkspaceBoundary 验证授权。
 
 <a id="resources"></a>
 

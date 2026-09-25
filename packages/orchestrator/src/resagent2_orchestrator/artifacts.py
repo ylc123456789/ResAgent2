@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_components.workspace import WorkspaceBoundary, WorkspacePermissionError
+from resagent2_components.artifacts import ArtifactCandidateError, resolve_artifact_source
 
 from resagent2_contracts import (
     AgentOwner,
@@ -85,29 +85,12 @@ class ArtifactRegistry:
         metadata.pop("source_path", None)
         metadata.pop("source_root", None)
         if candidate.content is None:
-            if grant is None and output_dir is None:
-                raise ArtifactRegistrationError(
-                    "workspace-file ArtifactCandidate requires a workspace grant"
+            try:
+                label, workspace, source = resolve_artifact_source(
+                    candidate.path, grant=grant, output_dir=output_dir,
                 )
-            roots = []
-            if grant is not None:
-                roots.append(("workspace", Path(grant.root).resolve(strict=True)))
-            if output_dir is not None:
-                roots.append(("output_dir", Path(output_dir).resolve()))
-            matches = [(label, root, (root / candidate.path).resolve())
-                       for label, root in roots if (root / candidate.path).is_file()]
-            if len(matches) != 1:
-                raise ArtifactRegistrationError("artifact path is missing or ambiguous across authorized roots")
-            label, workspace, source = matches[0]
-            if not source.is_file() or not source.is_relative_to(workspace):
-                raise ArtifactRegistrationError(
-                    "artifact path is outside workspace or not a file"
-                )
-            if label == "workspace":
-                try:
-                    source = WorkspaceBoundary(grant).resolve_read_file(candidate.path)
-                except (OSError, WorkspacePermissionError) as error:
-                    raise ArtifactRegistrationError(str(error)) from error
+            except (ArtifactCandidateError, OSError) as error:
+                raise ArtifactRegistrationError(str(error)) from error
             metadata["source_path"] = source.relative_to(workspace).as_posix()
             metadata["source_root"] = label
 

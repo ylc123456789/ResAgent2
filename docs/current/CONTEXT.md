@@ -71,7 +71,7 @@
 | assistant/tool 历史 | Provider 原始 assistant 内容、reasoning、tool call，以及本地生成的配对 receipt | 按 Session 顺序完整保存；续传检查点后的完整回合，不切开调用/回执；不附加旧轮完整领域 prompt |
 | 领域 `system` 段 | 当前 Agent 唯一 prompt 的职责与用法提示 | 始终必需，是最后一条 `user` 消息内的首段，不是 API `system` 消息 |
 | `history_checkpoint` 段 | 压力下生成的旧交互交接摘要 | 有检查点才出现，必需；仅用于定位/续做，当前状态与回答优先，不是证据 |
-| `runtime_feedback` 段 | 尚待处理的动作/参数/完成检查等拒绝信息 | 有反馈才出现，必需；每轮随当前领域上下文重建，解除规则由 Loop 管理 |
+| `runtime_feedback` 段 | 尚待处理的动作/参数/完成检查等拒绝信息；包括缺失/歧义候选文件及重复输出名的 code 和说明 | 有反馈才出现，必需；每轮随当前领域上下文重建，解除规则由 Loop 管理 |
 | `pending_operation` 段 | Session.pending_action 的工具、准确参数和 action_id，明确该操作尚未执行 | 有待确认动作才出现，必需；不另存状态，消费批准后消失；要求依据当前 answer 决定是否重发 |
 
 原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；操作确认回执额外标记 `execution_status=not_executed`，避免把成功发出问题当作执行成功。不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。

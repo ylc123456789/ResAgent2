@@ -41,14 +41,17 @@ class RenderedFinalReport:
 
 class ScientificCompletionValidator:
     """Check evidence provenance and terminal execution state."""
-    def __init__(self, registry):
+    def __init__(self, registry, artifact_registry):
+        self._artifact_registry = artifact_registry
         self._kinds = {item.workflow_agent_kind for item in registry.definitions}
 
     def validate(self, run, result, refs):
         violations = []
 
-        def reject(code, message, ids=()):
-            violations.append(CompletionViolation(code=code, message=message, related_ids=list(ids)))
+        def reject(code, message, ids=(), *, subject=None):
+            violations.append(CompletionViolation(
+                code=code, message=message, subject=subject, related_ids=list(ids),
+            ))
 
         if result.status not in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
             reject(CompletionViolationCode.INVALID_OPINION, "Scientific has not completed")
@@ -83,8 +86,13 @@ class ScientificCompletionValidator:
             requirement = run.conclusion_requirements_ref
             if requirement is None or run.artifacts.get(requirement.id) != requirement or requirement.kind != "conclusion_requirements" or requirement.run_id != run.run_id:
                 raise ValueError("Run conclusion requirement binding missing or invalid")
-            required = read_json(requirement, ConclusionRequirements).required_evidence_kinds
-            missing = missing_required_evidence_kinds(required, run_id=run.run_id, artifacts=run.artifacts.values(),
+            requirements = read_json(requirement, ConclusionRequirements)
+            for name in self._artifact_registry.missing_required_artifacts(
+                requirements.required_artifacts, run_id=run.run_id, artifacts=run.artifacts,
+            ):
+                reject(CompletionViolationCode.REQUIRED_ARTIFACT_MISSING,
+                       "required artifact was not produced", subject=name)
+            missing = missing_required_evidence_kinds(requirements.required_evidence_kinds, run_id=run.run_id, artifacts=run.artifacts.values(),
                                                       observed_artifact_ids=valid, cited_artifact_ids=cited)
             if missing:
                 reject(CompletionViolationCode.MISSING_EVIDENCE_KIND, "missing observed and cited evidence kinds", missing)

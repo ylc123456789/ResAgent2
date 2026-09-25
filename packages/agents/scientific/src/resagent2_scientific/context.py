@@ -61,6 +61,15 @@ path, download a dataset, or silently substitute one.
 
 Read and cite registered evidence of the kinds required by the supplied
 conclusion_requirements artifact. Authorized imported evidence counts.
+Its required_artifacts list names exact, case-sensitive output_name values that
+must be registered in this Run for final acceptance. These are logical
+delivery names, not filesystem paths, artifact kinds or citation requirements.
+Preserve each explicit name in request_work's objective or constraints and ask
+execution Agents to submit artifacts with that output_name. Do not infer names
+from the goal. If a required output is missing, request the missing work or ask
+the user how to proceed. Your own valid named finish outputs are checked after
+registration by the final gate. A filename alone does not satisfy delivery.
+Existence does not establish scientific correctness.
 The complete research index groups available materials by their original work
 objective, including prior rounds. Read original files by their artifact IDs.
 Current work feedback supplies a cited Interpreter brief for the latest round.

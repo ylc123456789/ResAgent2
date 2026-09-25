@@ -182,6 +182,7 @@ def _request_from_args(args: argparse.Namespace) -> ResearchRequest:
         hypothesis=args.hypothesis,
         context=args.context,
         constraints=args.constraint,
+        required_artifacts=args.required_artifact,
         budget=RunBudget(
             max_llm_calls=args.max_llm_calls,
             timeout_seconds=args.timeout_seconds,
@@ -226,6 +227,10 @@ def _parser(
     run.add_argument("--hypothesis")
     run.add_argument("--context", default="")
     run.add_argument("--constraint", action="append", default=[])
+    run.add_argument(
+        "--required-artifact", action="append", default=[], metavar="NAME",
+        help="require an exact, case-sensitive registered output_name; repeat for multiple names",
+    )
     run.add_argument("--max-tasks", type=int, default=8)
     run.add_argument("--max-attempts", type=int, default=2)
     run.add_argument("--max-llm-calls", type=int, default=200)

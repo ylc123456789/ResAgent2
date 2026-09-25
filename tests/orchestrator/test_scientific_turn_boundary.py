@@ -161,3 +161,39 @@ def test_invalid_usage_does_not_charge_fabricated_calls(tmp_path,calls):
     actual=controller._apply_turn(run.run_id,request,raw)
     assert actual.status == "failed"
     assert actual.llm_calls_used == 2
+
+
+def test_missing_delivery_gate_preserves_registered_artifacts_and_unconsumed_work(tmp_path):
+    from resagent2_orchestrator.handoffs import read_json
+
+    controller, run, _ = prepared(tmp_path)
+    run.conclusion_requirements_ref = system_artifact(
+        controller.scheduler.artifact_registry, run, "conclusion_requirements",
+        ConclusionRequirements(required_artifacts=["metrics"]),
+    )
+    controller.scheduler.store.save(run)
+    request = controller._scientific_request(run)
+    before = dict(run.artifacts)
+    result = reply(run, "completed")
+    result.artifacts.append(ArtifactCandidate(
+        kind="module_report", path="partial.json", media_type="application/json",
+        summary="Partial work is preserved", content='{"partial": true}', output_name="partial",
+    ))
+
+    actual = controller._apply_turn(run.run_id, request, result)
+    assert_unconsumed(actual)
+    assert actual.terminal_error.code == "contract_error"
+    assert actual.final_opinion is None
+    assert actual.final_report_artifact_id is None
+    assert [(item.code.value, item.subject) for item in actual.completion_violations] == [
+        ("required_artifact_missing", "metrics"),
+    ]
+    assert all(actual.artifacts[key] == ref for key, ref in before.items())
+    new_refs = [ref for key, ref in actual.artifacts.items() if key not in before]
+    assert {ref.kind for ref in new_refs} == {"scientific_opinion", "observation_trace", "module_report"}
+    partial = next(ref for ref in new_refs if ref.output_name == "partial")
+    assert read_json(partial) == {"partial": True}
+    durable = controller.scheduler.store.load(run.run_id)
+    assert durable.artifacts == actual.artifacts
+    assert durable.completion_violations == actual.completion_violations
+    assert durable.work_requests[0].status == "stable"

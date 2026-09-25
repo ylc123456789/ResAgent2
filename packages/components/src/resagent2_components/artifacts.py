@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
@@ -116,15 +116,7 @@ class RegisteredArtifactReader:
             return None
         return artifact
 
-    def read_text(
-        self,
-        artifact_id: str,
-        *,
-        max_chars: int = MAX_READ_CHARS,
-        start_line: int | None = None,
-        end_line: int | None = None,
-    ) -> dict:
-        """Verify the entire frozen file before returning an optional text window."""
+    def _resolve_file(self, artifact_id: str) -> tuple[ArtifactRef, Path]:
         artifact = self.resolve_ref(artifact_id)
         if artifact is None:
             raise ArtifactReadError(f"unknown artifact id: {artifact_id}")
@@ -134,6 +126,26 @@ class RegisteredArtifactReader:
         path = Path(url2pathname(parsed.path))
         if not path.is_file():
             raise ArtifactReadError("artifact file is missing")
+        return artifact, path
+
+    def verify(self, artifact_id: str) -> None:
+        """Verify frozen bytes in bounded memory, without decoding or observing."""
+        artifact, path = self._resolve_file(artifact_id)
+        with path.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        if digest != artifact.sha256:
+            raise ArtifactReadError("artifact sha256 does not match frozen content")
+
+    def read_text(
+        self,
+        artifact_id: str,
+        *,
+        max_chars: int = MAX_READ_CHARS,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> dict:
+        """Verify the entire frozen file before returning an optional text window."""
+        artifact, path = self._resolve_file(artifact_id)
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
         if digest != artifact.sha256:
@@ -147,6 +159,29 @@ class RegisteredArtifactReader:
                 text, start_line=start_line, end_line=end_line, max_chars=max_chars,
             ),
         }
+
+
+def missing_required_artifacts(
+    required_names: Iterable[str], *, artifact_ids: Iterable[str],
+    reader: RegisteredArtifactReader,
+) -> list[str]:
+    """Check exact output names against authorized, frozen Run artifacts.
+
+    Only registered refs count; filenames, metadata and finish candidates do
+    not establish delivery. The reader verifies frozen bytes in bounded memory,
+    without decoding or marking them as observed by the Scientific Agent.
+    Corrupt or unreadable registered files remain errors, not missing outputs.
+    """
+    required = list(dict.fromkeys(required_names))
+    if not required:
+        return []
+    present = set()
+    for artifact_id in dict.fromkeys(artifact_ids):
+        ref = reader.resolve_ref(artifact_id)
+        if ref is not None and ref.output_name in required:
+            reader.verify(artifact_id)
+            present.add(ref.output_name)
+    return [name for name in required if name not in present]
 
 
 REPORT_LINE_CHARS = 1_000

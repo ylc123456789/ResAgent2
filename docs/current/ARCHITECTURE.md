@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **16.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **17.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -173,10 +173,12 @@ Coding 可以只分析，Experiment 可以只解读已有结果；是否必须�
 
 完成检查复用既有 AgentLoop → CompletionCheck → runtime_feedback。Coding/Experiment 的候选文件与登记共用 Components 的解析规则，可修正提交错误在同一 Session 中反馈；权限和预算边界继续生效。ArtifactRegistry 仍在接收结果时重新校验并冻结，防止两道检查间文件改变。
 
+Run 级 `required_artifacts` 从 ResearchRequest 显式传入，Controller 冻结为 conclusion_requirements；Scientific 与最终 gate 共用 Components 的精确 output_name 存在规则，经授权 reader 验证冻结 hash。Scientific 缺失时在原 Session 收到反馈，可补请求工作或询问用户；最终 gate 只认可 Registry 中的实际交付。这个要求不增加观察或引用义务，原有证据种类规则独立生效；不解析自然语言，也不转成 Task 字段。
+
 两级完成检查职责不同：
 
 - Agent completion check 生成本次变更、验证/实验命令和观察记录，校验领域事实；Scheduler 根据冻结要求验收实际交付。
-- Run 最终 gate 从完整 Run 核对任务、证据归属、观察集合、观点与局限；失败任务身份由代码写入报告，不要求 Scientific 回传 Task ID。
+- Run 最终 gate 从完整 Run 核对任务、证据归属、观察集合、明确逻辑输出、观点与局限；失败任务身份由代码写入报告，不要求 Scientific 回传 Task ID。
 
 inconclusive 可以是合法完成的科学意见；completed_with_warnings 必须保留缺口。字段合法、工具成功、Run 完成和科学结论正确不能互相替代。
 

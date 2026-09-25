@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "16.0"
+SCHEMA_VERSION = "17.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["16.0"] = SCHEMA_VERSION
+    schema_version: Literal["17.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +456,8 @@ class ResearchRequest(ContractModel):
     constraints: list[NonEmptyStr] = Field(default_factory=list)
     input_artifacts: list[ArtifactImport] = Field(default_factory=list)
     required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
+    # Exact registered logical output names, never inferred from task prose.
+    required_artifacts: list[OutputName] = Field(default_factory=list)
     budget: RunBudget
     execution_limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
     permissions: RunPermissions
@@ -1285,9 +1287,11 @@ class WorkFeedback(ContractModel):
 
 
 class ConclusionRequirements(ContractModel):
-    """Run-bound final citation requirements, stored as artifact content."""
+    """Run-bound final citation and output requirements, stored as artifact content."""
 
     required_evidence_kinds: list[RequiredEvidenceKind] = Field(default_factory=list)
+    # Case-sensitive ArtifactRef.output_name values, not file paths or kinds.
+    required_artifacts: list[OutputName] = Field(default_factory=list)
 
 
 class ObservationTrace(ContractModel):

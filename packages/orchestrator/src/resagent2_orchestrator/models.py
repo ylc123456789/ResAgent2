@@ -43,6 +43,7 @@ class CompletionViolationCode(StrEnum):
     INVALID_OPINION = "invalid_opinion"
     UNOBSERVED_EVIDENCE = "unobserved_evidence"
     MISSING_EVIDENCE_KIND = "missing_evidence_kind"
+    REQUIRED_ARTIFACT_MISSING = "required_artifact_missing"
     MISSING_LIMITATIONS = "missing_limitations"
     INCONSISTENT_TASK_RESULT = "inconsistent_task_result"
 
@@ -52,6 +53,7 @@ class CompletionViolation(OrchestratorModel):
 
     code: CompletionViolationCode
     message: str = Field(min_length=1)
+    subject: str | None = None
     related_ids: list[str] = Field(default_factory=list)
 
 

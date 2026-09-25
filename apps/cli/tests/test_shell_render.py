@@ -239,3 +239,19 @@ def test_render_trace_labels_serial_tools_and_compaction():
 def test_render_trace_metadata_does_not_invent_raw_calls():
     joined = "\n".join(render_trace([{"tool": "finish", "tool_calls_sha256": "opaque"}]))
     assert "[tool_calls]" not in joined and "opaque" not in joined
+
+
+@pytest.mark.parametrize("subject", [None, "metrics.json"])
+def test_render_final_identifies_completion_violation_subject(subject):
+    from resagent2_orchestrator import CompletionViolation
+
+    run = _run(status="failed")
+    run.completion_violations = [CompletionViolation(
+        code="required_artifact_missing", message="required artifact was not produced",
+        subject=subject,
+    )]
+    suffix = f" [{subject}]" if subject is not None else ""
+    assert (
+        f"  required_artifact_missing{suffix}: required artifact was not produced"
+        in render_final(run)
+    )

@@ -149,6 +149,35 @@ def test_run_passes_goal_and_workspace_to_existing_interfaces(tmp_path: Path):
     assert builder.calls[0]["workspaces"]["ws_main"].location == str(workspace.resolve())
 
 
+@pytest.mark.parametrize("names", [[], ["metrics.json", "Summary", "metrics.json"]])
+def test_run_passes_only_explicit_required_artifacts_to_controller(tmp_path, names):
+    controller = _Controller(_run())
+    flags = [part for name in names for part in ("--required-artifact", name)]
+
+    result = cli(
+        ["run", "--goal", "Produce metrics.json", "--data-root", str(tmp_path), *flags],
+        application_builder=_Builder(controller),
+    )
+
+    assert result == EXIT_COMPLETED
+    assert controller.created[1].required_artifacts == names
+
+
+def test_run_rejects_invalid_required_artifact_before_building_application(tmp_path):
+    controller = _Controller(_run())
+    builder = _Builder(controller)
+
+    with pytest.raises(ValidationError, match="required_artifacts"):
+        cli(
+            ["run", "--goal", "Produce metrics", "--data-root", str(tmp_path),
+             "--required-artifact", "results/metrics.json"],
+            application_builder=builder,
+        )
+
+    assert controller.created is None
+    assert builder.calls == []
+
+
 def test_goal_file_is_read_explicitly(tmp_path: Path):
     goal_file = tmp_path / "goal.txt"
     goal_file.write_text("a long research goal", encoding="utf-8")

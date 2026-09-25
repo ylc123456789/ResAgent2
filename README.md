@@ -32,11 +32,13 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 - 无参数或 `resagent2 shell`：交互监控壳；Ctrl-C 只停监看，不取消 Run；
 - 共享数据集由部署者在 `RESAGENT2_DATASET_ROOT/catalog.json` 注册；用户不必每次指定物理路径。缺必需数据集时询问用户，不自行下载或静默替换。
 
+明确要求某项交付时，可重复使用 `--required-artifact NAME`。名称精确匹配本 Run 已登记工件的 `output_name`，区分大小写；文件名或自然语言提及不会自动成为机器要求。
+
 安装、模型配置、数据根目录与完整示例见 [CLI README](apps/cli/README.md)。
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `16.0`（`SCHEMA_VERSION="16.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `17.0`（`SCHEMA_VERSION="17.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 

@@ -199,3 +199,20 @@ def test_display_deduplicates_unchanged_non_tty_blocks():
     display.render(["two"])
 
     assert stream.getvalue() == "one\ntwo\n"
+
+
+@pytest.mark.parametrize("names", [[], ["metrics.json", "Summary", "metrics.json"]])
+def test_shell_run_passes_explicit_required_artifacts(tmp_path, monkeypatch, names):
+    shell = _shell(tmp_path, InMemoryRunStore())
+    created = []
+    shell.application_builder = lambda **kwargs: SimpleNamespace(
+        controller=SimpleNamespace(create_run=lambda run_id, request: created.append((run_id, request))),
+    )
+    shell.runner = SimpleNamespace(start=lambda action: action())
+    monkeypatch.setattr(shell, "_watch", lambda run_id: None)
+    flags = [part for name in names for part in ("--required-artifact", name)]
+
+    shell._cmd_run(["--run-id", "run_x", "--goal", "Produce metrics.json", *flags])
+
+    assert created[0][0] == "run_x"
+    assert created[0][1].required_artifacts == names

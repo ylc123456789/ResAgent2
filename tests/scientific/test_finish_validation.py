@@ -180,3 +180,120 @@ def test_native_finish_rejects_even_same_session_input_ref_then_recovers(tmp_pat
     assert result.llm_calls == persisted.llm_calls_used == 2
     assert "Input, foreign or unregistered artifacts" in client.contexts[1].text
     assert all(getattr(item, "id", None) != ref.id for item in result.artifacts)
+
+
+class NativeActionClient:
+    tool_session_key = "required-output-recovery"
+
+    def __init__(self, actions):
+        self.actions = actions
+        self.contexts = []
+
+    def next_tool_call(self, context, schemas, turns, **kwargs):
+        index = len(self.contexts)
+        self.contexts.append(context)
+        name, arguments = self.actions[index]
+        return ToolCallTurn(tool_calls=[NativeToolCall(
+            id=f"delivery_{index}", name=name, arguments=json.dumps(arguments),
+        )])
+
+
+def required_output_request(tmp_path):
+    registry = ArtifactRegistry(tmp_path / "required-artifacts")
+    requirements = registry.register_system_artifact(
+        ArtifactCandidate(
+            kind="conclusion_requirements", path="requirements.json",
+            media_type="application/json", summary="Required delivery",
+            content=json.dumps({"required_artifacts": ["metrics"]}),
+        ),
+        run_id=RUN_ID, source_type="conclusion_requirement",
+    )
+    request = AgentRequest(
+        run_id=RUN_ID, agent="scientific", instruction="Deliver the requested metrics",
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=30),
+        permissions=AgentPermissions(request_work=True), input_artifacts=[requirements],
+    )
+    return registry, request
+
+
+def test_native_missing_output_feedback_can_request_work_and_resume_same_session(tmp_path):
+    registry, request = required_output_request(tmp_path)
+    client = NativeActionClient([
+        ("finish", finish().model_dump(mode="json")),
+        ("request_work", {
+            "assessment": {"statement": "The required metrics have not been produced"},
+            "work_request": {
+                "objective": "Produce metrics with output_name metrics",
+                "expected_evidence": ["Measured metrics"],
+            },
+        }),
+        ("finish", finish().model_dump(mode="json")),
+    ])
+    store = InMemorySessionStore()
+    agent = ScientificAgent(client, store=store)
+    with execution_budget(max_llm_calls=5, timeout_seconds=30):
+        paused = agent.invoke(request)
+    persisted = store.load(SESSION_ID)
+
+    assert paused.status == "request_work"
+    assert paused.control.action == "request_work"
+    assert paused.session.id == persisted.session_id == SESSION_ID
+    assert paused.llm_calls == persisted.llm_calls_used == 2
+    assert persisted.status == SessionStatus.PAUSED
+    assert len(persisted.tool_turns) == 2
+    assert "required_artifact_missing" in client.contexts[1].text
+    assert "subject=metrics" in client.contexts[1].text
+
+    delivered = registry.register(
+        ArtifactCandidate(
+            kind="experiment_result", path="measured.json", media_type="application/json",
+            summary="Measured result", content='{"accuracy": 0.8}', output_name="metrics",
+        ),
+        grant=None, producer=AgentOwner.EXPERIMENT, run_id=RUN_ID,
+        task_id="task_metrics", attempt_number=1, index=1, existing_ids=set(),
+    )
+    resumed = request.model_copy(update={
+        "parent_session_id": SESSION_ID,
+        "input_artifacts": [*request.input_artifacts, delivered],
+    })
+    with execution_budget(max_llm_calls=3, timeout_seconds=30):
+        completed = agent.invoke(resumed)
+    persisted = store.load(SESSION_ID)
+
+    assert completed.status == "completed"
+    assert completed.session.id == paused.session.id == persisted.session_id
+    assert completed.llm_calls == 1
+    assert persisted.llm_calls_used == 3
+    assert persisted.status == SessionStatus.COMPLETED
+    assert len(persisted.tool_turns) == 3
+    assert persisted.runtime_feedback is None
+    trace = next(item for item in completed.artifacts if item.kind == "observation_trace")
+    assert json.loads(trace.content)["observed_artifact_ids"] == []
+    assert all(getattr(item, "id", None) != delivered.id for item in completed.artifacts)
+
+
+def test_native_missing_output_feedback_can_ask_user_in_same_session(tmp_path):
+    _, request = required_output_request(tmp_path)
+    client = NativeActionClient([
+        ("finish", finish().model_dump(mode="json")),
+        ("ask_user", {
+            "assessment": {"statement": "Required metrics are unavailable"},
+            "text": "Which source should produce the required metrics?",
+            "requested_fields": ["source"],
+        }),
+    ])
+    store = InMemorySessionStore()
+    agent = ScientificAgent(client, store=store)
+    with execution_budget(max_llm_calls=5, timeout_seconds=30):
+        result = agent.invoke(request)
+    persisted = store.load(SESSION_ID)
+
+    assert result.status == "needs_user_input"
+    assert result.control.action == "ask_user"
+    assert result.session.id == persisted.session_id == SESSION_ID
+    assert result.llm_calls == persisted.llm_calls_used == 2
+    assert persisted.status == SessionStatus.PAUSED
+    assert len(persisted.tool_turns) == 2
+    assert "required_artifact_missing" in client.contexts[1].text
+    assert "subject=metrics" in client.contexts[1].text
+    assert any(item.kind == "question" for item in result.artifacts)

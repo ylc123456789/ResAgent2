@@ -30,13 +30,15 @@ ResAgent2 的顶层控制模块。
 - answer、work_feedback、dataset_catalog 及验收要求的冻结工件交接；
 - ArtifactCandidate 的 workspace 边界检查、hash、复制和 provenance 登记；
 - revision-bound WorkflowPatch 和旧 revision 历史；
-- finish gate；
+- finish gate：通过 ArtifactRegistry 检查冻结的 Run 级 `required_artifacts`，只接受本 Run 精确 `output_name` 对应的已登记产物；
 - 内存 RunStore 和原子 JSON RunStore；Run 创建时固定授权，RunUsagePort 在模型发送前保存请求占用；
 - WorkflowCompiler：`WorkflowCompiler` Protocol + `DeterministicWorkflowCompiler`（测试 fixture）+ `LLMWorkflowCompiler`（注入 `CompilerLLM`，最多两版 draft）。成功返回 CompilationResult，失败抛 CompilationError，两者报告本次调用消费，详见 [接口](../../docs/current/CONTRACTS.md#compiler)。
 
 Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 16.0，旧 Run 保留但不迁移或恢复。
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 17.0，旧 Run 保留但不迁移或恢复。
+
+Controller 创建 Run 时将 `ResearchRequest.required_artifacts` 冻结到 `conclusion_requirements`。最终缺失诊断为 `required_artifact_missing`，message 为 `required artifact was not produced`，subject 为要求的名称；不能完成 Run，保留已有证据。此要求不额外要求观察或引用，原有 `required_evidence_kinds` 单独检查。
 
 Controller/Scheduler 给三个 Agent、Compiler 与 Interpreter 绑定同一请求用量和剩余期限。AgentResult.llm_calls 只用于诊断，不重复扣费；预算耗尽与超时按对应错误终止。操作批准沿用公开问答工件，不能改变 Run 权限。详见[运行控制契约](../../docs/current/CONTRACTS.md#research-request)。
 

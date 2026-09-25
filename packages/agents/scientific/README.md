@@ -10,6 +10,10 @@ ask_user 的问题进入 question artifact，当前判断保存在 scientific_as
 
 finish 提交 report 及一个 scientific_opinion JSON artifact。完成检查验证内容格式、
 真实观察过的引用、要求的证据 kind，以及失败工作对应的科研限制说明。
+`conclusion_requirements.required_artifacts` 给出用户显式声明的逻辑输出名，精确、区分大小写地匹配本 Run 已登记的 `output_name`。缺失时已有 CompletionCheck 返回 runtime_feedback，同一 Session 可继续 request_work 或 ask_user，共用原预算。Scientific 自己合法命名的 finish 候选可先提出，最终仍由接收端登记并独立检查。
+
+存在检查不要求读取或引用对应产物，不增加 observation_trace；`required_evidence_kinds` 的观察和引用规则保持独立。Scientific 应在工作目标或约束中保留用户的明确名称，让执行 Agent 按同名 output_name 提交，不能把文件名或科学结论当成交付事实。
+
 observation_trace 由工具记录确定性生成；模型不能自行填报观察历史。
 文献检索中途登记的 ArtifactRef 可以同轮读取，并按原 ID 返回。
 

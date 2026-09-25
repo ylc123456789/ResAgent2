@@ -71,12 +71,13 @@ class ScientificAgent:
                 self.resource_layout.dataset_root, request_dataset_refs(request),
             )
             requirements = []
+            required_artifacts = []
             unresolved = []
             for ref in request.input_artifacts:
                 if ref.kind == "conclusion_requirements":
-                    requirements.extend(
-                        read_artifact_json(reader, ref.id, ConclusionRequirements).required_evidence_kinds
-                    )
+                    material = read_artifact_json(reader, ref.id, ConclusionRequirements)
+                    requirements.extend(material.required_evidence_kinds)
+                    required_artifacts.extend(material.required_artifacts)
             feedback_refs = [ref for ref in request.input_artifacts if ref.kind == "work_feedback"]
             if feedback_refs:
                 current = next((ref for ref in feedback_refs if ref.id in request.resume_artifact_ids),
@@ -115,6 +116,7 @@ class ScientificAgent:
             permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
             completion_check=ScientificCompletionCheck(
                 unresolved, list(dict.fromkeys(requirements)),
+                required_artifacts=required_artifacts,
                 resolve_artifact=reader.resolve_ref, reader=reader,
                 input_artifact_ids=[item.id for item in request.input_artifacts],
             ),

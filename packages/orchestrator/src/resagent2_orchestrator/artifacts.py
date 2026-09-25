@@ -11,7 +11,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_components.artifacts import ArtifactCandidateError, resolve_artifact_source
+from resagent2_components.artifacts import (
+    ArtifactCandidateError, RegisteredArtifactReader, missing_required_artifacts,
+    resolve_artifact_source,
+)
 
 from resagent2_contracts import (
     AgentOwner,
@@ -58,6 +61,15 @@ class ArtifactRegistry:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def missing_required_artifacts(
+        self, required_names, *, run_id: RunId, artifacts: dict[str, ArtifactRef],
+    ) -> list[str]:
+        """Query the Run registration map and verify matching frozen outputs."""
+        reader = RegisteredArtifactReader(list(artifacts.values()), run_id=run_id)
+        return missing_required_artifacts(
+            required_names, artifact_ids=artifacts, reader=reader,
+        )
 
     def register(
         self,

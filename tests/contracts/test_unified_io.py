@@ -54,7 +54,7 @@ def test_all_agents_use_the_same_request_and_result(agent):
 
 @pytest.mark.parametrize("field", [
     "goal", "constraints", "inputs", "dataset_refs", "answers", "facts", "continuation",
-    "acceptance", "acceptance_ref", "required_evidence_kinds", "capability", "mode",
+    "acceptance", "acceptance_ref", "required_evidence_kinds", "required_artifacts", "capability", "mode",
 ])
 def test_request_rejects_parallel_task_semantics(field):
     with pytest.raises(ValidationError, match="Extra inputs"):

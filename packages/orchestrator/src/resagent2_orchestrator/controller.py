@@ -53,7 +53,7 @@ class ResearchController:
         self.interpreter = interpreter
         self.scheduler = scheduler
         self.registry = registry
-        self.gate = gate or ScientificCompletionValidator(registry)
+        self.gate = gate or ScientificCompletionValidator(registry, scheduler.artifact_registry)
         self.report_renderer = report_renderer or FinalReportRenderer()
         self.dataset_ref_source = dataset_ref_source
 
@@ -70,7 +70,10 @@ class ResearchController:
             run.artifacts[ref.id] = ref
         run.conclusion_requirements_ref = system_artifact(
             self.scheduler.artifact_registry, run, "conclusion_requirements",
-            ConclusionRequirements(required_evidence_kinds=request.required_evidence_kinds),
+            ConclusionRequirements(
+                required_evidence_kinds=request.required_evidence_kinds,
+                required_artifacts=request.required_artifacts,
+            ),
         )
         self._save(run)
         return self.run_until_stable(run_id)

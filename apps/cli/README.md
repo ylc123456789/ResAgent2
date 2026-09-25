@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 16.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 17.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -88,6 +88,18 @@ resagent2 run \
 resagent2 run --workspace /path/to/repo --goal-file goal.txt
 ```
 
+明确要求交付逻辑输出时，重复使用 `--required-artifact NAME`；交互 shell 的 `/run` 使用相同参数：
+
+```bash
+resagent2 run --workspace /path/to/repo \
+  --goal "比较已有结果，交付指标和分析说明" \
+  --required-artifact metrics.json --required-artifact analysis
+```
+
+`NAME` 使用 `OutputName`：1–128 个 ASCII 字母、数字、下划线、点或连字符，以字母开头。它精确、区分大小写地匹配本 Run 登记工件的 `output_name`，不是磁盘路径、文件名、kind 或 metadata。比如源文件为 `results/metrics.json`，仍须提交 `output_name="metrics.json"` 才满足该要求。未传参数时列表为空，系统不会从目标文本推断文件名。重复相同名称只要求该名称存在一次。
+
+要求在创建 Run 时冻结为 `conclusion_requirements`。缺失时 Scientific 在原 Session 收到反馈，可请求补交工作或询问用户；最终 gate 只接受实际登记且通过冻结文件 hash 检查的产物。这是存在要求，不额外要求 Scientific 阅读或引用该产物，也不证明其内容正确；原有证据引用规则独立生效。
+
 查看、回答和恢复：
 
 ```bash
@@ -107,7 +119,7 @@ Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下�
 
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 
-常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
+常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint` / `--required-artifact`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
 
 <a id="run-controls"></a>
 

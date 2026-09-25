@@ -13,7 +13,9 @@ from resagent2_contracts import (
     SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
 from resagent2_components import RegisteredArtifactReader, read_artifact_json
-from resagent2_components.artifacts import ArtifactCandidateError, check_output_names
+from resagent2_components.artifacts import (
+    ArtifactCandidateError, check_output_names, missing_required_artifacts,
+)
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
 
@@ -36,12 +38,14 @@ class ScientificCompletionCheck:
     def __init__(
         self, unresolved_task_outcomes: list[WorkTaskOutcome],
         required_evidence_kinds: list[str] | None = None, *,
+        required_artifacts: list[str] | None = None,
         resolve_artifact: Callable[[str], ArtifactRef | None] | None = None,
         reader: RegisteredArtifactReader | None = None,
         input_artifact_ids: list[str] | None = None,
     ) -> None:
         self._unresolved = unresolved_task_outcomes
         self._required_evidence_kinds = required_evidence_kinds or []
+        self._required_artifacts = required_artifacts or []
         self._resolve_artifact = resolve_artifact
         self._reader = reader
         self._input_artifact_ids = frozenset(input_artifact_ids or [])
@@ -91,6 +95,32 @@ class ScientificCompletionCheck:
                 report="Still missing required evidence of kind " + ", ".join(missing)
                 + "; observe and cite registered artifacts of those kinds",
             )
+        if self._required_artifacts:
+            if self._reader is None:
+                raise ValueError("Required artifacts have no authorized registry reader")
+            available_ids = [
+                *sorted(self._input_artifact_ids), *observed,
+                *[item.id for item in candidate.artifacts if isinstance(item, ArtifactRef)],
+            ]
+            # This pre-registration boundary may propose its own valid outputs.
+            # The receiving gate must still register and independently verify them.
+            pending_names = {
+                item.output_name for item in candidate.artifacts
+                if isinstance(item, ArtifactCandidate) and item.output_name is not None
+            }
+            missing_outputs = missing_required_artifacts(
+                [name for name in self._required_artifacts if name not in pending_names],
+                artifact_ids=available_ids, reader=self._reader,
+            )
+            if missing_outputs:
+                return CompletionDecision(
+                    complete=False,
+                    report="\n".join(
+                        f"required_artifact_missing: required artifact was not produced; subject={name}"
+                        for name in missing_outputs
+                    ) + "\nRequest the missing work or ask the user how to proceed; "
+                    "delivery requires a registered artifact with that exact output_name.",
+                )
         if self._unresolved and not opinion.limitations:
             return CompletionDecision(
                 complete=False,

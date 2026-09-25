@@ -1,6 +1,6 @@
 # ResAgent2 Validation 修改方案
 
-状态：阶段 0 已完成源码盘点；阶段 1 本地与服务器验收完成，原始证据已独立复核通过。阶段 2、3 后续分阶段推进。
+状态：阶段 0 已完成源码盘点；阶段 1 本地与服务器验收完成，原始证据已独立复核通过。阶段 2 源码已实现，schema 17.0，等待服务器验收；阶段 3 尚未实现。本轮未运行任何测试。
 
 本文定义 Validation 的职责、边界、分阶段改动和验收方式。2026-09-25 开始按阶段实施；各阶段的代码与测试结果记录在本文末尾。保持 Agent 调用模式和 Scientific、Compiler、Interpreter、Scheduler、子 Agent 的职责。
 
@@ -97,15 +97,17 @@ Validation 本身不返回 `retryable`、`fatal` 等调度策略。是否恢复�
 
 空诊断表示通过。一个结果可以包含多个诊断，但每个诊断应说明一个具体问题。
 
-## 5. 明确要求的最小实现（阶段 2，尚未实现）
+## 5. 明确要求的最小实现（阶段 2，源码已实现、待服务器验收）
 
-源码盘点确认：`ConclusionRequirements` 是 Controller 创建的 **Run 级最终要求**，当前只有 `required_evidence_kinds`。它不是 WorkRequest/Task 字段。Task 已有独立的 `TaskAcceptanceSpec`；生产 Compiler 不生成任意 acceptance policy，只为明确的跨任务交接声明逻辑输出名。
+`ConclusionRequirements` 是 Controller 创建的 **Run 级最终要求**。schema 17.0 在它与 `ResearchRequest` 中增加 `required_artifacts: list[OutputName]`，默认空；CLI `run` 与交互 shell `/run` 共用可重复的 `--required-artifact NAME`。Controller 创建 Run 时冻结要求，不从 goal、context、constraints 或文件名推断要求。
 
-后续只在现有 Run 级 `conclusion_requirements` 中扩展最小的产物存在要求。检查通过同一 Run 的登记表，具体字段和匹配规则要在阶段 2 明确，并同步输入入口、Scientific 反馈、最终 gate、schema 和测试。
+要求仅精确、区分大小写地匹配同一 Run 已登记 `ArtifactRef.output_name`。`OutputName` 为 1–128 个 ASCII 字母、数字、下划线、点或连字符，以字母开头；它不是路径、文件名、kind 或 metadata。例如要求 `metrics.json` 时，磁盘同名文件或 `output_name="Metrics.json"` 都不满足；必须登记 `output_name="metrics.json"`。重复要求只表达一次存在要求；不同登记产物可以同名，所有匹配文件都须通过冻结 hash 校验。
 
-例如用户明确要求交付 `metrics.json`，才记录这一精确要求；用户只说“比较两个模型”时不能推断文件名。固定代码不解析自然语言，不让 Compiler 猜测用户要求。统一 Agent 入口仍是 `instruction + input_artifacts`。
+Scientific 的 CompletionCheck 与 Registry 复用 Components 的 `missing_required_artifacts`，通过 `RegisteredArtifactReader` 检查授权、Run 归属和冻结字节，不绕过登记表扫描工作区。只有存在要求，不新增观察或引用要求；原 `required_evidence_kinds` 的观察与引用规则独立生效。机器存在检查不写入 Scientific 的观察记录。
 
-不把 Run 要求搬到 Task，不把阶段 2 的拟议字段误写成现有接口，不建立第二套兼容要求。
+Scientific 缺失交付时沿已有 runtime_feedback 继续同一 Session，可 request_work 补交或 ask_user。其自己的合法命名 finish 候选可以先提议，接收端必须实际登记并独立复验，最终 gate 才认可交付。损坏的登记工件保持原拒绝路径，不转换成可接受结果或普通缺失。
+
+要求不进入 WorkRequest/Task 字段，不代替已有 `TaskAcceptanceSpec`。Scientific 负责在工作目标或约束中保留用户明确的名称，Compiler 保持原目标和约束，执行 Agent 按该 output_name 提交；固定代码不解析自然语言，统一 Agent 入口仍为 `instruction + input_artifacts`。
 
 ## 6. 分阶段修改
 
@@ -162,7 +164,7 @@ LLM 提交 finish 候选
 
 ### 阶段 2：`required_artifacts` 检查
 
-在 Run 级最终完成边界中接入 `conclusion_requirements` 的产物存在要求。现阶段尚无 `required_artifacts` 字段；阶段 2 再最小扩展。
+在 Run 级最终完成边界接入 `conclusion_requirements.required_artifacts` 的明确存在要求。源码已按 §5 实现，schema 升为 17.0；本轮验收尚未执行。
 
 检查必须通过 ArtifactRegistry 查询同一 Run 的登记结果，不直接绕过登记表访问文件系统。这样可以保证要求、索引、登记表和实际读取范围一致。
 
@@ -236,11 +238,15 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 
 ### 阶段 2 测试
 
-- `required_artifacts` 存在时通过；
-- `required_artifacts` 缺失时返回明确诊断；
-- 要求只匹配同一 Run 的登记产物；
-- 产物登记表、索引和读取入口保持一致；
-- 不要求时不额外推断文件名。
+- CLI 与 shell 显式输入、Contracts 往返和 Controller 冻结一致；schema 16 及更早 Run 拒绝恢复且原记录保留；
+- 精确 output_name 已登记时通过，缺失或仅文件名相同则返回明确诊断；大小写、重复要求与同名多登记规则一致；
+- Scientific 缺失时收到 runtime_feedback，在同一 Run/Session 内请求工作、补交并完成，预算和身份不重置；
+- 原生候选先提议、接收端实际登记；可替换 ModulePort 不能绕过最终 gate；
+- 要求只匹配同一 Run 的授权登记产物，损坏的冻结内容被拒绝；
+- 产物登记表、索引和读取入口保持一致；存在检查不增加观察记录；
+- 不要求时不额外推断文件名，原 evidence kind 的观察/引用规则独立通过回归。
+
+本轮全部测试在服务器由专门测试 AI 执行，包括全量 pytest、mock、真实 CLI 整链及 Scientific 缺失反馈定向探针。
 
 ### 阶段 3 测试
 
@@ -320,3 +326,14 @@ Validation 发现问题后只报告问题，不替 Agent 或用户解决问题�
 报告与阶段 1 计划范围一致。首次收尾因 SSH 认证失败仅核对了报告；随后使用用户指定身份连接成功，已独立读取原始 trace、Session、脚本、账本与冻结工件，并补核事件顺序、计量唯一性和 Git 初始字节。原始证据支持通过，阶段 1 收尾，无新增必补测试。验证器的弱断言及离线补核见 [独立复核](VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。
 
 后续阶段保持原边界：阶段 2 只做 Run 级 conclusion_requirements 的明确产物存在检查，先落实精确匹配语义与输入来源，再同步生产者、消费者及 schema；阶段 3 再整理新的运行前检查。任务入口、LLM 的语义职责和已有权限/预算/恢复流程不因此改变。
+
+
+## 15. 阶段 2 实施与待验收（2026-09-25）
+
+- `ResearchRequest` 和 `ConclusionRequirements` 新增默认空的 `required_artifacts: list[OutputName]`，Controller 冻结要求；CLI/shell 使用同源的可重复参数。
+- Components 提供共享授权登记输出查询，Scientific CompletionCheck 与 Registry 复用；最终 gate 经 Registry 再检查实际交付，缺失诊断含稳定 code/message/subject。
+- 精确区分大小写的 output_name 存在要求独立于证据 kind 的观察/引用要求；无要求不从自然语言推断。Scientific 同 Session 反馈可继续请求工作或提问，沿用原预算、授权和身份。
+- 当前公共 schema 为 17.0；旧 schema 16 及更早 Run 不支持恢复，不迁移或改写历史状态。§12–14 的 schema 16.0 与阶段 1 验收数值是历史事实，保持原样。
+- 已同步现行接口、上下文、架构和 CLI 文档。阶段 3 新的运行前 Validation 尚未实现。
+
+**验证状态：待服务器验收。** 用户指定所有测试在服务器上由专门 AI 执行；本轮本地仅源码/文档编辑与静态审查，没有运行 pytest、mock、真实模型或其他测试。服务器尚未开启，当前地址与 SSH 端口尚未提供；没有本轮测试结果，也没有验收完成结论。工具 schema 指纹须在服务器受控生成、比较并审查，不能以自动刷新基线或放宽断言掩盖差异。

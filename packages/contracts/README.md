@@ -1,6 +1,6 @@
 # contracts
 
-跨模块稳定类型和接口。当前 wire schema 为 `16.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
+跨模块稳定类型和接口。当前 wire schema 为 `17.0`；不支持直接恢复旧版本 Run 或 Session，不修改旧记录。
 
 三个 Agent 共同使用 `invoke(AgentRequest) -> AgentResult`。任务内容只有 `instruction` 和 `input_artifacts`；预算、权限、工作区和恢复定位保留明确控制字段。结果业务内容只有 `report + artifacts`，状态、控制动作、Session、错误和实际调用计量独立保存。
 
@@ -15,6 +15,8 @@
 - `WorkFeedback`、`ScientificOpinion`、`ObservationTrace` 等结构化 artifact 内容。
 
 图节点只允许 Coding 和 Experiment，Scientific 由 Controller 调用。任务提交阶段的验收要求及逻辑输出名称登记为一份 `acceptance_requirements`，已接受任务和 Attempt 只保存同一正式引用。
+
+`ResearchRequest.required_artifacts` 和冻结的 `ConclusionRequirements.required_artifacts` 均为默认空的 `list[OutputName]`，只要求当前 Run 登记的精确 `output_name` 存在；与已观察、已引用的 `required_evidence_kinds` 分开。它不是 Task/WorkRequest 字段，也不从自然语言推断。
 
 问题和工作请求以 artifact 传递，`control` 仅引用正式 artifact ID 或本次结果中的候选下标。回答内容保存问题快照、请求字段、可选选项和准确的 Run/Task/Attempt/Session 归属。回答键使用 `AnswerFieldName`：ASCII 字母开头，后续为字母、数字或下划线，总长 1-64。
 

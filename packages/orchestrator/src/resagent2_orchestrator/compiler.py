@@ -103,7 +103,9 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "not execution: one approved operation may require calling the same tool again "
         "after approval. Do not turn a single intended operation into a one-tool-call limit.",
         "Return CompilationDraft. Use instruction as the only task text. Do not invent "
-        "metric names, file paths, acceptance policies, permissions or runtime identities.",
+        "metric names, file paths, acceptance policies, permissions or runtime identities. "
+        "Preserve explicitly requested artifact output_name values verbatim in the task "
+        "instruction; Run delivery requirements do not create a new task acceptance policy.",
         "Dependencies refer only to keys in this draft and require success. "
         "Conditional repairs are requested in a later round after an actual failure.",
         "Future input bindings select a logical output_name declared by a direct dependency. "

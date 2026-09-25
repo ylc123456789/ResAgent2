@@ -133,7 +133,8 @@ def render_final(run: Any) -> list[str]:
     if run.completion_violations:
         lines.append("Completion violations:")
         for violation in run.completion_violations:
-            lines.append(f"  {violation.code.value}: {violation.message}")
+            subject = f" [{violation.subject}]" if violation.subject is not None else ""
+            lines.append(f"  {violation.code.value}{subject}: {violation.message}")
     return lines
 
 

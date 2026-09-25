@@ -13,7 +13,7 @@
 | [process.py](src/resagent2_components/process.py) | shell-free 命令解析/执行、凭据过滤、日志、进程树超时终止 |
 | [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
-| [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、报告生成、媒体类型、登记接口形状 |
+| [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
 | [context.py](src/resagent2_components/context.py)、[text.py](src/resagent2_components/text.py) | 共享读取/环境/诊断投影；文本窗口与长行呈现 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、平级文献来源、共用 HTTP 节奏 |
 
@@ -34,6 +34,8 @@ ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 
 workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环境状态；材料按 Runtime 的统一权重/优先级分配，旧读取保留时序和后续内置修改标记。规则与预算只在 [CONTEXT](../../docs/current/CONTEXT.md) 维护；调用语义见 [CONTRACTS](../../docs/current/CONTRACTS.md#components)。
+
+`missing_required_artifacts` 共用 `RegisteredArtifactReader` 的 Run 授权与冻结 hash 检查，精确比较已登记 Ref 的 `output_name`；存在检查通过 `verify` 分块计算文件 hash，不解码文本或全量载入二进制产物；不扫描工作区、不按文件名猜测，也不把存在检查写成 Scientific 的观察记录。Scientific 和 Registry 复用此事实规则，登记权威仍在 Orchestrator。
 
 <a id="literature"></a>
 

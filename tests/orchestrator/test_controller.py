@@ -1503,3 +1503,81 @@ def test_failed_compiler_usage_comes_from_reservations(tmp_path, usage_known) ->
     assert run.llm_calls_used == (4 if usage_known else 1)
     assert run.terminal_error is not None
     assert run.terminal_error.details["compiler_usage_known"] is usage_known
+
+
+def test_required_outputs_are_frozen_in_the_conclusion_requirement_artifact():
+    ask = {
+        "tool": "ask_user",
+        "arguments": {
+            "assessment": {"statement": "Need the metric source"},
+            "text": "Which source should supply the metrics?", "requested_fields": ["source"],
+        },
+    }
+    controller = build_controller(actions=[ask])
+    request = research_request().model_copy(update={"required_artifacts": ["metrics", "analysis"]})
+    run = controller.create_run("run_frozen_outputs", request)
+    assert run.status == RunStatus.PAUSED
+    snapshot = run.conclusion_requirements_ref
+    assert read_json(snapshot, ConclusionRequirements).required_artifacts == ["metrics", "analysis"]
+
+    request.required_artifacts[:] = ["replacement"]
+    persisted = controller.scheduler.store.load(run.run_id)
+    assert persisted.conclusion_requirements_ref == snapshot
+    assert read_json(persisted.conclusion_requirements_ref, ConclusionRequirements).required_artifacts == [
+        "metrics", "analysis",
+    ]
+    forwarded = controller._scientific_request(persisted)
+    assert snapshot in forwarded.input_artifacts
+
+
+def test_controller_registers_required_scientific_candidate_before_final_acceptance():
+    action = finish_action()
+    action["arguments"]["artifacts"].append(ArtifactCandidate(
+        kind="module_report", path="analysis.md", media_type="text/markdown",
+        summary="Requested analysis", content="The analysis", output_name="analysis",
+    ).model_dump(mode="json"))
+    controller = build_controller(actions=[action])
+    request = research_request().model_copy(update={"required_artifacts": ["analysis"]})
+    run = controller.create_run("run_scientific_delivery", request)
+
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
+    deliveries = [ref for ref in run.artifacts.values() if ref.output_name == "analysis"]
+    assert len(deliveries) == 1
+    assert deliveries[0].producer == AgentOwner.SCIENTIFIC
+    assert deliveries[0].session_id == run.scientific_session.id
+    assert run.final_opinion.evidence_artifact_ids == []
+    assert run.scientific_observed_artifact_ids == []
+    assert run.final_report_artifact_id in run.artifacts
+    assert controller.scheduler.artifact_registry.missing_required_artifacts(
+        ["analysis"], run_id=run.run_id, artifacts=run.artifacts,
+    ) == []
+
+
+def test_missing_output_feedback_can_execute_work_and_resume_without_citation():
+    controller = build_controller(actions=[finish_action(), request_work_action(), finish_action()])
+    produced = completed_result().model_copy(update={"artifacts": [
+        ArtifactCandidate(
+            kind="experiment_result", path="result.json", media_type="application/json",
+            summary="Measured output", content='{"accuracy": 0.8}', output_name="metrics",
+        ),
+    ]})
+    controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT] = ModuleBinding(
+        owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([produced]),
+    )
+    request = research_request().model_copy(update={"required_artifacts": ["metrics"]})
+    run = controller.create_run("run_required_work", request)
+
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
+    assert len(run.work_requests) == 1
+    assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
+    assert run.work_requests[0].scientific_session_id == run.scientific_session.id
+    assert any(ref.output_name == "metrics" for ref in run.artifacts.values())
+    assert run.final_opinion.evidence_artifact_ids == []
+    assert run.scientific_observed_artifact_ids == []
+    contexts = controller.scientific_port.llm_client.contexts
+    assert len(contexts) == 3
+    assert "required_artifact_missing" in contexts[1].text
+    assert "subject=metrics" in contexts[1].text
+    persisted = controller.scientific_port.store.load(run.scientific_session.id)
+    assert persisted.session_id == run.scientific_session.id
+    assert persisted.llm_calls_used == run.llm_calls_used == 3

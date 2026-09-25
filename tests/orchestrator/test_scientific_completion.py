@@ -49,7 +49,7 @@ def prepared(tmp_path):
         status="completed", created_at=now, updated_at=now)
     run = ResearchRun(run_id='run_gate', request=ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2)), status='running', scientific_session=session, created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(registry, run, "conclusion_requirements", ConclusionRequirements())
-    gate = ScientificCompletionValidator(WorkflowAgentRegistry(definitions=[WorkflowAgentDefinition(workflow_agent_kind="experiment")]))
+    gate = ScientificCompletionValidator(WorkflowAgentRegistry(definitions=[WorkflowAgentDefinition(workflow_agent_kind="experiment")]), registry)
     return registry, run, gate
 
 
@@ -194,3 +194,139 @@ def test_each_system_kind_supports_its_defined_scope_and_replay(prepared, kind):
         assert first == registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type=source, **fields)
         with pytest.raises(ValueError):
             registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type="forged", **fields)
+
+
+def require_outputs(prepared, names):
+    registry, run, _ = prepared
+    run.conclusion_requirements_ref = system_artifact(
+        registry, run, "conclusion_requirements", ConclusionRequirements(required_artifacts=names),
+    )
+
+
+def named_delivery(prepared, *, name="metrics", run_id=None, path="measurements.json"):
+    registry, run, _ = prepared
+    ref = registry.register_scientific(
+        ArtifactCandidate(
+            kind="module_report", path=path, media_type="application/json",
+            summary="Delivered report", content='{"measurement": 1}', output_name=name,
+        ),
+        run_id=run_id or run.run_id, session_id=run.scientific_session.id,
+    )
+    run.artifacts[ref.id] = ref
+    return ref
+
+
+def test_required_output_does_not_force_observation_or_citation(prepared):
+    _, run, gate = prepared
+    require_outputs(prepared, ["metrics"])
+    ref = named_delivery(prepared)
+    result, refs = registered_result(prepared)
+    accepted = gate.validate(run, result, refs)
+    assert accepted.ok
+    assert accepted.report.evidence == []
+    assert run.scientific_observed_artifact_ids == []
+    assert ref.id not in accepted.report.opinion.evidence_artifact_ids
+
+
+@pytest.mark.parametrize("source", ["missing", "wrong_case", "filename", "foreign_run", "unregistered"])
+def test_gate_requires_registered_exact_name_in_same_run(prepared, tmp_path, source):
+    _, run, gate = prepared
+    require_outputs(prepared, ["metrics"])
+    if source == "wrong_case":
+        named_delivery(prepared, name="Metrics")
+    elif source == "filename":
+        named_delivery(prepared, name=None, path="metrics")
+    elif source == "foreign_run":
+        named_delivery(prepared, run_id="run_foreign")
+    elif source == "unregistered":
+        ref = named_delivery(prepared)
+        del run.artifacts[ref.id]
+    else:
+        (tmp_path / "metrics").write_text("A workspace file alone is insufficient", encoding="utf-8")
+    result, refs = registered_result(prepared)
+    actual = gate.validate(run, result, refs)
+    assert not actual.ok
+    assert [(item.code.value, item.message, item.subject, item.related_ids) for item in actual.violations] == [
+        ("required_artifact_missing", "required artifact was not produced", "metrics", []),
+    ]
+
+
+@pytest.mark.parametrize("fault", ["missing", "corrupt"])
+def test_gate_rejects_unreadable_registered_delivery_as_authority_error(prepared, fault):
+    from pathlib import Path
+
+    _, run, gate = prepared
+    require_outputs(prepared, ["metrics"])
+    ref = named_delivery(prepared)
+    path = Path(ref.uri.removeprefix("file://"))
+    if fault == "missing":
+        path.unlink()
+    else:
+        path.write_text("changed", encoding="utf-8")
+    result, refs = registered_result(prepared)
+    actual = gate.validate(run, result, refs)
+    assert not actual.ok
+    assert CompletionViolationCode.INVALID_OPINION in {item.code for item in actual.violations}
+    assert CompletionViolationCode.REQUIRED_ARTIFACT_MISSING not in {item.code for item in actual.violations}
+
+
+def test_registered_deliveries_from_different_rounds_can_share_a_required_name(prepared):
+    registry, run, gate = prepared
+    require_outputs(prepared, ["metrics"])
+    named_delivery(prepared)
+    later = registry.register(
+        ArtifactCandidate(
+            kind="experiment_result", path="later.json", media_type="application/json",
+            summary="Later measured metrics", content='{"measurement": 2}', output_name="metrics",
+        ),
+        grant=None, producer=AgentOwner.EXPERIMENT, run_id=run.run_id,
+        task_id="task_later", attempt_number=1, index=1, existing_ids=set(run.artifacts),
+    )
+    run.artifacts[later.id] = later
+    result, refs = registered_result(prepared)
+    assert gate.validate(run, result, refs).ok
+
+
+def test_pending_scientific_output_only_counts_after_receiving_registration(prepared):
+    registry, run, gate = prepared
+    require_outputs(prepared, ["analysis"])
+    pending = ArtifactCandidate(
+        kind="module_report", path="analysis.md", media_type="text/markdown",
+        summary="Requested analysis", content="The completed analysis", output_name="analysis",
+    )
+    result, refs = registered_result(prepared)
+    result.artifacts.append(pending)
+    rejected = gate.validate(run, result, refs)
+    assert not rejected.ok
+    assert any(item.subject == "analysis" for item in rejected.violations)
+
+    registered = registry.register_scientific(
+        pending, run_id=run.run_id, session_id=run.scientific_session.id,
+    )
+    run.artifacts[registered.id] = registered
+    result.artifacts[-1] = registered
+    assert gate.validate(run, result, [*refs, registered]).ok
+
+
+def test_gate_without_output_requirements_does_not_read_unrelated_files(prepared):
+    from pathlib import Path
+
+    _, run, gate = prepared
+    ref = named_delivery(prepared)
+    Path(ref.uri.removeprefix("file://")).unlink()
+    result, refs = registered_result(prepared)
+    assert gate.validate(run, result, refs).ok
+
+
+def test_registry_uses_supplied_run_map_and_verifies_frozen_delivery(prepared):
+    registry, run, _ = prepared
+    ref = named_delivery(prepared)
+    assert registry.missing_required_artifacts(
+        ["metrics"], run_id=run.run_id, artifacts=run.artifacts,
+    ) == []
+    assert registry.missing_required_artifacts(
+        ["metrics"], run_id=run.run_id, artifacts={},
+    ) == ["metrics"]
+    assert registry.missing_required_artifacts(
+        ["metrics"], run_id="run_other", artifacts={ref.id: ref},
+    ) == ["metrics"]

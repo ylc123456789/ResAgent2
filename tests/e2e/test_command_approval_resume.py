@@ -260,7 +260,10 @@ def test_stale_first_answer_cannot_change_second_command_or_session(case):
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=SimpleNamespace(invoke=forbidden),
         compiler=SimpleNamespace(compile=forbidden),
-        scheduler=SimpleNamespace(store=run_store, resume_task_in_place=forbidden),
+        scheduler=SimpleNamespace(
+            store=run_store, resume_task_in_place=forbidden,
+            artifact_registry=ArtifactRegistry(case.root / "artifacts"),
+        ),
         registry=WorkflowAgentRegistry(definitions=[]),
     )
     files = [*run_store.root.glob("*.json"), *(case.root / "sessions").glob("*.json")]

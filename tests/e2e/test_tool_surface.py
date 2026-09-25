@@ -4,7 +4,7 @@ Descriptions include class docstrings and guidance, not only input schemas.
 The fixture is a regression baseline, not permission to auto-update snapshots.
 Schema 13 updates control schema constants and adds the Coding delete_path tool.
 Other workspace, artifact, literature and environment tools retain their surface.
-Schema 14, 15 and 16 only update the embedded public schema version constants.
+Schema 14, 15, 16 and 17 only update the embedded public schema version constants.
 """
 
 import hashlib

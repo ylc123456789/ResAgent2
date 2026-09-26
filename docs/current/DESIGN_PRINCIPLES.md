@@ -80,7 +80,7 @@ Scientific 负责科学意义，不负责具体 Agent 调用、任务状态或�
 | 默认呈现 | 每轮工作交接提供最新完整科研目录和本轮带引用简报；底层登记引用供工具读取和校验，不再额外展开整份登记表或执行记录 |
 | 阅读闭环 | 目录、简报引用和原件读取使用同一登记来源；完整问答也可追溯。阅读答案不等于消费批准或恢复任务 |
 
-Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的解释不替代 Scientific 的最终判断，引用有效也不证明语义正确。目录和简报不授予权限；读目录不等于读到原证据。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已观察、已引用或科学有效。新的运行前检查仍留待后续阶段。
+Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的解释不替代 Scientific 的最终判断，引用有效也不证明语义正确。目录和简报不授予权限；读目录不等于读到原证据。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已观察、已引用或科学有效。新增统一运行前 Validation 暂缓实现；现有请求、依赖、预算、权限和读取时校验继续生效。只有具体问题证明需要时，再评估最小补充，详见 [Validation 方案](../history/reviews/VALIDATION_DESIGN.md)。
 
 ## 2. 修改时保持的十二条约束
 

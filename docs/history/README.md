@@ -2,9 +2,13 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## L3 规程换题（尚未执行）
+
+2026-09-26 更新[现行 L3 指南](../guides/L3_RESEARCH_TEST.md)：保留真实 CLI、短目标、有限问答和独立验收，研究题目改为 CIFAR-10 / ResNet18 的置信度校准；覆盖当前统一 IO、Interpreter、完整科研目录和明确产物交付。官方基准依据与取舍列在指南中，本次只是规程设计。旧学习率调度[规程](reviews/L3_RESEARCH_TEST_2026-09-16.md)原文归档，原验收不重新评分。
+
 ## Validation 分阶段修改（未合并）
 
-2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。原始 Session、trace、脚本、账本和冻结工件已独立复核，支持通过；验证器弱断言已离线补核，无新增必补测试。结果与固定任务覆盖边界见 [独立复核](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。后续 Run 级明确产物要求与新增运行前检查尚未实现，见 [分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
+2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。原始 Session、trace、脚本、账本和冻结工件已独立复核，支持通过；验证器弱断言已离线补核，无新增必补测试。结果与固定任务覆盖边界见 [独立复核](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。随后阶段 2 的 Run 级明确产物要求已完成实现与服务器验收（schema 17.0），阶段 3 新增运行前 Validation 于 2026-09-26 决定暂缓；证据与收尾见[分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
 
 ## 完整科研目录与问答阅读（未合并）
 

@@ -81,7 +81,7 @@ resagent2 run --run-id run_literature_fallback_check \
 
 小补验确认实际文献链路可用后，更新原 PRE-CHECK 的**产品身份、外部服务与成本确认**。复核旧研究仓库/数据/准备 SHA 未变即可，不重新写准备补丁。若最初 workspace 尚无正式 Run 修改，可以继续使用；若已变动，先报告，不清空或覆盖。
 
-执行最新版 [L3 规程](../../guides/L3_RESEARCH_TEST.md)：
+执行最新版 [L3 规程](L3_RESEARCH_TEST_2026-09-16.md)：
 
 - Flash 单配置；1M 窗口、256K 输出上限、Agent 128K 均不变。
 - 冻结 `--max-tasks 12 --max-attempts 2 --max-llm-calls 200 --timeout-seconds 14400`。

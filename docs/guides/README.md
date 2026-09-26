@@ -7,7 +7,7 @@
 | 了解系统究竟怎么跑 | [理解一次研究任务](UNDERSTANDING.md) |
 | 运行任务、看进度、回答问题 | [CLI 使用说明](../../apps/cli/README.md) |
 | 装环境、定位代码、修改并验证 | [开发与验证](DEVELOPMENT.md) |
-| 测试一次接近真实的研究过程 | [L3 风格测试规程](L3_RESEARCH_TEST.md)（复现步骤及既有案例入口；不代表当前提交重跑过 L3） |
+| 测试一次接近真实的研究过程 | [L3 风格测试规程](L3_RESEARCH_TEST.md)（2026-09-26 置信度校准案例；真实 CLI、有限问答、独立复核，尚未执行） |
 | 查模块职责 | [当前架构](../current/ARCHITECTURE.md) |
 | 查方法、字段、状态、失败与恢复 | [模块接口与契约](../current/CONTRACTS.md) |
 

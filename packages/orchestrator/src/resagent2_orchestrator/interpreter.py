@@ -80,7 +80,17 @@ def validate_brief(brief: WorkBrief, allowed_ids: set[str]) -> WorkBrief:
 
 def _execution_window(reader: RegisteredArtifactReader, ref: ArtifactRef, *, max_chars=12_000) -> dict:
     """Present recent whole records, with explicit order and bounded command excerpts."""
-    data = read_artifact_json(reader, ref.id)
+    source = reader.read_text(ref.id, max_chars=16_000_000)
+    window = {key: source[key] for key in ("artifact_id", "kind", "summary", "provenance")}
+    window["view"] = "execution_outcomes"
+    if source["truncated"]:
+        return {
+            **window, "truncated": True,
+            "content": json.dumps({
+                "available": False, "reason": "execution_record_exceeds_structured_read_limit",
+            }),
+        }
+    data = json.loads(source["content"])
     if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         raise ValueError("execution_record must contain a results list")
     results = [VerificationResult.model_validate(item) for item in data["results"]]
@@ -104,18 +114,17 @@ def _execution_window(reader: RegisteredArtifactReader, ref: ArtifactRef, *, max
                     "results": [item, *selected]}
         if len(json.dumps(proposed, ensure_ascii=False)) > max_chars:
             if not selected:
-                raise ValueError("latest execution outcome exceeds the Interpreter reading limit")
+                return {
+                    **window, "truncated": True,
+                    "content": json.dumps({
+                        "available": False, "reason": "latest_execution_outcome_exceeds_window_limit",
+                    }),
+                }
             break
         selected.insert(0, item)
         content = proposed
     return {
-        "artifact_id": ref.id, "kind": ref.kind, "summary": ref.summary,
-        "provenance": ref.model_dump(
-            mode="json", include={"producer", "task_id", "attempt_number", "session_id"},
-            exclude_none=True,
-        ),
-        "view": "execution_outcomes",
-        "content": json.dumps(content, ensure_ascii=False),
+        **window, "content": json.dumps(content, ensure_ascii=False),
         "truncated": bool(content["omitted_earlier_records"])
                      or any(item["command_truncated"] for item in selected),
     }
@@ -194,6 +203,9 @@ class LLMWorkInterpreter:
             "not a judgment that failures remain unresolved. Omitted records and omitted command "
             "portions are not supplied content. A task error can refer to an earlier command; distinguish "
             "the latest actual outcome from task status and whether a repair achieved its purpose. "
+            "An unavailable execution view supplies only source identity and its stated reading "
+            "limitation, not execution contents. Its ID may cite that limitation; being citable "
+            "does not mean its contents were provided or observed. "
             "Module reports are explanations, not independent measurements. "
             "Use only supplied content windows for content claims; truncation and unread binary "
             "files are limitations. Never infer contents from filenames or index summaries. "

@@ -199,7 +199,7 @@ Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本�
 - 索引由登记材料、原工作需求、Task/Attempt 关系确定性生成。失败尝试与成功尝试材料都保留；未提交/未登记文件不在范围内。成对问答 answer 按保存的 Task/Attempt 归入对应工作，Scientific 问答归入 scientific 组；答案仍是 Controller 保存的用户信息，不冒充 Agent 输出。research_index、work_feedback、单独的 question、要求和观察记录不收入目录；work_record 用于执行事实。
 - 当前完整目录由 ResearchRun.research_index_ref 指向；冻结版本不覆盖。每次构建 Scientific 上下文时，research_materials 展示选定的最新完整目录正文；不再计算或交付目录增量。WorkFeedback 只保留目录引用，不复制目录正文。
 - 索引与读取以同一组登记引用为基础：索引条目必须属于当前 Run、对应登记原件且在 Scientific 可读范围内。子任务 answer 不再因 Task/Attempt 作用域被阅读过滤；恢复材料仍单独校验作用域。简报引用必须在完整索引中可定位、可读取。原件缺失、归属不符或 hash 错误明确失败，不静默丢弃条目。
-- `WorkBrief.statements` 每条含 text 和非空 artifact_ids。简报只说明本轮 WorkRequest 的工作、结果、失败和局限，不累积重写历史总结。本轮相关材料包含任务内成对问答。Interpreter 校验引用确实来自本次读取的文本窗口或完整执行记录；二进制材料只导航，不假装已理解。正文窗口明确截断，每份最多 12000 字符；execution_record 在同样额度内按完整结果选择最近记录、正序呈现，并标记序号及省略。不能基于未提供内容作断言，历史失败不自动表示当前工作未解决。
+- `WorkBrief.statements` 每条含 text 和非空 artifact_ids。简报只说明本轮 WorkRequest 的工作、结果、失败和局限，不累积重写历史总结。本轮相关材料包含任务内成对问答。Interpreter 校验引用确实来自本次读取的文本窗口或完整执行记录；二进制材料只导航，不假装已理解。正文窗口明确截断，每份最多 12000 字符；execution_record 在同样额度内按完整结果选择最近记录、正序呈现，并标记序号及省略。不能基于未提供内容作断言，历史失败不自动表示当前工作未解决。结构化读取或单条呈现容量不足时仅提供带来源 ID 和原因的 unavailable 视图，不冒充已读内容，也不将容量不足当作非法执行。非法结构及原件、授权、hash 错误仍明确失败。
 - Interpreter 只有两版以内的结构化草稿；第二版带第一版的解析/引用错误。它使用同一 Run 的调用预算、截止时间与 trace，不读私有 Session，不执行工具或调度任务。引用检查不保证语义正确。
 - Controller 在 STABLE 后准备反馈，保存后复用，不提前将 WorkRequest 标记为 CONSUMED。恢复时如已有新登记材料，只同步完整目录，不重新生成已保存简报；目录未变则复用原快照。仍由 Scientific 有效返回后消费。保存前崩溃可以重新解释，已产生模型消费保留。简报耗尽最后一次额度时先保存完整交付，再以 budget_exhausted 阻止 Scientific 调用。
 - WorkRequest 交接时，Scientific 模型收到最新完整目录正文、本轮带引用简报及原件读取入口，不再额外展开底层登记表；其他上下文保持原样。机器侧仍检查原记录的归属及未解决事实。目录生成和 Interpreter 阅读不会增加 Scientific 的 observed 集合，展示目录也不等于读到其引用的证据。完整目录是必需上下文，超过输入额度时明确失败，不静默降为增量。

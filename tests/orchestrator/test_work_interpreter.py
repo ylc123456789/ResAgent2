@@ -334,3 +334,40 @@ def test_execution_view_verifies_hash_outside_selected_suffix(tmp_path):
     path.write_text(path.read_text().replace("run_0.py", "other.py"))
     with pytest.raises(ValueError, match="sha256"):
         supplied_execution_window(ref, record_ref, index)
+
+
+def test_oversized_execution_record_is_unavailable_without_claimed_outcomes(tmp_path):
+    _, ref, record_ref, index = execution_source(
+        tmp_path, [("python very_long.py " + "x" * 16_000_000, 0, False)],
+    )
+    window = supplied_execution_window(ref, record_ref, index)
+    assert window["artifact_id"] == ref.id
+    assert window["provenance"]["task_id"] == ref.task_id
+    assert window["view"] == "execution_outcomes"
+    assert window["truncated"] is True
+    assert json.loads(window["content"]) == {
+        "available": False, "reason": "execution_record_exceeds_structured_read_limit",
+    }
+    assert len(window["content"]) <= 12_000
+
+
+def test_oversized_latest_outcome_is_unavailable_instead_of_showing_older_success(tmp_path):
+    results = [
+        VerificationResult(command="python earlier.py", exit_code=0,
+                           stdout_path="earlier.stdout", stderr_path="earlier.stderr",
+                           duration_seconds=1.0).model_dump(mode="json"),
+        VerificationResult(command="python latest.py", exit_code=1,
+                           stdout_path="x" * 13_000, stderr_path="latest.stderr",
+                           duration_seconds=1.0).model_dump(mode="json"),
+    ]
+    _, ref, record_ref, index = source(
+        tmp_path, kind="execution_record", content=json.dumps({"results": results}),
+    )
+    window = supplied_execution_window(ref, record_ref, index)
+    assert window["artifact_id"] == ref.id
+    assert window["view"] == "execution_outcomes"
+    assert window["truncated"] is True
+    assert json.loads(window["content"]) == {
+        "available": False, "reason": "latest_execution_outcome_exceeds_window_limit",
+    }
+    assert len(window["content"]) <= 12_000

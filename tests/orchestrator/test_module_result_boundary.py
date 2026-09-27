@@ -176,6 +176,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
 ):
     """Native failure cleanup preserves command receipts through registration."""
     import shlex
+    import subprocess
     import sys
     from pathlib import Path
 
@@ -190,6 +191,13 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     workspace.mkdir()
     (workspace / "train.py").write_text(
         'import sys\nprint("training failed", file=sys.stderr)\nsys.exit(7)\n'
+    )
+
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    subprocess.run(["git", "add", "train.py"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+         "commit", "-qm", "baseline"], cwd=workspace, check=True,
     )
 
     def prepared_binding(*args, **kwargs):

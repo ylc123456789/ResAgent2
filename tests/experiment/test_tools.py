@@ -84,6 +84,14 @@ def test_classify_command_is_deterministic() -> None:
     assert classify_command("python -c \"print(1)\"") == "experiment"
 
 
+@pytest.mark.parametrize("python", ["python", "python3"])
+@pytest.mark.parametrize("module,expected", [
+    ("pip", "setup"), ("pipeline.run", "experiment"), ("pipelines", "experiment"),
+])
+def test_classify_python_module_by_exact_name(python, module, expected):
+    assert classify_command(f"{python} -m {module} all") == expected
+
+
 @pytest.mark.parametrize("writable,allowed", [(False, True), (True, False)])
 def test_run_command_enforces_permission_at_tool_entry(tmp_path, writable, allowed):
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])))
@@ -113,13 +121,17 @@ def test_run_command_blocks_experiment_when_automatic_audit_fails(tmp_path, monk
     assert observation.memory_updates["env_audit"] == {"success": False}
 
 
-def test_run_command_allows_experiment_after_certification(tmp_path) -> None:
+@pytest.mark.parametrize("command", [
+    "python train.py", "python -m pipeline.run validate", "python -m pipeline.run all",
+])
+def test_run_command_allows_experiment_after_certification(tmp_path, command) -> None:
     boundary = _boundary(tmp_path)
     tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30)
 
-    observation = tool.execute(_state(), tool.input_model(command="python train.py"))
+    observation = tool.execute(_state(), tool.input_model(command=command))
 
     assert observation.value["exit_code"] == 0
+    assert observation.value["command"] == command
 
 
 @pytest.mark.parametrize("kind", ["prepare", "audit", "setup"])
@@ -141,14 +153,21 @@ def test_environment_tools_reject_disabled_operations_before_effects(tmp_path, k
     assert binding.certified
 
 
-def test_run_command_rejects_setup_commands(tmp_path) -> None:
+@pytest.mark.parametrize("command", ["pip install numpy", "python -m pip install numpy", "ls"])
+def test_run_command_rejects_setup_commands_before_effects(tmp_path, monkeypatch, command) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30)
+    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path), timeout_seconds=30)
 
-    observation = tool.execute(_state(), tool.input_model(command="pip install numpy"))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Rejected commands must not audit or execute")
+
+    monkeypatch.setattr(tool.binding, "audit", forbidden)
+    monkeypatch.setattr(tool.runner, "run", forbidden)
+    observation = tool.execute(_state(), tool.input_model(command=command))
 
     assert observation.ok is False
     assert observation.value["reason"] == "not_an_experiment_command"
+    assert observation.memory_updates == {}
 
 
 def test_run_command_blocks_without_environment(tmp_path) -> None:

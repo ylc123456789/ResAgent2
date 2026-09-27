@@ -6,6 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from resagent2_capabilities import DeletePathTool
+from resagent2_components import CommandPermissionDecision
 from resagent2_components.operations import command_decision
 from resagent2_components.permissions import OperationPermissionPolicy
 from resagent2_components.workspace import WorkspaceBoundary
@@ -31,6 +32,9 @@ class Command:
     def __init__(self):
         self.calls = []
         self.before_execute = lambda: None
+
+    def check_command(self, command):
+        return CommandPermissionDecision(allowed=True)
 
     def execute(self, state, arguments):
         self.before_execute()

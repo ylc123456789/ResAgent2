@@ -46,6 +46,10 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             workflow = tool.policy.check(arguments.command)
             if not workflow.allowed:
                 return PermissionDecision(outcome="deny", reason=workflow.reason)
+        if action.tool == "run_command":
+            workflow = tool.check_command(arguments.command)
+            if not workflow.allowed:
+                return PermissionDecision(outcome="deny", reason=workflow.reason)
         context = {"cwd": str(self.boundary.root)}
         prepared = None
         if action.tool == "delete_path":

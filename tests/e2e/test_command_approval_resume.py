@@ -181,6 +181,33 @@ def test_native_commands_resume_with_fresh_audit_and_single_use_approval(case, s
     assert all(event["value"]["env_audit"]["success"] for event in executed)
 
 
+@pytest.mark.parametrize("case", ["experiment"], indirect=True)
+@pytest.mark.parametrize("mode", ["validate", "all"])
+def test_pipeline_module_runs_once_after_approval(case, mode):
+    package = case.repo / "pipeline"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "run.py").write_text(
+        "from pathlib import Path\nimport sys\n"
+        "with Path(sys.argv[1] + '.marker').open('a') as f:\n"
+        "    f.write('executed\\n')\n"
+    )
+    action = {"tool": "run_command", "arguments": {"command": f"python -m pipeline.run {mode}"}}
+
+    first = invoke(case, case.request, [action])
+    assert first.status == "needs_user_input"
+    assert case.manager.audits == []
+    assert not (case.repo / f"{mode}.marker").exists()
+
+    result = invoke(case, approve(case, case.request, first), [action, FINISH])
+    assert result.status == "completed", result.report
+    assert len(case.manager.audits) == 1
+    assert (case.repo / f"{mode}.marker").read_text() == "executed\n"
+    state = JsonSessionStore(case.root / "sessions").load(result.session.id)
+    assert state.pending_action is None
+    assert state.memory["command_count"] == 1
+
+
 def test_failed_audit_after_approval_blocks_actual_command(case):
     first = invoke(case, case.request, [command(case, "first")])
     case.manager.success = False

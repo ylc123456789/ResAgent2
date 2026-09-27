@@ -53,6 +53,31 @@ def test_command_permission_denied_before_environment_access(tmp_path):
     assert result.status == ModuleStatus.FAILED
 
 
+@pytest.mark.parametrize("command", ["pip install numpy", "python -m pip install numpy", "ls"])
+@pytest.mark.parametrize("confirm_commands", [False, True])
+def test_non_experiment_command_is_denied_before_approval(tmp_path, monkeypatch, command, confirm_commands):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Rejected commands must not reach execution or audit")
+
+    monkeypatch.setattr("resagent2_experiment.tools.RunCommandTool.execute", forbidden)
+    monkeypatch.setattr("resagent2_components.EnvironmentBinding.audit", forbidden)
+    agent = NativeExperimentAgent(ScriptedLLMClient([
+        {"tool": "run_command", "arguments": {"command": command}},
+        {"tool": "finish", "arguments": {"report": "No experiment was executed."}},
+    ]))
+    result = agent.invoke(request(tmp_path, writable=True, confirm_commands=confirm_commands))
+
+    assert result.status == ModuleStatus.COMPLETED, result.report
+    assert all(artifact.kind != "question" for artifact in result.artifacts)
+    state = agent.loop.store.load(result.session.id)
+    assert state.pending_action is None
+    assert state.memory["command_count"] == 0
+    rejected = [event.data for event in state.events
+                if event.type == "observation" and event.tool == "run_command"]
+    assert len(rejected) == 1 and rejected[0]["ok"] is False
+    assert "run_command only runs experiment commands" in rejected[0]["summary"]
+
+
 def test_missing_result_path_cannot_be_claimed(tmp_path):
     result = NativeExperimentAgent(ScriptedLLMClient([{
         "tool": "finish", "arguments": {"report": "Done", "artifacts": [{

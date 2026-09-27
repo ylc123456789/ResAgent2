@@ -270,7 +270,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
 
-`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围，再检查工具自身命令约束与固定 argv 规则。常规受支持验证及直接工作区脚本可放行；内联解释器代码和未覆盖命令询问；裸 rm/rmdir、提权、shell 包装及明确破坏性系统操作拒绝。环境安装仍走受控环境 Tool。confirm_commands 为允许范围内的操作增加确认，不能把 deny 改为 allow；需确认的验证一次只提交一条命令。
+`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围，再检查工具自身命令约束与固定 argv 规则。run_command 与执行入口复用同一职责检查，安装及目录检查命令在请求确认前拒绝；Python 模块按完整名称识别 pip，不把 pipeline 等同名前缀的科研模块当成安装命令。常规受支持验证及直接工作区脚本可放行；内联解释器代码和未覆盖命令询问；裸 rm/rmdir、提权、shell 包装及明确破坏性系统操作拒绝。环境安装仍走受控环境 Tool。confirm_commands 为允许范围内的操作增加确认，不能把 deny 改为 allow；需确认的验证一次只提交一条命令。
 
 | 操作 | 所需操作授权 | 额外边界 |
 |---|---|---|

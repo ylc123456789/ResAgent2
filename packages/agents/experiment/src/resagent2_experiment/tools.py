@@ -8,6 +8,7 @@ from typing import cast
 from pydantic import BaseModel
 
 from resagent2_components import (
+    CommandPermissionDecision,
     EnvironmentBinding,
     ProcessRunner,
     parse_command,
@@ -44,7 +45,7 @@ def classify_command(command: str) -> str:
         return "setup"
     if executable in {"python", "python3"}:
         args = argv[1:]
-        if args and args[0] == "-m" and len(args) >= 2 and args[1].startswith("pip"):
+        if args[:2] == ["-m", "pip"]:
             return "setup"
         if args and args[0] in {"--version", "-V"}:
             return "setup"
@@ -87,6 +88,19 @@ class RunCommandTool:
         self.log_dir = log_dir
         self.allowed = allowed
 
+    @staticmethod
+    def check_command(command: str) -> CommandPermissionDecision:
+        """Check the tool's command scope without preparing or executing it."""
+        if classify_command(command) != "experiment":
+            return CommandPermissionDecision(
+                allowed=False,
+                reason=(
+                    "run_command only runs experiment commands; use run_setup "
+                    "for dependency installs and the file tools for inspection"
+                ),
+            )
+        return CommandPermissionDecision(allowed=True)
+
     def _tail(self, path_str: str, *, limit: int = 2000) -> str:
         """Return a bounded tail of a command log, so failures are diagnosable."""
         path = Path(path_str)
@@ -109,12 +123,10 @@ class RunCommandTool:
                 ok=False,
                 value={"blocked": True, "reason": "no_environment"},
             )
-        if classify_command(args.command) != "experiment":
+        workflow = self.check_command(args.command)
+        if not workflow.allowed:
             return ToolObservation(
-                summary=(
-                    "run_command only runs experiment commands; use run_setup "
-                    "for dependency installs and the file tools for inspection"
-                ),
+                summary=workflow.reason,
                 ok=False,
                 value={"blocked": True, "reason": "not_an_experiment_command"},
             )

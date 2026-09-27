@@ -227,7 +227,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
         data_root=tmp_path / "data", workspaces={"ws_test": WorkspaceSpec(
             workspace_id="ws_test", source_kind="local", location=str(workspace),
-            access=WorkspaceAccess(unrestricted=True),
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
         )},
     )
     now = datetime.now(UTC)

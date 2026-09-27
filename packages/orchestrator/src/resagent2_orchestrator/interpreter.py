@@ -13,7 +13,7 @@ from resagent2_components.artifacts import RegisteredArtifactReader, research_ar
 from resagent2_components.materials import read_artifact_json
 from resagent2_contracts import (
     ArtifactRef, CitedStatement, ResearchArtifactEntry, ResearchIndex,
-    ResearchIndexGroup, RecordedAnswer, WorkBrief, WorkRecord, WorkRequest,
+    ResearchIndexGroup, RecordedAnswer, VerificationResult, WorkBrief, WorkRecord, WorkRequest,
 )
 from resagent2_runtime.budget import current_budget, invoke_model
 
@@ -78,6 +78,49 @@ def validate_brief(brief: WorkBrief, allowed_ids: set[str]) -> WorkBrief:
     return brief
 
 
+def _execution_window(reader: RegisteredArtifactReader, ref: ArtifactRef, *, max_chars=12_000) -> dict:
+    """Present recent whole records, with explicit order and bounded command excerpts."""
+    data = read_artifact_json(reader, ref.id)
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise ValueError("execution_record must contain a results list")
+    results = [VerificationResult.model_validate(item) for item in data["results"]]
+    content = {
+        "order": "oldest_to_newest",
+        "total_records": len(results),
+        "historical_failed_records": sum(r.exit_code != 0 or r.timed_out for r in results),
+        "omitted_earlier_records": len(results),
+        "results": [],
+    }
+    selected = []
+    # Preserve each selected outcome as one unit; a long command must not hide later outcomes.
+    for ordinal in range(len(results), 0, -1):
+        result = results[ordinal - 1]
+        item = result.model_dump(mode="json", exclude={"schema_version"})
+        item["record_number"] = ordinal
+        item["command_truncated"] = len(result.command) > 1_000
+        if item["command_truncated"]:
+            item["command"] = result.command[:500] + "\n...[command excerpt omitted]...\n" + result.command[-500:]
+        proposed = {**content, "omitted_earlier_records": ordinal - 1,
+                    "results": [item, *selected]}
+        if len(json.dumps(proposed, ensure_ascii=False)) > max_chars:
+            if not selected:
+                raise ValueError("latest execution outcome exceeds the Interpreter reading limit")
+            break
+        selected.insert(0, item)
+        content = proposed
+    return {
+        "artifact_id": ref.id, "kind": ref.kind, "summary": ref.summary,
+        "provenance": ref.model_dump(
+            mode="json", include={"producer", "task_id", "attempt_number", "session_id"},
+            exclude_none=True,
+        ),
+        "view": "execution_outcomes",
+        "content": json.dumps(content, ensure_ascii=False),
+        "truncated": bool(content["omitted_earlier_records"])
+                     or any(item["command_truncated"] for item in selected),
+    }
+
+
 class DeterministicWorkInterpreter:
     """Explicit test double, never selected as a production fallback."""
 
@@ -123,7 +166,8 @@ class LLMWorkInterpreter:
             }):
                 # Binary contents are not decoded or described as observed evidence.
                 continue
-            window = reader.read_text(artifact_id, max_chars=12_000)
+            window = (_execution_window(reader, ref) if ref.kind == "execution_record"
+                      else reader.read_text(artifact_id, max_chars=12_000))
             sources.append(window)
         allowed = {source["artifact_id"] for source in sources}
         # The complete record is supplied as structured facts, even if its preview is truncated.
@@ -145,6 +189,11 @@ class LLMWorkInterpreter:
             "to the original objective. Do not schedule tasks or decide the final scientific verdict. "
             "Return WorkBrief: every statement must cite supplied source artifact IDs. "
             "The work record supports execution facts, not unmeasured scientific claims. "
+            "Execution outcome views select the newest records and display them oldest to newest; "
+            "record_number is the original position. Historical failure counts include all records, "
+            "not a judgment that failures remain unresolved. Omitted records and omitted command "
+            "portions are not supplied content. A task error can refer to an earlier command; distinguish "
+            "the latest actual outcome from task status and whether a repair achieved its purpose. "
             "Module reports are explanations, not independent measurements. "
             "Use only supplied content windows for content claims; truncation and unread binary "
             "files are limitations. Never infer contents from filenames or index summaries. "

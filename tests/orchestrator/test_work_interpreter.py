@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     AgentOwner, ArtifactCandidate, ArtifactRef, Attempt, CitedStatement, ModuleError,
     ResearchIndex, ResearchIndexGroup, ResearchArtifactEntry, RecordedAnswer, WorkBrief, WorkFeedback,
-    WorkOutcome, WorkRecord, WorkRequest, WorkRequestDraft, WorkflowTask, WorkTaskOutcome,
+    VerificationResult, WorkOutcome, WorkRecord, WorkRequest, WorkRequestDraft, WorkflowTask, WorkTaskOutcome,
 )
 from resagent2_orchestrator import ArtifactRegistry, LLMWorkInterpreter
 from resagent2_orchestrator.interpreter import build_research_index
@@ -16,9 +16,9 @@ from resagent2_runtime.budget import BudgetExhaustedError, execution_budget
 NOW = datetime.now(UTC)
 
 
-def source(tmp_path, *, media_type="application/json", content='{"accuracy": 0.8}'):
+def source(tmp_path, *, kind="data", media_type="application/json", content='{"accuracy": 0.8}'):
     registry = ArtifactRegistry(tmp_path)
-    ref = registry.register(ArtifactCandidate(kind="data", path="metrics.json", media_type=media_type,
+    ref = registry.register(ArtifactCandidate(kind=kind, path="metrics.json", media_type=media_type,
         summary="Measured accuracy", content=content), grant=None, producer=AgentOwner.EXPERIMENT,
         run_id="run_test", task_id="task_measure", attempt_number=1, index=1, existing_ids=set())
     draft = WorkRequestDraft(objective="Compare methods", expected_evidence=["accuracy"])
@@ -241,3 +241,96 @@ def test_full_index_keeps_history_but_brief_only_receives_current_work_and_expli
     supplied = {window["artifact_id"] for window in payload["source_windows"]}
     assert answer.id in supplied and historical.id not in supplied
     assert {group["key"] for group in payload["research_index"]["groups"]} == {work.id}
+
+def execution_source(tmp_path, commands):
+    results = [
+        VerificationResult(command=command, exit_code=code, timed_out=timed_out,
+                           stdout_path=f"command_{i}.stdout", stderr_path=f"command_{i}.stderr",
+                           duration_seconds=1.0).model_dump(mode="json")
+        for i, (command, code, timed_out) in enumerate(commands, 1)
+    ]
+    return source(tmp_path, kind="execution_record", content=json.dumps({"results": results}))
+
+
+def supplied_execution_window(ref, record_ref, index):
+    client = Client([brief(ref.id)])
+    with execution_budget(max_llm_calls=1, timeout_seconds=30):
+        LLMWorkInterpreter(client).interpret(
+            record_ref=record_ref, index=index, artifacts=[ref, record_ref],
+        )
+    payload = json.loads(client.prompts[0].split("\n", 1)[1])
+    return next(window for window in payload["source_windows"] if window["artifact_id"] == ref.id)
+
+
+def test_long_failed_commands_do_not_hide_later_successful_outcomes(tmp_path):
+    commands = [
+        (f"python stage_{i}.py", 0, False) for i in range(1, 6)
+    ] + [
+        ("python -c 'failed_lookup " + "x" * 20_000 + " calibration'", 1, False),
+        ("python -c 'retry_lookup " + "y" * 20_000 + " calibration'", 1, False),
+        ("python corrected_check.py", 0, False),
+        ("python summarize.py", 0, False),
+    ]
+    registry, ref, record_ref, index = execution_source(tmp_path, commands)
+    before = (registry.root / ref.run_id / ref.id / "metrics.json").read_bytes()
+    window = supplied_execution_window(ref, record_ref, index)
+    facts = json.loads(window["content"])
+    assert facts["order"] == "oldest_to_newest"
+    assert facts["total_records"] == 9 and facts["historical_failed_records"] == 2
+    assert facts["omitted_earlier_records"] == 0
+    assert [item["record_number"] for item in facts["results"]] == list(range(1, 10))
+    assert [item["exit_code"] for item in facts["results"]] == [0] * 5 + [1, 1, 0, 0]
+    assert facts["results"][5]["command_truncated"] is True
+    assert facts["results"][-1]["command"] == "python summarize.py"
+    assert facts["results"][-1]["stderr_path"] == "command_9.stderr"
+    assert len(window["content"]) <= 12_000 and window["truncated"] is True
+    assert (registry.root / ref.run_id / ref.id / "metrics.json").read_bytes() == before
+
+
+def test_many_execution_records_keep_recent_whole_suffix_and_disclose_omissions(tmp_path):
+    commands = [(f"python run_{i}.py " + "x" * 1500, 1 if i == 0 else 0, False)
+                for i in range(100)]
+    _, ref, record_ref, index = execution_source(tmp_path, commands)
+    window = supplied_execution_window(ref, record_ref, index)
+    facts = json.loads(window["content"])
+    omitted = facts["omitted_earlier_records"]
+    assert 0 < omitted < 100
+    assert facts["historical_failed_records"] == 1  # Omitted early failure is not erased.
+    assert [item["record_number"] for item in facts["results"]] == list(range(omitted + 1, 101))
+    assert all(item["exit_code"] == 0 for item in facts["results"])
+    assert len(window["content"]) <= 12_000
+
+
+@pytest.mark.parametrize("commands", [[], [("python delayed.py", 0, True)]])
+def test_execution_view_handles_empty_history_and_timeout(tmp_path, commands):
+    _, ref, record_ref, index = execution_source(tmp_path, commands)
+    facts = json.loads(supplied_execution_window(ref, record_ref, index)["content"])
+    assert facts["total_records"] == len(commands)
+    assert facts["omitted_earlier_records"] == 0
+    assert facts["historical_failed_records"] == len(commands)
+
+
+@pytest.mark.parametrize("invalid", [
+    "not-json", "[]", "{}", '{"results": {}}', '{"results": [{"command": "python x.py"}]}',
+])
+def test_execution_view_rejects_invalid_record_before_model_dispatch(tmp_path, invalid):
+    _, ref, record_ref, index = source(tmp_path, kind="execution_record", content=invalid)
+    client = Client([brief(ref.id)])
+    with execution_budget(max_llm_calls=1, timeout_seconds=30) as budget:
+        with pytest.raises(ValueError):
+            LLMWorkInterpreter(client).interpret(
+                record_ref=record_ref, index=index, artifacts=[ref, record_ref],
+            )
+        assert budget.usage.used == 0
+    assert client.prompts == []
+
+
+def test_execution_view_verifies_hash_outside_selected_suffix(tmp_path):
+    commands = [(f"python run_{i}.py " + "x" * 1500, 0, False) for i in range(100)]
+    registry, ref, record_ref, index = execution_source(tmp_path, commands)
+    before = json.loads(supplied_execution_window(ref, record_ref, index)["content"])
+    assert before["omitted_earlier_records"] > 0
+    path = registry.root / ref.run_id / ref.id / "metrics.json"
+    path.write_text(path.read_text().replace("run_0.py", "other.py"))
+    with pytest.raises(ValueError, match="sha256"):
+        supplied_execution_window(ref, record_ref, index)

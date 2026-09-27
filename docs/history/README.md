@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## Interpreter 固定代码化（方案，未实施）
+
+2026-09-27 提出[Interpreter 固定代码化修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)：保留反向交接模块，用固定代码更新科研索引并组织子 Agent 已记录报告，拟移除每轮 LLM 二次简报。沿用原文读取与引用规则；当前产品仍为 schema 18.0，本文不代表实现或验收完成。
+
 ## L3 规程换题（尚未执行）
 
 2026-09-26 更新[现行 L3 指南](../guides/L3_RESEARCH_TEST.md)：保留真实 CLI、短目标、有限问答和独立验收，研究题目改为 CIFAR-10 / ResNet18 的置信度校准；覆盖当前统一 IO、Interpreter、完整科研目录和明确产物交付。官方基准依据与取舍列在指南中，本次只是规程设计。旧学习率调度[规程](reviews/L3_RESEARCH_TEST_2026-09-16.md)原文归档，原验收不重新评分。

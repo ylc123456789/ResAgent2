@@ -113,7 +113,7 @@ class CompletionCheck(Protocol):
         state: AgentState,
         candidate: FinishCandidate | None,
     ) -> CompletionDecision:
-        """Decide completion independently of the proposed LLM status."""
+        """Validate the candidate and execution constraints, not task semantics."""
 
 
 class PermissionPolicy(Protocol):
@@ -735,10 +735,18 @@ class AgentLoop:
                     )
 
                 if decision.complete:
-                    self._cancel_pending_calls(state)
-                    state.status = SessionStatus.COMPLETED
                     state.runtime_feedback = None
                     state.runtime_feedback_source = None
+                    candidate = observation.finish_candidate
+                    if candidate is not None and candidate.status == ModuleStatus.FAILED:
+                        return self._failure(
+                            state, ErrorCode.AGENT_REPORTED_FAILURE,
+                            "Agent reported that the assigned work could not be completed",
+                            retryable=False, artifacts=decision.artifacts,
+                            report=decision.report or candidate.report,
+                        )
+                    self._cancel_pending_calls(state)
+                    state.status = SessionStatus.COMPLETED
                     self._save(state)
                     status = (
                         ModuleStatus.COMPLETED_WITH_WARNINGS

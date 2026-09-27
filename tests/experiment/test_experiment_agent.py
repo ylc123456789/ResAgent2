@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ModuleStatus, TaskBudget,
+    AgentOwner, AgentPermissions, AgentRequest, ErrorCode, ModuleStatus, TaskBudget,
     WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_experiment import NativeExperimentAgent
@@ -91,3 +91,23 @@ def test_missing_result_path_cannot_be_claimed(tmp_path):
 def test_missing_workspace_is_blocked(tmp_path):
     result = NativeExperimentAgent(ScriptedLLMClient([])).invoke(request(tmp_path, workspace=None))
     assert result.status == ModuleStatus.BLOCKED
+
+
+def test_explicit_failure_needs_no_fabricated_command_and_keeps_partial_artifacts(tmp_path):
+    (tmp_path / "findings.json").write_text('{"missing": "evaluation entry point"}')
+    report = "The evaluation entry point is absent; implementation is needed."
+    agent = NativeExperimentAgent(ScriptedLLMClient([{
+        "tool": "finish", "arguments": {"status": "failed", "report": report, "artifacts": [{
+            "kind": "data", "path": "findings.json", "media_type": "application/json",
+            "summary": "Inspection findings",
+        }]},
+    }]))
+    result = agent.invoke(request(tmp_path))
+    assert result.status == result.session.status == "failed"
+    assert result.error.code == ErrorCode.AGENT_REPORTED_FAILURE
+    assert result.error.retryable is False
+    assert result.report == report
+    assert [item.path for item in result.artifacts] == ["findings.json"]
+    state = agent.loop.store.load(result.session.id)
+    assert state.memory["command_count"] == 0
+    assert not any(event.tool == "run_command" for event in state.events)

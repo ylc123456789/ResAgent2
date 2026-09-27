@@ -116,7 +116,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
 
-finish 与另外两个 Agent 相同，只提交 report 和 artifacts；Scientific 其中必须包含 scientific_opinion JSON 工件。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
+finish 与另外两个 Agent 共用 status/report/artifacts；Scientific 的完成意见仅接受 status=completed，产物必须包含 scientific_opinion JSON。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
 
 Scientific 的提示与完成检查从共享工件契约派生允许新建的种类；已有输入证据通过 opinion.evidence_artifact_ids 引用，不在 finish 里重新交付为新工件。不支持的 kind、输入/外来/伪造 Ref 和重复输出在现有 Loop 内收到 runtime_feedback，使用同一剩余预算纠正；不是 Controller 失败后另起重试。注册层仍检查身份、hash 和磁盘内容。
 
@@ -153,9 +153,9 @@ Scientific 不再默认收到平铺 input_artifacts、完整 work_record 或旧 
 
 可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。Coding prompt 区分有限的代码正确性检查与产出研究证据的实验，不允许把后者包装成测试来执行；任务同时包含实验时，报告已实现的入口、实际检查及剩余工作。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
 
-**验证状态的含义：**`verification_state.edited_since_verification` 比较 edit_revision 与 verification_revision，表示记录的编辑版本是否晚于验证版本。false 不表示本 Attempt 没有修改，也不代表实时 Git diff 为空。verification_issue、verification_stale 和 suggested_next_action 提示当前验证状态；新编辑、环境变动或恢复不会让旧验证自动覆盖当前代码。
+**验证状态的含义：**verification_state.edited_since_verification 比较编辑与验证版本；verification_stale 仅表示已有验证记录是否过期，verification_passed 单独表示验证结果（无记录为 null）。当前版本失败与旧版本通过分别表达，不互相代替。suggested_next_action 是建议，不是完成门槛；新编辑或环境变动不沿用旧验证。
 
-需要验证而绑定尚未认证时，建议动作是 run_verification，由获准执行的工具自动核验环境；不再要求模型先单独 audit_env。没有记录到编辑时 suggested_next_action 为 none，verification_stale 也可为 false，即使 verification_issue 是“未执行验证”；这些字段不强制纯分析任务运行命令。
+需要验证而绑定尚未认证时，建议动作是 run_verification，由获准执行的工具自动核验环境；不再要求先单独 audit_env。没有验证记录时 verification_stale 为 false、verification_passed 为 null，verification_issue 说明未验证。Coding/Experiment 在同一 finish 中按目标声明 completed 或 failed，并在 report 解释依据；两种声明均先检查产物事实，纯分析不强制执行命令。
 
 这些字段是确定性事实与建议，不是另一种业务模式。finalizer 生成验证工件，Scheduler 根据明确的验收要求判断是否必须成功执行。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
 
@@ -359,4 +359,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 17.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 18.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

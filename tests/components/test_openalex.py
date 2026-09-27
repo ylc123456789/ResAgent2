@@ -159,3 +159,80 @@ def test_both_sources_failing_never_registers_empty_artifact():
     with pytest.raises(LiteratureSearchError, match="arXiv HTTP 429.*OpenAlex TimeoutError"):
         LiteratureSearchTool(backend, register).execute(state(), LiteratureSearchToolInput(query="x"))
     assert register.last_candidate is None
+
+
+@pytest.mark.parametrize("remaining,reset,retry_after,expected", [
+    ("0", "3600", None, 3600),
+    ("0.0", "90", "120", 120),
+    ("0", "30", None, 60),
+    ("1", "3600", None, 60),
+    ("0.5", "3600", None, 60),
+    (None, "3600", None, 60),
+    ("-1", "3600", None, 60),
+    ("NaN", "3600", None, 60),
+    ("1e-999", "3600", None, 60),
+    ("0", None, None, 60),
+    ("0", "0", None, 60),
+    ("0", "-1", None, 60),
+    ("0", "NaN", None, 60),
+    ("0", "inf", None, 60),
+    ("0", "unknown", None, 60),
+    ("0", "1" * 100, None, 60),
+])
+def test_429_only_explicit_exhausted_quota_extends_cooldown(
+    monkeypatch, caplog, remaining, reset, retry_after, expected,
+):
+    from tests.components.test_literature_http import response_records
+
+    headers = {
+        key: value for key, value in {
+            "X-RateLimit-Remaining": remaining,
+            "X-RateLimit-Reset": reset,
+            "Retry-After": retry_after,
+        }.items() if value is not None
+    }
+    calls = []
+    def open_request(request, *, timeout):
+        calls.append(request)
+        response = httpx.Response(429, request=request, headers=headers)
+        response.raise_for_status()
+
+    monkeypatch.setattr(openalex, "send_request", open_request)
+    backend = OpenAlexLiteratureBackend()
+    with pytest.raises(LiteratureUnavailableError, match="429"):
+        backend.search("calibration", max_results=3)
+    assert openalex._OPENALEX_HTTP._cooldown_until == expected
+    assert response_records(caplog)[-1]["cooldown_seconds"] == expected
+    with pytest.raises(LiteratureUnavailableError, match="cooling down"):
+        backend.search("other keywords", max_results=3)
+    assert len(calls) == 1
+
+
+def test_exhausted_openalex_quota_does_not_block_peer_search(monkeypatch):
+    def open_request(request, *, timeout):
+        httpx.Response(429, request=request, headers={
+            "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "3600",
+        }).raise_for_status()
+
+    monkeypatch.setattr(openalex, "send_request", open_request)
+    peer = _FakeBackend([OpenAlexLiteratureBackend()._paper(work())])
+    backend = MultiSourceLiteratureBackend(OpenAlexLiteratureBackend(), peer)
+    assert len(backend.search("calibration", max_results=3)) == 1
+    assert openalex._OPENALEX_HTTP._cooldown_until == 3600
+    assert peer.last_kwargs["query"] == "calibration"
+
+
+def test_quota_reset_does_not_change_non_429_retries(monkeypatch):
+    calls = []
+    def open_request(request, *, timeout):
+        calls.append(request)
+        response = httpx.Response(503, request=request, headers={
+            "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "3600",
+        })
+        response.raise_for_status()
+
+    monkeypatch.setattr(openalex, "send_request", open_request)
+    with pytest.raises(LiteratureUnavailableError, match="after 3 attempts"):
+        OpenAlexLiteratureBackend().search("calibration", max_results=3)
+    assert len(calls) == 3
+    assert openalex._OPENALEX_HTTP._cooldown_until == 69

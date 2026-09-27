@@ -229,15 +229,20 @@ def test_new_binding_and_reaudit_require_new_verification(setup):
 
 
 @pytest.mark.parametrize("exit_code", [1, 2])
-def test_failed_verification_never_guides_finish(setup, exit_code):
+def test_current_failed_verification_remains_current_and_reports_failure(setup, exit_code):
     observation = reverify(setup, exit_code=exit_code)
 
     assert observation.ok is False
     assert setup.state.memory["verification_revision"] == setup.state.memory["edit_revision"]
     control = derive_control_state(setup.state, setup.binding)
-    assert control["verification_stale"]
+    assert not control["verification_stale"]
+    assert control["verification_passed"] is False
     assert control["suggested_next_action"] == "inspect_and_fix_verification"
-    assert not finish(setup.check, setup.state)["covers_current_workspace"]
+    record = finish(setup.check, setup.state)
+    assert record["covers_current_workspace"]
+    assert record["passed"] is False
+    assert record["issue"] is None
+    assert record["results"][0]["exit_code"] == exit_code
 
 
 @pytest.mark.parametrize("results", [[], None, ["invalid"], [{"exit_code": 0}]])
@@ -252,8 +257,12 @@ def test_missing_or_invalid_results_cannot_satisfy_verification(setup, results):
 
 def test_latest_edit_and_workspace_digest_still_enforced(setup):
     setup.state.memory["edit_revision"] = 2
-    assert not finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, setup.binding)["verification_stale"]
+    record = finish(setup.check, setup.state)
+    assert not record["covers_current_workspace"]
+    assert record["passed"] is True
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is True
     setup.state.memory["edit_revision"] = 1
     setup.state.memory["verification_diff_sha256"] = "outdated"
     assert "Workspace changed" in finish(setup.check, setup.state)["issue"]

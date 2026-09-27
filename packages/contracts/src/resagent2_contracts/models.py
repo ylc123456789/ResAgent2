@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "17.0"
+SCHEMA_VERSION = "18.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["17.0"] = SCHEMA_VERSION
+    schema_version: Literal["18.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +155,7 @@ class ErrorCode(StrEnum):
     INVALID_INPUT = "invalid_input"
     PERMISSION_DENIED = "permission_denied"
     TOOL_FAILED = "tool_failed"
+    AGENT_REPORTED_FAILURE = "agent_reported_failure"
     TIMEOUT = "timeout"
     BUDGET_EXHAUSTED = "budget_exhausted"
     CONTRACT_ERROR = "contract_error"
@@ -414,7 +415,6 @@ class TaskAcceptanceSpec(ContractModel):
     required_artifact_paths: list[NonEmptyStr] = Field(default_factory=list)
     required_artifact_kinds: list[NonEmptyStr] = Field(default_factory=list)
     required_output_names: list[OutputName] = Field(default_factory=list)
-    require_successful_execution: bool = False
 
     @field_validator("required_artifact_paths")
     @classmethod

@@ -92,39 +92,33 @@ def test_attempt_cannot_replace_its_accepted_requirement(tmp_path):
         check_acceptance(completed, task, attempt, [completed.artifacts[key] for key in attempt.artifact_ids])
 
 
-def test_successful_execution_requires_a_current_execution_record(tmp_path):
-    spec = TaskAcceptanceSpec(required_metric_keys=["accuracy"], require_successful_execution=True)
-    scheduler, _, run, _ = accepted(tmp_path, [metrics()], spec=spec)
-    failed = scheduler.run_until_stable(run.run_id)
-    assert "required successful execution" in failed.workflow.tasks[0].attempts[0].error.message
+def test_semantic_execution_policy_is_not_an_exact_delivery_requirement():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        TaskAcceptanceSpec(require_successful_execution=True)
 
 
-@pytest.mark.parametrize("commands,success", [
-    ([("python train.py", 1, False), ("python --version", 0, False)], False),
-    ([("python train.py", 0, True), ("python --version", 0, False)], False),
-    ([("python train.py", 1, False), ("python train.py --smoke", 0, False)], False),
-    ([("python train.py", 1, False), ('python "train.py"', 0, False)], True),
-    ([("python train.py", 1, False), ("python other.py", 1, False),
-      ("python train.py", 0, False)], False),
-])
-def test_execution_acceptance_cannot_hide_failure_with_unrelated_success(tmp_path, commands, success):
-    results = [dict(command=command, exit_code=code, timed_out=timed_out,
-                    stdout_path=f"{index}.stdout", stderr_path=f"{index}.stderr", duration_seconds=0.1)
-               for index, (command, code, timed_out) in enumerate(commands)]
-    execution = ArtifactCandidate(kind="execution_record", path="execution_record.json",
-        media_type="application/json", summary="Actual executions", content=json.dumps({"results": results}))
-    # A successful verification must not override an unresolved experiment failure either.
-    verification = ArtifactCandidate(kind="verification_result", path="verification.json",
-        media_type="application/json", summary="Current syntax check", content=json.dumps({
-            "covers_current_workspace": True, "results": [dict(command="python -m py_compile train.py",
-                exit_code=0, timed_out=False, stdout_path="verify.stdout", stderr_path="verify.stderr", duration_seconds=0.1)]}))
-    scheduler, _, run, _ = accepted(tmp_path, [metrics(), execution, verification],
-        spec=TaskAcceptanceSpec(require_successful_execution=True, required_metric_keys=["accuracy"]))
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_acceptance_checks_delivery_without_inferring_task_semantics(tmp_path, exit_code):
+    record = ArtifactCandidate(
+        kind="execution_record", path="execution_record.json",
+        media_type="application/json", summary="Actual execution",
+        content=json.dumps({"results": [dict(
+            command="python verify.py", exit_code=exit_code, timed_out=False,
+            stdout_path="out.log", stderr_path="err.log", duration_seconds=0.1,
+        )]}),
+    )
+    scheduler, _, run, _ = accepted(
+        tmp_path, [metrics(), record],
+        spec=TaskAcceptanceSpec(required_metric_keys=["accuracy"]),
+    )
     outcome = scheduler.run_until_stable(run.run_id)
     task = outcome.workflow.tasks[0]
-    assert task.status == ("completed" if success else "failed")
-    if not success:
-        assert "required successful execution" in task.attempts[0].error.message
+    assert task.status == "completed"
+    execution = next(outcome.artifacts[key] for key in task.attempts[0].artifact_ids
+                     if outcome.artifacts[key].kind == "execution_record")
+    assert read_json(execution)["results"][0]["exit_code"] == exit_code
 
 
 def test_registry_derives_required_paths_and_ignores_claimed_metadata(tmp_path):

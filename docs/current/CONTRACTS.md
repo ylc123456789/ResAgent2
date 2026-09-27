@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 17.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 18.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -163,7 +163,7 @@ Scientific 的普通产物归属 Session，支持 literature_search、scientific
 
 注入的进程内 ModulePort 与原生 Agent 的确定性 finalizer 是可信实现。模型 finish 候选不能提交 `execution_record`、`verification_result` 或 `observation_trace`；原生代码从真实命令回执、验证状态和读取观察中生成它们。Coding 的 patch 同样从实际差异生成。
 
-同一 Attempt 的执行结果按命令 argv 归并：仅同一命令后来成功重跑才能解除它此前的失败或超时；不同命令的成功（包括诊断探针）不能覆盖未恢复失败。仅忽略 shell 引号和参数间空白，不推测不同参数或解释器是否等价。Experiment 完成判定和 `require_successful_execution` 验收共用该规则，原始 `execution_record` 保留全部执行。没有执行的纯分析任务仍可完成；要求实际执行时应同时声明所需指标与产物，成功命令本身不证明目标实验已完成。
+任务是否完成由 Coding/Experiment 通过统一 finish 的 status 声明，不从命令 argv 或历史退出码推断。系统生成的 execution_record 保留全部命令事实；一次操作失败不自动等于任务失败，后续成功也不抹去旧记录。任务报告解释失败与交付的关系，Scientific 判断科研充分性。
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
@@ -206,7 +206,7 @@ Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本�
 
 <a id="opinion"></a>
 
-Scientific finish 使用统一的 report/artifacts，并提交一个 `scientific_opinion` JSON 工件。ScientificOpinion 含 verdict、statement、evidence_artifact_ids、limitations、unresolved_questions、recommended_next_steps；supports/refutes 至少引用一个工件。required_evidence_kinds 来自 conclusion_requirements，当前支持 literature_search。
+Scientific finish 使用统一的 status/report/artifacts，完成意见只接受 status=completed，并提交一个 `scientific_opinion` JSON 工件。证据不足可表达 inconclusive、请求工作或提问，不能以 status=failed 绕过意见与明确交付检查。ScientificOpinion 含 verdict、statement、evidence_artifact_ids、limitations、unresolved_questions、recommended_next_steps；supports/refutes 至少引用一个工件。required_evidence_kinds 来自 conclusion_requirements，当前支持 literature_search。
 
 Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifacts` 冻结为 `ConclusionRequirements`。后者仅按本 Run 已登记 `ArtifactRef.output_name` 精确、区分大小写地匹配，不按 path、文件名、kind 或 metadata 匹配，不从自然语言补全。`OutputName` 为 1–128 个 ASCII 字母、数字、下划线、点或连字符，以字母开头，不接受目录分隔符、空白或 glob。重复要求按存在语义去重；不同登记产物可同名，所有匹配的冻结文件都须通过 hash 校验。单次 finish 内原有输出名唯一性规则仍有效。
 
@@ -367,17 +367,17 @@ LLM trace 的 `action_valid` 表示响应已解析出候选动作：单工具 pa
 
 Coding/Experiment 和 ArtifactRegistry 共用 Components 的 `resolve_artifact_source`：候选文件必须在授权 workspace 或本 Attempt 的 output_dir 中唯一定位。缺失或歧义文件、重复 output_name 返回现有 `runtime_feedback`，原 Task/Attempt/Session 继续修改提交；三个 Agent 共用输出名唯一性检查。反馈带稳定 code 和具体文件/名称，未新增对外诊断 schema。连续失败上限、预算和超时继续生效。
 
-越权、IO 异常和登记时的证据损坏不转成可接受结果；接收端错误沿现有失败路径处理。Experiment 已发生的失败执行优先返回原 TOOL_FAILED 和 execution_record，记录排在候选前面，使后续某候选登记失败时仍保留执行事实。不会自动修改文件名、忽略候选或把失败训练改成成功。
+越权、IO 异常和登记时的证据损坏不转成可接受结果；接收端错误沿现有失败路径处理。Experiment 的 execution_record 排在候选前面，使后续某候选登记失败时仍保留执行事实。声明 failed 也要先通过候选事实检查，不自动修改文件名或忽略非法候选。
 
-统一的 finish 只提交 `report` 和 `artifacts`。它是完成提议，不能自行设置最终 status 或提交另一套机器结果。
+统一的 finish 提交 `status/report/artifacts`；status 复用 ModuleStatus 的 completed/failed（缺省 completed），不增加另一套业务结果或生命周期。CompletionCheck 接受候选后，AgentLoop 将其映射到唯一的 AgentResult.status；模型声明失败标为 AGENT_REPORTED_FAILURE，报告保留模型的原因，不能冒充系统验证的 TOOL_FAILED。failed 仍沿现有 Session/Attempt/Task 失败与依赖阻断路径返回，预算、权限及真实技术错误不受模型声明覆盖。
 
-- Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录，标明验证是否覆盖当前代码和环境。分析任务可以无修改完成，未执行验证不能被写成已通过。
-- Experiment 可分析已有结果；执行后由代码生成 execution_record。未恢复的真实命令失败会返回失败及诊断；只有同一 argv 的成功重跑可解除该失败，不同诊断命令不能覆盖，旧记录仍保留。
+- Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录；covers_current_workspace 表示版本、环境与工作区匹配，passed 单独表示该验证批次的退出结果。当前版本测试失败可以覆盖当前代码，旧版本测试通过也不证明当前版本通过。分析任务可以无修改完成，未执行验证不能被写成已通过。
+- Experiment 可分析已有结果；执行后由代码生成完整 execution_record。完成检查只验证候选事实，任务是否完成由 Agent 根据目标与证据声明；它无需制造失败命令来表达无法完成。
 - Scientific 校验意见、工件授权和已观察引用，并生成 observation_trace。完成检查复用共享种类集合，模型只能创建 SCIENTIFIC_ARTIFACT_KINDS 中排除系统/工具生成种类后的工件；已有输入证据必须引用其 ID，不能重新作为输出交付。输入/外来/未经登记或被改写的 Ref、重复 Ref 和重复 output_name 在原 AgentLoop 中反馈纠正；本 Session 新登记的合法工具 Ref 仍可原样交付。注册层的身份/hash/磁盘复验继续保留，未知故障不会被无限重试。
 
 Scientific 的 CompletionCheck 通过 Components 的 `missing_required_artifacts` 查询授权登记 Ref 并验证整份冻结 hash。缺少明确输出时返回 `required_artifact_missing` 与名称，经原 `runtime_feedback` 继续同一 Session，可 request_work 补交或 ask_user；预算、超时和连续拒绝上限继续生效。登记前，Scientific 自己的合法命名 finish 候选可作为本次拟交付；它们必须经接收端实际登记后才能满足最终 gate，候选提议本身不保证通过。
 
-Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：required_metric_keys 必须是 JSON 顶层有限数值（排除 bool）；required_artifact_paths、required_artifact_kinds、required_output_names 必须实际存在。require_successful_execution 需要可信的成功 execution_record 或覆盖当前代码的 verification_result；报告文字不计作执行证据。未明确要求的检查不会从 Agent 名称或任务文本猜测出来。
+Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：required_metric_keys 必须是 JSON 顶层有限数值（排除 bool）；required_artifact_paths、required_artifact_kinds、required_output_names 必须实际存在。schema 18 移除 require_successful_execution，避免用不同命令的退出码代替任务语义；旧字段拒绝解析，不静默弱化或兼容。未明确要求的检查不会从 Agent 名称或任务文本猜测出来。
 
 <a id="final-report"></a>
 
@@ -502,7 +502,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 17.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 18.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
 本版在 ResearchRequest 与 ConclusionRequirements 增加默认空的 `required_artifacts: list[OutputName]`，保持统一 AgentRequest/AgentResult、预算与执行限制、WorkspaceAccess 和结构化单次批准机制。Scientific 接收完整科研目录，成对问答可按原 ID 阅读，恢复作用域仍由 RecordedAnswer 和冻结 answer 工件校验。schema 16 及更早 Run 不支持恢复，不保留兼容读取分支。
 

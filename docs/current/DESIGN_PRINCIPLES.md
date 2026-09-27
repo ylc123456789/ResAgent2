@@ -171,4 +171,6 @@ Capabilities 是模型工具入口，Components 是普通操作与共享呈现�
 - [ADR-0017](../history/decisions/0017-research-index-and-work-interpreter.md)：派生科研目录与带引用简报；取代 ADR-0014 中 Interpreter 位于 Scientific 内、仅作固定投影的实现选择。
 - [ADR-0018](../history/decisions/0018-complete-index-and-paired-answers.md)：每轮交接展示完整目录，打通成对问答的索引、引用和阅读；取代 ADR-0017 的增量展示选择。
 
+- [ADR-0019](../history/decisions/0019-agent-declared-completion.md)：在统一 finish 中接通既有任务状态，区分操作事实与任务语义；共享事实 validation 继续生效。
+
 本文明确总体设计目标，并汇总仍有效的规则。历史 ADR 中已被取代的字段、接口和实现不会因此重新生效。发现目标与实现有差距时，应记录差距，再决定具体改动；不能把设计目标写成已经实现或验证的能力。

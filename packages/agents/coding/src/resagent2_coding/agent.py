@@ -156,7 +156,8 @@ class NativeCodingAgent:
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory=initial_memory,
         )
-        if result.status not in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
+        if (result.status not in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}
+                or any(item.kind == "code_patch" for item in result.artifacts)):
             return result
         try:
             patch = repository.diff_since(baseline)

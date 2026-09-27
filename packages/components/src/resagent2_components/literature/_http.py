@@ -98,7 +98,10 @@ class LiteratureHTTP:
         self._next_request_at = 0.0
         self._cooldown_until = 0.0
 
-    def fetch(self, request: Callable[[], httpx.Response], *, max_attempts: int) -> bytes:
+    def fetch(
+        self, request: Callable[[], httpx.Response], *, max_attempts: int,
+        quota_cooldown: Callable[[httpx.Response], float] | None = None,
+    ) -> bytes:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         budget = current_budget()
@@ -138,6 +141,10 @@ class LiteratureHTTP:
                         cooldown_seconds = max(COOLDOWN_SECONDS, retry_after)
                     elif transient and attempt == max_attempts - 1:
                         cooldown_seconds = COOLDOWN_SECONDS
+                    if status == 429 and quota_cooldown is not None:
+                        cooldown_seconds = max(
+                            cooldown_seconds, quota_cooldown(error.response),
+                        )
                     _log_response(
                         self.source, error.response, attempt=attempt + 1,
                         max_attempts=max_attempts, retry_after=retry_after,
@@ -152,9 +159,7 @@ class LiteratureHTTP:
                             f"{self.source} HTTP 406; source cannot serve this request"
                         ) from None
                     if status == 429:
-                        self._cooldown_until = time.monotonic() + max(
-                            COOLDOWN_SECONDS, retry_after
-                        )
+                        self._cooldown_until = time.monotonic() + cooldown_seconds
                         raise LiteratureUnavailableError(
                             f"{self.source} HTTP 429; rate limited, cooldown active"
                         ) from None

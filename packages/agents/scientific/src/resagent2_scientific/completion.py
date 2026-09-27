@@ -53,6 +53,13 @@ class ScientificCompletionCheck:
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
             return CompletionDecision(complete=False)
+        if candidate.status == "failed":
+            return CompletionDecision(
+                complete=False,
+                report="Scientific finish requires a completed opinion. Use an inconclusive "
+                "verdict when evidence is insufficient, request more work, or ask the user; "
+                "required evidence and delivery checks still apply.",
+            )
         output_error = self._output_error(state, candidate)
         if output_error is not None:
             return CompletionDecision(complete=False, report=output_error)

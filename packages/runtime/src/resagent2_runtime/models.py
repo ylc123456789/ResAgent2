@@ -12,6 +12,7 @@ from resagent2_contracts import (
     ActionSnapshot,
     ArtifactOutput,
     ModuleError,
+    ModuleStatus,
     QuestionDraft,
     RunId,
     SessionId,
@@ -58,6 +59,11 @@ class ComposedContext(RuntimeModel):
 class FinishCandidate(RuntimeModel):
     """LLM-proposed result that still requires deterministic finalization."""
 
+    status: Literal[ModuleStatus.COMPLETED, ModuleStatus.FAILED] = Field(
+        default=ModuleStatus.COMPLETED,
+        description="Whether the assigned work is completed or cannot be completed. "
+        "Explain the judgment in report; actual execution records remain authoritative.",
+    )
     report: NonEmptyStr
     artifacts: list[ArtifactOutput] = Field(default_factory=list)
 
@@ -91,19 +97,12 @@ class ToolObservation(RuntimeModel):
 
 
 class CompletionDecision(RuntimeModel):
-    """Deterministic finalizer decision for the current Agent state.
+    """Fact validation of a finish candidate.
 
-    A finalizer can now express three outcomes, not two:
-
-    - ``complete=True``: the task succeeded; the loop returns a completed result;
-    - ``failure`` non-None: the task is deterministically verified to have
-      failed; the loop returns ``AgentResult.failed`` immediately;
-    - neither: keep working (optionally with an actionable ``report``).
-
-    ``failure`` is always a finalizer-built ``ModuleError`` (never taken from the
-    LLM verbatim), so a verified failure exit is a deterministic code decision,
-    not a way for the model to self-declare failure. ``complete`` and ``failure``
-    are mutually exclusive.
+    complete=True accepts the candidate; the loop applies its proposed
+    terminal status. failure reports a deterministic technical error.
+    Neither means keep working with the supplied corrective feedback.
+    Acceptance and a technical failure are mutually exclusive.
     """
 
     complete: bool

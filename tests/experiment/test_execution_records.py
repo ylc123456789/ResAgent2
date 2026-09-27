@@ -1,6 +1,6 @@
 """Actual command receipts remain machine-readable across completion outcomes."""
 
-from resagent2_contracts import AgentPermissions
+from resagent2_contracts import AgentPermissions, ErrorCode
 
 from datetime import UTC, datetime
 import json
@@ -40,38 +40,43 @@ class Command:
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
-def test_loop_returns_execution_record_for_success_and_failure(tmp_path, exit_code):
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exit_code, status):
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])))
     tools = (Command(exit_code), FinishTool())
     definition = AgentDefinition(
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
         tools=tools, llm_client=ScriptedLLMClient([
             {"tool": "run_command", "arguments": {}},
-            {"tool": "finish", "arguments": {"report": "Recorded the outcome"}},
+            {"tool": "finish", "arguments": {"status": status, "report": "Recorded the outcome"}},
         ]),
         context_builder=lambda *_: [],
         permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
         completion_check=ExperimentCompletionCheck(boundary),
     )
     result = AgentLoop().run(definition, AgentRequest(run_id='run_records', task_id='task_records', attempt_number=1, agent=AgentOwner.EXPERIMENT, instruction='Run', budget=TaskBudget(max_llm_calls=3, timeout_seconds=10), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)), session_id='session_records')
-    assert result.status == ("completed" if exit_code == 0 else "failed")
+    assert result.status == result.session.status == status
     record = json.loads(next(item.content for item in result.artifacts if item.kind == "execution_record"))
     assert record["results"][0]["exit_code"] == exit_code
     assert result.report == "Recorded the outcome"
-    if exit_code:
-        assert result.error.details["stderr_tail"] == "error"
+    assert record["results"][0]["stderr_path"] == "stderr.log"
+    if status == "failed":
+        assert result.error.code == ErrorCode.AGENT_REPORTED_FAILURE
+        assert result.error.retryable is False
+    else:
+        assert result.error is None
 
 
-@pytest.mark.parametrize("commands,failed_command", [
-    ([("python train.py", 1, False), ("python train.py", 0, False)], None),
-    ([("python train.py", 1, False), ('python  "train.py"', 0, False)], None),
-    ([("python train.py", 1, False), ("python --version", 0, False)], "python train.py"),
-    ([("python train.py", 0, True), ("python --version", 0, False)], "python train.py"),
-    ([("python train.py", 1, False), ("python train.py --smoke", 0, False)], "python train.py"),
-    ([("python train.py", 1, False), ("python other.py", 1, False),
-      ("python train.py", 0, False)], "python other.py"),
+@pytest.mark.parametrize("commands", [
+    [("python train.py", 1, False), ("python train.py", 0, False)],
+    [("python train.py", 1, False), ("python train.py --fixed", 0, False)],
+    [("python train.py", 1, False), ("python --version", 0, False)],
+    [("python train.py", 0, True), ("python --version", 0, False)],
+    [("python train.py", 1, False), ("python train.py --smoke", 0, False)],
+    [("python train.py", 1, False), ("python other.py", 1, False),
+     ("python train.py", 0, False)],
 ])
-def test_only_successful_retry_of_same_command_resolves_failure(tmp_path, commands, failed_command):
+def test_command_history_is_preserved_without_inferred_task_failure(tmp_path, commands):
     from resagent2_runtime import AgentEvent
     now = datetime.now(UTC)
     state = AgentState(
@@ -89,11 +94,8 @@ def test_only_successful_retry_of_same_command_resolves_failure(tmp_path, comman
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))
     decision = ExperimentCompletionCheck(boundary).evaluate(
         state, FinishCandidate(report="Recorded all outcomes"))
-    assert decision.complete == (failed_command is None)
-    if failed_command is not None:
-        assert decision.failure.details["command"] == failed_command
-        if not decision.failure.details["timed_out"]:
-            assert decision.failure.details["stderr_tail"] == "error"
+    assert decision.complete
+    assert decision.failure is None
     record = json.loads(next(item.content for item in decision.artifacts if item.kind == "execution_record"))
     assert [(row["command"], row["exit_code"], row["timed_out"])
             for row in record["results"]] == commands

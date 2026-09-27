@@ -15,7 +15,12 @@ from resagent2_components.literature import LiteratureSearchBackend, render_lite
 class LiteratureSearchToolInput(RuntimeModel):
     """Bounded literature query for the Scientific Agent."""
 
-    query: NonEmptyStr
+    query: NonEmptyStr = Field(
+        description=(
+            "Plain keywords or double-quoted phrases; do not use provider-specific "
+            "field prefixes or Boolean operators."
+        ),
+    )
     max_results: int = Field(default=10, ge=1, le=20)
     start_year: int | None = Field(default=None, ge=1900, le=2100)
     end_year: int | None = Field(default=None, ge=1900, le=2100)

@@ -12,10 +12,11 @@ EXPERIMENT_PROMPT 和 ExperimentCompletionCheck。
 audit_env 可用于显式诊断，不是每次命令前必须由模型单独调用的步骤。
 需要确认时匹配本次恢复的结构化答案与准确动作快照；第二条命令或同一命令再次执行均需新批准。
 
-finish 只有 report 和 artifacts。真实命令观察生成 execution_record；
-按解析后的 argv 保留每条命令的最新结果，其中仍有失败时，完成检查返回含原始诊断的失败。
-只有同一命令成功重跑才能解决其旧失败，随后成功的诊断命令不能掩盖失败；完整执行记录始终保留。
-模型不能伪造执行记录。
+finish 统一提交 status、report 和 artifacts，复用 completed/failed 状态。
+Agent 按目标与证据声明任务是否完成；代码检查候选文件、授权与输出事实。
+历史命令失败不自动判整个任务失败，完整 execution_record 由真实观察生成并保留。
+声明 failed 也须通过产物事实检查，再沿现有失败交接与依赖阻断流程返回。
+模型不能伪造执行记录，科学充分性仍由 Scientific 判断。
 
 WorkspaceBoundary 约束文件工具和操作入口，当前进程执行没有 OS 沙箱；
 实验/安装命令仍可能运行项目代码。环境 audit 是执行正确性检查，不是安全隔离。

@@ -1,6 +1,7 @@
 """Tests for the literature search capability (DEVELOPMENT_PLAN §7.3)."""
 
 from datetime import UTC, datetime, date
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -270,6 +271,32 @@ def test_arxiv_backend_builds_year_bounded_query() -> None:
     assert "submittedDate" in backend.last_url
     assert "202001010000" in backend.last_url
     assert "202412312359" in backend.last_url
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("electron", 'all:"electron"'),
+    ("graph neural networks", 'all:"graph" AND all:"neural" AND all:"networks"'),
+    ('"temperature scaling" calibration', 'all:"temperature scaling" AND all:"calibration"'),
+    ("C++ O'Neill", "all:\"C++\" AND all:\"O'Neill\""),
+    (r'"quote \"inside\"" "path\\name"', r'all:"quote \"inside\"" AND all:"path\\name"'),
+    ("a OR ti:b", 'all:"a" AND all:"OR" AND all:"ti:b"'),
+])
+def test_arxiv_translates_keywords_and_phrases_without_query_operators(query, expected):
+    backend = _FakeArxivBackend(ARXIV_ATOM.encode())
+    backend.search(query, max_results=3, start_year=2020, end_year=2024)
+    params = parse_qs(urlsplit(backend.last_url).query)
+    assert params["search_query"] == [
+        expected + " AND submittedDate:[202001010000 TO 202412312359]"
+    ]
+    assert params["max_results"] == ["3"]
+
+
+@pytest.mark.parametrize("query", ['"unclosed', '""', " \t ", 'keyword ""'])
+def test_arxiv_rejects_malformed_keyword_input_before_http(query):
+    backend = _FakeArxivBackend(ARXIV_ATOM.encode())
+    with pytest.raises(LiteratureSearchError, match="keywords"):
+        backend.search(query, max_results=3)
+    assert not hasattr(backend, "last_url")
 
 
 def test_arxiv_backend_raises_clear_error_instead_of_empty_result() -> None:

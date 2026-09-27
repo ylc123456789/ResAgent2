@@ -89,7 +89,7 @@ class FinishInput(FinishCandidate):
     """Input schema for FinishTool."""
 
 class FinishTool:
-    """Create a finish candidate without deciding the actual ModuleStatus."""
+    """Propose completed or failed work with a report and artifacts for validation."""
 
     name = "finish"
     input_model = FinishInput

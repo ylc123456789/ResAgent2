@@ -242,3 +242,13 @@ def test_required_output_read_failure_is_not_downgraded_to_missing(tmp_path, fau
     )
     with pytest.raises(ArtifactReadError):
         check.evaluate(_state({}), _finish([], verdict="inconclusive"))
+
+
+def test_failed_finish_cannot_bypass_scientific_completion_requirements():
+    check = ScientificCompletionCheck([], required_artifacts=["comparison_results"])
+    candidate = FinishCandidate(status="failed", report="Insufficient evidence")
+    decision = check.evaluate(_state({}), candidate)
+    assert not decision.complete
+    assert decision.failure is None
+    assert "inconclusive" in decision.report
+    assert "required evidence and delivery checks still apply" in decision.report

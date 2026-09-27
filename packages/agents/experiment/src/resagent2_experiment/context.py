@@ -35,8 +35,12 @@ Inspect produced files, report actual outcomes and do not invent measured
 numbers. On command failure, inspect the error and change the next action;
 do not repeat an unchanged failing command. Return a code failure requiring
 repair with its actual error and available evidence; do not edit source or
-substitute a different experiment to bypass it. The system derives failure
-status from actual execution.
+substitute a different experiment to bypass it. Choose finish status="completed"
+when this task is complete, or status="failed" when you cannot complete it.
+Explain the remaining work and actual errors; failure does not require inventing
+or executing a failing command. A failed exploratory command or a negative
+scientific result does not by itself mean the task failed. All actual command
+outcomes remain recorded independently of your chosen task status.
 
 Finish with report and artifacts. File candidates use kind, a path relative to
 the workspace or supplied output_dir, media_type, summary and optional output_name.

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ModuleStatus,
+    AgentOwner, AgentPermissions, AgentRequest, ErrorCode, ModuleStatus,
     TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_coding import CodingAction, NativeCodingAgent
@@ -155,3 +155,22 @@ def test_model_cannot_fabricate_system_record(tmp_path, kind):
 def test_missing_workspace_is_blocked(tmp_path):
     result = NativeCodingAgent(ScriptedLLMClient([])).invoke(request(tmp_path, workspace=None))
     assert result.status == ModuleStatus.BLOCKED
+
+
+def test_explicit_failure_keeps_one_patch_and_does_not_require_a_failed_command(tmp_path):
+    init_repo(tmp_path)
+    report = "Added documentation, but the requested behavior still needs implementation."
+    agent = NativeCodingAgent(ScriptedLLMClient([
+        edit(), finish(report, status="failed"),
+    ]))
+    result = agent.invoke(request(tmp_path, writable=True))
+    assert result.status == result.session.status == "failed"
+    assert result.error.code == ErrorCode.AGENT_REPORTED_FAILURE
+    assert result.error.retryable is False
+    assert result.report == report
+    patches = [item for item in result.artifacts if item.kind == "code_patch"]
+    assert len(patches) == 1
+    assert "Return the sum" in patches[0].content
+    assert {item.path for item in result.artifacts if item.kind == "code_change"} == {"util.py"}
+    state = agent.loop.store.load(result.session.id)
+    assert not any(event.tool == "run_verification" for event in state.events)

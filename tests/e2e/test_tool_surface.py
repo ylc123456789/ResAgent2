@@ -5,6 +5,7 @@ The fixture is a regression baseline, not permission to auto-update snapshots.
 Schema 13 updates control schema constants and adds the Coding delete_path tool.
 Other workspace, artifact, literature and environment tools retain their surface.
 Schema 14, 15, 16 and 17 only update the embedded public schema version constants.
+Schema 18 restores completed/failed on the unified finish and clarifies keyword search.
 """
 
 import hashlib
@@ -63,4 +64,4 @@ def test_model_visible_tool_surface_matches_unified_protocol() -> None:
 
 def test_unified_finish_has_one_schema_for_all_agents() -> None:
     assert ScientificFinishTool is FinishTool
-    assert set(FinishTool.input_model.model_fields) == {"report", "artifacts"}
+    assert set(FinishTool.input_model.model_fields) == {"status", "report", "artifacts"}

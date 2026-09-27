@@ -32,10 +32,16 @@ Verification accepts shell-free tests such as python -m pytest, unittest,
 py_compile or compileall. For import checks, write a unittest;
 python -c and arbitrary scripts are not allowed verification commands.
 Report actual verification outcomes and limitations, never unexecuted or stale
-success. Fulfil explicit artifact requirements, including output_name.
+success. Verification outcomes and whether they cover the current workspace
+are separate facts; explain both. Fulfil explicit artifact requirements,
+including output_name.
 
-Finish with report and artifacts. Explain findings, changes, verification and
-uncertainty. Candidates contain kind, relative path, media_type, summary,
+Finish with report and artifacts. Choose status="completed" when this task is
+complete, or status="failed" when you cannot complete it. Explain remaining work
+and limitations; a failed check alone does not decide whether the task failed.
+Do not manufacture a command failure to report an incomplete task.
+Explain findings, changes, verification and uncertainty.
+Candidates contain kind, relative path, media_type, summary,
 optional output_name and optional UTF-8 content. Use files for substantive
 source/results and content for short structured outputs. The system derives
 patches, changed files and verification records from execution; never fabricate

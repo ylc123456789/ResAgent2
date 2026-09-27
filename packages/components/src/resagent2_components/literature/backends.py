@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import shlex
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from urllib.parse import urlencode
 import httpx
@@ -91,8 +94,23 @@ class ArxivLiteratureBackend:
     def _search_query(
         query: str, start_year: int | None, end_year: int | None
     ) -> str:
-        """Append a submittedDate range only when a year bound is present."""
-        terms = [f"all:{query}"]
+        """Translate plain keywords and double-quoted phrases to arXiv syntax."""
+        lexer = shlex.shlex(query, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        lexer.quotes = '"'
+        try:
+            keywords = list(lexer)
+        except ValueError:
+            raise LiteratureSearchError(
+                "Use keywords and balanced double-quoted phrases for literature search"
+            ) from None
+        if not keywords or any(not word.strip() for word in keywords):
+            raise LiteratureSearchError("Literature query must contain non-empty keywords")
+        terms = [
+            'all:"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            for word in keywords
+        ]
         if start_year is not None and end_year is not None:
             terms.append(
                 f"submittedDate:[{start_year}01010000 TO {end_year}12312359]"
@@ -283,7 +301,8 @@ class OpenAlexLiteratureBackend:
             params["filter"] = ",".join(filters)
         url = f"{self._endpoint}?{urlencode(params)}"
         body = _OPENALEX_HTTP.fetch(
-            lambda: self._request(url), max_attempts=self.max_retries
+            lambda: self._request(url), max_attempts=self.max_retries,
+            quota_cooldown=self._quota_cooldown,
         )
         return self._parse(body)
 
@@ -294,6 +313,21 @@ class OpenAlexLiteratureBackend:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return send_request(httpx.Request("GET", url, headers=headers),
                             timeout=self.timeout_seconds)
+
+    @staticmethod
+    def _quota_cooldown(response: httpx.Response) -> float:
+        """Only an explicit zero remaining balance proves quota exhaustion."""
+        remaining = response.headers.get("X-RateLimit-Remaining", "")
+        reset = response.headers.get("X-RateLimit-Reset", "")
+        if len(remaining) > 64 or len(reset) > 64:
+            return 0.0
+        try:
+            balance, seconds = Decimal(remaining), float(reset)
+        except (InvalidOperation, ValueError):
+            return 0.0
+        if balance.is_zero() and math.isfinite(seconds) and seconds > 0:
+            return seconds  # OpenAlex documents seconds until midnight UTC.
+        return 0.0
 
     def _parse(self, body: bytes) -> list[LiteraturePaper]:
         try:

@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from resagent2_contracts import (
-    AgentOwner, ArtifactCandidate, ArtifactRef, TaskAcceptanceSpec, VerificationResult,
-    SYSTEM_ARTIFACT_PROVENANCE, latest_command_results,
+    AgentOwner, ArtifactCandidate, ArtifactRef, TaskAcceptanceSpec,
+    SYSTEM_ARTIFACT_PROVENANCE,
 )
 from .artifacts import ArtifactRegistrationError, _sha256
 
@@ -122,8 +122,6 @@ def check_acceptance(run, task, attempt, refs):
     if not set(spec.required_artifact_paths) <= paths:
         raise ArtifactRegistrationError("required artifact paths missing")
     numeric = set()
-    executed = False
-    execution_rows = []
     for item in refs:
         if item.media_type != "application/json":
             continue
@@ -131,18 +129,5 @@ def check_acceptance(run, task, attempt, refs):
         if isinstance(data, dict):
             numeric.update(key for key, value in data.items() if isinstance(value, (int, float))
                            and not isinstance(value, bool) and math.isfinite(value))
-            if item.kind in {"verification_result", "execution_record"}:
-                rows = [VerificationResult.model_validate(row) for row in data.get("results", [])]
-                current = item.kind != "verification_result" or data.get("covers_current_workspace") is True
-                if item.kind == "execution_record":
-                    execution_rows.extend(rows)
-                else:
-                    executed |= current and bool(rows) and all(
-                        row.exit_code == 0 and not row.timed_out for row in rows)
-    if execution_rows:
-        executed = all(row.exit_code == 0 and not row.timed_out
-                       for row in latest_command_results(execution_rows))
     if not set(spec.required_metric_keys) <= numeric:
         raise ArtifactRegistrationError("required numeric metric keys missing")
-    if spec.require_successful_execution and not executed:
-        raise ArtifactRegistrationError("required successful execution missing")

@@ -4,10 +4,11 @@ Exact metric/path requirements are checked at Scheduler artifact acceptance.
 """
 
 from datetime import UTC, datetime
+import json
 
 import pytest
 
-from resagent2_contracts import AgentOwner, ArtifactCandidate, ErrorCode, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
+from resagent2_contracts import AgentOwner, ArtifactCandidate, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
 from resagent2_components import WorkspaceBoundary
 from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
 from resagent2_experiment.completion import ExperimentCompletionCheck
@@ -59,8 +60,9 @@ def test_report_preserves_limits_without_claiming_measurement(tmp_path):
     assert decision.artifacts[0].content == '{"analysis": "uncertainty unknown"}'
 
 
-def test_missing_file_is_not_delivered(tmp_path):
-    decision = check(tmp_path).evaluate(state(), FinishCandidate(report="Done", artifacts=[evidence()]))
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_missing_file_is_not_delivered(tmp_path, status):
+    decision = check(tmp_path).evaluate(state(), FinishCandidate(status=status, report="Done", artifacts=[evidence()]))
     assert not decision.complete
     assert decision.failure is None
     assert decision.artifacts == []
@@ -92,7 +94,8 @@ def test_report_does_not_self_certify_command_failure(tmp_path):
 
 
 @pytest.mark.parametrize("exit_code,timed_out", [(1, False), (-9, True)])
-def test_failed_finish_preserves_verified_execution_error(tmp_path, exit_code, timed_out):
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, exit_code, timed_out, status):
     current = state()
     current.events.append(AgentEvent(
         sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
@@ -102,14 +105,21 @@ def test_failed_finish_preserves_verified_execution_error(tmp_path, exit_code, t
             "duration_seconds": 0.1,
         }},
     ))
-    candidate = FinishCandidate(report="Training failed", artifacts=[evidence("missing.json")])
+    candidate = FinishCandidate(status=status, report="Training failed")
     decision = check(tmp_path).evaluate(current, candidate)
-    assert decision.failure.code == ErrorCode.TOOL_FAILED
-    assert decision.failure.details["stderr_tail"] == "real error"
-    assert decision.failure.details["exit_code"] == exit_code
-    assert not decision.complete
-    assert decision.artifacts[0].kind == "execution_record"
-    assert decision.artifacts[1].path == "missing.json"
+    assert decision.complete
+    assert decision.failure is None
+    record = json.loads(decision.artifacts[0].content)["results"][0]
+    assert record["exit_code"] == exit_code
+    assert record["timed_out"] is timed_out
+    assert record["stderr_path"] == "out.stderr"
+    assert current.events[0].data["value"]["stderr_tail"] == "real error"
+
+    invalid = candidate.model_copy(update={"artifacts": [evidence("missing.json")]})
+    rejected = check(tmp_path).evaluate(current, invalid)
+    assert not rejected.complete
+    assert rejected.failure is None
+    assert "artifact_path_missing" in rejected.report
 
 
 def test_unexecuted_failure_text_is_not_command_evidence(tmp_path):
@@ -118,4 +128,6 @@ def test_unexecuted_failure_text_is_not_command_evidence(tmp_path):
         sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
         data={"ok": False, "value": {"blocked": True, "reason": "No environment"}},
     ))
-    assert check(tmp_path)._last_failed_command(current) is None
+    decision = check(tmp_path).evaluate(current, FinishCandidate(status="failed", report="Cannot execute"))
+    assert decision.complete
+    assert decision.artifacts == []

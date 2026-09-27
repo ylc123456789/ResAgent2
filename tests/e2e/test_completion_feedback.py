@@ -27,9 +27,10 @@ def output(path="metrics.json", **fields):
 class NativeClient:
     tool_session_key = "completion-feedback-test"
 
-    def __init__(self, submissions, *, prepare=None):
+    def __init__(self, submissions, *, prepare=None, statuses=None):
         self.submissions = submissions
         self.prepare = prepare
+        self.statuses = statuses or ["completed"] * len(submissions)
         self.contexts = []
 
     def next_tool_call(self, context, schemas, turns, **kwargs):
@@ -39,12 +40,13 @@ class NativeClient:
             self.prepare(index)
         return ToolCallTurn(tool_calls=[NativeToolCall(
             id=f"finish_{index}", name="finish", arguments=json.dumps({
+                "status": self.statuses[index],
                 "report": "Analysis ready", "artifacts": self.submissions[index],
             }),
         )])
 
 
-def execute(tmp_path, kind, submissions, *, budget=8, prepare=None):
+def execute(tmp_path, kind, submissions, *, budget=8, prepare=None, statuses=None, downstream=False):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     subprocess.run(["git", "init", "-q", str(workspace)], check=True)
@@ -55,7 +57,7 @@ def execute(tmp_path, kind, submissions, *, budget=8, prepare=None):
          "commit", "-qm", "baseline"],
     ]:
         subprocess.run(command, cwd=workspace, check=True)
-    client = NativeClient(submissions, prepare=prepare)
+    client = NativeClient(submissions, prepare=prepare, statuses=statuses)
     agent = (NativeCodingAgent if kind == "coding" else NativeExperimentAgent)(client)
     requests = []
 
@@ -78,7 +80,7 @@ def execute(tmp_path, kind, submissions, *, budget=8, prepare=None):
         request=ResearchRequest(
             goal="Analyze the provided metrics", permissions=RunPermissions(),
             budget=RunBudget(max_llm_calls=budget, timeout_seconds=30),
-            execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2),
+            execution_limits=ExecutionLimits(max_tasks=2 if downstream else 1, max_attempts_per_task=2),
         ), workspaces=scheduler._resolve_workspaces("run_completion_feedback"),
         created_at=now, updated_at=now,
     )
@@ -87,7 +89,11 @@ def execute(tmp_path, kind, submissions, *, budget=8, prepare=None):
         work_request_id="work_1", tasks=[TaskProposal(
             id="task_analysis", work_request_id="work_1",
             workflow_agent_kind=kind, instruction="Analyze the provided metrics",
-        )],
+        )] + ([TaskProposal(
+            id="task_dependent", work_request_id="work_1",
+            workflow_agent_kind=kind, instruction="Use the analysis",
+            depends_on=["task_analysis"],
+        )] if downstream else []),
     ))
     final = scheduler.run_until_stable(run.run_id)
     task = final.workflow.tasks[0]
@@ -160,3 +166,36 @@ def test_escaped_candidate_does_not_become_correctable_success(tmp_path, kind):
     assert "outside" in task.attempts[0].error.message
     assert len(client.contexts) == 1
     assert not task.attempts[0].artifact_ids
+
+
+@pytest.mark.parametrize("kind", ["coding", "experiment"])
+def test_agent_declared_failure_keeps_evidence_and_blocks_dependencies(tmp_path, kind):
+    run, task, state, client = execute(
+        tmp_path, kind, [[output()]], statuses=["failed"], downstream=True,
+    )
+    assert task.status == state.status == "failed"
+    assert task.attempts[0].error.code == ErrorCode.AGENT_REPORTED_FAILURE
+    assert task.attempts[0].error.retryable is False
+    assert task.attempts[0].report == "Analysis ready"
+    assert len(client.contexts) == 1
+    dependent = run.workflow.tasks[1]
+    assert dependent.status == "blocked"
+    assert not dependent.attempts
+    refs = [run.artifacts[key] for key in task.attempts[0].artifact_ids]
+    assert any(ref.metadata.get("source_path") == "metrics.json" for ref in refs)
+
+
+@pytest.mark.parametrize("kind", ["coding", "experiment"])
+def test_failed_finish_still_corrects_invalid_artifacts_in_same_session(tmp_path, kind):
+    run, task, state, client = execute(
+        tmp_path, kind, [[output("missing.json")], [output()]],
+        statuses=["failed", "failed"],
+    )
+    assert task.status == state.status == "failed"
+    assert task.attempts[0].error.code == ErrorCode.AGENT_REPORTED_FAILURE
+    assert len(client.contexts) == 2
+    assert "artifact_path_missing" in client.contexts[1].text
+    assert state.runtime_feedback is None
+    assert len(state.tool_turns) == 2
+    assert all(len(turn.tool_results) == 1 for turn in state.tool_turns)
+    assert len(task.attempts[0].artifact_ids) == 1

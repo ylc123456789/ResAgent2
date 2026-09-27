@@ -45,11 +45,13 @@ workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环�
 
 CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表，互为备份。初次按配置顺序尝试（目前 arXiv 在前）；成功后继续用该源，不可用时依次试其他源，每次最多遍历一轮。只保存实例内索引；没有探活、健康表、持久选择记录，也不同时查询/合并两个源。
 
+统一 query 接收普通关键词和双引号短语，不承诺提供方字段或 Boolean 语法。arXiv 将各词句显式转换为 all 字段并用 AND 连接，再加年份条件；未闭合引号或空短语明确报错。OpenAlex 使用官方 search 参数。
+
 仅 `LiteratureUnavailableError` 触发换源；合法空结果算成功。HTTP 406 表示当前来源无法提供该请求的结果，不在同源重试，直接尝试下一来源；不保证该故障是暂时的。HTTP 其余 4xx（除 408/429）、损坏 XML/JSON 和编程异常不静默换源。全部不可用汇总原因报错，不登记空工件伪装成功。保留各来源真实 ID/URL，不按同名合并论文。
 
-HTTP 使用 User-Agent，进程内按来源串行：arXiv 请求结束后至少间隔 3 秒，OpenAlex 1 秒。429 立即进入至少 60 秒冷却；Retry-After 支持秒数/HTTP 日期，更长则遵守。5xx/408 有 Retry-After 时同样冷却；其余超时/网络/5xx/408 最多三次 HTTP 尝试，退避 3/6 秒，耗尽后冷却。冷却期直接报不可用，不在 Agent 内长睡眠。既有 `max_retries` 参数指总尝试数。
+HTTP 使用 User-Agent，进程内按来源串行：arXiv 请求结束后至少间隔 3 秒，OpenAlex 1 秒。429 立即进入至少 60 秒冷却；Retry-After 支持秒数/HTTP 日期，更长则遵守。OpenAlex 仅在响应明确给出 Remaining=0 和有限正 Reset 秒数时，额外遵守额度恢复时间；缺失、非法或非零余额不推断日额度耗尽。5xx/408 有 Retry-After 时同样冷却；其余超时/网络/5xx/408 最多三次尝试，退避 3/6 秒，耗尽后冷却。冷却期直接换源，不在 Agent 内长睡眠。
 
-HTTP 响应诊断沿用应用日志：失败为 WARNING，成功为 INFO（独立诊断时可为 `resagent2_components.literature._http` 开启 INFO）。记录来源、状态码、本次搜索内的 HTTP 尝试序号/上限、Authorization 是否配置、Retry-After 是否存在及解析秒数、实际冷却秒数；白名单限额头仅接受有限非负数字：X-RateLimit-Limit、X-RateLimit-Remaining、X-RateLimit-Credits-Used、X-RateLimit-Reset。缺失/非法限额值不填造，记录不包含查询 URL、认证值、响应正文或其他响应头。诊断不改变重试/换源/冷却；响应头只提供当次服务事实，单凭 429 不断言日额度耗尽或请求频率超限。
+HTTP 响应诊断沿用应用日志：失败为 WARNING，成功为 INFO。记录来源、状态码、尝试序号/上限、Authorization 是否配置、Retry-After 及实际冷却秒数，以及有限非负的 X-RateLimit-Limit、Remaining、Credits-Used、Reset。日志不含查询 URL、认证值、响应正文或其他响应头；单凭 429 不断言原因。OpenAlex 额度控制只使用可确认的余额耗尽事实。
 
 HTTP 复用 Runtime 的 httpx 总超时传输；节奏等待、退避和请求都沿用 Run 剩余时间。Run 截止不作为普通来源不可用继续切换，耗尽后停止发新请求。论文 HTTP 不消耗模型请求次数，但消耗 Run 时间。
 

@@ -187,7 +187,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     assert restored.schema_version == '18.0'
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "12.0", "13.0", "14.0", "15.0", "16.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "12.0", "13.0", "14.0", "15.0", "16.0", "17.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(

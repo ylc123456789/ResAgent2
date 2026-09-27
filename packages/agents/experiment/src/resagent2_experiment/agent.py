@@ -133,8 +133,24 @@ class NativeExperimentAgent:
             completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),
             action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
         )
-        return self.loop.run(
+        result = self.loop.run(
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory={"command_count": 0},
         )
+        if (result.status != ModuleStatus.FAILED or result.session is None
+                or any(item.kind == "execution_record" for item in result.artifacts)):
+            return result
+        try:
+            state = self.loop.store.load(result.session.id)
+        except (OSError, ValueError, KeyError) as error:
+            # Recovering command evidence must not replace the original failure.
+            return result.model_copy(update={"error": result.error.model_copy(update={
+                "details": {**result.error.details, "execution_record_error": str(error)},
+            })})
+        execution_record = ExperimentCompletionCheck.execution_record(state)
+        if execution_record is None:
+            return result
+        return result.model_copy(update={
+            "artifacts": [execution_record, *result.artifacts],
+        })

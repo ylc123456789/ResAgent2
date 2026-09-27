@@ -22,8 +22,10 @@ Follow the instruction and registered materials using one action protocol.
 Use request_work for the next necessary round of code inspection, changes or
 experiment work; ask_user for missing decisions; finish for a final judgment.
 
-Finish with report and artifacts. Include exactly one scientific_opinion JSON
-artifact containing verdict, statement, evidence_artifact_ids, limitations,
+Finish with status="completed", report and artifacts. If evidence is insufficient,
+use an inconclusive verdict, request_work, or ask_user; status="failed" cannot
+bypass the run's evidence and delivery requirements.
+Include exactly one scientific_opinion JSON artifact containing verdict, statement, evidence_artifact_ids, limitations,
 unresolved_questions and recommended_next_steps. Use kind="scientific_opinion",
 path="scientific_opinion.json", media_type="application/json", summary and JSON
 content. Cite only ArtifactIds actually observed through read_artifact or

@@ -170,51 +170,114 @@ def test_registration_failure_preserves_diagnostics_calls_and_prior_artifact(tmp
     assert persisted.workflow.tasks[0].warnings == result.warnings
 
 
-def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(tmp_path):
-    """Finalizer ordering and incremental reception preserve the original failure."""
-    from resagent2_components import WorkspaceBoundary
-    from resagent2_contracts import WorkspaceAccess, WorkspaceGrant
-    from resagent2_experiment.completion import ExperimentCompletionCheck
-    from resagent2_orchestrator.handoffs import read_json
-    from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
+@pytest.mark.parametrize("missing_output", [False, True])
+def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
+    tmp_path, monkeypatch, missing_output,
+):
+    """Native failure cleanup preserves command receipts through registration."""
+    import shlex
+    import sys
+    from pathlib import Path
 
-    now = datetime.now(UTC)
-    state = AgentState(
-        session_id="session_boundary", agent_name="experiment",
-        owner="experiment", run_id="run_boundary", task_id="task_boundary",
-        attempt_number=1, created_at=now, updated_at=now,
+    from resagent2_components import EnvironmentBinding
+    from resagent2_components.environment import PreparedEnvironment
+    from resagent2_contracts import WorkspaceAccess, WorkspaceSpec
+    from resagent2_experiment import NativeExperimentAgent
+    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_runtime import ScriptedLLMClient
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "train.py").write_text(
+        'import sys\nprint("training failed", file=sys.stderr)\nsys.exit(7)\n'
     )
-    state.events.append(AgentEvent(
-        sequence=1, step=1, type="observation", tool="run_command", created_at=now,
-        data={"ok": False, "value": {
-            "command": "python train.py", "exit_code": 7, "timed_out": False,
-            "stdout_path": "train.stdout", "stderr_path": "train.stderr",
-            "stderr_tail": "training failed", "duration_seconds": 0.1,
+
+    def prepared_binding(*args, **kwargs):
+        binding = EnvironmentBinding(*args, **kwargs)
+        binding.current = PreparedEnvironment(
+            env_id="test_environment", prefix=Path(sys.prefix),
+            python_version=sys.version.split()[0],
+        )
+        binding.certified = True
+        binding.argv_prefix = lambda: None
+        return binding
+
+    monkeypatch.setattr("resagent2_experiment.agent.EnvironmentBinding", prepared_binding)
+    command = f"{shlex.quote(sys.executable)} train.py"
+    agent = NativeExperimentAgent(ScriptedLLMClient([
+        {"tool": "run_command", "arguments": {"command": command}},
+        {"tool": "finish", "arguments": {
+            "status": "failed", "report": "Training failed before producing metrics",
+            "artifacts": [{
+                "kind": "data", "path": "absent.json", "media_type": "application/json",
+                "summary": "Requested but absent output",
+            }] if missing_output else [],
         }},
-    ))
-    check = ExperimentCompletionCheck(WorkspaceBoundary(WorkspaceGrant(
-        root=str(tmp_path), source="local", access=WorkspaceAccess(read_paths=["."]),
-    )))
-    decision = check.evaluate(state, FinishCandidate(
-        report="Training failed before producing metrics",
-        artifacts=[ArtifactCandidate(
-            kind="data", path="absent.json", media_type="application/json",
-            summary="Requested but absent output",
+    ]))
+    results = []
+
+    class Port:
+        def invoke(self, request):
+            result = agent.invoke(request)
+            results.append(result)
+            return result
+
+    engine = WorkflowScheduler(
+        bindings={"experiment": ModuleBinding(owner=AgentOwner.EXPERIMENT, port=Port())},
+        store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data", workspaces={"ws_test": WorkspaceSpec(
+            workspace_id="ws_test", source_kind="local", location=str(workspace),
+            access=WorkspaceAccess(unrestricted=True),
+        )},
+    )
+    now = datetime.now(UTC)
+    run = ResearchRun(
+        run_id="run_boundary", status="running",
+        request=ResearchRequest(
+            goal="Run the provided experiment", permissions=RunPermissions(execute_commands=True),
+            budget=RunBudget(max_llm_calls=2, timeout_seconds=30),
+            execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2),
+        ), workspaces=engine._resolve_workspaces("run_boundary"),
+        created_at=now, updated_at=now,
+    )
+    engine.store.save(run)
+    engine.accept_proposal(run.run_id, WorkflowProposal(
+        work_request_id="work_boundary", tasks=[TaskProposal(
+            id="task_boundary", work_request_id="work_boundary",
+            workflow_agent_kind="experiment", instruction="Run train.py and report the outcome",
         )],
     ))
-    result = AgentResult(
-        status="failed", report=decision.report, artifacts=decision.artifacts,
-        error=decision.failure, session=_session(SessionStatus.FAILED),
-    )
-    engine, run, attempt = _execute(tmp_path, result)
-    assert run.workflow.tasks[0].status == "failed"
-    assert attempt.error.code == ErrorCode.TOOL_FAILED
-    assert attempt.error.details["exit_code"] == 7
-    assert attempt.error.details["stderr_tail"] == "training failed"
-    assert "absent.json" in attempt.error.details["artifact_registration_error"]
+    run = engine.run_until_stable(run.run_id)
+    task = run.workflow.tasks[0]
+    assert len(task.attempts) == len(results) == 1
+    attempt = task.attempts[0]
+    result = results[0]
+    state = agent.loop.store.load(attempt.session.id)
+    assert task.status == result.status == state.status == "failed"
+    expected_code = ErrorCode.BUDGET_EXHAUSTED if missing_output else ErrorCode.AGENT_REPORTED_FAILURE
+    assert attempt.error.code == expected_code
+    assert attempt.error == result.error
+    assert attempt.session == result.session
+    assert attempt.report == result.report
+    assert run.llm_calls_used == result.llm_calls == state.llm_calls_used == 2
     assert attempt.error.retryable is False
-    assert len(attempt.artifact_ids) == 1
+    if missing_output:
+        assert "artifact_path_missing" in state.runtime_feedback.summary
+        assert "absent.json" in state.runtime_feedback.summary
+    else:
+        assert state.runtime_feedback is None
+    observations = [event.data["value"] for event in state.events
+                    if event.type == "observation" and event.tool == "run_command"]
+    assert len(observations) == state.memory["command_count"] == 1
+    assert observations[0]["exit_code"] == 7
+    assert observations[0]["stderr_tail"].strip() == "training failed"
+    assert len(attempt.artifact_ids) == len(run.artifacts) == len(result.artifacts) == 1
     record = run.artifacts[attempt.artifact_ids[0]]
-    assert record.kind == "execution_record"
-    assert read_json(record)["results"][0]["exit_code"] == 7
+    assert record.kind == result.artifacts[0].kind == "execution_record"
+    rows = read_json(record)["results"]
+    assert len(rows) == 1
+    assert rows[0]["command"] == command
+    assert rows[0]["exit_code"] == 7
+    assert rows[0]["stderr_path"] == observations[0]["stderr_path"]
+    assert Path(rows[0]["stderr_path"]).read_text().strip() == "training failed"
     assert engine.load(run.run_id).artifacts[record.id] == record

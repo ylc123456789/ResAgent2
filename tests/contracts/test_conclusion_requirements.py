@@ -49,6 +49,7 @@ def test_required_artifacts_do_not_become_task_or_work_request_fields():
 
 
 @pytest.mark.parametrize("model", [research_request, ConclusionRequirements])
-def test_required_artifacts_reject_schema_16(model):
+@pytest.mark.parametrize("schema_version", ["16.0", "17.0"])
+def test_required_artifacts_reject_previous_schema(model, schema_version):
     with pytest.raises(ValidationError, match="schema_version"):
-        model(schema_version="16.0")
+        model(schema_version=schema_version)

@@ -25,13 +25,9 @@ class ExperimentCompletionCheck:
                 complete=False, report="Execution records are generated from actual command observations",
             )
         artifacts = list(candidate.artifacts)
-        records = self._execution_records(state)
-        if records:
-            artifacts.insert(0, ArtifactCandidate(
-                kind="execution_record", path="execution_record.json",
-                media_type="application/json", summary="Recorded experiment command outcomes",
-                content=json.dumps({"results": records}),
-            ))
+        execution_record = self.execution_record(state)
+        if execution_record is not None:
+            artifacts.insert(0, execution_record)
         try:
             check_task_output_artifacts(
                 artifacts, grant=self.boundary.grant, output_dir=self.output_dir,
@@ -40,6 +36,17 @@ class ExperimentCompletionCheck:
             return CompletionDecision(complete=False, report=f"{error.code}: {error}")
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=artifacts,
+        )
+
+    @staticmethod
+    def execution_record(state: AgentState) -> ArtifactCandidate | None:
+        records = ExperimentCompletionCheck._execution_records(state)
+        if not records:
+            return None
+        return ArtifactCandidate(
+            kind="execution_record", path="execution_record.json",
+            media_type="application/json", summary="Recorded experiment command outcomes",
+            content=json.dumps({"results": records}),
         )
 
     @staticmethod

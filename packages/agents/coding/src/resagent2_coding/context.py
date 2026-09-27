@@ -22,14 +22,15 @@ to Experiment, even when wrapped in tests. Deliver implemented entry points and
 actual checks; report any remaining experimental work.
 
 Use replace_text for existing files, create_file for new files and delete_path
-for deletions; nonempty directories require confirmation. Each old_text must match
-exactly once; multiple edits are allowed. Review the actual diff.
+for deletions; nonempty directories require confirmation.
+old_text must match exactly once in the current file per call.
+You may make multiple replace_text calls as needed. Review the actual diff.
 Read dependency requirements before choosing Python with prepare_environment.
 Install with run_setup, then run_verification. Verification automatically audits
 the environment, including after approval; use audit_env only for diagnostics.
 Verification accepts shell-free tests such as python -m pytest, unittest,
-py_compile or compileall. Use unittest for import checks; python -c and arbitrary
-scripts are not verification commands.
+py_compile or compileall. For import checks, write a unittest;
+python -c and arbitrary scripts are not allowed verification commands.
 Report actual verification outcomes and limitations, never unexecuted or stale
 success. Fulfil explicit artifact requirements, including output_name.
 

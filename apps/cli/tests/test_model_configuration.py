@@ -176,3 +176,13 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
         assert row["included_sections"] == ["system", "compiler_request"]
         assert 0 < row["estimated_tokens"] <= compiler_limit
         assert len(row["attempts"]) == row["retry_number"] + 1 == 1
+
+
+@pytest.mark.parametrize("level", ["off", "metadata", "full"])
+def test_composition_reports_effective_trace_configuration(defaults, monkeypatch, tmp_path, capsys, level):
+    monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", level)
+    monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "traces"))
+    composition.build_application(data_root=tmp_path / "data")
+    assert capsys.readouterr().err == (
+        f"LLM trace: {level}; directory: {tmp_path / 'traces'}\n"
+    )

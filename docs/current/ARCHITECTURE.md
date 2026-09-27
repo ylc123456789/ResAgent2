@@ -117,7 +117,7 @@ Interpreter 的固定代码整理来源与执行状态，LLM 根据授权材料�
 
 Compiler 和 Interpreter 都不是额外 AgentLoop：它们调用 LLM，但没有 Session 或工具循环；经 PromptLLMClient 复用上下文预算即可。
 
-Compiler 要求最小可执行图，同一 Agent 的检查、准备和执行尽量保留在一个任务中。草图只表达 instruction、模块路由、依赖、工作区和工件交接，不编造具体指标键、文件路径、验收策略或权限。精确要求由确定性调用方显式提供，接受后冻结为 acceptance_requirements；普通任务中的语义证据要求仍保留在 instruction。
+Compiler 按工作目的选择职责：代码实现与正确性验证交 Coding，为回答研究问题而进行的训练、拟合、评估等测量交 Experiment。已知实现前置条件先交 Coding；已有可用入口则可直接交 Experiment。在职责范围内保持最小可执行图，同一 Agent 的检查、准备和执行尽量保留在一个任务中。草图只表达 instruction、模块路由、依赖、工作区和工件交接，不编造具体指标键、文件路径、验收策略或权限。精确要求由确定性调用方显式提供，接受后冻结为 acceptance_requirements；普通任务中的语义证据要求仍保留在 instruction。
 
 depends_on 要求上游成功，不能表示“失败时修复”。真实失败先返回 Scientific；需要修复时新发 WorkRequest，追加 fix → rerun 的任务。
 

@@ -45,6 +45,34 @@ def _context() -> ComposedContext:
     )
 
 
+@pytest.mark.parametrize("level,directory,message", [
+    ("verbose", "traces", "trace_level must be"),
+    ("", None, "trace_level must be"),
+    ("metadata", None, "trace_dir is required"),
+    ("full", "", "trace_dir is required"),
+])
+def test_invalid_trace_configuration_fails_during_construction(level, directory, message):
+    with pytest.raises(ValueError, match=message):
+        OpenAICompatibleClient(
+            model="test", api_base="https://example.com/v1", api_key_env="UNUSED_KEY",
+            trace_level=level, trace_dir=directory,
+        )
+
+
+def test_trace_directory_is_resolved_before_working_directory_changes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.com/v1", api_key_env="UNUSED_KEY",
+        trace_level="full", trace_dir="traces",
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    client._write_trace({"call_id": "test"})
+    assert (tmp_path / "traces/llm_traces.jsonl").is_file()
+    assert not (other / "traces").exists()
+
+
 def test_model_profile_combines_model_capacity_and_component_limit() -> None:
     profile = ModelProfile(
         context_window=10_000,

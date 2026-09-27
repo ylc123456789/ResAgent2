@@ -95,10 +95,14 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         request.request.model_dump_json(),
         "Available execution Agents:",
         *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
-        "Each Agent has one business mode. Keep its inspection, preparation and execution "
-        "inside the same task where possible. Asking the user is part of a task, not a "
-        "separate workflow phase. Route existing-results analysis to Experiment even when "
-        "execution is forbidden. Scientific is never a graph node.",
+        "Each Agent has one business mode. Choose its role by the purpose of the work: "
+        "code correctness belongs to Coding; research measurements belong to Experiment. "
+        "When implementation is a known prerequisite, route it to Coding before Experiment. "
+        "Use Experiment directly when the needed code is available. Minimize the graph "
+        "within these roles: keep an Agent's inspection, preparation and execution together "
+        "where possible. Asking the user is part of a task, not a separate workflow phase. "
+        "Route existing-results analysis to Experiment even when execution is forbidden. "
+        "Scientific is never a graph node.",
         "Preserve the work request's constraints on effects. A confirmation request is "
         "not execution: one approved operation may require calling the same tool again "
         "after approval. Do not turn a single intended operation into a one-tool-call limit.",

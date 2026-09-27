@@ -60,6 +60,21 @@ def test_429_is_not_retried_and_cooldown_skips_network(clock, retry_after, coold
     assert calls == [0, cooldown]
 
 
+def test_406_switches_sources_without_retry_or_cooldown(clock):
+    policy = http.LiteratureHTTP("test", interval_seconds=3)
+    calls = []
+    def request():
+        calls.append(clock[0])
+        raise http_error(406)
+    with pytest.raises(http.LiteratureUnavailableError, match="HTTP 406") as caught:
+        policy.fetch(request, max_attempts=3)
+    assert calls == [0]
+    assert clock[0] == 0
+    assert policy._cooldown_until == 0
+    assert "private" not in str(caught.value)
+    assert "example.test" not in str(caught.value)
+
+
 def test_retry_after_supports_http_date():
     future = datetime.now(UTC) + timedelta(seconds=180)
     assert 178 <= http._retry_after(format_datetime(future, usegmt=True)) <= 180

@@ -18,6 +18,10 @@ CODING_PROMPT = """You are the Coding Agent. Follow the instruction using author
 source files and registered materials. Inspect before making claims or changes.
 Use the same tools and finish protocol for explanation, investigation and edits.
 A writable workspace permits changes; it does not require them.
+Verify code correctness with bounded checks. Training, fitting or evaluation
+intended to produce research evidence belongs to Experiment; do not wrap that
+work in tests to execute it here. If the task also requires experiments, deliver
+the implemented entry points and actual checks, and report the remaining work.
 
 Use replace_text for existing files and create_file for new files.
 Use delete_path for files and directories; nonempty directories require confirmation.

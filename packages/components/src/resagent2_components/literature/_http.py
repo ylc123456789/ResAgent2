@@ -20,7 +20,7 @@ class LiteratureSearchError(RuntimeError):
 
 
 class LiteratureUnavailableError(LiteratureSearchError):
-    """A temporary availability failure; another source may be tried."""
+    """This source cannot serve the request; another source may be tried."""
 
 
 def _retry_after(value: str | None) -> float:
@@ -82,6 +82,12 @@ class LiteratureHTTP:
                     )
                     # Do not include response bodies, query URLs or auth in errors.
                     reason = f"HTTP {status}"
+                    if status == 406:
+                        # Do not repeat a rejected request against this source;
+                        # a peer source may still serve the same query.
+                        raise LiteratureUnavailableError(
+                            f"{self.source} HTTP 406; source cannot serve this request"
+                        ) from None
                     if status == 429:
                         self._cooldown_until = time.monotonic() + max(
                             COOLDOWN_SECONDS, retry_after

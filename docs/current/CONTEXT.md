@@ -151,7 +151,7 @@ Scientific 不再默认收到平铺 input_artifacts、完整 work_record 或旧 
 | `command_results` | 每个执行工具最近一次有记录的命令结果；优先保留失败诊断 | 有命令结果才出现，必需；共享投影，不新增缓存 |
 | `directory` | 最近一次 list_files 观察的有界路径清单 | 有结果才出现，可选，priority=62；不是每轮重新扫磁盘 |
 
-可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
+可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。Coding prompt 区分有限的代码正确性检查与产出研究证据的实验，不允许把后者包装成测试来执行；任务同时包含实验时，报告已实现的入口、实际检查及剩余工作。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
 
 **验证状态的含义：**`verification_state.edited_since_verification` 比较 edit_revision 与 verification_revision，表示记录的编辑版本是否晚于验证版本。false 不表示本 Attempt 没有修改，也不代表实时 Git diff 为空。verification_issue、verification_stale 和 suggested_next_action 提示当前验证状态；新编辑、环境变动或恢复不会让旧验证自动覆盖当前代码。
 
@@ -165,7 +165,7 @@ Scientific 不再默认收到平铺 input_artifacts、完整 work_record 或旧 
 
 ### 3.3 Experiment：分析、执行与交付结果
 
-同样使用 [AgentRequest](CONTRACTS.md#module-request)，不含 Coding 的编辑工具；已有结果分析和新实验执行共用一套 prompt 与动作。
+同样使用 [AgentRequest](CONTRACTS.md#module-request)，不含 Coding 的编辑工具；已有结果分析和新实验执行共用一套 prompt 与动作。Experiment prompt 要求使用已有实验入口及其支持的参数；缺少实现时报告所需工作与未执行部分，真实代码故障则带错误和证据返回，由现有研究回合安排 Coding 修复。
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|

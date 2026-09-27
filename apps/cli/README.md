@@ -219,12 +219,22 @@ CLI 从这个根创建一个共享 `ResourceLayout`，注入三个 Agent。Scien
 - `RESAGENT2_ENV_ROOT`：受管 Conda 环境根；
 - `RESAGENT2_CONDA_EXE`：Conda 可执行文件路径。
 
-LLM trace 默认关闭：
+LLM trace 默认关闭。每次装配 CLI 都会在 stderr 显示生效档位和目录；`run`、`answer`、`resume` 是独立进程，均从各自启动环境读取配置。非 `off / metadata / full` 档位、启用 trace 却未提供目录会在客户端创建时明确报错。
 
 ```bash
 export RESAGENT2_LLM_TRACE_LEVEL=metadata   # off / metadata / full
 export RESAGENT2_LLM_TRACE_DIR=/data/resagent2/traces
 ```
+
+长任务建议让每次启动都读取同一份部署配置，而不依赖上一个终端中的 `export`。将上述变量以及模型、资源配置放入你维护的 Bash 文件（例如 `/data/resagent2/cli-config.sh`），使用仓库自带的薄启动入口：
+
+```bash
+bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh run <原 run 参数>
+bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh answer <Run ID> <回答参数>
+bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh resume <Run ID> <原 data-root 参数>
+```
+
+脚本每次加载并导出配置，再原样转发参数和退出码。配置中的 trace、data 和资源目录使用绝对路径；凭据继续从安全配置载入，不写入日志或提交到 Git。该入口不保存 Run 业务状态，直接调用 `resagent2` 仍按当前进程环境工作。
 
 `metadata` 不保存消息正文；`full` 会保存 request、response、原生 tool calls 和模型提供时的 reasoning，适合调试但可能包含源码和用户输入。full trace 目录和文件分别按 `0700` / `0600` 创建，仍应只放在可信存储上并按需清理。
 

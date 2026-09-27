@@ -8,6 +8,7 @@ validation remain in their owning packages.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,7 +59,7 @@ class CliApplication:
 
 def _trace_dir() -> Path | None:
     value = os.environ.get("RESAGENT2_LLM_TRACE_DIR")
-    return Path(value).expanduser() if value else None
+    return Path(value).expanduser().resolve() if value else None
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -213,4 +214,6 @@ def build_application(
         registry=registry,
         dataset_ref_source=dataset_catalog,
     )
+    trace_level = os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
+    print(f"LLM trace: {trace_level}; directory: {_trace_dir() or 'unset'}", file=sys.stderr)
     return CliApplication(controller=controller, run_store=run_store)

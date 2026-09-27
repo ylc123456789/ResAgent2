@@ -213,7 +213,11 @@ class OpenAICompatibleClient:
         self.api_key_env = api_key_env
         self.model_profile = model_profile
         self.timeout_seconds = timeout_seconds
-        self.trace_dir = Path(trace_dir) if trace_dir else None
+        if trace_level not in {"off", "metadata", "full"}:
+            raise ValueError("trace_level must be off, metadata or full")
+        if trace_level != "off" and not trace_dir:
+            raise ValueError("trace_dir is required when trace_level is enabled")
+        self.trace_dir = Path(trace_dir).expanduser().resolve() if trace_dir else None
         self.trace_level = trace_level
         self._trace_context: dict = {}
         self._trace_seq = 0

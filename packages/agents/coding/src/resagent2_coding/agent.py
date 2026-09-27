@@ -38,8 +38,10 @@ class NativeCodingAgent:
     """Inspect and edit authorized code through a single Agent protocol."""
 
     description = (
-        "Understand, explain, modify and verify code under the granted permissions. "
-        "Code inspection can finish with a report; changes and command execution are optional."
+        "Understand, implement and repair code, including experiment entry points, and "
+        "verify correctness under the granted permissions. Bounded correctness checks "
+        "belong here; research measurements belong to Experiment. Code inspection can "
+        "finish with a report; changes and command execution are optional."
     )
 
     def __init__(

@@ -108,11 +108,16 @@ umask 077
 mkdir -p "$L3_ROOT/logs" "$L3_ROOT/traces" "$L3_ROOT/analysis"
 # 此时 workspace 已完成中性准备；goal.txt 和资源配置已经核对。
 
-export RESAGENT2_MODEL=deepseek-v4-flash
-export RESAGENT2_LLM_TRACE_LEVEL=full
-export RESAGENT2_LLM_TRACE_DIR="$L3_ROOT/traces"
+L3_CLI=/root/autodl-tmp/projects/ResAgent2/apps/cli/run-configured.sh
+cat > "$L3_ROOT/cli-config.sh" <<EOF
+RESAGENT2_MODEL=deepseek-v4-flash
+RESAGENT2_LLM_TRACE_LEVEL=full
+RESAGENT2_LLM_TRACE_DIR="$L3_ROOT/traces"
+EOF
+# 预检确认的 API、资源等非默认配置也放入此文件；凭据从安全配置载入。
+# 每次 run/answer/resume 都通过同一个入口加载配置。
 
-resagent2 run \
+bash "$L3_CLI" "$L3_ROOT/cli-config.sh" run \
   --run-id "$L3_RUN_ID" \
   --workspace "$L3_WORKSPACE" \
   --data-root "$L3_ROOT/data" \
@@ -127,7 +132,7 @@ resagent2 run \
 L3_RUN_RC=$?
 printf '%s\n' "$L3_RUN_RC" > "$L3_ROOT/logs/run.exit_code"
 
-resagent2 show "$L3_RUN_ID" --data-root "$L3_ROOT/data"
+bash "$L3_CLI" "$L3_ROOT/cli-config.sh" show "$L3_RUN_ID" --data-root "$L3_ROOT/data"
 ~~~
 
 命令默认使用现有完整生产装配（含 LLM Compiler、Interpreter），不 mock，不直接调用单个 Agent，不使用固定任务探针冒充 L3。`shell /run` 与一次性 CLI 使用共同请求构造；本轮选择一次性 CLI，不为界面覆盖多跑一个昂贵案例。模型名按已验证服务器配置冻结，若变更须在启动前记录，不能静默中途换模型。
@@ -137,17 +142,17 @@ resagent2 show "$L3_RUN_ID" --data-root "$L3_ROOT/data"
 若 paused，先 `show` 读取**当前**原题和实际 requested_fields，再依第 7 节规则回答；下列字段名只是占位符，多字段问题逐项提供：
 
 ~~~bash
-resagent2 answer "$L3_RUN_ID" --data-root "$L3_ROOT/data" \
+bash "$L3_CLI" "$L3_ROOT/cli-config.sh" answer "$L3_RUN_ID" --data-root "$L3_ROOT/data" \
   --field 'ACTUAL_FIELD=根据当前问题给出的真实回答'
 ~~~
 
 回答必须继续原 Run、对应 Task/Attempt/Session 和预算；不能改 JSON 绕过校验。中断后确认没有活跃写入进程、也不是等待答案，才使用：
 
 ~~~bash
-resagent2 resume "$L3_RUN_ID" --data-root "$L3_ROOT/data"
+bash "$L3_CLI" "$L3_ROOT/cli-config.sh" resume "$L3_RUN_ID" --data-root "$L3_ROOT/data"
 ~~~
 
-持久化工作区、授权和预算沿用创建时配置，不需重传。不把 `show` 的退出码当完成判据；它只是成功展示状态。交互 shell 的 Ctrl-C 只停止观察；关闭终端/中断一次性命令也不是可靠取消或无损恢复策略。
+新终端先恢复 `L3_ROOT`、`L3_RUN_ID` 和 `L3_CLI` 的实际路径，再使用同一配置入口。核对每次启动日志中的 trace 档位为 full、目录相同；结束时以调用身份核对 trace 与用量账本，单列缺失请求，不能用 Session 代替缺失的完整请求。持久化工作区、授权和预算沿用创建时配置，不需重传。不把 `show` 的退出码当完成判据；它只是成功展示状态。交互 shell 的 Ctrl-C 只停止观察；关闭终端/中断一次性命令也不是可靠取消或无损恢复策略。
 
 ## 7. 测试 AI 的问答边界
 

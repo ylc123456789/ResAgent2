@@ -151,3 +151,95 @@ def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     # OpenAlex remains in cooldown until t=70; arXiv has recovered.
     assert calls[-1] == ("arxiv", 61)
     assert len(calls) == 4
+
+
+@pytest.fixture
+def real_backends(monkeypatch):
+    from resagent2_components.literature import _http, backends
+
+    for attribute, name in (("_ARXIV_HTTP", "arXiv"), ("_OPENALEX_HTTP", "OpenAlex")):
+        monkeypatch.setattr(
+            backends, attribute, _http.LiteratureHTTP(name, interval_seconds=0),
+        )
+    return backends
+
+
+def test_406_tries_real_peer_backend_and_keeps_successful_source(real_backends, monkeypatch):
+    import json
+    from tests.components.test_literature_http import http_error
+    from tests.components.test_openalex import work
+
+    calls = []
+    def arxiv_request(self, url):
+        calls.append("arxiv")
+        raise http_error(406)
+    def openalex_request(self, url):
+        calls.append("openalex")
+        return json.dumps({"results": [work()]}).encode()
+    monkeypatch.setattr(real_backends.ArxivLiteratureBackend, "_request", arxiv_request)
+    monkeypatch.setattr(real_backends.OpenAlexLiteratureBackend, "_request", openalex_request)
+    backend = MultiSourceLiteratureBackend(
+        real_backends.ArxivLiteratureBackend(), real_backends.OpenAlexLiteratureBackend(),
+    )
+
+    first = backend.search("calibration", max_results=3)
+    assert first[0].paper_id == "openalex:W123"
+    assert first[0].source_url == "https://openalex.org/W123"
+    assert backend.search("next query", max_results=3) == first
+    assert calls == ["arxiv", "openalex", "openalex"]
+
+
+@pytest.mark.parametrize("peer_status", [406, 429])
+def test_406_and_unavailable_peer_preserve_both_causes(real_backends, monkeypatch, peer_status):
+    from tests.components.test_literature_http import http_error
+
+    calls = []
+    def arxiv_request(self, url):
+        calls.append("arxiv")
+        raise http_error(406)
+    def openalex_request(self, url):
+        calls.append("openalex")
+        raise http_error(peer_status)
+    monkeypatch.setattr(real_backends.ArxivLiteratureBackend, "_request", arxiv_request)
+    monkeypatch.setattr(real_backends.OpenAlexLiteratureBackend, "_request", openalex_request)
+    backend = MultiSourceLiteratureBackend(
+        real_backends.ArxivLiteratureBackend(), real_backends.OpenAlexLiteratureBackend(),
+    )
+
+    with pytest.raises(LiteratureUnavailableError, match="All literature sources") as caught:
+        backend.search("calibration", max_results=3)
+    assert calls == ["arxiv", "openalex"]
+    assert "arXiv HTTP 406" in str(caught.value)
+    assert f"OpenAlex HTTP {peer_status}" in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", [400, 401, 403, 404, "invalid_xml", "deadline", "bug"])
+def test_other_backend_failures_do_not_switch_sources(real_backends, monkeypatch, failure):
+    from resagent2_runtime.budget import DeadlineExceededError
+    from tests.components.test_literature_http import http_error
+
+    calls = []
+    def arxiv_request(self, url):
+        calls.append("arxiv")
+        if failure == "invalid_xml":
+            return b"<broken"
+        if failure == "deadline":
+            raise DeadlineExceededError("deadline")
+        if failure == "bug":
+            raise RuntimeError("bug")
+        raise http_error(failure)
+    def openalex_request(self, url):
+        calls.append("openalex")
+        return b'{"results": []}'
+    monkeypatch.setattr(real_backends.ArxivLiteratureBackend, "_request", arxiv_request)
+    monkeypatch.setattr(real_backends.OpenAlexLiteratureBackend, "_request", openalex_request)
+    backend = MultiSourceLiteratureBackend(
+        real_backends.ArxivLiteratureBackend(), real_backends.OpenAlexLiteratureBackend(),
+    )
+
+    expected = (DeadlineExceededError if failure == "deadline" else
+                RuntimeError if failure == "bug" else LiteratureSearchError)
+    with pytest.raises(expected) as caught:
+        backend.search("calibration", max_results=3)
+    assert not isinstance(caught.value, LiteratureUnavailableError)
+    assert calls == ["arxiv"]

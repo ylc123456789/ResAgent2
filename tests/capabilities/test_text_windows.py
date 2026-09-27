@@ -73,6 +73,9 @@ def test_workspace_and_artifact_share_line_range_semantics(tmp_path, start, end,
         assert result.value["content"] == expected
         assert result.value["truncated"] is False
     assert artifact_result.memory_updates["read_artifact_ids"] == [ref.id]
+    assert artifact_result.value["provenance"] == {
+        "producer": "experiment", "task_id": "task_reader", "attempt_number": 1,
+    }
 
 
 def test_artifact_range_can_recover_text_after_default_character_limit(tmp_path):

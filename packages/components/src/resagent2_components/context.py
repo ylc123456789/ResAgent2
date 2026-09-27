@@ -19,7 +19,7 @@ from .workspace import WorkspacePermissionError, _normalize_relative
 
 _READ_FIELDS = (
     "path", "artifact_id", "start_line", "end_line", "content", "truncated",
-    "observed_at", "context_truncated",
+    "observed_at", "context_truncated", "kind", "provenance",
 )
 
 

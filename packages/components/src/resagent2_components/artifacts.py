@@ -155,6 +155,10 @@ class RegisteredArtifactReader:
             "artifact_id": artifact.id,
             "kind": artifact.kind,
             "summary": artifact.summary,
+            "provenance": artifact.model_dump(
+                mode="json", include={"producer", "task_id", "attempt_number", "session_id"},
+                exclude_none=True,
+            ),
             **slice_text_lines(
                 text, start_line=start_line, end_line=end_line, max_chars=max_chars,
             ),

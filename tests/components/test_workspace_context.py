@@ -120,6 +120,33 @@ def test_artifact_content_survives_short_history_without_a_second_cache():
     assert _reads(state)["artifact_snippets"][0]["content"] == text
     assert "read_artifact_summaries" not in state.memory
 
+def test_registered_artifact_provenance_survives_context_truncation(tmp_path):
+    from resagent2_components import RegisteredArtifactReader
+    from resagent2_contracts import ArtifactRef
+    import hashlib
+
+    path = tmp_path / "result.txt"
+    path.write_text("original evidence " * 10000)
+    ref = ArtifactRef(
+        id="artifact_result", kind="text", producer=AgentOwner.EXPERIMENT,
+        run_id="run_context", task_id="task_source", attempt_number=2,
+        uri=path.as_uri(), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        media_type="text/plain", summary="Result",
+        metadata={"producer": "scientific", "task_id": "task_other"},
+    )
+    value = RegisteredArtifactReader([ref], run_id=ref.run_id).read_text(ref.id)
+    state = _state()
+    _observe(state, "read_artifact", value)
+    snippet = _reads(state, max_context_tokens=2048)["artifact_snippets"][0]
+
+    assert snippet["context_truncated"] is True
+    assert snippet["kind"] == "text"
+    assert snippet["provenance"] == {
+        "producer": "experiment", "task_id": "task_source", "attempt_number": 2,
+    }
+    assert state.events[0].data["value"] == value
+
+
 def test_artifact_does_not_evict_file_ranges_or_dependencies():
     state = _state()
     state.memory["read_paths"] = ["requirements.txt", "train.py"]

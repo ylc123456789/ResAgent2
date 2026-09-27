@@ -65,7 +65,7 @@ from resagent2_orchestrator import (
     ArtifactRegistry,
     JsonRunStore,
     LLMWorkflowCompiler,
-    LLMWorkInterpreter,
+    DeterministicWorkInterpreter,
     ModuleBinding,
     ResearchController,
     ScientificArtifactRegistration,
@@ -440,17 +440,7 @@ def _build_controller(workdir: Path, repo: Path | None):
                 section_name="compiler_request",
             )
         ),
-        interpreter=LLMWorkInterpreter(
-            PromptLLMClient(
-                _new_llm_client(),
-                system_prompt="You are the stateless ResAgent2 Work Interpreter.",
-                max_context_tokens=int(os.environ.get(
-                    "RESAGENT2_INTERPRETER_CONTEXT_TOKENS",
-                    DEFAULT_AGENT_CONTEXT_TOKENS,
-                )),
-                section_name="interpreter_request",
-            )
-        ),
+        interpreter=DeterministicWorkInterpreter(),
         scheduler=scheduler,
         registry=registry,
         dataset_ref_source=DatasetCatalog(resource_layout.dataset_root),

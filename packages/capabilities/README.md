@@ -22,7 +22,7 @@
 
 ## 工具行为
 
-read_file / read_artifact 都支持行范围；工件先校验授权与整份 hash 再切片。search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。
+read_file / read_artifact 都支持行范围；工件先校验授权与整份 hash 再切片。read_artifact 还可在选定物理行范围内使用零基 `start_char` / `end_char` 读取字符窗口（不含 end_char），用于继续读取超长行；原正文和物理行号保持不变。search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。
 
 delete_path 接受准确的相对 path 和 recursive=False；已授权文件、链接或空目录可直接删除，非空目录须明确 recursive=True 并通过目标快照确认。执行前重验路径集合、类型和版本，变化不能复用旧批准。链接只删除自身；根目录、受保护元数据和越界目标拒绝。删除与部分完成都沿用 edit_revision、读取过期标记和验证失效机制，不提供原子回滚。首版只装配到 Coding；删除文件内容仍使用 replace_text(new_text="")。
 
@@ -30,4 +30,4 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 上下文构造已迁到 Components；选择与预算仍由 Runtime 统一管理，详见 [CONTEXT](../../docs/current/CONTEXT.md#budgets)，这里不再维护另一份额度表。
 
-测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 18.0，旧权限和确认字段不保留兼容解释。
+测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 19.0，旧权限和确认字段不保留兼容解释。

@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **18.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **19.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -27,7 +27,7 @@ flowchart TB
     Coding -->|任务结果| Scheduler
     Experiment -->|任务结果| Scheduler
     Scheduler -->|WorkOutcome| Controller
-    Controller --> Interpreter[Interpreter：科研目录和带引用简报]
+    Controller --> Interpreter[Interpreter：固定科研目录和原报告整理]
     Interpreter -->|反向交接材料| Controller
     Controller --> Report[最终验收与报告]
     linkStyle default stroke:#597fa6,stroke-width:3px
@@ -100,10 +100,10 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 3. **编译当前一轮**：LLM 产生一个任务草图；代码分配身份、解析依赖和工作区，进行结构校验。解析或结构错误最多纠正一次，无额外语义复审调用。
 4. **接受并执行图**：Scheduler 校验候选图、绑定、预算和 revision 后接受；只执行依赖成功的 ready Task。已知代码前置条件先交 Coding，正式实验交 Experiment。
 5. **收集结果**：模块返回 AgentResult。Scheduler 接收报告、登记工件、按冻结要求验收并记录 Attempt，再构建 WorkOutcome 交回 Controller。跨任务输入按已声明 output_name 解析到上游成功 Attempt 的唯一工件。
-6. **解释与下一步**：Controller 保存成对的 work_record；Orchestrator 的 Interpreter 生成累计科研目录及带引用简报。Controller 冻结 work_feedback，Scientific 通过原恢复入口接收本轮带引用简报和更新后的完整目录，再通过现有工具阅读原证据、判断下一步。
+6. **反馈与下一步**：Controller 保存成对的 work_record；Interpreter 用固定代码生成累计科研目录，按任务和真实尝试序号组织已记录报告。Controller 冻结 work_feedback，Scientific 通过原恢复入口接收执行事实、本轮报告和完整目录，按信息缺口读取原件并判断下一步。
 7. **完成**：Scientific 提交 scientific_opinion；Controller 验证后生成最终报告并将 Run 记为 completed。
 
-Interpreter 的固定代码整理来源与执行状态，LLM 根据授权材料解释本轮成果和局限。它不调度任务、不改 Run、不拥有独立 Session；Scientific 仍负责最终科学判断。原记录保留并可按需读取，默认上下文不再展开完整执行反馈或全量授权清单。
+Interpreter 不再调用 LLM；报告原文来自最新 Attempt，任务状态、错误和累计警告来自结构字段，旧尝试保留编号及状态入口。目标、任务和产物沿用 WorkRequest、Task、Artifact 的原身份与名称。它不调度任务、不改 Run、不拥有独立 Session；Scientific 负责语义综合及科学判断。
 
 发现、结果和局限通过 report 表达，需要下游分页读取的长说明可提交 `kind=module_report` 工件。解释与原始测量分别具有明确用途；工件经 Registry 冻结后按授权读取，报告文字不能替代实际命令回执、测量文件或已读文献。
 
@@ -115,7 +115,7 @@ Interpreter 的固定代码整理来源与执行状态，LLM 根据授权材料�
 | Scheduler 任务执行循环 | 选择 ready Task，处理 Attempt 和 retry | 本轮图稳定或需暂停 |
 | 每个 Agent 的 AgentLoop | 上下文 → 候选动作 → 工具 → 观测 → 完成检查 | 模块结束、请求工作或问用户 |
 
-Compiler 和 Interpreter 都不是额外 AgentLoop：它们调用 LLM，但没有 Session 或工具循环；经 PromptLLMClient 复用上下文预算即可。
+Compiler 和 Interpreter 都没有 Session 或工具循环。Compiler 通过 PromptLLMClient 编译需求；Interpreter 只组织已有记录，不需要模型客户端或独立上下文额度。
 
 Compiler 按工作目的选择职责：代码实现与正确性验证交 Coding，为回答研究问题而进行的训练、拟合、评估等测量交 Experiment。已知实现前置条件先交 Coding；已有可用入口则可直接交 Experiment。在职责范围内保持最小可执行图，同一 Agent 的检查、准备和执行尽量保留在一个任务中。草图只表达 instruction、模块路由、依赖、工作区和工件交接，不编造具体指标键、文件路径、验收策略或权限。精确要求由确定性调用方显式提供，接受后冻结为 acceptance_requirements；普通任务中的语义证据要求仍保留在 instruction。
 
@@ -131,7 +131,7 @@ depends_on 要求上游成功，不能表示“失败时修复”。真实失败
 | Workflow / Task / Attempt | 已接受任务图 / 任务 / 一次执行尝试 | Scheduler |
 | Session / events / memory / tool_turns | Agent 内部执行记录与原生工具协议续传 | Agent 与 runtime |
 | RunUsage / 执行截止时间 | 请求占用与结果 / 扣除人工等待后的剩余时长 | Run 持久记录；Runtime 向下传递并检查 |
-| 科研目录与反馈引用 | 目录可从登记表和执行事实重建；简报复用已冻结反馈，保存前中断才重新生成 | Controller 保存与交付 |
+| 科研目录与反馈引用 | 目录可从登记表和执行事实重建；原报告汇总复用冻结反馈，保存前中断才重新组装 | Controller 保存与交付 |
 | ArtifactRef 与冻结内容 | 有来源和 hash 的证据引用及文件 | Registry 登记；Controller/Scheduler 收入 Run |
 
 Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一 Attempt、Session、输出目录和基线。retry 才开始新 Attempt；新一轮科学修复则是新 WorkRequest 和新任务。
@@ -148,7 +148,7 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 - Session 创建时固定工具协议身份：正文 JSON 为 `None`，OpenAI-compatible 原生身份由协议、endpoint、model 构成且不含 API key；自定义原生客户端须提供稳定身份。恢复拒绝 JSON↔原生切换和原生 endpoint/model 变化，不做迁移。
 - 原生 AgentLoop 先保存整批 call，逐项派发前记录 executing_call_id，结果按 call ID 配对。重启保留已完成回执；正在执行但缺回执的项记为 unknown outcome，后续项记为未开始；不自动重放。这只提供进程重启 checkpoint，不保证掉电持久化，也不承诺外部副作用 exactly-once。
 - 已接受图优先恢复；未接受编译可重做，但 LLM 不保证每次选择相同任务。
-- 已保存的 Interpreter 反馈按 WorkRequest 复用；保存前中断可以重做，但已花模型预算不退还。只有 Scientific 返回被接受后才消费该 WorkRequest。
+- 已保存的 Interpreter 反馈按 WorkRequest 复用；保存前中断可以重新组装，不产生模型用量。既有用量不重置；只有 Scientific 返回被接受后才消费该 WorkRequest。
 - 原生 Scientific 按工作请求或问题身份去重交付；不能推广成所有 Port/工具的自动幂等。
 - 单个 JSON 快照可原子替换，但 Run、Session、文件和命令不构成一个大事务。当前以单进程、单写入者为前提，不支持同一 Run 并发推进。
 - 中断不保证外部命令没发生；失败不自动回滚代码、依赖或全部文件。CLI 停止监看也不等于取消执行。
@@ -161,7 +161,7 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 
 Run.artifacts 是唯一的产物登记表。科研目录 research_index 从已授权登记材料、工作目标及历次 Attempt 派生，按初始材料、Scientific 材料和工作需求分组，只保留原 Artifact ID 及展示字段。失败尝试不会被后续成功覆盖；完整问答按原 Task/Attempt 或 Scientific 归属收入目录，不作为 Agent 自报产出。目录不扫描未登记文件，也不递归收入目录、反馈和观察记录。work_record 保存原需求、执行结果和历次尝试，是无文件输出时仍可引用的执行事实。
 
-WorkRequest 稳定后，Interpreter 使用固定代码生成累计目录，使用 LLM 阅读本轮相关文本材料（包括本轮问答）并生成带引用简报。Controller 将反馈冻结，保存当前目录指针和 feedback_refs。Scientific 接收本轮简报及最新完整目录正文，不再接收目录增量。目录条目与底层读取共用登记来源，子任务答案也可按原 ID 读取；答案用于批准和恢复时的作用域不变。初始输入、回答恢复及最终完成沿用原目录刷新机制。解释不是测量，Scientific 仍需读取原材料形成观点。
+WorkRequest 稳定后，Interpreter 生成累计目录并固定组织原报告，Controller 保存目录指针和 feedback_refs。Scientific 收到最新完整目录，以及本轮反馈的必需事实框和可伸缩报告正文；共享 Composer 分配正文空间，省略或截断明确标注，完整原件仍可读取。目录与工具共用登记来源，子任务答案可按原 ID 阅读；批准和恢复的作用域不变。目录与报告呈现不增加 observed，也不赋予其引用原件已读资格。
 
 ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源、冻结内容并计算 hash 后，才产生 ArtifactRef。授权可以读不等于已经读，已经读过也不保证正文一直留在模型上下文。
 
@@ -190,7 +190,7 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用与冻结 dataset_catalog 工件 → Agent 的实际可用性检查。缺所需资源复用 ask_user。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 
-RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；重试、格式纠正、Compiler、Interpreter 和摘要都占用余额。结果用量仅用于诊断，不二次扣费；中断留下的 unknown 占用不退款。嵌套调用只能收紧额度与截止时间，不能新开钱包。
+RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；三个 Agent、Compiler、重试、格式纠正和摘要都占用余额，固定 Interpreter 不占用模型次数。结果用量仅用于诊断；中断留下的 unknown 占用不退款，内部调用不能另开预算。
 
 Run 的操作授权与 WorkspaceAccess 是内部权限上限。Components 的 OperationPermissionPolicy 共用 allow / ask / deny 判定，文件和进程组件在执行前仍检查边界；领域命令约束保留在各自工具。ask 复用现有 question/answer 工件与 Session，批准绑定单次动作、参数、上下文和身份，派发前持久消费。Coding 的 delete_path 允许授权文件和空目录删除，非空目录使用待删除目标快照确认；不新增审批服务。
 
@@ -200,7 +200,7 @@ Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。模型/文献 HTTP、退避、环境操作和受控进程沿用 Run 截止时间，到期取消 HTTP 或终止进程树。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。验证与实验工具在操作获准后、命令执行前自动核验尚未认证的绑定，失败不执行；批准恢复不信任旧认证，也不要求模型为固定前置核验再走一轮确认。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
-- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent、Compiler与Interpreter共用128000的默认输入额度；Compiler/Interpreter使用无状态JSON翻译，不使用Session压缩；workspace_context共用文件/工件/诊断/目录投影，先分起始份额、空余按优先级借用，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
+- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用128000默认输入额度；Compiler使用无状态JSON编译，Interpreter不调用模型。workspace_context及工作反馈共用材料分配，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
 - 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[文献组件](../../packages/components/README.md#literature)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**

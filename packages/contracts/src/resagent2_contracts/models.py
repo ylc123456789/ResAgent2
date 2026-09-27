@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "18.0"
+SCHEMA_VERSION = "19.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["18.0"] = SCHEMA_VERSION
+    schema_version: Literal["19.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -1262,19 +1262,6 @@ class ResearchIndex(ContractModel):
         return self
 
 
-class CitedStatement(ContractModel):
-    """An Interpreter explanation with references to its supplied source materials."""
-
-    text: NonEmptyStr
-    artifact_ids: list[ArtifactId] = Field(min_length=1)
-
-
-class WorkBrief(ContractModel):
-    """Explanatory prose, not measured evidence or the final scientific judgment."""
-
-    statements: list[CitedStatement] = Field(min_length=1)
-
-
 class WorkFeedback(ContractModel):
     """Frozen reverse handoff; raw execution facts remain in the referenced record."""
 
@@ -1283,7 +1270,7 @@ class WorkFeedback(ContractModel):
     session_id: SessionId
     work_record_artifact_id: ArtifactId
     index_artifact_id: ArtifactId
-    brief: WorkBrief
+    report: NonEmptyStr
 
 
 class ConclusionRequirements(ContractModel):

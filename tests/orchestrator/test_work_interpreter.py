@@ -1,19 +1,145 @@
-"""The reverse boundary preserves provenance, cited inputs and Run budgets."""
+"""Deterministic handoffs preserve source reports, identities and history."""
+
 import json
 from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 from resagent2_contracts import (
-    AgentOwner, ArtifactCandidate, ArtifactRef, Attempt, CitedStatement, ModuleError,
-    ResearchIndex, ResearchIndexGroup, ResearchArtifactEntry, RecordedAnswer, WorkBrief, WorkFeedback,
-    VerificationResult, WorkOutcome, WorkRecord, WorkRequest, WorkRequestDraft, WorkflowTask, WorkTaskOutcome,
+    AgentOwner, ArtifactCandidate, ArtifactRef, Attempt, ModuleError,
+    ResearchIndex, ResearchIndexGroup, ResearchArtifactEntry, RecordedAnswer,
+    WarningRecord, WorkAttemptRecord, WorkFeedback, WorkOutcome, WorkRecord,
+    WorkRequest, WorkRequestDraft, WorkflowTask, WorkTaskOutcome,
 )
-from resagent2_orchestrator import ArtifactRegistry, LLMWorkInterpreter
+from resagent2_orchestrator import ArtifactRegistry, DeterministicWorkInterpreter
 from resagent2_orchestrator.interpreter import build_research_index
-from resagent2_runtime.budget import BudgetExhaustedError, execution_budget
+from resagent2_runtime.budget import execution_budget
 
 NOW = datetime.now(UTC)
+
+
+def work_record(*, report="Measured accuracy: 0.8. One experiment, no replication."):
+    return WorkRecord(
+        run_id="run_test", session_id="session_test", work_request_id="work_test",
+        previous_work_request=WorkRequestDraft(
+            objective="Compare methods", expected_evidence=["accuracy"], constraints=["Use the frozen split"],
+        ),
+        work_outcome=WorkOutcome(
+            work_request_id="work_test", workflow_revision=1, summary="execution stable",
+            tasks=[WorkTaskOutcome(task_id="task_measure", status="completed", summary="Fallback task text",
+                                   artifact_ids=["artifact_metric"])],
+        ),
+        attempts=[WorkAttemptRecord(task_id="task_measure", attempt_number=1, status="completed",
+                                    summary=report, artifact_ids=["artifact_metric"])],
+    )
+
+
+def test_report_preserves_original_content_without_mutation_or_model_usage():
+    record = work_record(report="Original report.\nExact number: 0.80000.\nLimit: one seed.")
+    before = record.model_dump()
+    interpreter = DeterministicWorkInterpreter()
+    with execution_budget(max_llm_calls=1, timeout_seconds=30) as budget:
+        report = interpreter.interpret(record)
+        assert budget.usage.used == 0
+    assert report == interpreter.interpret(record)
+    assert record.model_dump() == before
+    assert record.attempts[0].summary in report
+    assert record.previous_work_request.objective in report
+    assert record.previous_work_request.constraints[0] in report
+    assert "task_measure" in report and "artifact_metric" in report
+    assert "Fallback task text" not in report
+
+
+def test_latest_report_is_selected_by_attempt_number_and_history_remains_distinct():
+    record = work_record(report="Current result with remaining limitations.")
+    record.attempts[0].attempt_number = 3
+    record.attempts.extend([
+        WorkAttemptRecord(task_id="task_measure", attempt_number=2, status="failed",
+                          summary="Do not repeat this older interpretation."),
+        WorkAttemptRecord(task_id="task_measure", attempt_number=1, status="failed",
+                          summary="Do not repeat this oldest interpretation."),
+    ])
+    record.work_outcome.tasks[0].warnings = [WarningRecord(code="historical_warning", message="Review precision.")]
+    report = DeterministicWorkInterpreter().interpret(record)
+    assert report.count(record.attempts[0].summary) == 1
+    assert "Latest attempt: 3; status: completed" in report
+    assert report.index("attempt 1: failed") < report.index("attempt 2: failed")
+    assert "Do not repeat" not in report
+    assert "accumulated across attempts" in report and "Review precision." in report
+    assert "Task status: completed" in report
+
+
+def test_task_order_and_original_ids_distinguish_identical_report_text():
+    record = work_record(report="Same report")
+    record.work_outcome.tasks.insert(0, WorkTaskOutcome(
+        task_id="task_code", status="completed", summary="Unused", artifact_ids=["artifact_code"],
+    ))
+    record.attempts.append(WorkAttemptRecord(
+        task_id="task_code", attempt_number=1, status="completed",
+        summary="Same report", artifact_ids=["artifact_code"],
+    ))
+    report = DeterministicWorkInterpreter().interpret(record)
+    assert report.index("Task: task_code") < report.index("Task: task_measure")
+    assert report.index("artifact_code") < report.index("Task: task_measure")
+    assert report.count("Same report") == 2
+    assert report.count("Latest attempt: 1; status: completed") == 2
+
+
+def test_missing_report_and_unexecuted_task_do_not_echo_instruction_as_agent_work():
+    record = work_record(report="")
+    record.work_outcome.tasks.append(WorkTaskOutcome(
+        task_id="task_blocked", status="blocked", summary="Run a future experiment",
+        error=ModuleError(code="contract_error", message="dependency did not complete", retryable=False),
+    ))
+    report = DeterministicWorkInterpreter().interpret(record)
+    assert "No recorded report." in report and "Not executed; no Agent report." in report
+    assert "Run a future experiment" not in report and "Fallback task text" not in report
+    assert "dependency did not complete" in report
+
+
+def test_recorded_report_does_not_override_actual_task_status():
+    record = work_record(report="The experiment succeeded, according to the Agent.")
+    error = ModuleError(code="tool_failed", message="A later operation failed", retryable=False)
+    record.work_outcome.tasks[0].status = "failed"
+    record.work_outcome.tasks[0].error = error
+    record.attempts[0].status = "failed"
+    record.attempts[0].error = error
+    report = DeterministicWorkInterpreter().interpret(record)
+    assert "Task status: failed" in report
+    assert record.attempts[0].summary in report and error.message in report
+
+
+@pytest.mark.parametrize("invalid", ["foreign_task", "duplicate_attempt", "foreign_output", "output_without_attempt"])
+def test_report_refuses_inconsistent_source_bindings(invalid):
+    record = work_record()
+    if invalid == "foreign_task":
+        record.attempts[0].task_id = "task_other"
+    elif invalid == "duplicate_attempt":
+        record.attempts.append(record.attempts[0].model_copy())
+    elif invalid == "foreign_output":
+        record.work_outcome.tasks[0].artifact_ids = ["artifact_other"]
+    else:
+        record.attempts = []
+    with pytest.raises(ValueError):
+        DeterministicWorkInterpreter().interpret(record)
+
+
+def test_long_recorded_report_is_not_truncated_before_context_composition():
+    original = "Start of original report.\n" + "Detailed material\n" * 2000 + "Final limitation."
+    assert original in DeterministicWorkInterpreter().interpret(work_record(report=original))
+
+
+def test_work_feedback_requires_report_and_rejects_old_brief():
+    fields = dict(
+        run_id="run_test", session_id="session_test", work_request_id="work_test",
+        work_record_artifact_id="artifact_record", index_artifact_id="artifact_index",
+    )
+    with pytest.raises(ValidationError, match="report"):
+        WorkFeedback(**fields, report="")
+    with pytest.raises(ValidationError, match="brief"):
+        WorkFeedback(**fields, report="Recorded task results", brief={"statements": []})
+    feedback = WorkFeedback(**fields, report="Recorded task results")
+    assert WorkFeedback.model_validate_json(feedback.model_dump_json()) == feedback
 
 
 def source(tmp_path, *, kind="data", media_type="application/json", content='{"accuracy": 0.8}'):
@@ -32,72 +158,6 @@ def source(tmp_path, *, kind="data", media_type="application/json", content='{"a
     index = ResearchIndex(run_id="run_test", groups=[ResearchIndexGroup(key="work_test", title=draft.objective,
         artifacts=[ResearchArtifactEntry.from_ref(ref), ResearchArtifactEntry.from_ref(record_ref)])])
     return registry, ref, record_ref, index
-
-
-class Client:
-    def __init__(self, replies):
-        self.replies = iter(replies)
-        self.prompts = []
-
-    def next_action(self, prompt, action_type):
-        self.prompts.append(prompt)
-        return next(self.replies)
-
-
-def brief(artifact_id):
-    return WorkBrief(statements=[CitedStatement(text="Accuracy is 0.8", artifact_ids=[artifact_id])])
-
-
-def test_interpreter_reads_real_frozen_content_and_corrects_unsupplied_citation(tmp_path):
-    _, ref, record_ref, index = source(tmp_path)
-    client = Client([brief("artifact_invented"), brief(ref.id)])
-    with execution_budget(max_llm_calls=2, timeout_seconds=30) as budget:
-        result = LLMWorkInterpreter(client).interpret(record_ref=record_ref, index=index, artifacts=[ref, record_ref])
-        assert budget.usage.used == 2
-    assert result.statements[0].artifact_ids == [ref.id]
-    assert 'accuracy' in client.prompts[0] and '0.8' in client.prompts[0]
-    assert 'Previous brief rejected' in client.prompts[1]
-
-
-def test_interpreter_refuses_unread_binary_citation(tmp_path):
-    _, ref, record_ref, index = source(tmp_path, media_type="application/octet-stream")
-    client = Client([brief(ref.id), brief(ref.id)])
-    with execution_budget(max_llm_calls=2, timeout_seconds=30):
-        with pytest.raises(ValueError, match="unread artifact"):
-            LLMWorkInterpreter(client).interpret(record_ref=record_ref, index=index, artifacts=[ref, record_ref])
-    assert json.loads(client.prompts[0].split("\n", 1)[1])["source_windows"] == []
-
-
-def test_interpreter_checks_hash_before_model_dispatch(tmp_path):
-    registry, ref, record_ref, index = source(tmp_path)
-    (registry.root / ref.run_id / ref.id / "metrics.json").write_text('{"accuracy": 99}')
-    client = Client([brief(ref.id)])
-    with execution_budget(max_llm_calls=2, timeout_seconds=30) as budget:
-        with pytest.raises(ValueError, match="sha256"):
-            LLMWorkInterpreter(client).interpret(record_ref=record_ref, index=index, artifacts=[ref, record_ref])
-        assert budget.usage.used == 0
-    assert client.prompts == []
-
-
-def test_correction_cannot_open_another_budget(tmp_path):
-    _, ref, record_ref, index = source(tmp_path)
-    client = Client([brief("artifact_invented"), brief(ref.id)])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30) as budget:
-        with pytest.raises(BudgetExhaustedError):
-            LLMWorkInterpreter(client).interpret(record_ref=record_ref, index=index, artifacts=[ref, record_ref])
-        assert budget.usage.used == 1
-    assert len(client.prompts) == 1
-
-
-def test_text_windows_keep_truncation_visible(tmp_path):
-    _, ref, record_ref, index = source(tmp_path, media_type="text/plain", content="x" * 14000)
-    client = Client([brief(record_ref.id)])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30):
-        LLMWorkInterpreter(client).interpret(record_ref=record_ref, index=index, artifacts=[ref, record_ref])
-    payload = json.loads(client.prompts[0].split("\n", 1)[1])
-    window = next(item for item in payload["source_windows"] if item["artifact_id"] == ref.id)
-    assert window["truncated"] is True
-    assert len(window["content"]) <= 12000
 
 
 def test_index_preserves_failed_attempt_when_retry_succeeds(tmp_path):
@@ -126,15 +186,6 @@ def test_index_rejects_foreign_scope_and_missing_attempt_binding(tmp_path):
         build_research_index(run_id="run_other", artifacts=[ref], work_requests=[])
     with pytest.raises(ValueError, match="source task"):
         build_research_index(run_id="run_test", artifacts=[ref], work_requests=[])
-
-
-def test_work_feedback_requires_citations_and_rejects_removed_delta():
-    with pytest.raises(ValidationError):
-        WorkBrief(statements=[dict(text="Unsupported", artifact_ids=[])])
-    with pytest.raises(ValidationError, match="index_changes"):
-        WorkFeedback(run_id="run_test", session_id="session_test", work_request_id="work_test",
-            work_record_artifact_id="artifact_record", index_artifact_id="artifact_index",
-            index_changes=ResearchIndex(run_id="run_other"), brief=brief("artifact_record"))
 
 
 def test_index_distinguishes_imported_materials_from_final_report():
@@ -183,7 +234,7 @@ def index_with_answer(tmp_path, **answer_options):
     return registry, refs, task, work, answer
 
 
-def test_task_answer_is_indexed_readable_and_supplied_as_paired_brief_source(tmp_path):
+def test_task_answer_is_indexed_and_readable_with_original_provenance(tmp_path):
     from resagent2_components import RegisteredArtifactReader
 
     _, refs, task, work, answer = index_with_answer(tmp_path)
@@ -196,15 +247,6 @@ def test_task_answer_is_indexed_readable_and_supplied_as_paired_brief_source(tmp
     pair = json.loads(RegisteredArtifactReader(refs, run_id="run_test").read_text(answer.id)["content"])
     assert pair["question_text"].startswith("Which metric")
     assert pair["values"] == {"metric": "accuracy", "direction": "higher"}
-    client = Client([WorkBrief(statements=[CitedStatement(
-        text="The user identified accuracy and the higher-is-better direction.", artifact_ids=[answer.id],
-    )])])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30):
-        result = LLMWorkInterpreter(client).interpret(record_ref=refs[1], index=index, artifacts=refs)
-    payload = json.loads(client.prompts[0].split("\n", 1)[1])
-    supplied = next(window for window in payload["source_windows"] if window["artifact_id"] == answer.id)
-    assert json.loads(supplied["content"]) == pair
-    assert result.statements[0].artifact_ids == [answer.id]
 
 
 @pytest.mark.parametrize("invalid", ["scope", "attempt", "hash", "missing"])
@@ -227,147 +269,11 @@ def test_index_rejects_invalid_answer_source(tmp_path, invalid):
         build_research_index(run_id="run_test", artifacts=refs, work_requests=[work], tasks=[task])
 
 
-def test_full_index_keeps_history_but_brief_only_receives_current_work_and_explicit_inputs(tmp_path):
+def test_full_index_keeps_historical_answers_separate_from_current_work(tmp_path):
     registry, refs, task, work, answer = index_with_answer(tmp_path)
     historical = answer_ref(registry, question_id="question_earlier", task_id=None,
                             attempt_number=None, session_id="session_test")
     refs.append(historical)
     index = build_research_index(run_id="run_test", artifacts=refs, work_requests=[work], tasks=[task])
     assert {entry.artifact_id for group in index.groups for entry in group.artifacts} == {ref.id for ref in refs}
-    client = Client([brief(answer.id)])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30):
-        LLMWorkInterpreter(client).interpret(record_ref=refs[1], index=index, artifacts=refs)
-    payload = json.loads(client.prompts[0].split("\n", 1)[1])
-    supplied = {window["artifact_id"] for window in payload["source_windows"]}
-    assert answer.id in supplied and historical.id not in supplied
-    assert {group["key"] for group in payload["research_index"]["groups"]} == {work.id}
-
-def execution_source(tmp_path, commands):
-    results = [
-        VerificationResult(command=command, exit_code=code, timed_out=timed_out,
-                           stdout_path=f"command_{i}.stdout", stderr_path=f"command_{i}.stderr",
-                           duration_seconds=1.0).model_dump(mode="json")
-        for i, (command, code, timed_out) in enumerate(commands, 1)
-    ]
-    return source(tmp_path, kind="execution_record", content=json.dumps({"results": results}))
-
-
-def supplied_execution_window(ref, record_ref, index):
-    client = Client([brief(ref.id)])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30):
-        LLMWorkInterpreter(client).interpret(
-            record_ref=record_ref, index=index, artifacts=[ref, record_ref],
-        )
-    payload = json.loads(client.prompts[0].split("\n", 1)[1])
-    return next(window for window in payload["source_windows"] if window["artifact_id"] == ref.id)
-
-
-def test_long_failed_commands_do_not_hide_later_successful_outcomes(tmp_path):
-    commands = [
-        (f"python stage_{i}.py", 0, False) for i in range(1, 6)
-    ] + [
-        ("python -c 'failed_lookup " + "x" * 20_000 + " calibration'", 1, False),
-        ("python -c 'retry_lookup " + "y" * 20_000 + " calibration'", 1, False),
-        ("python corrected_check.py", 0, False),
-        ("python summarize.py", 0, False),
-    ]
-    registry, ref, record_ref, index = execution_source(tmp_path, commands)
-    before = (registry.root / ref.run_id / ref.id / "metrics.json").read_bytes()
-    window = supplied_execution_window(ref, record_ref, index)
-    facts = json.loads(window["content"])
-    assert facts["order"] == "oldest_to_newest"
-    assert facts["total_records"] == 9 and facts["historical_failed_records"] == 2
-    assert facts["omitted_earlier_records"] == 0
-    assert [item["record_number"] for item in facts["results"]] == list(range(1, 10))
-    assert [item["exit_code"] for item in facts["results"]] == [0] * 5 + [1, 1, 0, 0]
-    assert facts["results"][5]["command_truncated"] is True
-    assert facts["results"][-1]["command"] == "python summarize.py"
-    assert facts["results"][-1]["stderr_path"] == "command_9.stderr"
-    assert len(window["content"]) <= 12_000 and window["truncated"] is True
-    assert (registry.root / ref.run_id / ref.id / "metrics.json").read_bytes() == before
-
-
-def test_many_execution_records_keep_recent_whole_suffix_and_disclose_omissions(tmp_path):
-    commands = [(f"python run_{i}.py " + "x" * 1500, 1 if i == 0 else 0, False)
-                for i in range(100)]
-    _, ref, record_ref, index = execution_source(tmp_path, commands)
-    window = supplied_execution_window(ref, record_ref, index)
-    facts = json.loads(window["content"])
-    omitted = facts["omitted_earlier_records"]
-    assert 0 < omitted < 100
-    assert facts["historical_failed_records"] == 1  # Omitted early failure is not erased.
-    assert [item["record_number"] for item in facts["results"]] == list(range(omitted + 1, 101))
-    assert all(item["exit_code"] == 0 for item in facts["results"])
-    assert len(window["content"]) <= 12_000
-
-
-@pytest.mark.parametrize("commands", [[], [("python delayed.py", 0, True)]])
-def test_execution_view_handles_empty_history_and_timeout(tmp_path, commands):
-    _, ref, record_ref, index = execution_source(tmp_path, commands)
-    facts = json.loads(supplied_execution_window(ref, record_ref, index)["content"])
-    assert facts["total_records"] == len(commands)
-    assert facts["omitted_earlier_records"] == 0
-    assert facts["historical_failed_records"] == len(commands)
-
-
-@pytest.mark.parametrize("invalid", [
-    "not-json", "[]", "{}", '{"results": {}}', '{"results": [{"command": "python x.py"}]}',
-])
-def test_execution_view_rejects_invalid_record_before_model_dispatch(tmp_path, invalid):
-    _, ref, record_ref, index = source(tmp_path, kind="execution_record", content=invalid)
-    client = Client([brief(ref.id)])
-    with execution_budget(max_llm_calls=1, timeout_seconds=30) as budget:
-        with pytest.raises(ValueError):
-            LLMWorkInterpreter(client).interpret(
-                record_ref=record_ref, index=index, artifacts=[ref, record_ref],
-            )
-        assert budget.usage.used == 0
-    assert client.prompts == []
-
-
-def test_execution_view_verifies_hash_outside_selected_suffix(tmp_path):
-    commands = [(f"python run_{i}.py " + "x" * 1500, 0, False) for i in range(100)]
-    registry, ref, record_ref, index = execution_source(tmp_path, commands)
-    before = json.loads(supplied_execution_window(ref, record_ref, index)["content"])
-    assert before["omitted_earlier_records"] > 0
-    path = registry.root / ref.run_id / ref.id / "metrics.json"
-    path.write_text(path.read_text().replace("run_0.py", "other.py"))
-    with pytest.raises(ValueError, match="sha256"):
-        supplied_execution_window(ref, record_ref, index)
-
-
-def test_oversized_execution_record_is_unavailable_without_claimed_outcomes(tmp_path):
-    _, ref, record_ref, index = execution_source(
-        tmp_path, [("python very_long.py " + "x" * 16_000_000, 0, False)],
-    )
-    window = supplied_execution_window(ref, record_ref, index)
-    assert window["artifact_id"] == ref.id
-    assert window["provenance"]["task_id"] == ref.task_id
-    assert window["view"] == "execution_outcomes"
-    assert window["truncated"] is True
-    assert json.loads(window["content"]) == {
-        "available": False, "reason": "execution_record_exceeds_structured_read_limit",
-    }
-    assert len(window["content"]) <= 12_000
-
-
-def test_oversized_latest_outcome_is_unavailable_instead_of_showing_older_success(tmp_path):
-    results = [
-        VerificationResult(command="python earlier.py", exit_code=0,
-                           stdout_path="earlier.stdout", stderr_path="earlier.stderr",
-                           duration_seconds=1.0).model_dump(mode="json"),
-        VerificationResult(command="python latest.py", exit_code=1,
-                           stdout_path="x" * 13_000, stderr_path="latest.stderr",
-                           duration_seconds=1.0).model_dump(mode="json"),
-    ]
-    _, ref, record_ref, index = source(
-        tmp_path, kind="execution_record", content=json.dumps({"results": results}),
-    )
-    window = supplied_execution_window(ref, record_ref, index)
-    assert window["artifact_id"] == ref.id
-    assert window["view"] == "execution_outcomes"
-    assert window["truncated"] is True
-    assert json.loads(window["content"]) == {
-        "available": False, "reason": "latest_execution_outcome_exceeds_window_limit",
-    }
-    assert len(window["content"]) <= 12_000
+    assert next(group for group in index.groups if group.key == "scientific").artifacts[0].artifact_id == historical.id

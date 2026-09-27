@@ -134,17 +134,61 @@ def test_registered_artifact_provenance_survives_context_truncation(tmp_path):
         media_type="text/plain", summary="Result",
         metadata={"producer": "scientific", "task_id": "task_other"},
     )
-    value = RegisteredArtifactReader([ref], run_id=ref.run_id).read_text(ref.id)
+    value = RegisteredArtifactReader([ref], run_id=ref.run_id).read_text(
+        ref.id, start_char=2_500, end_char=160_000,
+    )
     state = _state()
     _observe(state, "read_artifact", value)
     snippet = _reads(state, max_context_tokens=2048)["artifact_snippets"][0]
 
     assert snippet["context_truncated"] is True
     assert snippet["kind"] == "text"
+    assert (snippet["start_char"], snippet["end_char"]) == (2_500, 160_000)
     assert snippet["provenance"] == {
         "producer": "experiment", "task_id": "task_source", "attempt_number": 2,
     }
     assert state.events[0].data["value"] == value
+
+
+def test_artifact_character_windows_keep_distinct_ranges_in_context(tmp_path):
+    import hashlib
+    from resagent2_capabilities import ReadArtifactTool
+    from resagent2_components import RegisteredArtifactReader
+    from resagent2_contracts import ArtifactRef
+
+    line = "abcdefghij0123456789ABCDEFGHIJ\n"
+    path = tmp_path / "result.txt"
+    path.write_text("header\n" + line + "footer", encoding="utf-8")
+    ref = ArtifactRef(
+        id="artifact_windows", kind="text", producer=AgentOwner.EXPERIMENT,
+        run_id="run_context", task_id="task_source", attempt_number=2,
+        uri=path.as_uri(), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        media_type="text/plain", summary="Result",
+    )
+    tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+    state = _state()
+    # Sharing a start or end boundary must not merge distinct source windows.
+    # Repeating one exact window replaces only that window's older observation.
+    for start, end in [(0, 10), (10, 20), (0, 20), (0, 10)]:
+        observation = tool.execute(state, tool.input_model(
+            artifact_id=ref.id, start_line=2, end_line=2,
+            start_char=start, end_char=end,
+        ))
+        state.memory.update(observation.memory_updates)
+        _observe(state, "read_artifact", observation.value)
+    before = state.model_dump_json()
+    snippets = _reads(state)["artifact_snippets"]
+    assert [(item["start_char"], item["end_char"]) for item in snippets] == [
+        (10, 20), (0, 20), (0, 10),
+    ]
+    assert [item["observed_at"] for item in snippets] == [2, 3, 4]
+    for item in snippets:
+        assert (item["start_line"], item["end_line"]) == (2, 2)
+        assert item["content"] == line[item["start_char"]:item["end_char"]]
+        assert item["artifact_id"] == ref.id
+        assert item["provenance"]["task_id"] == "task_source"
+    assert state.memory["read_artifact_ids"] == [ref.id]
+    assert state.model_dump_json() == before
 
 
 def test_artifact_does_not_evict_file_ranges_or_dependencies():

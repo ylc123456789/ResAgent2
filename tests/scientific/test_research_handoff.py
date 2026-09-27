@@ -1,4 +1,4 @@
-"""Scientific consumes cited research handoffs without observing their original sources."""
+"""Scientific receives recorded work reports without observing their source artifacts."""
 
 import hashlib
 import json
@@ -9,12 +9,15 @@ import pytest
 from resagent2_capabilities import ReadArtifactTool
 from resagent2_components import ArtifactReadError, RegisteredArtifactReader, read_request_material
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, CitedStatement,
+    AgentOwner, AgentPermissions, AgentRequest, ArtifactRef,
     ErrorCode, ModuleError, ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup,
-    TaskBudget, WorkBrief, WorkFeedback, WorkOutcome, WorkRecord, WorkRequestDraft,
+    TaskBudget, WarningRecord, WorkAttemptRecord, WorkFeedback, WorkOutcome, WorkRecord, WorkRequestDraft,
     WorkTaskOutcome,
 )
-from resagent2_runtime import AgentState, FinishCandidate, ScriptedLLMClient
+from resagent2_runtime import (
+    AgentState, ContextComposer, ContextMaterial, FinishCandidate, ScriptedLLMClient,
+)
+from resagent2_runtime.context import ContextBudgetExceeded
 from resagent2_scientific import ScientificAgent
 from resagent2_scientific.completion import ScientificCompletionCheck, _observed_artifact_ids
 from resagent2_scientific.context import build_context
@@ -56,19 +59,27 @@ def request(refs=(), *, parent=None, resume=()):
     )
 
 
-def handoff(root, *, session=SESSION, unresolved=()):
+def handoff(root, *, session=SESSION, unresolved=(), warnings=(),
+            report="The measurement is available, with the recorded limitations."):
     data = freeze(root, "artifact_data", "experiment_result", {"accuracy": 0.8})
     record = WorkRecord(
         run_id=RUN, work_request_id="work_measure", session_id=session,
-        previous_work_request=WorkRequestDraft(objective="Measure accuracy", expected_evidence=["accuracy"]),
+        previous_work_request=WorkRequestDraft(
+            objective="Measure accuracy", expected_evidence=["accuracy"],
+            constraints=["Preserve the evaluation split"],
+        ),
         work_outcome=WorkOutcome(
             work_request_id="work_measure", workflow_revision=2, summary="Work finished",
             tasks=[WorkTaskOutcome(
                 task_id="task_private", status="completed", summary="Measurement completed",
-                artifact_ids=[data.id],
+                artifact_ids=[data.id], warnings=list(warnings),
             )],
         ),
         unresolved_task_outcomes=list(unresolved),
+        attempts=[WorkAttemptRecord(
+            task_id="task_private", attempt_number=1, status="completed",
+            summary=report, artifact_ids=[data.id],
+        )],
     )
     record_ref = freeze(root, "artifact_record", "work_record", record.model_dump(mode="json"), session=session)
     index = ResearchIndex(run_id=RUN, groups=[ResearchIndexGroup(
@@ -79,10 +90,7 @@ def handoff(root, *, session=SESSION, unresolved=()):
     feedback = WorkFeedback(
         run_id=RUN, work_request_id="work_measure", session_id=session,
         work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-        brief=WorkBrief(statements=[CitedStatement(
-            text="The measurement is available, with the recorded limitations.",
-            artifact_ids=[data.id, record_ref.id],
-        )]),
+        report=f"WorkRequest work_measure: Measure accuracy\nTask task_private, attempt 1\n{report}",
     )
     feedback_ref = freeze(root, "artifact_feedback", "work_feedback", feedback.model_dump(mode="json"), session=session)
     return [data, record_ref, index_ref, feedback_ref]
@@ -98,8 +106,15 @@ def with_indexed_answer(root, refs, answer):
     return [*refs, answer, latest]
 
 
+def render_sections(items):
+    return {
+        section.name: section.render(1_000_000) if isinstance(section, ContextMaterial) else section.content
+        for section in items
+    }
+
+
 def sections(turn):
-    return {section.name: section.content for section in build_context(turn, state())}
+    return render_sections(build_context(turn, state()))
 
 
 def finish(evidence=(), limitations=()):
@@ -140,7 +155,7 @@ def test_direct_materials_use_same_research_index_shape(tmp_path):
     assert index.groups[0].artifacts[0].artifact_id == data.id
 
 
-def test_feedback_presents_full_directory_once_and_current_cited_brief(tmp_path):
+def test_feedback_presents_full_directory_once_and_current_reports(tmp_path):
     refs = handoff(tmp_path)
     rendered = sections(request(refs, parent=SESSION, resume=[refs[-1].id]))
     navigation = json.loads(rendered["research_materials"])
@@ -148,14 +163,22 @@ def test_feedback_presents_full_directory_once_and_current_cited_brief(tmp_path)
     assert {entry["artifact_id"] for group in navigation["index"]["groups"]
             for entry in group["artifacts"]} == {refs[0].id, refs[1].id}
     material = json.loads(rendered[f"material_{refs[-1].id}"])["content"]
-    assert set(material) == {"index_artifact_id", "work_record_artifact_id", "brief"}
-    assert material["brief"]["statements"][0]["artifact_ids"] == [refs[0].id, refs[1].id]
+    assert material["work_request_id"] == "work_measure"
+    assert material["previous_work_request"]["objective"] == navigation["index"]["groups"][0]["title"]
+    assert material["previous_work_request"]["expected_evidence"] == ["accuracy"]
+    assert material["previous_work_request"]["constraints"] == ["Preserve the evaluation split"]
+    assert material["tasks"] == [{
+        "task_id": "task_private", "status": "completed",
+        "artifact_ids": [refs[0].id], "warnings": [],
+    }]
+    assert "The measurement is available" in material["report"]
+    assert material["report_truncated"] is False
+    assert material["report_omitted"] is False
     assert "work_outcome" not in material
-    assert "task_private" not in json.dumps(rendered)
     assert "workflow_revision" not in json.dumps(rendered)
 
 
-def test_answer_resume_keeps_full_directory_without_repeating_previous_brief(tmp_path):
+def test_answer_resume_keeps_full_directory_without_repeating_previous_report(tmp_path):
     refs = handoff(tmp_path)
     answer = freeze(tmp_path, "artifact_answer", "answer", {
         "run_id": RUN, "session_id": SESSION, "question_id": "question_metric",
@@ -281,7 +304,7 @@ def test_invalid_raw_record_stops_before_model_invocation(tmp_path, invalid):
     assert client.contexts == []
 
 
-def test_resumed_handoff_shows_full_history_and_only_current_brief(tmp_path):
+def test_resumed_handoff_shows_full_history_and_only_current_report(tmp_path):
     refs = handoff(tmp_path)
     previous_data = freeze(tmp_path, "artifact_previous_data", "experiment_result", {"accuracy": 0.7})
     previous_index = ResearchIndex(run_id=RUN, groups=[ResearchIndexGroup(
@@ -300,15 +323,15 @@ def test_resumed_handoff_shows_full_history_and_only_current_brief(tmp_path):
         parent=SESSION, resume=[feedback_ref.id],
     )
     current = state()
-    rendered = {section.name: section.content for section in build_context(turn, current)}
+    rendered = render_sections(build_context(turn, current))
     navigation = json.loads(rendered["research_materials"])
     assert navigation == {"index_artifact_id": latest.id, "index": full_index.model_dump(mode="json")}
     assert [group["title"] for group in navigation["index"]["groups"]] == [
         "Measure the baseline", "Measure accuracy",
     ]
     material = json.loads(rendered[f"material_{feedback_ref.id}"])["content"]
-    assert material["brief"] == feedback.brief.model_dump(mode="json")
-    assert material["brief"]["statements"][0]["artifact_ids"] == [refs[0].id, refs[1].id]
+    assert material["report"] == feedback.report
+    assert material["tasks"][0]["artifact_ids"] == [refs[0].id]
     assert "index" not in material
     assert "index_changes" not in json.dumps(rendered)
     assert "input_artifacts" not in rendered
@@ -336,3 +359,92 @@ def test_directory_must_match_its_readable_registered_materials(tmp_path, mismat
         refs[0] = refs[0].model_copy(update={"summary": "A different registered summary"})
     with pytest.raises(ValueError, match="research index.*match"):
         sections(request(refs, parent=SESSION))
+
+
+def test_feedback_frame_retains_facts_when_report_is_omitted(tmp_path):
+    warning = WarningRecord(code="partial_validation", message="Repeated trials were not performed")
+    failed = WorkTaskOutcome(
+        task_id="task_previous", status="failed", summary="A prior task report",
+        error=ModuleError(code=ErrorCode.TOOL_FAILED, message="Prior input missing", retryable=False),
+        warnings=[warning],
+    )
+    refs = handoff(tmp_path, unresolved=[failed], warnings=[warning], report="Original report " * 20_000)
+    turn = request(refs, parent=SESSION, resume=[refs[-1].id])
+    current = state()
+    before = current.model_dump_json()
+    material = next(item for item in build_context(turn, current) if item.name == f"material_{refs[-1].id}")
+    assert isinstance(material, ContextMaterial)
+    frame = json.loads(material.render(0))["content"]
+    assert frame["report"] == ""
+    assert frame["report_omitted"] and frame["report_truncated"]
+    assert frame["tasks"][0]["status"] == "completed"
+    assert frame["tasks"][0]["warnings"][0]["message"] == warning.message
+    assert frame["unresolved_task_outcomes"][0]["task_id"] == failed.task_id
+    assert frame["unresolved_task_outcomes"][0]["error"]["message"] == failed.error.message
+    assert frame["work_record_artifact_id"] == refs[1].id
+    assert frame["index_artifact_id"] == refs[2].id
+    assert "summary" not in frame["tasks"][0]
+    assert current.model_dump_json() == before
+    assert _observed_artifact_ids(current) == []
+
+
+def test_long_feedback_uses_shared_budget_and_keeps_readable_original(tmp_path):
+    marker = "FINAL_REPORT_LIMITATION"
+    refs = handoff(tmp_path, report="Recorded result with a condition. " * 30_000 + marker)
+    turn = request(refs, parent=SESSION, resume=[refs[-1].id])
+    current = state()
+    sections = build_context(turn, current)
+    material = next(item for item in sections if item.name == f"material_{refs[-1].id}")
+    composer = ContextComposer()
+    # Leave room beyond fixed facts, but not enough for the entire saved report.
+    required = composer.compose("Scientific", sections, max_tokens=4_000)
+    assert required.estimated_tokens <= 4_000
+    rendered = required.text.split(f"## {material.name}\n", 1)[1]
+    body = json.loads(rendered)["content"]
+    assert body["report"] and body["report_truncated"] and not body["report_omitted"]
+    assert body["tasks"][0]["task_id"] == "task_private"
+    assert body["previous_work_request"]["constraints"] == ["Preserve the evaluation split"]
+    source = (tmp_path / "artifact_feedback.json").read_text()
+    original = json.loads(source)["report"]
+    assert original.startswith(body["report"])
+    assert len(original) > len(body["report"])
+    assert _observed_artifact_ids(current) == []
+    reader = RegisteredArtifactReader(turn.input_artifacts, run_id=RUN)
+    tool = ReadArtifactTool(reader)
+    first = tool.execute(current, tool.input_model(artifact_id=refs[-1].id))
+    assert first.value["truncated"] and marker not in first.value["content"]
+    # A real tool-sized window reaches the tail of the long JSON string;
+    # no enlarged internal reader limit or additional report artifact is needed.
+    offset = source.index(marker)
+    tail = tool.execute(current, tool.input_model(
+        artifact_id=refs[-1].id, start_char=offset, end_char=offset + len(marker),
+    ))
+    assert tail.value["content"] == marker
+    assert tail.value["truncated"] is False
+    current.memory.update(tail.memory_updates)
+    assert _observed_artifact_ids(current) == [refs[-1].id]
+    with pytest.raises(ContextBudgetExceeded):
+        composer.compose("Scientific", sections, max_tokens=1)
+
+
+@pytest.mark.parametrize("mismatch", ["work_request", "session", "kind", "hash"])
+def test_feedback_context_checks_its_source_record(tmp_path, mismatch):
+    refs = handoff(tmp_path)
+    record_ref = refs[1]
+    if mismatch == "hash":
+        refs[1] = record_ref.model_copy(update={"sha256": "0" * 64})
+    elif mismatch == "kind":
+        refs[1] = record_ref.model_copy(update={"kind": "data"})
+    else:
+        record = json.loads((tmp_path / "artifact_record.json").read_text())
+        if mismatch == "work_request":
+            record["work_request_id"] = "work_other"
+            record["work_outcome"]["work_request_id"] = "work_other"
+        else:
+            record["session_id"] = "session_other"
+        refs[1] = freeze(tmp_path, record_ref.id, "work_record", record, session=SESSION)
+    turn = request(refs, parent=SESSION, resume=[refs[-1].id])
+    # Exercise the material boundary directly, independent of Agent preflight.
+    from resagent2_components import request_materials_context
+    with pytest.raises(ArtifactReadError):
+        request_materials_context(turn)

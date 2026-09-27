@@ -18,7 +18,7 @@ from .workspace import WorkspacePermissionError, _normalize_relative
 
 
 _READ_FIELDS = (
-    "path", "artifact_id", "start_line", "end_line", "content", "truncated",
+    "path", "artifact_id", "start_line", "end_line", "start_char", "end_char", "content", "truncated",
     "observed_at", "context_truncated", "kind", "provenance",
 )
 
@@ -111,14 +111,14 @@ def workspace_context(
         # Probe presence only; the composer supplies the final rendering budget.
         if not recent_tool_snippets(
             state, tool=tool,
-            identity_keys=(source_key, "start_line", "end_line"),
+            identity_keys=(source_key, "start_line", "end_line", "start_char", "end_char"),
             text_key="content", max_total_chars=1,
         ) and not state.memory.get(index_key):
             continue
 
         def render_reads(chars: int, *, tool=tool, source_key=source_key, index_key=index_key) -> str:
             snippets = recent_tool_snippets(
-                state, tool=tool, identity_keys=(source_key, "start_line", "end_line"),
+                state, tool=tool, identity_keys=(source_key, "start_line", "end_line", "start_char", "end_char"),
                 text_key="content", max_total_chars=min(chars, max_context_tokens * 4),
             ) if chars > 0 else []
             # The source events and payloads are never modified by projection.

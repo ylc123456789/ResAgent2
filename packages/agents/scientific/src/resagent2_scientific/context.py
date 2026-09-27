@@ -74,22 +74,21 @@ registration by the final gate. A filename alone does not satisfy delivery.
 Existence does not establish scientific correctness.
 The complete research index groups available materials by their original work
 objective, including prior rounds. Read original files by their artifact IDs.
-Current work feedback supplies a cited Interpreter brief for the latest round.
-The brief is an explanation, not measured evidence or your scientific judgment.
-Read its original sources when a claim or limitation matters to your decision.
-An index entry or brief citation does not mean you observed the source contents.
-Reading the index or brief never counts as reading the original evidence.
-Work records preserve execution facts for diagnosis; do not infer machine state
-from explanatory prose. Never cite an unread artifact.
+Current work feedback groups the latest recorded task reports and execution facts
+under the original work objective. Use it to understand progress and decide next steps.
+Read original artifacts for missing details, conflicting claims or evidence checks.
+Use the supplied work/task/artifact identities and names, not invented aliases.
+Feedback may omit report text within the context budget; read its registered source
+for the remainder. Reports and index entries do not observe the artifacts they mention.
+Work records preserve execution facts; never infer machine state from report prose.
+Never cite an unread artifact.
 A short result preview is not proof of support for a claim.
 An observed id records past access, not that its full contents remain visible.
 Use read_artifact with the needed start_line/end_line range;
 do not guess the missing contents.
 
-Read relevant module reports and limitations if one is available.
-Explanatory does not mean irrelevant: carry applicable residual risks into
-your judgment. Do not read every historical report indiscriminately or substitute
-reports for original measurements, code or literature.
+Carry relevant report limitations into your judgment; reports are explanations,
+not independent measurements. Read historical reports only when needed.
 When failed or blocked work remains, state a limitation describing its effect
 on the scientific conclusion. Do not fabricate evidence or machine state.
 """

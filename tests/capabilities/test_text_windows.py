@@ -1,6 +1,7 @@
 """Text windows work across workspace and frozen evidence without weakening grants."""
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -193,3 +194,46 @@ def test_search_pipe_is_literal_and_guidance_does_not_promise_regex(tmp_path):
     assert "no regular expressions" in tool.input_model.model_json_schema()[
         "properties"
     ]["query"]["description"]
+
+def test_artifact_tool_pages_long_json_without_rewriting_source(tmp_path):
+    from resagent2_components.materials import read_artifact_json
+
+    path = tmp_path / "feedback.json"
+    body = json.dumps({"report": "原报告\\n" * 40_000 + "UNIQUE_TAIL"}, ensure_ascii=False, indent=2)
+    path.write_text(body, encoding="utf-8")
+    ref = _artifact(path)
+    reader = RegisteredArtifactReader([ref], run_id=ref.run_id)
+    tool = ReadArtifactTool(reader)
+    default = tool.execute(_state(), tool.input_model(artifact_id=ref.id)).value
+    assert default["truncated"] is True
+    assert "UNIQUE_TAIL" not in default["content"]
+    pieces = []
+    for start in range(0, len(body), 4_000):
+        result = tool.execute(_state(), tool.input_model(
+            artifact_id=ref.id, start_char=start, end_char=start + 4_000,
+        ))
+        assert result.value["truncated"] is False
+        assert result.memory_updates["read_artifact_ids"] == [ref.id]
+        pieces.append(result.value["content"])
+    assert "".join(pieces) == body
+    assert read_artifact_json(reader, ref.id) == json.loads(body)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == ref.sha256
+    # Physical lines retain their meaning; offsets are relative to that selection.
+    line = body.splitlines(keepends=True)[1]
+    result = tool.execute(_state(), tool.input_model(
+        artifact_id=ref.id, start_line=2, end_line=2, start_char=130_000, end_char=131_000,
+    ))
+    assert result.value["content"] == line[130_000:131_000]
+    path.write_text("X" + body[1:], encoding="utf-8")
+    with pytest.raises(ArtifactReadError, match="sha256"):
+        tool.execute(_state(), tool.input_model(artifact_id=ref.id, start_char=130_000))
+
+
+@pytest.mark.parametrize("start,end", [(5, 5), (5, 4)])
+def test_artifact_tool_rejects_inverted_character_window(tmp_path, start, end):
+    path = tmp_path / "text.txt"
+    path.write_text("source", encoding="utf-8")
+    ref = _artifact(path)
+    tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+    with pytest.raises(ValueError, match="character range"):
+        tool.execute(_state(), tool.input_model(artifact_id=ref.id, start_char=start, end_char=end))

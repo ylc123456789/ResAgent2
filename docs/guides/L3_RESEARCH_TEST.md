@@ -1,6 +1,6 @@
 # L3 风格测试：通过真实 CLI 完成一轮置信度校准研究
 
-版本：2026-09-26，`l3-calibration-v1`。**状态：规程已设计，尚未执行；不代表当前提交已通过 L3。** 适用当前 schema 17 的生产 CLI。启动时再冻结产品 SHA、配置与输入，不把文档提交当成测试结果。
+版本：2026-09-28，`l3-calibration-v1`。**状态：已对齐 schema 19 的固定 Interpreter；本次改动尚待服务器验收，不代表当前提交已通过 L3。** 适用当前 schema 19 的生产 CLI。启动时再冻结产品 SHA、配置与输入，不把文档提交当成测试结果。
 
 旧学习率调度规程已[归档](../history/reviews/L3_RESEARCH_TEST_2026-09-16.md)，其 `e6688f3` / schema 8 的[验收结果](../history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)仍有效于当时的案例。当前指南只维护这一版；历史结果不套用新评分标准。
 
@@ -135,9 +135,9 @@ printf '%s\n' "$L3_RUN_RC" > "$L3_ROOT/logs/run.exit_code"
 bash "$L3_CLI" "$L3_ROOT/cli-config.sh" show "$L3_RUN_ID" --data-root "$L3_ROOT/data"
 ~~~
 
-命令默认使用现有完整生产装配（含 LLM Compiler、Interpreter），不 mock，不直接调用单个 Agent，不使用固定任务探针冒充 L3。`shell /run` 与一次性 CLI 使用共同请求构造；本轮选择一次性 CLI，不为界面覆盖多跑一个昂贵案例。模型名按已验证服务器配置冻结，若变更须在启动前记录，不能静默中途换模型。
+命令默认使用现有完整生产装配（含 LLM Compiler、固定代码 Interpreter），不 mock，不直接调用单个 Agent，不使用固定任务探针冒充 L3。`shell /run` 与一次性 CLI 使用共同请求构造；本轮选择一次性 CLI，不为界面覆盖多跑一个昂贵案例。模型名按已验证服务器配置冻结，若变更须在启动前记录，不能静默中途换模型。
 
-`12 / 2 / 200 / 14400` 是本案例的任务数/每任务尝试数/总模型调用/Run 执行秒数上限；当前 CLI 默认仍为 `8 / 2 / 200 / 7200`。Compiler、Interpreter、三个 Agent、压缩与 HTTP 重试共用总账。显式等待用户的时间另计，依赖准备也耗执行预算；4 小时不是总墙钟硬截止或货币硬上限。不存在另一个 CLI“每次训练 timeout”参数。
+`12 / 2 / 200 / 14400` 是本案例的任务数/每任务尝试数/总模型调用/Run 执行秒数上限；当前 CLI 默认仍为 `8 / 2 / 200 / 7200`。Compiler、三个 Agent、压缩与 HTTP 重试共用总账；固定 Interpreter 不消耗模型调用。显式等待用户的时间另计，依赖准备也耗执行预算；4 小时不是总墙钟硬截止或货币硬上限。不存在另一个 CLI“每次训练 timeout”参数。
 
 若 paused，先 `show` 读取**当前**原题和实际 requested_fields，再依第 7 节规则回答；下列字段名只是占位符，多字段问题逐项提供：
 
@@ -188,7 +188,7 @@ bash "$L3_CLI" "$L3_ROOT/cli-config.sh" resume "$L3_RUN_ID" --data-root "$L3_ROO
 |---|---|
 | 正向目标传递 | goal → Scientific WorkRequest → Compiler → 统一 `instruction + input_artifacts`，研究约束没有丢失；Run 的 conclusion_requirements 被 Scientific 保留到相关工作请求及实际交付，不要求 required_artifacts 自动转为每个 Task 的 acceptance_requirements，也不固定 Task ID/数量 |
 | 子任务交付 | 当前 `report + artifacts` 与登记来源匹配，报告、失败和局限可读；不再核对旧 understand/modify 模式或旧结果外壳 |
-| 反向交接 | WorkInterpreter 的带引用 brief 忠实于原件，完整 research_index 可导航；Scientific 按需读关键原始证据并正确使用，不把简报当新测量 |
+| 反向交接 | 固定 WorkInterpreter 按原任务和尝试组织已记录报告，保留状态、错误、累计警告及产物 ID；完整 research_index 可导航，长正文省略可见且可补读。Scientific 按需读取原始证据，不把多份报告当独立测量，报告展示不自动赋予原件引用资格 |
 | 明确交付 | `comparison_results` 按精确 output_name 登记、同 Run 归属和冻结 hash 可核对；完成检查通过不等于结论正确 |
 | 问答和恢复 | 仅检查实际发生的路径；原题/答案和归属准确，继续同 Run/对应 Session，不重置预算；未发生就写“未触发” |
 | 拒绝与纠错 | 原始 Session 的参数拒绝、命令失败、completion feedback 与最终结果分开；`action_valid=true` 不等于工具执行或科学内容正确 |

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from resagent2_contracts import (
-    AgentRequest, ArtifactRef, DatasetRef, RecordedAnswer, WorkFeedback,
+    AgentRequest, ArtifactRef, DatasetRef, RecordedAnswer, WorkFeedback, WorkRecord,
     TaskAcceptanceSpec, ConclusionRequirements,
 )
-from resagent2_runtime import ContextSection
+from resagent2_runtime import ContextMaterial, ContextSection
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
+from .text import slice_text_lines
 
 
 def read_artifact_json(reader: RegisteredArtifactReader, artifact_id: str, model=None):
@@ -46,18 +47,60 @@ def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=Non
     return value
 
 
-def request_materials_context(request: AgentRequest) -> list[ContextSection]:
+def _work_feedback_context(ref: ArtifactRef, feedback: WorkFeedback,
+                           reader: RegisteredArtifactReader) -> ContextMaterial:
+    record_ref = reader.resolve_ref(feedback.work_record_artifact_id)
+    if (record_ref is None or record_ref.kind != "work_record"
+            or record_ref.session_id != feedback.session_id):
+        raise ArtifactReadError("work feedback has no authorized work record for this session")
+    record = read_artifact_json(reader, record_ref.id, WorkRecord)
+    if (record.run_id, record.session_id, record.work_request_id) != (
+            feedback.run_id, feedback.session_id, feedback.work_request_id):
+        raise ArtifactReadError("work record does not belong to this feedback")
+    # These are source facts, not conclusions extracted from the rendered report.
+    fields = {"task_id", "status", "error", "warnings", "artifact_ids"}
+    frame = {
+        "work_request_id": record.work_request_id,
+        "previous_work_request": record.previous_work_request.model_dump(
+            mode="json", exclude={"schema_version"},
+        ),
+        "index_artifact_id": feedback.index_artifact_id,
+        "work_record_artifact_id": record_ref.id,
+        "tasks": [task.model_dump(mode="json", include=fields, exclude_none=True)
+                  for task in record.work_outcome.tasks],
+        "unresolved_task_outcomes": [
+            task.model_dump(mode="json", include=fields, exclude_none=True)
+            for task in record.unresolved_task_outcomes
+        ],
+    }
+
+    def render(chars: int) -> str:
+        window = slice_text_lines(feedback.report, max_chars=chars)
+        return json.dumps({
+            "artifact_id": ref.id, "kind": ref.kind,
+            "content": {
+                **frame, "report": window["content"],
+                "report_truncated": window["truncated"],
+                "report_omitted": not window["content"],
+            },
+        }, ensure_ascii=False)
+
+    return ContextMaterial(
+        name=f"material_{ref.id}", render=render, weight=16, priority=100,
+    )
+
+
+def request_materials_context(request: AgentRequest) -> list[ContextSection | ContextMaterial]:
     reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
     required = set(request.resume_artifact_ids)
-    sections = []
+    sections: list[ContextSection | ContextMaterial] = []
     for ref in request.input_artifacts:
         if ref.id not in required and ref.kind not in {"acceptance_requirements", "conclusion_requirements"}:
             continue
         value = read_request_material(request, ref, reader=reader)
         if ref.kind == "work_feedback":
-            value = {key: value[key] for key in (
-                "index_artifact_id", "work_record_artifact_id", "brief",
-            )}
+            sections.append(_work_feedback_context(ref, WorkFeedback.model_validate(value), reader))
+            continue
         sections.append(ContextSection(
             name=f"material_{ref.id}", content=json.dumps({"artifact_id": ref.id, "kind": ref.kind, "content": value}),
             priority=100, required=True,

@@ -25,7 +25,7 @@ from .controller import (
     ResearchController,
     ScientificGate,
 )
-from .interpreter import DeterministicWorkInterpreter, LLMWorkInterpreter, WorkInterpreter
+from .interpreter import DeterministicWorkInterpreter, WorkInterpreter
 from .layout import RunLayout
 from .models import CompletionViolation, CompletionViolationCode, ResearchRun
 from .ports import ModuleBinding, ModulePort, ScriptedModulePort
@@ -33,7 +33,7 @@ from .scheduler import OrchestrationError, WorkflowScheduler
 from .store import InMemoryRunStore, JsonRunStore, RunStore
 
 __all__ = [
-    "DeterministicWorkInterpreter", "LLMWorkInterpreter", "WorkInterpreter",
+    "DeterministicWorkInterpreter", "WorkInterpreter",
     "ArtifactRegistrationError",
     "ArtifactRegistry",
     "CompilationError",

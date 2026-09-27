@@ -7,7 +7,7 @@ ResAgent2 的顶层控制模块。
 - ResearchRun；
 - Scientific Session 引用、WorkRequest 与 WorkOutcome；
 - WorkRequest → WorkflowProposal/Patch 的 WorkflowCompiler；
-- 执行事实 → 科研目录及带引用简报的 WorkInterpreter；
+- 执行事实与原报告 → 科研目录及本轮工作反馈的 WorkInterpreter；
 - Workflow validation/revision；
 - Task/Attempt 状态；
 - coding / experiment 模块路由；
@@ -36,15 +36,15 @@ ResAgent2 的顶层控制模块。
 
 Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 18.0，旧 Run 保留但不迁移或恢复。
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 19.0，旧 Run 保留但不迁移或恢复。
 
 Controller 创建 Run 时将 `ResearchRequest.required_artifacts` 冻结到 `conclusion_requirements`。最终缺失诊断为 `required_artifact_missing`，message 为 `required artifact was not produced`，subject 为要求的名称；不能完成 Run，保留已有证据。此要求不额外要求观察或引用，原有 `required_evidence_kinds` 单独检查。
 
-Controller/Scheduler 给三个 Agent、Compiler 与 Interpreter 绑定同一请求用量和剩余期限。AgentResult.llm_calls 只用于诊断，不重复扣费；预算耗尽与超时按对应错误终止。操作批准沿用公开问答工件，不能改变 Run 权限。详见[运行控制契约](../../docs/current/CONTRACTS.md#research-request)。
+Controller/Scheduler 给三个 Agent 和 Compiler 绑定同一请求用量和剩余期限；固定 Interpreter 不调用模型，工作交接仍受 Run 时间边界限制。AgentResult.llm_calls 只用于诊断，不重复扣费；预算耗尽与超时按对应错误终止。操作批准沿用公开问答工件，不能改变 Run 权限。详见[运行控制契约](../../docs/current/CONTRACTS.md#research-request)。
 
 production composition root 走 `ResearchController`：`create_run(run_id, request)` 进入科学控制循环，`ScientificAgent` 提出 `WorkRequestDraft`，`WorkflowCompiler` 生成 Proposal/Patch，Scheduler 执行 Coding/Experiment 图，`WorkOutcome` 回传后形成最终 `ScientificOpinion` 并经 `ScientificCompletionValidator` 写 completed。旧 PlanningPort 路径已删除，不保留两套总控逻辑。
 
-Interpreter 的固定代码生成累计目录，LLM 生成本轮带引用简报；Controller 保存和重用反馈。Scientific 收到完整目录正文，成对问答按归属入目录并可读取；底层登记表仍是唯一来源。它不拥有 Run/Session，也不调度任务。目录版本不可变，当前指针保存在 Run；失败尝试与原证据沿用原 ID。详见[反向交接契约](../../docs/current/CONTRACTS.md#interpreter)。
+Interpreter 通过固定代码生成累计目录，并按原 WorkRequest 和任务身份组织最新尝试的已记录报告、实际状态、错误、累计警告和产物入口。`WorkInterpreter.interpret(record: WorkRecord) -> str` 的生产实现为 `DeterministicWorkInterpreter`，不读取实验正文重新解释。Controller 冻结 `WorkRecord` 和含 `report` 的 `WorkFeedback`，保存后按原恢复链复用。Scientific 收到完整目录及可按预算展开的工作报告；成对问答按归属入目录，底层登记表仍是唯一来源。Interpreter 不拥有 Run/Session，也不调度任务。目录版本不可变，当前指针保存在 Run；失败尝试与原证据沿用原 ID，后台组织和反馈展示不自动标记原件已读。详见[反向交接契约](../../docs/current/CONTRACTS.md#interpreter)。
 
 ## 最小使用方式
 
@@ -52,7 +52,7 @@ Interpreter 的固定代码生成累计目录，LLM 生成本轮带引用简报�
 controller = ResearchController(
     scientific_port=scientific,
     compiler=compiler,
-    interpreter=interpreter,
+    interpreter=DeterministicWorkInterpreter(),
     scheduler=WorkflowScheduler(bindings={...}, store=JsonRunStore("state")),
     registry=registry,
 )

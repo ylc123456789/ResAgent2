@@ -2,9 +2,9 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
-## Interpreter 固定代码化（方案，未实施）
+## Interpreter 固定代码化（已实现，待服务器验收）
 
-2026-09-27 提出[Interpreter 固定代码化修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)：保留反向交接模块，用固定代码更新科研索引并组织子 Agent 已记录报告，拟移除每轮 LLM 二次简报。沿用原文读取与引用规则；当前产品仍为 schema 18.0，本文不代表实现或验收完成。
+2026-09-28 按[修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)在开发分支实现固定 Interpreter，schema 19.0：保留科研索引和反向交接，组织子 Agent 已记录报告，移除每轮 LLM 二次简报；上下文共用原预算机制，补齐长 JSON 正文的字符窗口读取。原观察与 validation 边界保持不变。当前仅完成源码静态检查，未运行本地或服务器测试；见 [ADR-0020](decisions/0020-deterministic-work-interpreter.md)。
 
 ## L3 规程换题（尚未执行）
 

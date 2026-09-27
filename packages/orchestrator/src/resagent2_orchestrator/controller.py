@@ -17,7 +17,7 @@ from resagent2_contracts import (
 from .compiler import CompilationError
 from .completion import FinalReportRenderer, ScientificCompletionValidator
 from .handoffs import read_json, receive_artifacts, system_artifact
-from .interpreter import WorkInterpreter, build_research_index, validate_brief
+from .interpreter import WorkInterpreter, build_research_index
 from .models import ResearchRun
 from .ports import ModulePort
 from .scheduler import _question_id, _transition_work_request, _validate_answer
@@ -169,7 +169,7 @@ class ResearchController:
         return index, system_artifact(self.scheduler.artifact_registry, run, "research_index", index)
 
     def _prepare_research_handoff(self, run):
-        """Persist one complete handoff; replay never regenerates an accepted brief."""
+        """Persist one complete handoff; replay never regenerates an accepted report."""
         active = self._active_work_request(run)
         if active is None or active.status != WorkRequestStatus.STABLE:
             _, run.research_index_ref = self._research_index(run)
@@ -177,7 +177,7 @@ class ResearchController:
             return
         if active.id in run.feedback_refs:
             # An interrupted Scientific turn may already have registered new materials.
-            # Refresh navigation while reusing the committed brief and its original sources.
+            # Refresh navigation while reusing the committed report and its original sources.
             _, run.research_index_ref = self._research_index(run)
             self._save(run)
             return
@@ -192,18 +192,12 @@ class ResearchController:
         )
         record_ref = system_artifact(self.scheduler.artifact_registry, run, "work_record", record,
                                      session_id=active.scientific_session_id)
-        index, index_ref = self._research_index(run)
-        with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
-                              timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
-                              usage=RunUsagePort(run, self.scheduler.store)):
-            brief = self.interpreter.interpret(record_ref=record_ref, index=index,
-                                               artifacts=self._authorized_artifacts(run))
-        # This boundary also checks injected implementations, not only the production LLM.
-        validate_brief(brief, {entry.artifact_id for group in index.groups for entry in group.artifacts})
+        _, index_ref = self._research_index(run)
+        report = self.interpreter.interpret(read_json(record_ref, WorkRecord))
         feedback = WorkFeedback(
             run_id=run.run_id, work_request_id=active.id, session_id=active.scientific_session_id,
             work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-            brief=brief,
+            report=report,
         )
         ref = system_artifact(self.scheduler.artifact_registry, run, "work_feedback", feedback,
                               session_id=active.scientific_session_id)

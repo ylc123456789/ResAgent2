@@ -17,6 +17,8 @@ class ReadArtifactInput(RuntimeModel):
     artifact_id: NonEmptyStr
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
+    start_char: int = Field(default=0, ge=0, description="Zero-based character offset within the selected physical lines.")
+    end_char: int | None = Field(default=None, ge=1, description="Exclusive character end within the selected physical lines.")
 
 
 class ReadArtifactTool:
@@ -26,8 +28,10 @@ class ReadArtifactTool:
     input_model = ReadArtifactInput
     model_guidance = (
         "If an artifact read is truncated, read a bounded start_line/end_line "
-        "range; do not repeat the same unbounded read. The full frozen file "
-        "is integrity-checked before any range is returned."
+        "range. For a long line or JSON string, use start_char/end_char to read "
+        "small character windows within those same lines (zero-based, end exclusive). "
+        "Keep the line range fixed while paging characters. Do not repeat an "
+        "unbounded read. The full frozen file is integrity-checked before any range is returned."
     )
 
     def __init__(self, reader: RegisteredArtifactReader) -> None:
@@ -37,6 +41,7 @@ class ReadArtifactTool:
         args = cast(ReadArtifactInput, arguments)
         value = self.reader.read_text(
             args.artifact_id, start_line=args.start_line, end_line=args.end_line,
+            start_char=args.start_char, end_char=args.end_char,
         )
         return ToolObservation(
             summary=f"Read registered Artifact {args.artifact_id}",

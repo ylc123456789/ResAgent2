@@ -47,7 +47,7 @@ cd "$repo_dir"
 |---|---|---|
 | 命令和显示 | apps/cli | 仍只调用 Controller，不加第二套调度 |
 | 科学判断或证据读取 | agents/scientific | prompt / context / completion 的不同职责 |
-| 执行结果到科研材料的反向交接 | orchestrator/interpreter | 固定目录、LLM 简报；Controller 保存和交付 |
+| 执行结果到科研材料的反向交接 | orchestrator/interpreter | 固定目录、按原任务组织已记录报告；Controller 保存和交付，Scientific 解释科学意义 |
 | 代码修改策略 | agents/coding | 真实变更、当前版本验证和失败记录 |
 | 实验执行或指标 | agents/experiment | 命令记录、完整证据集和 warnings |
 | Run、图、暂停恢复 | orchestrator | 身份、状态、重复交付、消费保留 |

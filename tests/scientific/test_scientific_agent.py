@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, ErrorCode,
     ScientificOpinion, TaskBudget, WorkFeedback, WorkRecord, WorkOutcome, WorkRequestDraft,
-    ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup, WorkBrief, CitedStatement,
+    ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup,
     WorkTaskOutcome, scientific_session_id,
 )
 from resagent2_scientific import ScientificAgent
@@ -94,9 +94,7 @@ def feedback(root, session, *, unresolved=()):
     value = WorkFeedback(
         run_id="run_example", work_request_id="work_round1", session_id=session,
         work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-        brief=WorkBrief(statements=[CitedStatement(
-            text="The work record describes the outcome.", artifact_ids=[record_ref.id],
-        )]),
+        report="The work record describes the outcome.",
     )
     feedback_ref = artifact(root, "artifact_feedback", kind="work_feedback", session=session,
                             content=value.model_dump(mode="json"))

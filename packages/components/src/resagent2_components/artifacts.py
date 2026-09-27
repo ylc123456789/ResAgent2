@@ -143,14 +143,26 @@ class RegisteredArtifactReader:
         max_chars: int = MAX_READ_CHARS,
         start_line: int | None = None,
         end_line: int | None = None,
+        start_char: int = 0,
+        end_char: int | None = None,
     ) -> dict:
-        """Verify the entire frozen file before returning an optional text window."""
+        """Verify frozen bytes, select physical lines, then a character window."""
+        if start_char < 0 or (end_char is not None and end_char <= start_char):
+            raise ValueError("character range must satisfy 0 <= start_char < end_char")
         artifact, path = self._resolve_file(artifact_id)
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
         if digest != artifact.sha256:
             raise ArtifactReadError("artifact sha256 does not match frozen content")
         text = content.decode("utf-8", errors="replace")
+        window = slice_text_lines(
+            text, start_line=start_line, end_line=end_line, max_chars=len(text),
+        )
+        selected = window["content"][start_char:end_char]
+        window.update(
+            start_char=start_char, end_char=end_char,
+            content=selected[:max_chars], truncated=len(selected) > max_chars,
+        )
         return {
             "artifact_id": artifact.id,
             "kind": artifact.kind,
@@ -159,9 +171,7 @@ class RegisteredArtifactReader:
                 mode="json", include={"producer", "task_id", "attempt_number", "session_id"},
                 exclude_none=True,
             ),
-            **slice_text_lines(
-                text, start_line=start_line, end_line=end_line, max_chars=max_chars,
-            ),
+            **window,
         }
 
 

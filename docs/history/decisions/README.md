@@ -26,4 +26,7 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0017：科研目录与反向工作解释](0017-research-index-and-work-interpreter.md)（取代 Scientific 内纯投影及重复执行反馈呈现）
 - [ADR-0018：完整科研目录与成对问答阅读](0018-complete-index-and-paired-answers.md)（取代增量展示，打通问答索引与读取）
 
+- [ADR-0019：Agent 声明任务完成状态，固定代码验证结构事实](0019-agent-declared-completion.md)
+- [ADR-0020：Interpreter 固定组织原报告](0020-deterministic-work-interpreter.md)（取代 LLM 二次简报，保留完整索引与观察边界）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

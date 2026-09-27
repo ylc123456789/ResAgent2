@@ -29,7 +29,7 @@ def test_required_artifacts_round_trip_as_exact_logical_output_names(model):
     value = model(required_artifacts=names)
     restored = type(value).model_validate_json(value.model_dump_json())
     assert restored.required_artifacts == names
-    assert restored.schema_version == "18.0"
+    assert restored.schema_version == "19.0"
 
 
 @pytest.mark.parametrize("name", [

@@ -6,6 +6,7 @@ Schema 13 updates control schema constants and adds the Coding delete_path tool.
 Other workspace, artifact, literature and environment tools retain their surface.
 Schema 14, 15, 16 and 17 only update the embedded public schema version constants.
 Schema 18 restores completed/failed on the unified finish and clarifies keyword search.
+Schema 19 replaces internal feedback briefs and adds artifact character windows.
 """
 
 import hashlib

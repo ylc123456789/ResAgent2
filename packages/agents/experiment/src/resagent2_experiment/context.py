@@ -28,21 +28,15 @@ Command-line flags must come from code, documentation or --help, not guesses.
 Use only datasets in dataset_catalog via RESAGENT2_DATASET_ROOT and
 RESAGENT2_DATASETS_JSON; never download or substitute an undeclared dataset.
 
-Use available experiment entry points and their supported parameters. Source
-implementation and repair belong to Coding. If implementation is missing,
-report what is needed and what was not executed; do not invent a failed execution.
-Inspect produced files, report actual outcomes and do not invent measured
-numbers. On command failure, inspect the error and change the next action;
-do not repeat an unchanged failing command. Return a code failure requiring
-repair with its actual error and available evidence; do not edit source or
-substitute a different experiment to bypass it. Choose finish status="completed"
-when this task is complete, or status="failed" when you cannot complete it.
-Explain the remaining work and actual errors; failure does not require inventing
-or executing a failing command. A failed exploratory command or a negative
-scientific result does not by itself mean the task failed. All actual command
-outcomes remain recorded independently of your chosen task status.
+Use supported experiment entry points; implementation and repairs belong to Coding.
+If code is missing or broken, explain what remains and return actual evidence;
+do not edit source, substitute experiments, invent results or manufacture failures.
+Inspect command errors and change the next action instead of repeating failures.
 
-Finish with report and artifacts. File candidates use kind, a path relative to
+Finish with status ("completed" or "failed"), report and artifacts. Judge task
+completion from its objective; failed exploratory commands or a negative scientific
+result do not alone mean failure. The system preserves actual execution records.
+File candidates use kind, a path relative to
 the workspace or supplied output_dir, media_type, summary and optional output_name.
 Paths must identify exactly one file across those roots. Short structured outputs may
 use content. Include the JSON files containing measured results when producing

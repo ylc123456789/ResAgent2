@@ -49,6 +49,8 @@ CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表，互为备份。初
 
 HTTP 使用 User-Agent，进程内按来源串行：arXiv 请求结束后至少间隔 3 秒，OpenAlex 1 秒。429 立即进入至少 60 秒冷却；Retry-After 支持秒数/HTTP 日期，更长则遵守。5xx/408 有 Retry-After 时同样冷却；其余超时/网络/5xx/408 最多三次 HTTP 尝试，退避 3/6 秒，耗尽后冷却。冷却期直接报不可用，不在 Agent 内长睡眠。既有 `max_retries` 参数指总尝试数。
 
+HTTP 响应诊断沿用应用日志：失败为 WARNING，成功为 INFO（独立诊断时可为 `resagent2_components.literature._http` 开启 INFO）。记录来源、状态码、本次搜索内的 HTTP 尝试序号/上限、Authorization 是否配置、Retry-After 是否存在及解析秒数、实际冷却秒数；白名单限额头仅接受有限非负数字：X-RateLimit-Limit、X-RateLimit-Remaining、X-RateLimit-Credits-Used、X-RateLimit-Reset。缺失/非法限额值不填造，记录不包含查询 URL、认证值、响应正文或其他响应头。诊断不改变重试/换源/冷却；响应头只提供当次服务事实，单凭 429 不断言日额度耗尽或请求频率超限。
+
 HTTP 复用 Runtime 的 httpx 总超时传输；节奏等待、退避和请求都沿用 Run 剩余时间。Run 截止不作为普通来源不可用继续切换，耗尽后停止发新请求。论文 HTTP 不消耗模型请求次数，但消耗 Run 时间。
 
 OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送，不进 URL、工件或模型上下文；匿名额度由服务端决定。摘要缺失就留空，每篇仍最多 2000 字符，不抓 PDF、不新增 LLM 摘要。生成 Markdown 明示检索摘要不等于全文或独立测量。

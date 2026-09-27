@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -13,6 +16,11 @@ from resagent2_runtime.budget import DeadlineExceededError, current_budget, rema
 
 USER_AGENT = "ResAgent2/0.1 (+https://github.com/ylc123456789/ResAgent2)"
 COOLDOWN_SECONDS = 60.0
+_QUOTA_HEADERS = (
+    "X-RateLimit-Limit", "X-RateLimit-Remaining",
+    "X-RateLimit-Credits-Used", "X-RateLimit-Reset",
+)
+_LOGGER = logging.getLogger(__name__)
 
 
 class LiteratureSearchError(RuntimeError):
@@ -38,6 +46,43 @@ def _retry_after(value: str | None) -> float:
             return 0.0
 
 
+def _response_diagnostics(
+    source: str, response: httpx.Response, *, attempt: int,
+    max_attempts: int, retry_after: float, cooldown_seconds: float,
+) -> dict:
+    """Keep only status, timing and numeric quota facts, never response text."""
+    quota = {}
+    for name in _QUOTA_HEADERS:
+        raw = response.headers.get(name)
+        if raw is None or len(raw) > 64:
+            continue
+        try:
+            number = float(raw)
+        except ValueError:
+            continue
+        if math.isfinite(number) and number >= 0:
+            quota[name] = number
+    return {
+        "source": source,
+        "status": response.status_code,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "authentication_configured": bool(response.request.headers.get("Authorization")),
+        "retry_after_present": "Retry-After" in response.headers,
+        "retry_after_seconds": retry_after,
+        "cooldown_seconds": cooldown_seconds,
+        "quota": quota,
+    }
+
+
+def _log_response(source: str, response: httpx.Response, **timing) -> None:
+    level = logging.INFO if response.is_success else logging.WARNING
+    _LOGGER.log(
+        level, "Literature HTTP response %s",
+        json.dumps(_response_diagnostics(source, response, **timing), sort_keys=True),
+    )
+
+
 class LiteratureHTTP:
     """Serialize requests to one source, including across backend instances.
 
@@ -53,7 +98,7 @@ class LiteratureHTTP:
         self._next_request_at = 0.0
         self._cooldown_until = 0.0
 
-    def fetch(self, request: Callable[[], bytes], *, max_attempts: int) -> bytes:
+    def fetch(self, request: Callable[[], httpx.Response], *, max_attempts: int) -> bytes:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         budget = current_budget()
@@ -74,11 +119,29 @@ class LiteratureHTTP:
                     current_budget().remaining_timeout()
                 retry_after = 0.0
                 try:
-                    return request()
+                    response = request()
+                    _log_response(
+                        self.source, response, attempt=attempt + 1,
+                        max_attempts=max_attempts,
+                        retry_after=_retry_after(response.headers.get("Retry-After")),
+                        cooldown_seconds=0.0,
+                    )
+                    return response.content
                 except httpx.HTTPStatusError as error:
                     status = error.response.status_code
                     retry_after = _retry_after(
                         error.response.headers.get("Retry-After")
+                    )
+                    cooldown_seconds = 0.0
+                    transient = status == 408 or 500 <= status <= 599
+                    if status == 429 or (transient and retry_after > 0):
+                        cooldown_seconds = max(COOLDOWN_SECONDS, retry_after)
+                    elif transient and attempt == max_attempts - 1:
+                        cooldown_seconds = COOLDOWN_SECONDS
+                    _log_response(
+                        self.source, error.response, attempt=attempt + 1,
+                        max_attempts=max_attempts, retry_after=retry_after,
+                        cooldown_seconds=cooldown_seconds,
                     )
                     # Do not include response bodies, query URLs or auth in errors.
                     reason = f"HTTP {status}"

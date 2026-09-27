@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, date
 
+import httpx
 import pytest
 
 from resagent2_components import (
@@ -232,9 +233,9 @@ class _FakeArxivBackend(ArxivLiteratureBackend):
         super().__init__()
         self._body = body
 
-    def _request(self, url: str) -> bytes:
+    def _request(self, url: str) -> httpx.Response:
         self.last_url = url
-        return self._body
+        return httpx.Response(200, content=self._body, request=httpx.Request("GET", url))
 
 
 def test_arxiv_backend_parses_deduplicates_and_normalizes() -> None:
@@ -273,7 +274,7 @@ def test_arxiv_backend_builds_year_bounded_query() -> None:
 
 def test_arxiv_backend_raises_clear_error_instead_of_empty_result() -> None:
     class Failing(ArxivLiteratureBackend):
-        def _request(self, url: str) -> bytes:
+        def _request(self, url: str) -> httpx.Response:
             raise TimeoutError("connection timed out")
 
     backend = Failing(max_retries=2)

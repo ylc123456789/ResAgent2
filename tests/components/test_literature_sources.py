@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.components.test_literature_http import http_response
+
 from resagent2_components import (
     LiteratureSearchError,
     LiteratureUnavailableError,
@@ -127,13 +129,13 @@ def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
         calls.append(("arxiv", clock[0]))
         if clock[0] < 60:
             raise http_error(429)
-        return ARXIV_ATOM.encode()
+        return http_response(ARXIV_ATOM.encode())
 
     def openalex_request(self, url):
         calls.append(("openalex", clock[0]))
         if clock[0] >= 10:
             raise http_error(429)
-        return json.dumps({"results": [work()]}).encode()
+        return http_response(json.dumps({"results": [work()]}).encode())
 
     monkeypatch.setattr(literature.ArxivLiteratureBackend, "_request", arxiv_request)
     monkeypatch.setattr(openalex.OpenAlexLiteratureBackend, "_request", openalex_request)
@@ -175,7 +177,7 @@ def test_406_tries_real_peer_backend_and_keeps_successful_source(real_backends, 
         raise http_error(406)
     def openalex_request(self, url):
         calls.append("openalex")
-        return json.dumps({"results": [work()]}).encode()
+        return http_response(json.dumps({"results": [work()]}).encode())
     monkeypatch.setattr(real_backends.ArxivLiteratureBackend, "_request", arxiv_request)
     monkeypatch.setattr(real_backends.OpenAlexLiteratureBackend, "_request", openalex_request)
     backend = MultiSourceLiteratureBackend(
@@ -222,7 +224,7 @@ def test_other_backend_failures_do_not_switch_sources(real_backends, monkeypatch
     def arxiv_request(self, url):
         calls.append("arxiv")
         if failure == "invalid_xml":
-            return b"<broken"
+            return http_response(b"<broken")
         if failure == "deadline":
             raise DeadlineExceededError("deadline")
         if failure == "bug":
@@ -230,7 +232,7 @@ def test_other_backend_failures_do_not_switch_sources(real_backends, monkeypatch
         raise http_error(failure)
     def openalex_request(self, url):
         calls.append("openalex")
-        return b'{"results": []}'
+        return http_response(b'{"results": []}')
     monkeypatch.setattr(real_backends.ArxivLiteratureBackend, "_request", arxiv_request)
     monkeypatch.setattr(real_backends.OpenAlexLiteratureBackend, "_request", openalex_request)
     backend = MultiSourceLiteratureBackend(

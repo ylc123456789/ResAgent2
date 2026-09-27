@@ -103,10 +103,10 @@ class ArxivLiteratureBackend:
             terms.append(f"submittedDate:[000001010000 TO {end_year}12312359]")
         return " AND ".join(terms)
 
-    def _request(self, url: str) -> bytes:
+    def _request(self, url: str) -> httpx.Response:
         """One raw HTTP request; overridable in tests to avoid the network."""
         return send_request(httpx.Request("GET", url, headers={"User-Agent": USER_AGENT}),
-                            timeout=self.timeout_seconds).content
+                            timeout=self.timeout_seconds)
 
     def _fetch(self, url: str) -> bytes:
         return _ARXIV_HTTP.fetch(
@@ -287,13 +287,13 @@ class OpenAlexLiteratureBackend:
         )
         return self._parse(body)
 
-    def _request(self, url: str) -> bytes:
+    def _request(self, url: str) -> httpx.Response:
         headers = {"User-Agent": USER_AGENT}
         if self._api_key:
             # Never place credentials in URLs, artifacts, or model context.
             headers["Authorization"] = f"Bearer {self._api_key}"
         return send_request(httpx.Request("GET", url, headers=headers),
-                            timeout=self.timeout_seconds).content
+                            timeout=self.timeout_seconds)
 
     def _parse(self, body: bytes) -> list[LiteraturePaper]:
         try:

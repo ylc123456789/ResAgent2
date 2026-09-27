@@ -1,6 +1,8 @@
 """HTTP policy tests use virtual time, never live sleeps or requests."""
 
 from datetime import UTC, datetime, timedelta
+import json
+import logging
 from email.utils import format_datetime
 import httpx
 
@@ -18,6 +20,14 @@ def clock(monkeypatch):
     return now
 
 
+def http_response(body=b"ok", *, status=200, headers=None, authenticated=False):
+    request = httpx.Request(
+        "GET", "https://example.test/?q=private-query&api_key=private-key",
+        headers={"Authorization": "Bearer private-key"} if authenticated else {},
+    )
+    return httpx.Response(status, content=body, headers=headers, request=request)
+
+
 def http_error(status, retry_after=None):
     headers = {}
     if retry_after is not None:
@@ -31,7 +41,7 @@ def test_arxiv_instances_share_spacing(clock, monkeypatch):
     times = []
     def request(self, url):
         times.append(clock[0])
-        return b'<feed xmlns="http://www.w3.org/2005/Atom"/>'
+        return http_response(b'<feed xmlns="http://www.w3.org/2005/Atom"/>')
     monkeypatch.setattr(literature.ArxivLiteratureBackend, "_request", request)
     for _ in range(3):
         assert literature.ArxivLiteratureBackend().search("x", max_results=1) == []
@@ -46,7 +56,7 @@ def test_429_is_not_retried_and_cooldown_skips_network(clock, retry_after, coold
         calls.append(clock[0])
         if len(calls) == 1:
             raise http_error(429, retry_after)
-        return b"ok"
+        return http_response()
     with pytest.raises(http.LiteratureUnavailableError, match="429"):
         policy.fetch(request, max_attempts=3)
     assert calls == [0]
@@ -110,7 +120,7 @@ def test_transient_failure_can_recover(clock):
         calls.append(clock[0])
         if len(calls) < 2:
             raise TimeoutError()
-        return b"ok"
+        return http_response()
     assert policy.fetch(request, max_attempts=3) == b"ok"
     assert calls == [0, 3]
 
@@ -134,3 +144,125 @@ def test_programming_errors_are_not_swallowed(clock):
         raise RuntimeError("bug")
     with pytest.raises(RuntimeError, match="bug"):
         http.LiteratureHTTP("test", interval_seconds=3).fetch(request, max_attempts=3)
+
+
+def response_records(caplog):
+    return [
+        json.loads(record.getMessage().split("Literature HTTP response ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("Literature HTTP response ")
+    ]
+
+
+@pytest.mark.parametrize("status", [200, 406, 429, 503])
+def test_response_diagnostics_keep_only_safe_facts(clock, caplog, status):
+    caplog.set_level(logging.INFO, logger=http.__name__)
+    response = http_response(
+        b'{"message": "private-body private-key"}', status=status,
+        authenticated=True, headers={
+            "Retry-After": "120",
+            "X-RateLimit-Limit": "100",
+            "X-RateLimit-Remaining": "0.25",
+            "X-RateLimit-Credits-Used": "0.01",
+            "X-RateLimit-Reset": "3600",
+            "X-Secret": "private-header",
+            "Set-Cookie": "private-cookie",
+        },
+    )
+    def request():
+        response.raise_for_status()
+        return response
+    policy = http.LiteratureHTTP("OpenAlex", interval_seconds=1)
+    if status == 200:
+        assert policy.fetch(request, max_attempts=3) == response.content
+    else:
+        with pytest.raises(http.LiteratureUnavailableError):
+            policy.fetch(request, max_attempts=3)
+    [record] = response_records(caplog)
+    assert record["source"] == "OpenAlex"
+    assert record["status"] == status
+    assert record["attempt"] == 1
+    assert record["max_attempts"] == 3
+    assert record["authentication_configured"] is True
+    assert record["retry_after_present"] is True
+    assert record["retry_after_seconds"] == 120
+    assert record["cooldown_seconds"] == (120 if status in {429, 503} else 0)
+    assert record["quota"] == {
+        "X-RateLimit-Limit": 100, "X-RateLimit-Remaining": 0.25,
+        "X-RateLimit-Credits-Used": 0.01, "X-RateLimit-Reset": 3600,
+    }
+    assert policy._cooldown_until == record["cooldown_seconds"]
+    for private in ("private-key", "private-query", "private-body", "private-header",
+                    "private-cookie", "example.test", "Authorization"):
+        assert private not in caplog.text
+    expected_level = logging.INFO if status == 200 else logging.WARNING
+    assert caplog.records[-1].levelno == expected_level
+
+
+@pytest.mark.parametrize("raw", ["private-key", "NaN", "inf", "-1", "1" * 100])
+def test_diagnostics_discard_invalid_quota_values(clock, caplog, raw):
+    caplog.set_level(logging.INFO, logger=http.__name__)
+    response = http_response(headers={
+        "X-RateLimit-Remaining": raw, "Retry-After": "private-key",
+    })
+    assert http.LiteratureHTTP("OpenAlex", interval_seconds=1).fetch(
+        lambda: response, max_attempts=1,
+    ) == b"ok"
+    [record] = response_records(caplog)
+    assert record["quota"] == {}
+    assert record["authentication_configured"] is False
+    assert record["retry_after_present"] is True
+    assert record["retry_after_seconds"] == 0
+    assert "private-key" not in caplog.text
+
+
+def test_diagnostics_preserve_http_attempt_numbers(clock, caplog):
+    caplog.set_level(logging.INFO, logger=http.__name__)
+    responses = iter([http_response(status=503), http_response()])
+    def request():
+        response = next(responses)
+        response.raise_for_status()
+        return response
+    assert http.LiteratureHTTP("test", interval_seconds=1).fetch(
+        request, max_attempts=3,
+    ) == b"ok"
+    records = response_records(caplog)
+    assert [(r["status"], r["attempt"], r["cooldown_seconds"]) for r in records] == [
+        (503, 1, 0), (200, 2, 0),
+    ]
+    assert clock[0] == 3
+
+
+def test_http_date_retry_after_is_logged_as_seconds(clock, caplog):
+    until = datetime.now(UTC) + timedelta(seconds=180)
+    response = http_response(
+        status=429, headers={"Retry-After": format_datetime(until, usegmt=True)},
+    )
+    policy = http.LiteratureHTTP("OpenAlex", interval_seconds=1)
+    def request():
+        response.raise_for_status()
+        return response
+    with pytest.raises(http.LiteratureUnavailableError):
+        policy.fetch(request, max_attempts=3)
+    [record] = response_records(caplog)
+    assert 178 <= record["retry_after_seconds"] <= 180
+    assert record["cooldown_seconds"] == record["retry_after_seconds"]
+    assert policy._cooldown_until == record["cooldown_seconds"]
+    with pytest.raises(http.LiteratureUnavailableError, match="cooling down"):
+        policy.fetch(request, max_attempts=3)
+    assert response_records(caplog) == [record]  # Skipping HTTP is not another response.
+
+
+def test_exhausted_transient_attempt_logs_final_cooldown(clock, caplog):
+    response = http_response(status=503)
+    policy = http.LiteratureHTTP("OpenAlex", interval_seconds=1)
+    def request():
+        response.raise_for_status()
+        return response
+    with pytest.raises(http.LiteratureUnavailableError, match="after 3 attempts"):
+        policy.fetch(request, max_attempts=3)
+    records = response_records(caplog)
+    assert [(r["attempt"], r["cooldown_seconds"]) for r in records] == [
+        (1, 0), (2, 0), (3, 60),
+    ]
+    assert policy._cooldown_until - clock[0] == 60

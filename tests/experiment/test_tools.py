@@ -118,7 +118,8 @@ def test_run_command_blocks_experiment_when_automatic_audit_fails(tmp_path, monk
     assert observation.ok is False
     assert observation.value["blocked"] is True
     assert observation.value["reason"] == "environment_audit_failed"
-    assert observation.memory_updates["env_audit"] == {"success": False}
+    assert observation.memory_updates["env_audit"]["success"] is False
+    assert observation.memory_updates["env_audit"]["environment_information"] == tool.binding.information
 
 
 @pytest.mark.parametrize("command", [

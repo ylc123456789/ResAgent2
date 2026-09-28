@@ -36,7 +36,7 @@ class AuditEnvTool:
         audit = self.binding.audit()
         return ToolObservation(
             summary=(
-                "Environment audit passed"
+                "Base environment audit passed (Python identity/version and pip only)"
                 if audit.get("success")
                 else "Environment audit failed: sys.prefix, pip or Python version "
                 "does not match the bound env"

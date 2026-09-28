@@ -26,6 +26,30 @@ from resagent2_components import (
 from resagent2_runtime import AgentState
 
 
+@pytest.fixture(autouse=True)
+def environment_information_probe(monkeypatch):
+    """Environment tool tests never start optional real host diagnostics."""
+    probe = {"calls": [], "package_version": "1.0"}
+    def inspect(prefix, conda_exe):
+        snapshot = {
+            "observed_at": "2026-09-28T00:00:00+00:00",
+            "prefix": str(prefix),
+            "runtime": {
+                "status": "observed",
+                "sys_prefix": str(prefix),
+                "packages": {
+                    "status": "observed", "count": 1,
+                    "items": [{"name": "example", "version": probe["package_version"]}],
+                },
+            },
+            "nvidia": {"status": "unavailable", "error": "nvidia-smi is not installed"},
+        }
+        probe["calls"].append(snapshot)
+        return snapshot
+    monkeypatch.setattr("resagent2_components.environment.inspect_environment", inspect)
+    return probe
+
+
 def _state(**memory) -> AgentState:
     now = datetime.now(UTC)
     return AgentState(
@@ -513,3 +537,107 @@ def test_environment_cleanup_selects_only_managed(tmp_path) -> None:
     assert deleted == ["resenv_managed"]
     assert not (env_root / "resenv_managed").exists()
     assert (env_root / "resenv_unmanaged").exists()
+
+
+
+def test_prepare_reports_environment_facts_before_dependency_installation(
+    tmp_path, environment_information_probe,
+):
+    binding = _binding(_FakeManager(tmp_path / "envs"))
+    tool = PrepareEnvironmentTool(binding)
+
+    observation = tool.execute(_state(), tool.input_model())
+
+    assert observation.ok
+    assert observation.value["environment_information"] == binding.information
+    assert binding.information["runtime"]["sys_prefix"] == str(binding.current.prefix)
+    assert len(environment_information_probe["calls"]) == 1
+    assert binding.certified is False  # Optional observations do not certify it.
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_setup_refreshes_package_facts_even_after_partial_install_failure(
+    tmp_path, environment_information_probe, exit_code,
+):
+    boundary = WorkspaceBoundary(
+        WorkspaceGrant(
+            root=str(tmp_path), source=WorkspaceSourceKind.LOCAL,
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
+        )
+    )
+    manager = _FakeManager(tmp_path / "envs")
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    previous = binding.refresh_information()
+    binding.certified = True
+    class Installer(_FakeRunner):
+        def run(self, *args, **kwargs):
+            assert binding.information is None
+            assert not binding.certified
+            environment_information_probe["package_version"] = "2.0"
+            return super().run(*args, **kwargs).model_copy(update={"exit_code": exit_code})
+    tool = RunSetupTool(
+        Installer(boundary), binding, log_dir=str(tmp_path / "setup"), timeout_seconds=30,
+    )
+
+    observation = tool.execute(_state(), tool.input_model(command="pip install example"))
+
+    assert observation.ok is (exit_code == 0)
+    assert binding.certified is False
+    assert observation.value["exit_code"] == exit_code
+    current = observation.value["environment_information"]
+    assert current == binding.information
+    assert current["runtime"]["packages"]["items"][0]["version"] == "2.0"
+    assert previous["runtime"]["packages"]["items"][0]["version"] == "1.0"
+    assert len(environment_information_probe["calls"]) == 2
+
+
+def test_setup_exception_clears_previous_information(tmp_path):
+    manager = _FakeManager(tmp_path / "envs")
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    binding.refresh_information()
+    binding.certified = True
+    class InterruptedRunner:
+        def run(self, *args, **kwargs):
+            assert binding.information is None
+            raise OSError("installation interrupted")
+    tool = RunSetupTool(
+        InterruptedRunner(), binding, log_dir=str(tmp_path / "setup"), timeout_seconds=30,
+    )
+
+    with pytest.raises(OSError, match="installation interrupted"):
+        tool.execute(_state(), tool.input_model(command="pip install example"))
+
+    assert binding.information is None
+    assert not binding.certified
+
+
+def test_missing_gpu_information_does_not_fail_base_certification(tmp_path):
+    manager = _FakeManager(tmp_path / "envs")
+    binding = _binding(manager)
+    binding.current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    tool = AuditEnvTool(binding)
+
+    observation = tool.execute(_state(), tool.input_model())
+
+    assert observation.ok
+    assert binding.certified
+    assert observation.value["success"]
+    assert observation.value["environment_information"]["nvidia"]["status"] == "unavailable"
+    assert observation.value["environment_information"] == binding.information
+
+
+def test_new_binding_does_not_reuse_previous_information(tmp_path):
+    manager = _FakeManager(tmp_path / "envs")
+    current = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
+    manager.inspect = lambda **_: current
+    previous = _binding(manager)
+    previous.audit()
+    assert previous.information is not None
+
+    restored = _binding(manager)
+
+    assert restored.current == current
+    assert restored.information is None
+    assert not restored.certified

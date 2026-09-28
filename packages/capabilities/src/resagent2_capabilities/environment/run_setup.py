@@ -104,6 +104,7 @@ class RunSetupTool:
         value = result.model_dump(mode="json")
         value["stdout_tail"] = self._tail(result.stdout_path)
         value["stderr_tail"] = self._tail(result.stderr_path)
+        value["environment_information"] = self.binding.refresh_information()
         return ToolObservation(
             summary=f"Setup command exited with code {result.exit_code}",
             value=value,

@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .resources import ResourceLayout
+from .environment_info import inspect_environment
 
 
 class EnvironmentManagerError(ValueError):
@@ -462,13 +463,22 @@ class EnvironmentBinding:
             run_id=run_id, workspace_id=workspace_id
         )
         self.certified: bool = False
+        self.information: dict | None = None
         # A fresh binding cannot vouch for tests from a previous process.
         self.generation = uuid4().hex
 
     def invalidate(self) -> None:
         """Invalidate environment-dependent observations before a mutation starts."""
         self.certified = False
+        self.information = None
         self.generation = uuid4().hex
+
+    def refresh_information(self) -> dict:
+        """Collect optional facts without certifying the environment."""
+        if self.current is None:
+            raise EnvironmentManagerError("No environment prepared")
+        self.information = inspect_environment(self.current.prefix, self.manager.conda_exe)
+        return self.information
 
     def audit(self) -> dict:
         """Validate the current interpreter without trusting persisted certification."""
@@ -477,6 +487,7 @@ class EnvironmentBinding:
             raise EnvironmentManagerError("No environment prepared")
         audit = self.manager.audit(self.current)
         self.certified = bool(audit.get("success"))
+        audit["environment_information"] = self.refresh_information()
         return audit
 
     def argv_prefix(self) -> list[str] | None:

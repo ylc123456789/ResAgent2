@@ -246,7 +246,8 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 ### 4.3 目录、环境、数据集的刷新频率不同
 
 - **directory**：最近一次 list_files 的结果，附原始事件号 observed_at 和历史性说明；参与共享材料分配，最多2000条完整路径。创建文件不自动更新旧清单，旧清单未列出的文件不等于不存在；重建上下文不是重新列目录。
-- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified、required_python；已有环境时再附 env_id、prefix、python_version。环境恢复不自动沿用旧认证。获准的验证/实验命令执行前会核验尚未认证的绑定，无需模型先单独 audit_env；这不代表每轮上下文构造都扫描依赖。完整 env_audit 保存在该次工具 value 和 Session memory，原生 receipt 可见；environment 段只投影当前绑定，不直接展开历史审计。
+- **environment**：每次构造从同一 EnvironmentBinding 读取 prepared/certified、required_python；已有环境时再附 env_id、prefix、python_version。certified 只表示绑定的 Python 身份/版本及 pip 通过基础核验，不表示依赖或设备可运行。已获准的 prepare_environment 完成后、run_setup 返回后（包括非零退出）、显式或自动 audit 会采集 environment_information：绑定 Python 观察到的平台、CPU/内存和设备可见性设置、已安装发行包版本，以及 nvidia-smi 返回的设备/显存/驱动和驱动报告的 CUDA 支持版本。后者不是本环境的 Toolkit 或框架构建。PyTorch 另从已安装 version.py 的字面量读取构建版本及 CUDA/ROCm 版本，补足发行包元数据可能缺少的 CUDA 后缀；不执行该模块，缺包与读取失败分别标注。探针不导入框架、不初始化设备、不判断兼容性；查询失败明确为 unavailable，不能推断没有硬件，也不改变基础认证结果。
+- **环境信息刷新**：information 带 observed_at，属于最近采集事实，不是实时监控；上下文构造不执行命令。prepare/setup 开始前清除快照，进程恢复后的新绑定不继承旧快照；已有环境但未采集时明确为 not_observed；尚未准备环境时只显示原有绑定状态。完整包列表留在工具回执，重复环境上下文中的包条目合计最多6000字符并标明 omitted_count；平台/设备事实不因包列表过长而被剪掉。获准的验证/实验命令仍按原规则审计尚未认证的绑定，内部诊断沿用同一预算与授权，不另设就绪 gate。
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
 - **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域。builder 展示 resume_artifact_ids 指定材料；answer 保留完整原题、答案及动作快照，work_feedback 展示必需事实框及可伸缩原报告，完整科研目录另行展示。每段保留 artifact_id、kind、content。要求工件仍按类型自动装入。注入材料不替代权限和单次批准检查，也不更新 observed；必需内容超过额度时明确失败。
 

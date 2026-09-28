@@ -116,6 +116,7 @@ class PrepareEnvironmentTool:
                 "env_id": environment.env_id,
                 "prefix": str(environment.prefix),
                 "python_version": environment.python_version,
+                "environment_information": self.binding.refresh_information(),
             },
             memory_updates={
                 "environment": {

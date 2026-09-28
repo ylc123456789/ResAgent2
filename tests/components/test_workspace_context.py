@@ -28,6 +28,35 @@ from resagent2_coding.context import build_context as coding_context, CODING_PRO
 from resagent2_experiment.context import build_context as experiment_context, EXPERIMENT_PROMPT
 
 
+@pytest.fixture(autouse=True)
+def environment_information_probe(monkeypatch):
+    """Context tests observe binding state without inspecting the real machine."""
+    probe = {
+        "calls": [],
+        "package_items": [{"name": "torch", "version": "2.14.0+cu130"}],
+    }
+    def inspect(prefix, conda_exe):
+        snapshot = {
+            "observed_at": "2026-09-28T00:00:00+00:00",
+            "prefix": str(prefix),
+            "runtime": {
+                "status": "observed", "sys_prefix": str(prefix),
+                "packages": {
+                    "status": "observed", "count": len(probe["package_items"]),
+                    "items": list(probe["package_items"]),
+                },
+            },
+            "nvidia": {
+                "status": "observed", "driver_version": "570.124.04",
+                "devices": [{"name": "NVIDIA GeForce RTX 4090"}],
+            },
+        }
+        probe["calls"].append(snapshot)
+        return snapshot
+    monkeypatch.setattr("resagent2_components.environment.inspect_environment", inspect)
+    return probe
+
+
 def _state():
     now = datetime.now(UTC)
     return AgentState(
@@ -78,10 +107,15 @@ def test_restored_environment_is_visible_but_not_certified(tmp_path):
     state = _state()
     state.memory["environment"] = {"env_id": "stale_env", "certified": True}
     binding = _binding(tmp_path)
-    assert _environment(state, binding) == {
+    environment = _environment(state, binding)
+    assert {key: environment[key] for key in (
+        "prepared", "certified", "required_python", "env_id", "prefix", "python_version",
+    )} == {
         "prepared": True, "certified": False, "required_python": None,
         "env_id": "env_test", "prefix": str(tmp_path), "python_version": "3.12.13",
     }
+    assert environment["information"]["status"] == "not_observed"
+    assert "certification_scope" in environment
     assert _environment(state, _binding(tmp_path, restored=False))["prepared"] is False
 
 def test_audit_remains_visible_after_observation_history_rotates(tmp_path):
@@ -427,3 +461,67 @@ def test_new_command_pass_replaces_failure_projection_not_original_events():
     assert "EXPERIMENT_FAILURE" in content
     assert "observed_at=3 run_verification" in content
     assert state.events[0].data["value"]["results"][0]["stderr_tail"] == "OLD_FAILURE"
+
+
+
+def test_context_keeps_observed_environment_facts_without_reprobing(
+    tmp_path, monkeypatch, environment_information_probe,
+):
+    state = _state()
+    binding = _binding(tmp_path)
+    receipt = AuditEnvTool(binding).execute(state, AuditEnvInput())
+    def forbidden_probe(*args, **kwargs):
+        raise AssertionError("Rendering context must not execute a diagnostic")
+    monkeypatch.setattr(
+        "resagent2_components.environment.inspect_environment", forbidden_probe,
+    )
+    before = json.dumps(receipt.value, sort_keys=True)
+
+    for _ in range(3):
+        environment = _environment(state, binding)
+        information = environment["information"]
+        assert information["nvidia"]["driver_version"] == "570.124.04"
+        assert information["runtime"]["packages"]["items"] == [
+            {"name": "torch", "version": "2.14.0+cu130"},
+        ]
+        _observe(state, "list_files", {"path": ".", "paths": ["train.py"]})
+
+    assert len(environment_information_probe["calls"]) == 1
+    assert json.dumps(receipt.value, sort_keys=True) == before
+    assert state.memory == {}
+
+
+def test_context_clears_invalidated_information_and_ignores_stale_memory(tmp_path):
+    state = _state()
+    binding = _binding(tmp_path)
+    receipt = AuditEnvTool(binding).execute(state, AuditEnvInput())
+    state.memory["env_audit"] = receipt.value
+    state.memory["environment_information"] = binding.information
+    assert _environment(state, binding)["information"]["runtime"]["status"] == "observed"
+
+    binding.invalidate()
+
+    assert _environment(state, binding)["information"]["status"] == "not_observed"
+    assert _environment(state, binding)["certified"] is False
+    assert _environment(state, _binding(tmp_path))["information"]["status"] == "not_observed"
+
+
+def test_actual_context_bounds_packages_and_retains_complete_tool_receipt(
+    tmp_path, environment_information_probe,
+):
+    environment_information_probe["package_items"] = [
+        {"name": f"package-{index:04d}", "version": "1.2.3"} for index in range(1000)
+    ]
+    state = _state()
+    binding = _binding(tmp_path)
+    receipt = AuditEnvTool(binding).execute(state, AuditEnvInput())
+    complete = receipt.value["environment_information"]["runtime"]["packages"]
+    before = json.dumps(receipt.value, sort_keys=True)
+
+    shown = _environment(state, binding)["information"]["runtime"]["packages"]
+
+    assert 0 < len(shown["items"]) < complete["count"]
+    assert shown["omitted_count"] == complete["count"] - len(shown["items"])
+    assert shown["count"] == 1000
+    assert len(complete["items"]) == 1000
+    assert json.dumps(receipt.value, sort_keys=True) == before

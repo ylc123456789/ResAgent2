@@ -14,6 +14,7 @@ from resagent2_runtime import (
 )
 
 from .environment import EnvironmentBinding
+from .environment_info import information_context
 from .workspace import WorkspacePermissionError, _normalize_relative
 
 
@@ -95,6 +96,8 @@ def workspace_context(
                 env_id=current.env_id,
                 prefix=str(current.prefix),
                 python_version=current.python_version,
+                certification_scope="Bound Python identity/version and pip only; dependencies and devices are not validated.",
+                information=information_context(binding.information),
             )
         sections.append(ContextSection(
             name="environment", content=json.dumps(environment),

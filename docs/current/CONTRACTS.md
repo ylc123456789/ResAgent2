@@ -493,10 +493,11 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 - `EnvironmentSpec.python_version` 有值表示硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断；
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用），不同 Workspace/Run 隔离；`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`；
-- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
+- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`，清除旧环境信息快照；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
 - 问答恢复不信任旧认证。获准命令执行前的自动核验使用同一 Run 截止时间，失败则不运行命令；这是该命令的固定前置检查，不新增模型调用或另一轮命令批准。实际自动核验结果保存在该命令的 ToolObservation.value.env_audit 和 Session memory.env_audit；已有认证时不重复执行探针；
 - Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
 - run_setup 接受裸名 python/python3 -m pip install、pip/pip3 install 及 conda env update；pip 实际运行绑定环境的绝对 Python。拒绝调用者指定其他解释器、目标目录或用户安装位置（含参数缩写）。确认继续绑定原工具参数和环境前缀，执行记录保存实际构造命令；部署层 pip 配置、镜像与缓存仍为可信输入，不改变或禁用。安装构建脚本仍属于可信进程，不构成系统沙箱。
+- prepare 成功、setup 返回（包括非零退出）和显式/自动 audit 的工具回执附 environment_information，来自同次受控只读查询。平台、设备、驱动与绑定 Python 的包版本（含 PyTorch version.py 静态构建信息）供 Agent 判断，不纳入基础审计 success；查询缺失、失败或局部超时只标明未知，不选择依赖、不导入框架、不证明 GPU 可运行。查询遵守 Run 截止时间；若已完成安装后预算耗尽，保留安装回执并标明诊断未完成，后续操作仍由原预算检查限制。环境信息不是新增公共请求字段或资源授权。
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
 
 <a id="schema"></a>

@@ -162,21 +162,24 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
-@pytest.mark.parametrize("explicit_limit", [1024, 2048])
-def test_native_explicit_small_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
+@pytest.mark.parametrize("explicit_limit", [1024, 2048, 4096])
+def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
     agent, client, request = _native_with_full_read_history(
         tmp_path, monkeypatch, capability, max_tokens=explicit_limit,
     )
     assert agent.max_context_tokens == explicit_limit
     result = agent.invoke(request)
-    if explicit_limit == 2048:
-        # The fixed input fits; material bodies now shrink after reserving it,
-        # rather than making a pre-allocated read share a required hard limit.
+    if explicit_limit == 4096:
+        # The current fixed input fits at this still-limited value. Material
+        # bodies must shrink within the requested limit; the limit is never
+        # silently replaced with the default 128K budget.
         assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
         assert result.llm_calls == 1
         assert len(client.contexts) == 1
         assert client.contexts[0].estimated_tokens <= explicit_limit
         return
+    # 1024 and 2048 are below the current fixed-context floor. The agent must
+    # fail explicitly instead of expanding the caller's requested limit.
     assert result.status == ModuleStatus.FAILED, result.model_dump(mode="json")
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
     assert result.error.retryable is False

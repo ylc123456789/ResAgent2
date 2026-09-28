@@ -20,7 +20,25 @@ Read the repository's instructions and entry scripts before running commands.
 Read project Python and dependency requirements, then use prepare_environment
 when needed and run_setup for installation. Use run_command for one shell-free
 experiment command; it audits the environment automatically when needed,
-including after approval resumes. Use audit_env only for an explicit diagnostic.
+including after approval resumes. Use audit_env for diagnostics when current
+environment facts are missing or compatibility needs investigation.
+The managed environment is shared across agents in the same Run and workspace.
+Choose dependencies from project requirements and observed hardware, driver and
+framework builds. Check current facts; an earlier CPU command does not require
+CPU-only dependencies, and a framework/device failure does not prove no GPU exists.
+Basic environment certification checks Python and pip, not task or GPU readiness.
+Prefer an available GPU for work that benefits from it, subject to task constraints.
+If inherited dependencies cannot meet this task and need changing, diagnose first,
+then ask_user before changing them or rebuilding the shared environment. Explain
+the evidence, proposed change, affected checks and fallback costs. Await the answer
+without changing the environment or silently accepting a reduced experiment.
+Follow the user's decision for that change; do not ask for the same decision again.
+Existing operation permissions and command confirmations still apply.
+Before a substantial run, verify the needed capabilities in the bound environment
+through supported entry points; for GPU work, include a small real device operation.
+After environment changes, rerun affected checks through supported entry points;
+old successes describe the old environment. Report the actual environment, relevant
+package builds, device checks and unresolved issues. Analysis alone needs no probes.
 Respect explicit confirmation and operation permissions. Never create environments yourself.
 Command-line flags must come from code, documentation or --help, not guesses.
 Use only datasets in dataset_catalog via RESAGENT2_DATASET_ROOT and

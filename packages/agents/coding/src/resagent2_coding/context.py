@@ -26,7 +26,25 @@ old_text must match exactly once in the current file per call.
 You may make multiple replace_text calls as needed. Review the actual diff.
 Read dependency requirements before choosing Python with prepare_environment.
 Install with run_setup, then run_verification. Verification automatically audits
-the environment, including after approval; use audit_env only for diagnostics.
+the environment, including after approval; use audit_env for diagnostics when
+current environment facts are missing or compatibility needs investigation.
+The managed environment is shared across agents in the same Run and workspace.
+Choose dependencies from project requirements and observed hardware, driver and
+framework builds. Check current facts; an earlier CPU command does not require
+CPU-only dependencies, and a framework/device failure does not prove no GPU exists.
+Basic environment certification checks Python and pip, not task or GPU readiness.
+Prefer an available GPU for work that benefits from it, subject to task constraints.
+If inherited dependencies cannot meet this task and need changing, diagnose first,
+then ask_user before changing them or rebuilding the shared environment. Explain
+the evidence, proposed change, affected checks and fallback costs. Await the answer
+without changing the environment or silently accepting a reduced experiment.
+Follow the user's decision for that change; do not ask for the same decision again.
+Existing operation permissions and command confirmations still apply.
+When execution is needed, verify task capabilities in the bound environment using
+bounded correctness checks; for GPU work, include a small real device operation.
+After environment changes, rerun affected checks; old successes describe the old
+environment. Report the actual environment, relevant package builds, device checks
+and unresolved issues for downstream work.
 Verification accepts shell-free tests such as python -m pytest, unittest,
 py_compile or compileall. For import checks, write a unittest;
 python -c and arbitrary scripts are not allowed verification commands.
@@ -42,7 +60,7 @@ optional output_name and optional UTF-8 content. Use files for substantive
 source/results and content for short structured outputs. The system derives
 patches, changed files and verification records from execution; never fabricate
 them. Read-only source access still permits this controlled output channel.
-Ask the user only for required information you cannot infer.
+Use ask_user for required information you cannot infer or the environment decision above.
 """
 
 

@@ -251,6 +251,10 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 - **数据集视图**：Agent 的 invoke 开始时从 dataset_catalog 工件解析引用，供该次循环的上下文和脚本映射共同使用；用户回答后再次进入 Agent 会重查。不是后台监视 catalog，也不是每个 LLM step 都重新扫目录。
 - **恢复材料**：Controller 配对原题或工作需求，将 answer/work_feedback 冻结并限定作用域。builder 展示 resume_artifact_ids 指定材料；answer 保留完整原题、答案及动作快照，work_feedback 展示必需事实框及可伸缩原报告，完整科研目录另行展示。每段保留 artifact_id、kind、content。要求工件仍按类型自动装入。注入材料不替代权限和单次批准检查，也不更新 observed；必需内容超过额度时明确失败。
 
+**执行 Agent 的环境决策提示：**Coding 与 Experiment 按项目要求及当前硬件、驱动和框架构建事实选择依赖，对适合加速的工作优先考虑可用 GPU；一次 CPU 命令不等于只能装 CPU 依赖，框架设备调用失败也不等于没有硬件。需要执行时，在实际绑定环境中用各自支持的有限检查验证任务所需能力；GPU 工作包括小型实际设备运算，纯分析不要求探测。基础认证不证明这些能力就绪。
+
+同 Run、同 workspace 的环境由执行 Agent 共用。若继承的依赖不能满足当前任务且需要调整，先诊断，再通过已有 ask_user 说明证据、拟议改动、受影响检查及降级代价，等待用户决定；等待期间不换包、不重建环境，也不自行缩减实验。按已收到的决定继续，不反复询问同一决策；原操作权限和精确命令确认仍独立生效。获准调整后复查受影响能力和检查，通过报告交接实际环境、相关包构建、设备验证和未解决项；旧环境的成功记录不冒充当前验证。以上是两份领域 Prompt 对模型的行为要求，未新增 GPU gate、环境状态字段或固定版本选择器，仍需真实模型验收。
+
 资源字段、路径授权等公开约定仍以 [资源契约](CONTRACTS.md#resources)、[问答契约](CONTRACTS.md#questions) 为准。
 
 **源码与测试**：[共享投影](../../packages/components/src/resagent2_components/context.py)、[片段选择](../../packages/runtime/src/resagent2_runtime/context.py)、[数据集视图](../../packages/components/src/resagent2_components/dataset.py)、[读取时序](../../tests/e2e/test_workspace_read_history.py)、[资源恢复](../../tests/e2e/test_runtime_resources.py)。

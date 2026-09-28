@@ -22,7 +22,8 @@ from resagent2_contracts import (
 )
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_runtime import (
-    AgentEvent, AgentState, ContextComposer, InMemorySessionStore, ToolObservation,
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentEvent, AgentState, ContextComposer,
+    InMemorySessionStore, ToolObservation,
 )
 
 
@@ -162,15 +163,15 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
-@pytest.mark.parametrize("explicit_limit", [1024, 2048, 4096])
+@pytest.mark.parametrize("explicit_limit", [1, DEFAULT_AGENT_CONTEXT_TOKENS // 4])
 def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
     agent, client, request = _native_with_full_read_history(
         tmp_path, monkeypatch, capability, max_tokens=explicit_limit,
     )
     assert agent.max_context_tokens == explicit_limit
     result = agent.invoke(request)
-    if explicit_limit == 4096:
-        # The current fixed input fits at this still-limited value. Material
+    if explicit_limit > 1:
+        # A quarter of the default budget fits the fixed input. Material
         # bodies must shrink within the requested limit; the limit is never
         # silently replaced with the default 128K budget.
         assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
@@ -178,8 +179,8 @@ def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkey
         assert len(client.contexts) == 1
         assert client.contexts[0].estimated_tokens <= explicit_limit
         return
-    # 1024 and 2048 are below the current fixed-context floor. The agent must
-    # fail explicitly instead of expanding the caller's requested limit.
+    # One token cannot fit the required context. The agent must fail explicitly
+    # instead of expanding the caller's requested limit.
     assert result.status == ModuleStatus.FAILED, result.model_dump(mode="json")
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
     assert result.error.retryable is False

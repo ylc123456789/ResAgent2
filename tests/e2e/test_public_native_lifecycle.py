@@ -272,7 +272,32 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
             assert round_answer_ids[previous_round] in ids
             assert read_json(final.feedback_refs[f"work_{previous_round}"])["work_record_artifact_id"] in ids
         indexed_ids = {entry["artifact_id"] for group in groups.values() for entry in group["artifacts"]}
-        assert {artifact_id for attempt in record["attempts"] for artifact_id in attempt["artifact_ids"]} <= indexed_ids
+        delivered = next(request for request in scientific_requests
+                         if feedback_ref.id in request.resume_artifact_ids)
+        reader = RegisteredArtifactReader(delivered.input_artifacts, run_id=run_id)
+        authorized = {ref.id: ref for ref in delivered.input_artifacts}
+        attempt_ids = {artifact_id for attempt in record["attempts"]
+                       for artifact_id in attempt["artifact_ids"]}
+        # Every recorded output is still authorized and integrity-readable,
+        # including control artifacts retained from the paused invocation.
+        assert attempt_ids <= authorized.keys()
+        for attempt in record["attempts"]:
+            for artifact_id in attempt["artifact_ids"]:
+                ref = authorized[artifact_id]
+                assert ref == final.artifacts[artifact_id]
+                assert (ref.task_id, ref.attempt_number) == (
+                    attempt["task_id"], attempt["attempt_number"],
+                )
+                assert reader.read_text(artifact_id)["artifact_id"] == artifact_id
+        # This fixture emits question controls and research outputs. The
+        # directory shows paired answers (including the original question),
+        # rather than duplicating standalone question controls.
+        question_ids = {artifact_id for artifact_id in attempt_ids
+                        if authorized[artifact_id].kind == "question"}
+        assert question_ids and question_ids.isdisjoint(indexed_ids)
+        group_ids = {entry["artifact_id"] for entry in groups[f"work_{round_number}"]["artifacts"]}
+        assert attempt_ids - question_ids <= group_ids
+        assert round_answer_ids[round_number] in group_ids
         assert final.artifacts[feedback["index_artifact_id"]].kind == "research_index"
         assert final.artifacts[feedback["work_record_artifact_id"]].kind == "work_record"
 

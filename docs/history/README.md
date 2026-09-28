@@ -4,7 +4,7 @@
 
 ## Interpreter 固定代码化（已实现，待服务器验收）
 
-2026-09-28 按[修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)在开发分支实现固定 Interpreter，schema 19.0：保留科研索引和反向交接，组织子 Agent 已记录报告，移除每轮 LLM 二次简报；上下文共用原预算机制，补齐长 JSON 正文的字符窗口读取。原观察与 validation 边界保持不变。当前仅完成源码静态检查，未运行本地或服务器测试；见 [ADR-0020](decisions/0020-deterministic-work-interpreter.md)。
+2026-09-28 按[修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)在开发分支实现固定 Interpreter，schema 19.0：保留科研索引和反向交接，组织子 Agent 已记录报告，移除每轮 LLM 二次简报；上下文共用原预算机制，补齐长 JSON 正文的字符窗口读取。原观察与 validation 边界保持不变。首次服务器测试方报告 1480 passed / 3 failed / 1 skipped、mock completed；三项错误测试已修正，等待服务器复测，尚未进入真实 CLI 验收。原因与边界见方案末尾的实施记录及 [ADR-0020](decisions/0020-deterministic-work-interpreter.md)。
 
 ## L3 规程换题（尚未执行）
 

@@ -37,10 +37,9 @@ def test_coding_prompt_allows_multiple_uniquely_matching_edits() -> None:
 
 
 def test_relevant_risks_are_not_dismissed_as_non_measurements():
-    assert "Explanatory does not mean irrelevant" in SCIENTIFIC_PROMPT
-    assert "carry applicable residual risks" in SCIENTIFIC_PROMPT
-    assert "historical report indiscriminately" in SCIENTIFIC_PROMPT
-    assert "if one is available" in SCIENTIFIC_PROMPT
+    assert "Carry relevant report limitations into your judgment" in SCIENTIFIC_PROMPT
+    assert "not independent measurements" in SCIENTIFIC_PROMPT
+    assert "Read historical reports only when needed" in SCIENTIFIC_PROMPT
 
 
 def test_verification_prompt_does_not_offer_forbidden_inline_python():

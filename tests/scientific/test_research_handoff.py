@@ -434,7 +434,13 @@ def test_feedback_context_checks_its_source_record(tmp_path, mismatch):
     if mismatch == "hash":
         refs[1] = record_ref.model_copy(update={"sha256": "0" * 64})
     elif mismatch == "kind":
-        refs[1] = record_ref.model_copy(update={"kind": "data"})
+        # Keep the Ref's kind/source/scope valid so this reaches the material
+        # boundary, which must reject a valid Ref of the wrong system kind.
+        refs[1] = ArtifactRef.model_validate({
+            **record_ref.model_dump(mode="json"),
+            "kind": "work_feedback",
+            "metadata": {"source_type": "controller_feedback"},
+        })
     else:
         record = json.loads((tmp_path / "artifact_record.json").read_text())
         if mismatch == "work_request":
@@ -446,5 +452,11 @@ def test_feedback_context_checks_its_source_record(tmp_path, mismatch):
     turn = request(refs, parent=SESSION, resume=[refs[-1].id])
     # Exercise the material boundary directly, independent of Agent preflight.
     from resagent2_components import request_materials_context
-    with pytest.raises(ArtifactReadError):
+    expected = {
+        "work_request": "work record does not belong to this feedback",
+        "session": "work record does not belong to this feedback",
+        "kind": "no authorized work record for this session",
+        "hash": "sha256",
+    }
+    with pytest.raises(ArtifactReadError, match=expected[mismatch]):
         request_materials_context(turn)

@@ -2,33 +2,50 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
-## Interpreter 固定代码化（已实现，待服务器验收）
+<a id="code-health-closeout"></a>
 
-2026-09-28 按[修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)在开发分支实现固定 Interpreter，schema 19.0：保留科研索引和反向交接，组织子 Agent 已记录报告，移除每轮 LLM 二次简报；上下文共用原预算机制，补齐长 JSON 正文的字符窗口读取。原观察与 validation 边界保持不变。首次服务器测试方报告 1480 passed / 3 failed / 1 skipped、mock completed；三项错误测试已修正，等待服务器复测，尚未进入真实 CLI 验收。原因与边界见方案末尾的实施记录及 [ADR-0020](decisions/0020-deterministic-work-interpreter.md)。
+## 2026-09-29：代码健康、固定 Interpreter 与 GPU 环境验收收尾
 
-## L3 规程换题（尚未执行）
+`fix/code-health` 本轮实现随本次文档收尾快进合入 `main`，保留分段提交与开发分支。产品验收基线为 **`f8439c23d19ff287bfd1e996ea8a329eae2b8cbd`（schema 19.0）**；其后的收尾只修改文档，不把文档提交说成重新运行过模型或 GPU 测试。此前代码健康修复、完整科研目录、Validation 阶段 1/2、任务完成状态、文献与 trace 修复、固定 Interpreter，以及环境事实和执行 Agent 提示一并进入主线。旧阶段记录中的“未合并”“待验收”仅描述当时状态。
 
-2026-09-26 更新[现行 L3 指南](../guides/L3_RESEARCH_TEST.md)：保留真实 CLI、短目标、有限问答和独立验收，研究题目改为 CIFAR-10 / ResNet18 的置信度校准；覆盖当前统一 IO、Interpreter、完整科研目录和明确产物交付。官方基准依据与取舍列在指南中，本次只是规程设计。旧学习率调度[规程](reviews/L3_RESEARCH_TEST_2026-09-16.md)原文归档，原验收不重新评分。
+测试方在服务器 26089 报告该 SHA 的 `pip check`、9 包源码导入核对通过，全量 **1510 passed / 1 skipped**，mock completed（13 工件）。正常 GPU 小测有真实 CUDA 前向和矩阵运算；完整 L3 `run_l3_calibration_v1_20260929_r4` 使用 RTX 4090 D、driver 580.142，完成 200 epoch GPU 训练和温度缩放，测试方评分 10/10。测试方从逐样本文件独立复算 accuracy/NLL/ECE/MCE，与交付一致，并检查 checkpoint hash、切分和 test 使用边界。test accuracy 0.9503 不变，NLL 0.193978→0.170550、ECE-15 0.028542→0.010553；MCE 0.706732→0.748345 的上升与单样本分箱限制如实保留，不宣称所有指标都改善。
 
-## Validation 分阶段修改（未合并）
+本次合并准备已只读核对服务器 MANIFEST、产品 HEAD 和原始 Run JSON：MANIFEST 记录上述验收基线，产品 HEAD 与之相同；原始 Run 为 completed，三个任务均 completed，`completion_violations=[]`、`terminal_error=null`，最终 verdict=supports，账本记录 116 次请求，comparison_results 已登记。本次没有重新执行逐样本复算或完整 trace 审计；科研评分及复算结果以上述测试方验收为依据。原始证据保留在服务器 `/root/autodl-tmp/resagent2/runs/l3-calibration-v1-20260929-r4/`（MANIFEST.md、logs、traces、data、protocol、workspace），不修改现场。
 
-2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。原始 Session、trace、脚本、账本和冻结工件已独立复核，支持通过；验证器弱断言已离线补核，无新增必补测试。结果与固定任务覆盖边界见 [独立复核](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。随后阶段 2 的 Run 级明确产物要求已完成实现与服务器验收（schema 17.0），阶段 3 新增运行前 Validation 于 2026-09-26 决定暂缓；证据与收尾见[分阶段方案](reviews/VALIDATION_DESIGN.md)。分支未合并。
+剩余范围明确保留：
 
-## 完整科研目录与问答阅读（未合并）
+- 继承 CPU-only 依赖的小测验证了诊断、ask_user、批准、修复尝试和失败复验；网络阻断后 Run 耗尽 50 次调用预算而 failed。它不是“依赖已修复成功”，也不证明网络失败处理效率；成功修复后继续任务的路径尚未补验，本次不再补测。
+- 论文服务和依赖下载仍受外部可用性影响；第三论文源尚未实现。L3 中 pip 缓存占满根分区，由测试方将缓存移到数据盘并恢复后继续，属于部署维护，不是产品已实现自动磁盘管理。
+- Validation 阶段三按[原决定](reviews/VALIDATION_DESIGN.md)暂缓，不作为合并前提。科研方案、证据含义与任务语义仍由对应 Agent 判断。
+- 主线 schema 从 13 升到 19；schema 18 及更早 Run 不支持在新版恢复。旧 Run、Session、trace 和工件保留，需要继续研究时新建 Run，不自动迁移旧状态。
 
-2026-09-24 在 `fix/code-health` 继续收敛 WorkRequest 交接：本轮带引用简报保持原职责，Scientific 收到更新后的完整科研目录；子任务成对问答按原来源入目录，并打通原件读取。schema **16.0** 删除 index_changes，不保留旧反馈兼容；登记表仍为唯一来源，批准与恢复作用域不变。当前处于实现与验证阶段，服务器尚未验收；见 [ADR-0018](decisions/0018-complete-index-and-paired-answers.md) 与[服务器验收计划](reviews/COMPLETE_INDEX_QA_TEST_2026-09-24.md)。此前 schema 15 的结果保留在下一节，不能代替本轮测试。
+## Interpreter 固定代码化（已完成本轮验收）
 
-## 科研目录与 Interpreter（未合并）
+2026-09-28 按[修改方案](reviews/DETERMINISTIC_INTERPRETER_PLAN_2026-09-27.md)在开发分支实现固定 Interpreter，schema 19.0：保留科研索引和反向交接，组织子 Agent 已记录报告，移除每轮 LLM 二次简报；上下文共用原预算机制，补齐长 JSON 正文的字符窗口读取。原观察与 validation 边界保持不变。首次服务器测试方报告 1480 passed / 3 failed / 1 skipped、mock completed；三项错误测试随后修正，后续全量回归与真实 L3 已完成，最新结果及覆盖限制见本页收尾记录。原因与边界见方案末尾的实施记录及 [ADR-0020](decisions/0020-deterministic-work-interpreter.md)。
+
+## L3 规程换题（后续已执行）
+
+2026-09-26 更新[现行 L3 指南](../guides/L3_RESEARCH_TEST.md)：保留真实 CLI、短目标、有限问答和独立验收，研究题目改为 CIFAR-10 / ResNet18 的置信度校准；覆盖当前统一 IO、Interpreter、完整科研目录和明确产物交付。官方基准依据与取舍列在指南中；2026-09-26 当时只完成规程设计，后续 R4 验收见本页收尾记录。旧学习率调度[规程](reviews/L3_RESEARCH_TEST_2026-09-16.md)原文归档，原验收不重新评分。
+
+## Validation 分阶段修改（阶段记录）
+
+2026-09-25 在 `fix/code-health` 完成阶段 0 盘点和阶段 1 完成候选检查，产品提交 `8fc0e79`、schema 16.0。本地全量 **1291 passed / 1 skipped**、mock completed（13 工件）；测试方报告服务器相同回归通过，Coding/Experiment 真实定向反馈探针 **40/40 PASS**。原始 Session、trace、脚本、账本和冻结工件已独立复核，支持通过；验证器弱断言已离线补核，无新增必补测试。结果与固定任务覆盖边界见 [独立复核](reviews/VALIDATION_PHASE1_TEST_2026-09-25.md#independent-review)。随后阶段 2 的 Run 级明确产物要求已完成实现与服务器验收（schema 17.0），阶段 3 新增运行前 Validation 于 2026-09-26 决定暂缓；证据与收尾见[分阶段方案](reviews/VALIDATION_DESIGN.md)。记录当时分支未合并；本次主线收尾见上文。
+
+## 完整科研目录与问答阅读（阶段记录）
+
+2026-09-24 在 `fix/code-health` 继续收敛 WorkRequest 交接：本轮带引用简报保持原职责，Scientific 收到更新后的完整科研目录；子任务成对问答按原来源入目录，并打通原件读取。schema **16.0** 删除 index_changes，不保留旧反馈兼容；登记表仍为唯一来源，批准与恢复作用域不变。该记录当时处于实现与验证阶段，服务器尚未验收；见 [ADR-0018](decisions/0018-complete-index-and-paired-answers.md) 与[服务器验收计划](reviews/COMPLETE_INDEX_QA_TEST_2026-09-24.md)。此前 schema 15 的结果保留在下一节，不能代替本轮测试。
+
+## 科研目录与 Interpreter（阶段记录）
 
 2026-09-23 在同一 `fix/code-health` 分支实现科研目录与带引用的反向简报，schema **15.0**。产品 `b31648d`、专项回归 `42efaa1`，本地 **1269 passed、1 skipped**，mock completed。原产物登记表保持唯一权威，Interpreter 与 Compiler 并列，权限、预算和 Agent 单入口规则保留。服务器 `36360f85` 已完成两条公开整链（27/132 次请求）和 CUDA 完整训练，核心目录/简报/引用通过独立复核；后续 CLI 定向补测已验证 Experiment 任务问答和完整 Controller 续跑（14 次调用、completed），GPU 采样封存、脚本留存和核验整理完成，三处验收缺口关闭。候选文件名错误的失败处理、任务答案的跨层可发现性作为后续设计事项保留。见[服务器复核与最终收尾](reviews/RESEARCH_HANDOFF_SERVER_REVIEW_2026-09-24.md#verified-closeout)，不把测试方通过计数等同于计划全部覆盖。设计见 [ADR-0017](decisions/0017-research-index-and-work-interpreter.md)，测试步骤与证据要求见[本轮交接](reviews/RESEARCH_HANDOFF_TEST_2026-09-23.md)。此前 schema 14 的通过结论只适用于原测试提交。
 
 ## 主线健康审查
 
-2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地与服务器 **1237 passed、1 skipped**、mock 通过；服务器 `2bad2d9a` 的真实公开入口整链也通过，跨进程批准、Experiment 任务内问答和最终工件完成，20 次调用与账本一致。原始证据已复核，验收范围内具备合并条件；分支尚未合并。Scientific verdict 曾反馈纠正、非法 data 纠正由确定性覆盖及中间算式文字瑕疵均保留于[收尾与边界](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md#verified-closeout)。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
+2026-09-22 对合并后的 `main@5fe2c7f` 做代码健康审查，在 `fix/code-health` 分阶段修复并清理遗留代码，schema 14.0。原产品基线 `51c3238` / 服务器实测 `b6258c7` 的回归 **1224 passed、1 skipped** 与 mock 通过，两条真实模型整链分别预算耗尽和最终工件契约错误。复核发现批准恢复语义缺口、Compiler 能力说明陈旧及 Scientific 完成检查不完整；2026-09-23 已按原机制修复，产品与测试基线 `9b425f2`，本地与服务器 **1237 passed、1 skipped**、mock 通过；服务器 `2bad2d9a` 的真实公开入口整链也通过，跨进程批准、Experiment 任务内问答和最终工件完成，20 次调用与账本一致。原始证据已复核，验收范围内具备合并条件；记录当时分支尚未合并。Scientific verdict 曾反馈纠正、非法 data 纠正由确定性覆盖及中间算式文字瑕疵均保留于[收尾与边界](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md#verified-closeout)。原始发现见[主线审查](reviews/MAIN_CODE_HEALTH_REVIEW_2026-09-22.md)，前轮实施见[原交接](reviews/CODE_HEALTH_TEST_HANDOFF_2026-09-22.md)，本轮证据勘误、实现及测试步骤见[服务器复核与根因修复复测](reviews/CODE_HEALTH_SERVER_REVIEW_2026-09-23.md)。
 
-2026-09-23 又对当前分支做[架构与流程不变量复核](reviews/ARCHITECTURE_INVARIANTS_REVIEW_2026-09-23.md)：检查模块独立、依赖倒置、开闭原则的适用边界及控制/恢复/预算/权限/证据流程，未发现本分支破坏核心设计；补齐 Scientific 包边界测试和 TaskProposal 旧说明，汇总[设计原则](../current/DESIGN_PRINCIPLES.md)。本地 1238 passed / 1 skipped，mock 通过；执行逻辑未变，服务器实测仍为上段提交，分支继续不合并。
+2026-09-23 又对当前分支做[架构与流程不变量复核](reviews/ARCHITECTURE_INVARIANTS_REVIEW_2026-09-23.md)：检查模块独立、依赖倒置、开闭原则的适用边界及控制/恢复/预算/权限/证据流程，未发现本分支破坏核心设计；补齐 Scientific 包边界测试和 TaskProposal 旧说明，汇总[设计原则](../current/DESIGN_PRINCIPLES.md)。本地 1238 passed / 1 skipped，mock 通过；执行逻辑未变，服务器实测仍为上段提交，当时分支继续不合并。
 
-## 最近已完成的主线
+## 此前已完成的主线
 
 Run 控制简化已完成修复轮定向功能复核，并将 `refactor/run-control@84063e4` 快进合入 **main**（schema **13.0**，产品 `602ffee`，实测 `8b071e6a`）：Coding 删除动作、批准恢复时环境核验两处缺陷关闭，本地/服务器 **1153 passed、1 skipped**。4 个真实模型场景覆盖 5 项功能；固定 Task 执行不等于 Scientific 完整 Run E2E。原始 Session 拒绝快照未保存、只读探针重跑覆盖旧状态等限制保留在[修复轮复核](reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。合并保留分段提交与开发分支，无需为记录勘误再跑模型/GPU。服务器仍使用固定 `projects/ResAgent2`。设计见[方案](reviews/RUN_CONTROL_SIMPLIFICATION_PLAN_2026-09-22.md)，复现步骤见[测试交接](reviews/RUN_CONTROL_TEST_HANDOFF_2026-09-22.md)。
 

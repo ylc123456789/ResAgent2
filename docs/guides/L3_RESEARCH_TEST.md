@@ -1,6 +1,6 @@
 # L3 风格测试：通过真实 CLI 完成一轮置信度校准研究
 
-版本：2026-09-28，`l3-calibration-v1`。**状态：已对齐 schema 19 的固定 Interpreter；本次改动尚待服务器验收，不代表当前提交已通过 L3。** 适用当前 schema 19 的生产 CLI。启动时再冻结产品 SHA、配置与输入，不把文档提交当成测试结果。
+规程版本：2026-09-28，`l3-calibration-v1`；验收状态更新：2026-09-29。**产品 `f8439c23`（schema 19）已完成服务器 R4 L3 验收。** 结果、证据位置及未覆盖的依赖修复成功路径见[验收收尾](../history/README.md#code-health-closeout)。本次仅更新验收状态，不改变题目、输入、预算或评分规则；后续启动仍须冻结实际 SHA、配置与输入，不把本轮通过结论套用到未来代码。
 
 旧学习率调度规程已[归档](../history/reviews/L3_RESEARCH_TEST_2026-09-16.md)，其 `e6688f3` / schema 8 的[验收结果](../history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)仍有效于当时的案例。当前指南只维护这一版；历史结果不套用新评分标准。
 
@@ -63,7 +63,7 @@ L3 沿用本项目“半开放真实研究任务”的叫法，不是通用评�
 
 预检与正式结果分开；只在服务器运行产品、模型或 GPU 测试，本次文档修改本身不启动它们。
 
-1. **产品身份**：用 Git 同步 `fix/code-health`，记录并冻结准确 SHA。遵循[开发指南](DEVELOPMENT.md#5-什么时候需要真实服务器验收)，产品仓库使用 `/root/autodl-tmp/projects/ResAgent2`；核对安装、`pip check`、9 个包的实际 import 来源。已有无关未跟踪目录单列，不擅自删除；测试期间不拉取、换分支或编辑产品。
+1. **产品身份**：用 Git 同步 `main`（或本轮明确指定的待验收分支），记录并冻结准确 SHA。遵循[开发指南](DEVELOPMENT.md#5-什么时候需要真实服务器验收)，产品仓库使用 `/root/autodl-tmp/projects/ResAgent2`；核对安装、`pip check`、9 个包的实际 import 来源。已有无关未跟踪目录单列，不擅自删除；测试期间不拉取、换分支或编辑产品。
 2. **数据与实验副本**：确认 catalog 中 `cifar10` 的真实路径及可读性、数据与 split hash、实验初始 commit/准备 diff、许可、剩余磁盘。`RESAGENT2_DATASETS_JSON` 如需配置，值是 ID→路径 JSON，不是 catalog 路径；具体见 [CLI 配置](../../apps/cli/README.md)。
 3. **中性冒烟**：在单独目录运行基线 1–2 epochs，检查 GPU、loss/accuracy、checkpoint 保存、固定切分和时间估计。不得拟合候选或把冒烟 checkpoint/指标作为正式交付。只有预估可以留出训练、拟合、评价与报告时间，才进入正式 Run。
 4. **文献服务**：检查实际配置的 arXiv/OpenAlex 后端；分别记录状态。一个来源可用即可继续，两源均失败则报告外部阻断，不偷偷取消查资料要求或把离线回放当实时成功。

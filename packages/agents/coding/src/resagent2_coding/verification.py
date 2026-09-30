@@ -126,6 +126,18 @@ class RunVerificationTool:
 
     name = "run_verification"
     input_model = RunVerificationInput
+    model_guidance = (
+        "Run bounded code-correctness checks in the bound environment. Supported "
+        "commands include python -m pytest, unittest, py_compile or compileall; "
+        "pytest; cargo test/check; go test; and npm/pnpm/yarn test. For import or "
+        "device checks, write a unittest with meaningful assertions when no suitable "
+        "test exists. python -c and arbitrary scripts are not allowed verification "
+        "commands. Do not wrap formal training, fitting or research evaluation in "
+        "a test to bypass the Coding/Experiment responsibility boundary. Commands "
+        "are shell-free; use run_setup for dependency installation. The tool audits "
+        "an uncertified binding after approval and before execution, records actual "
+        "results, and tracks whether those results cover the current code and environment."
+    )
 
     def __init__(
         self,

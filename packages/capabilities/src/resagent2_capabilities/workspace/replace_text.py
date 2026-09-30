@@ -35,10 +35,16 @@ class ReplaceTextInput(RuntimeModel):
 
 
 class ReplaceTextTool:
-    """Atomically apply an exactly-once text replacement."""
+    """Atomically replace one exact text occurrence in the current file."""
 
     name = "replace_text"
     input_model = ReplaceTextInput
+    model_guidance = (
+        "old_text must match exactly once in the current file per call; whitespace "
+        "is significant. Read current content before editing. Multiple calls are "
+        "allowed; each successful edit changes the content used by subsequent "
+        "matches. Review the resulting diff."
+    )
 
     def __init__(self, boundary: WorkspaceBoundary, *, max_bytes: int = 1_000_000) -> None:
         self.boundary = boundary

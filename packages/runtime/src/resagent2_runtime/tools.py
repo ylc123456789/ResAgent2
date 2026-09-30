@@ -89,10 +89,21 @@ class FinishInput(FinishCandidate):
     """Input schema for FinishTool."""
 
 class FinishTool:
-    """Propose completed or failed work with a report and artifacts for validation."""
+    """Submit a report and artifact outputs as a finish candidate for validation."""
 
     name = "finish"
     input_model = FinishInput
+    model_guidance = (
+        "Use status and report to state the assigned work's outcome; the Agent's role "
+        "determines its completion requirements. For each new artifact, supply kind, "
+        "path, media_type and summary, with optional output_name and UTF-8 content. "
+        "Without content, path must identify exactly one existing file relative to "
+        "the supplied workspace or output roots. With content, path is the relative "
+        "filename for the stored text. Use files for substantive source/results and "
+        "content for short structured outputs. Preserve explicit output_name values "
+        "verbatim; a filename alone is not a logical output_name. Never invent "
+        "ArtifactIds or fabricate system-generated execution or verification records."
+    )
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(FinishInput, arguments)
@@ -114,10 +125,18 @@ class AskUserToolInput(RuntimeModel):
 
 
 class AskUserTool:
-    """Return a question signal without performing terminal or UI I/O."""
+    """Request user input with a self-contained question and named answer fields."""
 
     name = "ask_user"
     input_model = AskUserToolInput
+    model_guidance = (
+        "Put the background, question and explanations in text so the user can answer "
+        "without seeing internal context. requested_fields contains short machine keys "
+        "such as mode or file_choice: 1-64 ASCII letters, digits or underscores, "
+        "starting with a letter. Do not put sentences or option explanations in keys. "
+        "Optional options maps those same keys to the offered answer values; explain "
+        "the choices in text."
+    )
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(AskUserToolInput, arguments)

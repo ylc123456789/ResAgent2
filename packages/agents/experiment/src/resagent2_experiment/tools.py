@@ -70,6 +70,16 @@ class RunCommandTool:
 
     name = "run_command"
     input_model = RunCommandInput
+    model_guidance = (
+        "Each call executes one shell-free experiment command; make additional calls "
+        "as the task needs. Use supported entry points and flags verified in code, "
+        "documentation or --help. Use file tools for inspection, prepare_environment "
+        "to bind the environment, and run_setup for dependency installation. An "
+        "uncertified binding is audited after approval and before execution; this "
+        "base audit does not validate task or GPU readiness. The receipt preserves "
+        "the exit status, stdout/stderr paths and bounded output tails. Read existing "
+        "logs rather than rerunning a command solely to obtain a log."
+    )
 
     def __init__(
         self,

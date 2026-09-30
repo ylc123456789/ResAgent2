@@ -158,6 +158,10 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', expected_evidence=['Measured result']), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
     assert result.llm_calls == len(requests) == 1
     assert all(body["max_tokens"] == 256_000 and 599 < timeout <= 600 for body, timeout in requests)
+    message = requests[0][0]["messages"][0]["content"]
+    schema = json.dumps(CompilationDraft.model_json_schema(), ensure_ascii=False)
+    assert message.count(schema) == 1
+    assert message.count('"title": "CompilationDraft"') == 1
     rows = [json.loads(line) for line in (tmp_path / "trace/llm_traces.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     for row in rows:

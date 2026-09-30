@@ -11,7 +11,9 @@ from resagent2_contracts import (
     AgentOwner, ArtifactRef, ErrorCode, ResearchRequest, RunBudget, AgentRequest,
     TaskBudget, scientific_session_id,
 )
-from resagent2_runtime import ContextComposer, InMemorySessionStore, ScriptedLLMClient
+from resagent2_runtime import (
+    DEFAULT_AGENT_CONTEXT_TOKENS, ContextComposer, InMemorySessionStore, ScriptedLLMClient,
+)
 from resagent2_scientific import ScientificAgent
 
 
@@ -165,7 +167,7 @@ def test_scientific_full_pool_keeps_multiple_artifacts_as_history_grows(tmp_path
     assert "read_artifact_summaries" not in state.memory
 
 
-@pytest.mark.parametrize("explicit_limit", [1024, 8000])
+@pytest.mark.parametrize("explicit_limit", [1, DEFAULT_AGENT_CONTEXT_TOKENS // 4])
 def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limit):
     _, _, store, turn, _ = _run_full_pool(tmp_path)
     client = ScriptedLLMClient([_pause()])
@@ -175,7 +177,7 @@ def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limi
     result = agent.invoke(resumed)
 
     assert agent.max_context_tokens == explicit_limit
-    if explicit_limit == 1024:
+    if explicit_limit == 1:
         assert result.status == "failed", result.model_dump(mode="json")
         assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
         assert "context" in result.error.message.lower()
@@ -183,8 +185,9 @@ def test_scientific_explicit_context_budget_is_respected(tmp_path, explicit_limi
         assert result.llm_calls == 0
         assert client.contexts == []
     else:
-        # This minimal turn fits within 8000. An explicit limit is a ceiling,
-        # not a reason to reject a context that actually fits, nor to expand it.
+        # A quarter of the default budget comfortably fits this small read pool.
+        # Test the explicit ceiling and complete retained evidence without tying
+        # either to the previous wording/length of prompts and tool guidance.
         assert result.status == "needs_user_input", result.model_dump(mode="json")
         assert result.llm_calls == 1
         assert len(client.contexts) == 1

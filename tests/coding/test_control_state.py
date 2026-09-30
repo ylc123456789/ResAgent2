@@ -1,4 +1,4 @@
-"""Deterministic "modify—verify" control state for the Coding Agent."""
+"""Expose verification outcomes and freshness without deciding task completion."""
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -28,11 +28,13 @@ def _binding(certified: bool):
     return SimpleNamespace(certified=certified, generation="generation_test")
 
 
-def test_no_edit_yet_is_not_unverified() -> None:
+def test_no_edit_or_verification_has_no_pass_result() -> None:
     control = derive_control_state(_state({"edit_revision": 0}), _binding(False))
     assert control["edited_since_verification"] is False
     assert control["verification_stale"] is False
-    assert control["suggested_next_action"] == "none"
+    assert control["verification_passed"] is None
+    assert control["verification_issue"] == "No verification executed"
+    assert "suggested_next_action" not in control
 
 
 def test_after_edit_missing_verification_is_distinct_from_stale_results() -> None:
@@ -41,19 +43,19 @@ def test_after_edit_missing_verification_is_distinct_from_stale_results() -> Non
     assert control["verification_stale"] is False
     assert control["verification_passed"] is None
     assert control["environment_certified"] is False
-    assert control["suggested_next_action"] == "run_verification"
+    assert control["verification_issue"] == "No verification executed"
 
 
-def test_after_audit_still_suggests_verification() -> None:
+def test_base_audit_does_not_imply_code_verification() -> None:
     # The environment is now audited, but the latest edit is still unverified.
     control = derive_control_state(_state({"edit_revision": 1}), _binding(True))
     assert control["environment_certified"] is True
     assert control["verification_stale"] is False
     assert control["verification_passed"] is None
-    assert control["suggested_next_action"] == "run_verification"
+    assert control["verification_issue"] == "No verification executed"
 
 
-def test_after_verification_obligation_clears() -> None:
+def test_current_success_reports_pass_and_freshness() -> None:
     control = derive_control_state(
         _state({
             "edit_revision": 1,
@@ -69,21 +71,22 @@ def test_after_verification_obligation_clears() -> None:
     )
     assert control["edited_since_verification"] is False
     assert control["verification_stale"] is False
-    assert control["suggested_next_action"] == "finish"
+    assert control["verification_issue"] is None
+    assert "suggested_next_action" not in control
     assert control["verification_passed"] is True
 
 
-def test_newer_edit_without_results_still_suggests_verification() -> None:
+def test_stored_revision_does_not_imply_verification_results() -> None:
     # A stored revision alone does not prove that verification records exist.
     control = derive_control_state(
         _state({"edit_revision": 2, "verification_revision": 1}), _binding(True)
     )
     assert control["verification_stale"] is False
     assert control["verification_passed"] is None
-    assert control["suggested_next_action"] == "run_verification"
+    assert control["verification_issue"] == "No verification executed"
 
 
-def test_old_failure_does_not_override_a_new_revision_or_environment():
+def test_failed_result_keeps_its_outcome_when_code_or_environment_changes():
     memory = {
         "edit_revision": 1, "verification_revision": 1,
         "verification_environment_generation": "generation_test",
@@ -94,12 +97,13 @@ def test_old_failure_does_not_override_a_new_revision_or_environment():
         }],
     }
     current = derive_control_state(_state(memory), _binding(True))
-    assert current["suggested_next_action"] == "inspect_and_fix_verification"
+    assert current["verification_issue"] is None
+    assert "suggested_next_action" not in current
     assert current["verification_passed"] is False
     assert current["verification_stale"] is False
     for change in ({"edit_revision": 2}, {"verification_environment_generation": "old_generation"}):
         result = derive_control_state(_state({**memory, **change}), _binding(True))
-        assert result["suggested_next_action"] == "run_verification"
+        assert result["verification_issue"] is not None
         assert result["verification_passed"] is False
         assert result["verification_stale"] is True
     assert "workspace_changed" not in derive_control_state(_state(memory), _binding(True))

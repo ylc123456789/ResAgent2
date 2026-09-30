@@ -87,17 +87,17 @@ def _verification_status(
         results = [VerificationResult.model_validate(item)
                    for item in state.memory.get("verification_results", [])]
     except (ValidationError, TypeError):
-        return [], "Stored verification results are invalid; rerun verification"
+        return [], "Stored verification results are invalid"
     if not results:
         return results, "No verification executed"
     if state.memory.get("verification_revision") != int(state.memory.get("edit_revision", 0)):
-        return results, "Run verification after the latest file edit"
+        return results, "Verification records belong to a different edit revision"
     if binding is not None and not binding.certified:
-        return results, "Rerun verification; its environment will be audited automatically"
+        return results, "The current environment binding is not certified"
     if binding is not None and state.memory.get("verification_environment_generation") != binding.generation:
-        return results, "Environment changed or was restored; rerun verification"
+        return results, "The environment binding changed or was restored after verification"
     if not state.memory.get("verification_workspace_unchanged", False):
-        return results, "Workspace changed during verification; review and rerun verification"
+        return results, "Workspace changed during verification"
     return results, None
 
 
@@ -105,15 +105,6 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) 
     """Expose execution facts without imposing a business mode or mandatory edit."""
     results, issue = _verification_status(state, binding)
     passed = all(item.exit_code == 0 and not item.timed_out for item in results) if results else None
-    edited = int(state.memory.get("edit_revision", 0)) > 0
-    next_action = "none"
-    if issue is not None:
-        if edited or results:
-            next_action = "run_verification"
-    elif passed is False:
-        next_action = "inspect_and_fix_verification"
-    elif passed:
-        next_action = "finish"
     return {
         "edit_revision": int(state.memory.get("edit_revision", 0)),
         "verification_revision": state.memory.get("verification_revision"),
@@ -122,5 +113,4 @@ def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) 
         "environment_certified": bool(binding and binding.certified),
         "edited_since_verification": int(state.memory.get("edit_revision", 0)) > int(state.memory.get("verification_revision") or 0),
         "verification_stale": bool(results) and issue is not None,
-        "suggested_next_action": next_action,
     }

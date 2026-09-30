@@ -21,10 +21,19 @@ class RunSetupInput(RuntimeModel):
 
 
 class RunSetupTool:
-    """Install project dependencies inside the bound environment."""
+    """Run one dependency-installation command inside the bound environment."""
 
     name = "run_setup"
     input_model = RunSetupInput
+    model_guidance = (
+        "Use one shell-free python -m pip install, pip install, or conda env update -f "
+        "command with bare executable names; the tool selects the bound environment. "
+        "Follow the inherited-dependency approval requirements before changing it. "
+        "Inspect the failure receipt before another installation attempt. Setup "
+        "invalidates the previous environment audit even if it fails; execution tools "
+        "audit again when needed. Installation success does not prove task or GPU "
+        "capability; rerun affected checks after dependency changes."
+    )
 
     def __init__(
         self,

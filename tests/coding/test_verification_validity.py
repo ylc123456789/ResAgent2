@@ -1,4 +1,4 @@
-"""One environment-generation validity rule drives guidance and completion."""
+"""One environment-generation validity rule drives context and recorded evidence."""
 
 import json
 import shlex
@@ -145,16 +145,22 @@ def test_setup_then_audit_cannot_revive_prior_verification(setup, exit_code):
     assert setup.binding.generation != generation
     assert setup.binding.certified is False
     assert not finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is True
     generation = setup.binding.generation
     assert reaudit(setup.binding, setup.state).ok
     assert setup.binding.generation == generation
     assert not finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is True
     assert reverify(setup).ok
     assert setup.state.memory["verification_environment_generation"] == generation
     assert finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "finish"
+    control = derive_control_state(setup.state, setup.binding)
+    assert not control["verification_stale"]
+    assert control["verification_passed"] is True
 
 
 def test_setup_exception_invalidates_before_runner_raises(setup):
@@ -223,7 +229,9 @@ def test_new_binding_and_reaudit_require_new_verification(setup):
     assert reaudit(restored, setup.state).ok
 
     assert not finish(setup.check, setup.state)["covers_current_workspace"]
-    assert derive_control_state(setup.state, restored)["suggested_next_action"] == "run_verification"
+    control = derive_control_state(setup.state, restored)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is True
     assert reverify(setup).ok
     assert finish(setup.check, setup.state)["covers_current_workspace"]
 
@@ -237,8 +245,15 @@ def test_current_failed_verification_remains_current_and_reports_failure(setup, 
     control = derive_control_state(setup.state, setup.binding)
     assert not control["verification_stale"]
     assert control["verification_passed"] is False
-    assert control["suggested_next_action"] == "inspect_and_fix_verification"
-    record = finish(setup.check, setup.state)
+    assert control["verification_issue"] is None
+    decision = setup.check.evaluate(
+        setup.state,
+        FinishCandidate(report="Explained the failure of the requested check"),
+    )
+    assert decision.complete
+    assert decision.report == "Explained the failure of the requested check"
+    record = next(json.loads(item.content) for item in decision.artifacts
+                  if item.kind == "verification_result")
     assert record["covers_current_workspace"]
     assert record["passed"] is False
     assert record["issue"] is None
@@ -249,7 +264,10 @@ def test_current_failed_verification_remains_current_and_reports_failure(setup, 
 def test_missing_or_invalid_results_cannot_satisfy_verification(setup, results):
     setup.state.memory["verification_results"] = results
 
-    assert derive_control_state(setup.state, setup.binding)["suggested_next_action"] == "run_verification"
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_passed"] is None
+    assert not control["verification_stale"]
+    assert control["verification_issue"]
     decision = finish(setup.check, setup.state)
     assert not decision["covers_current_workspace"]
     assert decision["issue"] == derive_control_state(setup.state, setup.binding)["verification_issue"]

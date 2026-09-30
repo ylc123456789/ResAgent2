@@ -227,7 +227,7 @@ compile(request: WorkRequest, *, current: Workflow | None,
 
 成功返回 CompilationResult(output, llm_calls)，output 为 WorkflowProposal 或 WorkflowPatch；编译错误抛 CompilationError，并保留实际 llm_calls。预算耗尽和超时分别抛 BudgetExhaustedError、DeadlineExceededError，由 Controller 保存对应终止原因。Compiler 不读下游 Session，不直接修改 Run 状态。LLM 编译必须处于可信调用方绑定的共享 execution_budget 中，直接使用该余额和期限。
 
-LLMWorkflowCompiler 请求一个 CompilationDraft，由确定性代码物化正式身份、解析工作区并校验。正文解析或结构校验失败时最多纠正一次，无额外语义复审调用。Compiler 使用 PromptLLMClient 的 JSON 输出路径，无 AgentLoop、工具或 Session；上下文和调用消费仍受共同预算约束。
+LLMWorkflowCompiler 请求一个 CompilationDraft，由确定性代码物化正式身份、解析工作区并校验。正文解析或结构校验失败时最多纠正一次，无额外语义复审调用。Compiler 使用 PromptLLMClient 的 JSON 输出路径，无 AgentLoop、工具或 Session；客户端根据 action_type 提供输出 schema，Compiler 提示不重复嵌入；上下文和调用消费仍受共同预算约束。
 
 <a id="workflow"></a>
 

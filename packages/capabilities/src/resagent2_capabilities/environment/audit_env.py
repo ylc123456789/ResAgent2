@@ -15,10 +15,17 @@ class AuditEnvInput(RuntimeModel):
 
 
 class AuditEnvTool:
-    """Prove the bound base environment is correct (framework-agnostic)."""
+    """Check bound Python identity/version and pip availability, and report environment facts."""
 
     name = "audit_env"
     input_model = AuditEnvInput
+    model_guidance = (
+        "Use for diagnostics when current environment facts are missing or suspect. "
+        "run_verification and run_command audit automatically when needed. A passing "
+        "audit certifies only Python identity/version and pip availability. Package "
+        "and device observations do not prove GPU initialization or task capability; "
+        "verify needed capabilities through authorized execution tools."
+    )
 
     def __init__(self, binding: EnvironmentBinding, *, allowed: bool = True) -> None:
         self.binding = binding

@@ -32,6 +32,8 @@ class CompilationError(ValueError):
 
 
 class CompilerLLM(Protocol):
+    """Client supplies the output schema from action_type; Compiler validates it."""
+
     def next_action(self, prompt: str, action_type: type[BaseModel]) -> BaseModel | dict: ...
 
 
@@ -91,10 +93,8 @@ class DeterministicWorkflowCompiler:
 def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=None):
     remaining = limits.max_tasks - (len(current.tasks) if current else 0)
     lines = [
-        "Compile the smallest currently executable graph for this work request.",
-        request.request.model_dump_json(),
-        "Available execution Agents:",
-        *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
+        "### Responsibility",
+        "Compile the smallest currently executable graph for this work request. "
         "Each Agent has one business mode. Choose its role by the purpose of the work: "
         "code correctness belongs to Coding; research measurements belong to Experiment. "
         "When implementation is a known prerequisite, route it to Coding before Experiment. "
@@ -103,24 +103,35 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "where possible. Asking the user is part of a task, not a separate workflow phase. "
         "Route existing-results analysis to Experiment even when execution is forbidden. "
         "Scientific is never a graph node.",
-        "Preserve the work request's constraints on effects. A confirmation request is "
-        "not execution: one approved operation may require calling the same tool again "
-        "after approval. Do not turn a single intended operation into a one-tool-call limit.",
-        "Return CompilationDraft. Use instruction as the only task text. Do not invent "
-        "metric names, file paths, acceptance policies, permissions or runtime identities. "
-        "Preserve explicitly requested artifact output_name values verbatim in the task "
-        "instruction; Run delivery requirements do not create a new task acceptance policy.",
+        "",
+        "### Graph and handoff rules",
         "Dependencies refer only to keys in this draft and require success. "
         "Conditional repairs are requested in a later round after an actual failure.",
         "Future input bindings select a logical output_name declared by a direct dependency. "
         "Use output_names only when an explicit cross-task handoff needs named outputs. "
         "Do not guess artifact IDs. Existing input_artifacts must already be supplied materials.",
+        "Preserve the work request's constraints on effects. A confirmation request is "
+        "not execution: one approved operation may require calling the same tool again "
+        "after approval. Do not turn a single intended operation into a one-tool-call limit.",
+        "",
+        "### Output",
+        "Return CompilationDraft using the supplied output schema. Use instruction as "
+        "the only task text. Do not invent metric names, file paths, acceptance policies, "
+        "permissions or runtime identities. Preserve explicitly requested artifact "
+        "output_name values verbatim in the task instruction; Run delivery requirements "
+        "do not create a new task acceptance policy.",
+        "",
+        "### Available execution Agents",
+        *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
+        "",
+        "### Work input",
+        "Work request: " + request.request.model_dump_json(),
         f"Remaining task capacity (an upper bound, not a target): {remaining}",
         "Logical workspaces: " + json.dumps([w.model_dump(mode="json") for w in workspaces]),
-        "Draft schema: " + json.dumps(CompilationDraft.model_json_schema()),
     ]
     if feedback:
-        lines.append("Previous draft rejected by structural validation: " + feedback)
+        lines.extend(["", "### Structural feedback",
+                      "Previous draft rejected by structural validation: " + feedback])
     return "\n".join(lines)
 
 

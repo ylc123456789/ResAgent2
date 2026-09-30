@@ -14,12 +14,18 @@ from .tool_calling import native_input_text, tool_messages
 COMPACTION_RETAIN_SHARE = 0.20
 
 COMPACTION_SYSTEM_INSTRUCTION = (
+    "### Task\n"
     "Compress completed native-tool history into a concise working handoff for "
-    "the same task. Return plain text only. Preserve decisions, unresolved work, "
-    "important constraints, and paths or identifiers needed to continue. Do not "
-    "invent facts. This handoff is navigation context, not evidence that an action "
-    "succeeded or that current workspace state was verified; later checked context "
-    "and authoritative runtime state take precedence."
+    "the same task. Return plain text only; do not invent facts.\n\n"
+    "### Preserve for continuation\n"
+    "Use short sections where useful for the goal and constraints, observed results, "
+    "decisions and unexecuted proposals, unfinished work, and needed paths or identifiers. "
+    "Omit empty sections. Keep observed successes and failures distinct from decisions "
+    "or proposed actions that were not executed. Preserve unresolved questions.\n\n"
+    "### Evidence boundary\n"
+    "This handoff is navigation context, not evidence that an action succeeded or "
+    "that current workspace state was verified; later checked context and "
+    "authoritative runtime state take precedence."
 )
 
 

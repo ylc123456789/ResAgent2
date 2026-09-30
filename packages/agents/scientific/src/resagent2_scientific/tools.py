@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from resagent2_contracts import QuestionDraft
 from resagent2_runtime import AgentState, ToolObservation
-from resagent2_runtime.tools import FinishTool
+from resagent2_runtime.tools import AskUserTool as RuntimeAskUserTool, FinishTool
 
 from .completion import _observed_artifact_ids, unobserved_artifact_ids
 from .models import AskUserInput, RequestWorkInput
@@ -19,6 +19,16 @@ def _unobserved_evidence(state: AgentState, cited_ids: list[str]) -> list[str]:
 
 
 class RequestWorkTool:
+    """Request the next necessary round of implementation or experiment work."""
+
+    model_guidance = (
+        "assessment contains statement, evidence_artifact_ids, limitations, and "
+        "unresolved_questions. Cite only observed evidence IDs. work_request contains "
+        "objective, expected_evidence, constraints, and input_artifact_ids. Describe "
+        "the needed work and evidence semantically; do not invent task IDs, executable "
+        "paths, or routing fields. Preserve explicit requirements and logical output "
+        "names. Use input_artifact_ids to supply registered materials needed for the work."
+    )
     name = "request_work"
     input_model = RequestWorkInput
 
@@ -43,6 +53,13 @@ class RequestWorkTool:
 
 
 class AskUserTool:
+    """Ask for a research decision with the current scientific assessment."""
+
+    model_guidance = (
+        RuntimeAskUserTool.model_guidance
+        + " assessment contains statement, evidence_artifact_ids, limitations, and "
+        "unresolved_questions; cite only observed evidence IDs."
+    )
     name = "ask_user"
     input_model = AskUserInput
 

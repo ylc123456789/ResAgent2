@@ -22,10 +22,18 @@ class PrepareEnvironmentInput(RuntimeModel):
 
 
 class PrepareEnvironmentTool:
-    """Create or reuse the run/workspace base environment and bind it."""
+    """Create or reuse a shared base Python environment and bind it to this task."""
 
     name = "prepare_environment"
     input_model = PrepareEnvironmentInput
+    model_guidance = (
+        "Choose Python from project requirements. A healthy environment matching the "
+        "requested Python is reused; an incompatible or unhealthy environment may be "
+        "rebuilt, removing installed dependencies. The environment is shared across "
+        "agents in the same Run and workspace. Follow the inherited-dependency "
+        "approval requirements before rebuilding it; preparation is not a way to "
+        "bypass them. Preparation alone does not prove task or GPU readiness."
+    )
 
     def __init__(
         self,

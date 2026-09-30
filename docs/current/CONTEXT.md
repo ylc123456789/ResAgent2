@@ -74,6 +74,8 @@
 | `runtime_feedback` 段 | 尚待处理的动作/参数/完成检查等拒绝信息；包括缺失/歧义候选文件及重复输出名的 code 和说明 | 有反馈才出现，必需；每轮随当前领域上下文重建，解除规则由 Loop 管理 |
 | `pending_operation` 段 | Session.pending_action 的工具、准确参数和 action_id，明确该操作尚未执行 | 有待确认动作才出现，必需；不另存状态，消费批准后消失；要求依据当前 answer 决定是否重发 |
 
+三个 Agent 的职责提示统一按角色范围、输入与证据、判断原则、工作方式、完成交接组织为 Markdown 小节；这是文本组织，不是强制执行阶段。工具的参数、操作语义与局限放在各自 `model_guidance`，原生 description 和正文 JSON 的 `tool_contracts` 复用同一说明。Coding/Experiment 的共享环境原则复用同一段文本。当前状态、材料、批准和反馈仍由动态段提供，领域提示不复制完整 schema。
+
 原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；操作确认回执额外标记 `execution_status=not_executed`，避免把成功发出问题当作执行成功。不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
 
 批准本身不会执行工具。模型需按当前答案重发相同工具和参数，沿用原权限策略重验目标、消费批准后才执行；这是同一待执行操作的继续，不是第二次副作用。拒绝时不执行。`pending_operation` 只投影待处理快照，不自行把答案判成有效授权，也不对消费后执行结果未知的操作自动重放。
@@ -145,7 +147,7 @@ Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权�
 | `task` | `instruction`、workspace_access、permissions、confirm_commands，以及 input_artifacts 的 id/kind/summary | 必需；来自本 Task/Attempt 的请求 |
 | `dataset_catalog` | 当前 invoke 解析的数据集视图与共享说明 | 必需 |
 | `material_<artifact_id>` | acceptance_requirements，以及本次 resume_artifact_ids 指定的 answer | 对已选材料必需；校验 Task/Attempt 归属 |
-| `verification_state` | edit_revision、verification_revision、environment_certified、验证问题/是否过时及 suggested_next_action；代次比较在代码内完成，不直接展示 generation | 存在控制投影时必需；每步调用 derive_control_state |
+| `verification_state` | edit_revision、verification_revision、environment_certified、验证问题、实际通过/失败及是否过时；代次比较在代码内完成，不直接展示 generation | 存在控制投影时必需；每步调用 derive_control_state |
 | `environment` | 实际 EnvironmentBinding 的 prepared/certified、Python 要求及已有环境身份 | 有绑定时必需；与工具使用同一绑定 |
 | `file_reads` / `artifact_reads` | 文件片段与工件片段，分别保留 | 各自导航框必需，正文共享空余额度 |
 | `command_results` | 每个执行工具最近一次有记录的命令结果；优先保留失败诊断 | 有命令结果才出现，必需；共享投影，不新增缓存 |
@@ -153,11 +155,11 @@ Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权�
 
 可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。Coding prompt 区分有限的代码正确性检查与产出研究证据的实验，不允许把后者包装成测试来执行；任务同时包含实验时，报告已实现的入口、实际检查及剩余工作。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
 
-**验证状态的含义：**verification_state.edited_since_verification 比较编辑与验证版本；verification_stale 仅表示已有验证记录是否过期，verification_passed 单独表示验证结果（无记录为 null）。当前版本失败与旧版本通过分别表达，不互相代替。suggested_next_action 是建议，不是完成门槛；新编辑或环境变动不沿用旧验证。
+**验证状态的含义：**verification_state.edited_since_verification 比较编辑与验证版本；verification_stale 仅表示已有验证记录是否过期，verification_passed 单独表示验证结果（无记录为 null）。当前版本失败与旧版本通过分别表达，不互相代替。不从这些事实推导建议行动；新编辑或环境变动不沿用旧验证。
 
-需要验证而绑定尚未认证时，建议动作是 run_verification，由获准执行的工具自动核验环境；不再要求先单独 audit_env。没有验证记录时 verification_stale 为 false、verification_passed 为 null，verification_issue 说明未验证。Coding/Experiment 在同一 finish 中按目标声明 completed 或 failed，并在 report 解释依据；两种声明均先检查产物事实，纯分析不强制执行命令。
+Agent 决定需要验证而绑定尚未认证时，run_verification 在获准执行后自动核验环境，不要求先单独 audit_env。没有验证记录时 verification_stale 为 false、verification_passed 为 null，verification_issue 说明未验证。Coding/Experiment 在同一 finish 中按目标声明 completed 或 failed，并在 report 解释依据；两种声明均先检查产物事实，纯分析不强制执行命令。
 
-这些字段是确定性事实与建议，不是另一种业务模式。finalizer 生成验证工件，Scheduler 检查明确的工件交付条件；命令结果与新鲜度作为事实保留，任务是否完成由 Agent 结合目标判断。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
+这些字段只呈现确定性事实，不规定下一步行动或另一种业务模式。finalizer 生成验证工件，Scheduler 检查明确的工件交付条件；命令结果与新鲜度作为事实保留，任务是否完成由 Agent 结合目标判断。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
 
 **源码与测试**：[context](../../packages/agents/coding/src/resagent2_coding/context.py)、[Agent 装配](../../packages/agents/coding/src/resagent2_coding/agent.py)、[验证状态与完成检查](../../packages/agents/coding/src/resagent2_coding/completion.py)、[验证状态测试](../../tests/coding/test_control_state.py)、[验证有效性测试](../../tests/coding/test_verification_validity.py)。
 

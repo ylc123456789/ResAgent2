@@ -257,20 +257,20 @@ bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh resume <Run ID> <�
 - `RESAGENT2_CONTEXT_WINDOW`：默认 `1000000`；
 - `RESAGENT2_RESERVED_OUTPUT_TOKENS`：默认 `256000`（思考 + 最终输出的请求上限，不是目标长度）；
 - `RESAGENT2_CONTEXT_SAFETY_MARGIN_TOKENS`：默认 `1024`；
-- `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `128000`；
-- `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `128000`；
-- `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `128000`；
-- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `128000`。
+- `RESAGENT2_SCIENTIFIC_CONTEXT_TOKENS`：默认 `256000`；
+- `RESAGENT2_CODING_CONTEXT_TOKENS`：默认 `256000`；
+- `RESAGENT2_EXPERIMENT_CONTEXT_TOKENS`：默认 `256000`；
+- `RESAGENT2_COMPILER_CONTEXT_TOKENS`：默认 `256000`。
 
 Interpreter 使用固定代码，不创建模型客户端或读取独立上下文额度配置。工作反馈正文由 Scientific 的现有上下文预算分配；任务事实和原件入口保留，正文省略会明确标记。
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，限制单次模型 HTTP 请求总时长。实际取它与 Run 当前剩余时间的较小值，通过 httpx 与可取消的总超时执行；每次重试重新计算余量，同时消耗请求次数。取消本地请求不保证供应商停止计算或计费，未知结果保留预算占用。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。128K表示128000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
+三个Agent共享默认值与额度算法，但可分别覆盖。256K表示256000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
 
-Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不扩到256K、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
+Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为128000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 
@@ -278,7 +278,7 @@ Loop/Composer先计入tools、续传历史、固定领域正文及材料导航�
 
 **升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。程序化客户端和独立 E2E 组合根不会自动继承 CLI 的部署默认值。
 
-如果脚本仍设置某Agent的 `*_CONTEXT_TOKENS=8192`，该覆盖也会继续生效；使用本轮新默认需移除它或明确设为128000。更大输入允许保留更多工具历史和已读材料，但也可能增加调用耗时和费用，不保证消除模型错误、重复动作或循环。
+如果脚本仍设置某个Agent或Compiler的 `*_CONTEXT_TOKENS=8192` 或 `128000`，该显式覆盖会继续生效，不会随代码默认值升级；使用新的统一默认需移除它或明确设为256000。更大输入允许保留更多工具历史和已读材料，但也可能增加调用耗时和费用，不保证消除模型错误、重复动作或循环。
 
 ## 7. 退出码与常见情况
 

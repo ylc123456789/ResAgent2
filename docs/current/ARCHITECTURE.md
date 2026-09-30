@@ -200,7 +200,7 @@ Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者
 - ProcessRunner 运行命令并保存输出；EnvironmentManager 与共享 Tool 管基础环境和认证。已授权环境操作同时返回只读环境信息，Binding 为上下文保留最近快照；硬件和包版本查询不构成依赖/设备就绪检查。模型/文献 HTTP、退避、环境操作和受控进程沿用 Run 截止时间，到期取消 HTTP 或终止进程树。环境按 Run + workspace 绑定；重新绑定或开始 prepare/setup 会使旧认证/验证过期。验证与实验工具在操作获准后、命令执行前自动核验尚未认证的绑定，失败不执行；批准恢复不信任旧认证，也不要求模型为固定前置核验再走一轮确认。
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再按行切片；文件读取复用相同切片逻辑。
-- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用128000默认输入额度；Compiler使用无状态JSON编译，Interpreter不调用模型。workspace_context及工作反馈共用材料分配，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
+- Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用256000默认输入额度；Compiler使用无状态JSON编译，Interpreter不调用模型。workspace_context及工作反馈共用材料分配，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
 - 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[文献组件](../../packages/components/README.md#literature)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
@@ -209,7 +209,7 @@ Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史
 
 正文 JSON 路径的模型正文不是合法 JSON，或原生路径的 tool arguments 不是 JSON object 时，客户端不原样重发同一请求。AgentLoop 把简短原因送入已有的 required `runtime_feedback`，在同一 Session/Attempt 内允许有限纠正；原生每轮接受 1–8 个 tool calls，整批参数/权限预检后串行执行并逐项保存回执；控制工具独占一轮，失败取消剩余调用，assistant content 不是备用指令。Compiler 使用已有的两版 draft 上限处理正文 JSON 错误，不引入 AgentLoop。网络及响应封装故障仍走客户端原有有界重试。
 
-原生 Session 的 `tool_turns` 保存已配对 assistant/tool 消息；下一轮只重建最新业务 Context 并与这段协议历史一起发送，不累积旧 prompt。输入压力下只总结较早完整回合，原始历史不删；检查点、近期原生回合和当前领域上下文共同构成输入，详见[最小压缩](CONTEXT.md#compaction)。完整 `messages + tools`（含 JSON 转义）与业务 Context 共用 128K 总输入额度，摘要和动作/重试共用 Run 剩余调用预算；step 只记录时序，不再限制。`reasoning_content` 只用于同 Session 协议续传，不是业务证据。
+原生 Session 的 `tool_turns` 保存已配对 assistant/tool 消息；下一轮只重建最新业务 Context 并与这段协议历史一起发送，不累积旧 prompt。输入压力下只总结较早完整回合，原始历史不删；检查点、近期原生回合和当前领域上下文共同构成输入，详见[最小压缩](CONTEXT.md#compaction)。完整 `messages + tools`（含 JSON 转义）与业务 Context 共用 256K 总输入额度，摘要和动作/重试共用 Run 剩余调用预算；step 只记录时序，不再限制。`reasoning_content` 只用于同 Session 协议续传，不是业务证据。
 
 <a id="principles"></a>
 

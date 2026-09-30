@@ -37,10 +37,10 @@ def defaults(monkeypatch):
 
 
 @pytest.mark.parametrize("component,action_type,limit", [
-    ("scientific", ScientificAction, 128_000),
-    ("coding", CodingAction, 128_000),
-    ("experiment", ExperimentAction, 128_000),
-    ("compiler", CompilationDraft, 128_000),
+    ("scientific", ScientificAction, 256_000),
+    ("coding", CodingAction, 256_000),
+    ("experiment", ExperimentAction, 256_000),
+    ("compiler", CompilationDraft, 256_000),
 ])
 def test_output_headroom_preserves_every_module_input_limit(defaults, component, action_type, limit):
     client = composition._client()

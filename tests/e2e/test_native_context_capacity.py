@@ -137,14 +137,14 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
     agent, client, request = _native_with_full_read_history(
         tmp_path, monkeypatch, capability, artifact_first=artifact_first,
     )
-    assert agent.max_context_tokens == 128_000
+    assert agent.max_context_tokens == 256_000
     result = agent.invoke(request)
     assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
     assert len(client.contexts) == 1
     context = client.contexts[0]
     assert {"file_reads", "artifact_reads", "environment", "tool_contracts", "recent_observations", "runtime_feedback"} <= set(context.included_sections)
-    assert context.estimated_tokens <= 128_000
-    assert ContextComposer.estimate_tokens(context.text) <= 128_000
+    assert context.estimated_tokens <= 256_000
+    assert ContextComposer.estimate_tokens(context.text) <= 256_000
     assert "read_file: path" in context.text
     assert "read_artifact: artifact_id" in context.text
     assert "RECOVERABLE_FEEDBACK" in context.text
@@ -173,7 +173,7 @@ def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkey
     if explicit_limit > 1:
         # A quarter of the default budget fits the fixed input. Material
         # bodies must shrink within the requested limit; the limit is never
-        # silently replaced with the default 128K budget.
+        # silently replaced with the default budget.
         assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
         assert result.llm_calls == 1
         assert len(client.contexts) == 1
@@ -198,7 +198,7 @@ def test_model_capacity_reduces_read_pools_before_they_are_built(tmp_path, monke
     client.context_budget = context_budget
     result = agent.invoke(request)
     assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
-    assert budgets == [128_000]
+    assert budgets == [256_000]
     context = client.contexts[0]
     assert context.estimated_tokens <= 32_000
     reads = {}

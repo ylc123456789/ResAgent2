@@ -76,7 +76,7 @@ def _reads(context):
     return {"artifact_snippets": json.loads(section.split("\n", 1)[1])["snippets"], "file_snippets": []}
 
 
-def _assert_composed(context, limit=128_000):
+def _assert_composed(context, limit=256_000):
     assert {"artifact_reads", "tool_contracts", "evidence_control_state"} <= set(context.included_sections)
     assert "read_artifact_summaries" not in context.included_sections
     contracts = context.text.split("## tool_contracts\n", 1)[1].split("\n\n## ", 1)[0]
@@ -94,7 +94,7 @@ def test_scientific_range_read_exposes_middle_evidence_in_next_real_prompt(tmp_p
 
     result = agent.invoke(_turn([artifact]))
 
-    assert agent.max_context_tokens == 128_000
+    assert agent.max_context_tokens == 256_000
     assert result.status == "needs_user_input", result.model_dump(mode="json")
     assert len(client.contexts) == 3
     assert "middle_KEY_EVIDENCE" not in client.contexts[1].text
@@ -139,7 +139,7 @@ def _run_full_pool(tmp_path):
 
 def test_scientific_full_pool_keeps_multiple_artifacts_as_history_grows(tmp_path):
     agent, client, store, turn, bodies = _run_full_pool(tmp_path)
-    assert agent.max_context_tokens == 128_000
+    assert agent.max_context_tokens == 256_000
     assert len(client.contexts) == 5
     # Multiple ranges coexist while they fit; chronological order is preserved.
     for count, context in enumerate(client.contexts[2:], start=2):

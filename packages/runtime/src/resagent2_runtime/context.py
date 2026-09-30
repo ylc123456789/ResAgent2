@@ -9,7 +9,7 @@ from math import ceil, isfinite
 from .models import AgentState, ComposedContext, ContextSection
 
 
-DEFAULT_AGENT_CONTEXT_TOKENS = 128_000
+DEFAULT_AGENT_CONTEXT_TOKENS = 256_000
 CONTEXT_TARGET_SHARE = 0.80
 
 

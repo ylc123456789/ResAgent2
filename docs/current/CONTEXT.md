@@ -187,7 +187,7 @@ run_command 的回执包含实际命令、退出/超时状态、日志路径与�
 
 ### 3.4 Compiler：同一预算机制，但不是第四个 AgentLoop
 
-输入边界见 [WorkflowCompiler](CONTRACTS.md#compiler)。CLI / real E2E 仍用 `PromptLLMClient.next_action` 把编译 prompt 包成两个必需段：`system` 和 `compiler_request`，要求 JSON-only 输出；两入口的默认额度同源为128000，CLI仍可用 `RESAGENT2_COMPILER_CONTEXT_TOKENS` 单独覆盖。它复用客户端的旧分段注入路径，不使用 Agent 的原生工具历史或 `tools` 数组。
+输入边界见 [WorkflowCompiler](CONTRACTS.md#compiler)。CLI / real E2E 仍用 `PromptLLMClient.next_action` 把编译 prompt 包成两个必需段：`system` 和 `compiler_request`，要求 JSON-only 输出；两入口的默认额度同源为256000，CLI仍可用 `RESAGENT2_COMPILER_CONTEXT_TOKENS` 单独覆盖。它复用客户端的旧分段注入路径，不使用 Agent 的原生工具历史或 `tools` 数组。
 
 compiler_request 包含当前 WorkRequest 的目标、证据要求、约束，可用 coding/experiment 模块说明，CompilationDraft schema，剩余任务容量、逻辑工作区，以及存在时的结构纠错反馈。CLI 与 real E2E 使用各 Agent 类上的同一份 description，明确 Coding 可只解释代码，Experiment 可只分析已有结果、无需执行或准备环境。要求把同一 Agent 的提问、检查、准备和执行保留在一个任务中，并用声明的 output_name 连接确有需要的跨任务产物。任务容量明确是上限，不是应凑满的目标；单次操作的约束不能被改写成只准调用工具一次，确认后重发不等于重复执行。
 
@@ -298,7 +298,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 | 层次 | 当前默认或规则 | 由谁负责 |
 |---|---|---|
 | 模型可用输入容量 | 注入的 ModelProfile：窗口减预留输出和安全余量；Compiler 还扣 JSON 输出 schema 说明 | LLM client 的预算 hook |
-| 模块输入上限 | Scientific / Coding / Experiment / Compiler 各128000 tokens；前三者覆盖完整序列化 `{messages, tools}`，Compiler保留JSON-only计量路径；Interpreter无模型输入额度 | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模型模块参数可覆盖 |
+| 模块输入上限 | Scientific / Coding / Experiment / Compiler 各256000 tokens；前三者覆盖完整序列化 `{messages, tools}`，Compiler保留JSON-only计量路径；Interpreter无模型输入额度 | 共享DEFAULT_AGENT_CONTEXT_TOKENS，各模型模块参数可覆盖 |
 | 材料软水位 | 固定正文与最小导航框先入场；可伸缩材料扩展到整包80%，与压缩触发阈值同源 | ContextComposer + CONTEXT_TARGET_SHARE |
 | 材料起始份额 | 反馈/文件/工件/诊断/目录的相对权重16/16/16/4/1，只分配给已选入项；空余按反馈100、诊断96、读取80、目录62优先级借用 | ContextMaterial + ContextComposer |
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
@@ -315,19 +315,19 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 
 **只有整包输入上限是容量硬门槛。** 先原样放入职责、任务、问答、反馈、已有摘要等固定必需段，再保留材料的最小导航框；可选段仍按原优先级选入。材料在80%水位内先按相对权重分配，再按优先级使用剩余空间，不能借走其他材料已分到的一份。80%不是必需输入的拒绝线：必需内容超过它但未超过100%仍可容纳，并沿用历史压缩判断。
 
-例如128K模块的材料填充目标是整包102.4K，留下空间容纳后续工具返回；这不是对下次返回一定放得下的承诺。不能把所有空余都填到128K，否则材料扩展自身就可能反复触发压缩。输入参数可覆盖模块上限，但系统不会自动扩大它。协议历史与材料投影的重复内容仍会重复计量，不做隐式去重或删原始回执。
+例如256K模块的材料填充目标是整包204.8K，留下空间容纳后续工具返回；这不是对下次返回一定放得下的承诺。不能把所有空余都填到256K，否则材料扩展自身就可能反复触发压缩。输入参数可覆盖模块上限，但系统不会自动扩大它。协议历史与材料投影的重复内容仍会重复计量，不做隐式去重或删原始回执。
 
-**真正不足就报错，不新增恢复状态机。** 沿用至多一次旧历史压缩后，schema、单个巨大近期完整回合或最小必需输入仍装不下，返回现有 `budget_exhausted` 并保留现场；不自动ask_user、不加二次摘要纠错、不反复扩容。空/截断摘要仍拒绝。当前业务信息不由历史摘要替代，Compiler没有材料或Session；其默认输入额度同为128000，但仍走原JSON-only路径，不新增压缩。
+**真正不足就报错，不新增恢复状态机。** 沿用至多一次旧历史压缩后，schema、单个巨大近期完整回合或最小必需输入仍装不下，返回现有 `budget_exhausted` 并保留现场；不自动ask_user、不加二次摘要纠错、不反复扩容。空/截断摘要仍拒绝。当前业务信息不由历史摘要替代，Compiler没有材料或Session；其默认输入额度同为256000，但仍走原JSON-only路径，不新增压缩。
 
 输出额度是另一项配置：思考与最终正文可能共享 Provider 的输出额度。它不能用来解释所有输入裁剪，也不因为输入还有空间就自动增大。环境变量及部署默认值统一查 [CLI 配置](../../apps/cli/README.md#6-模型与上下文预算)，本文不另设一套值。
 
-**源码与测试**：[Composer / 材料分配 / 选择器](../../packages/runtime/src/resagent2_runtime/context.py)、[弹性分配测试](../../tests/runtime/test_context_materials.py)、[ModelProfile / 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[执行Agent容量](../../tests/e2e/test_native_context_capacity.py)、[Scientific容量](../../tests/e2e/test_scientific_context_capacity.py)。128K是当前工程选择，不承诺所有任务都足够或成本/延迟不变。
+**源码与测试**：[Composer / 材料分配 / 选择器](../../packages/runtime/src/resagent2_runtime/context.py)、[弹性分配测试](../../tests/runtime/test_context_materials.py)、[ModelProfile / 客户端](../../packages/runtime/src/resagent2_runtime/llm.py)、[执行Agent容量](../../tests/e2e/test_native_context_capacity.py)、[Scientific容量](../../tests/e2e/test_scientific_context_capacity.py)。256K是当前工程选择，不承诺所有任务都足够或成本/延迟不变。
 
 <a id="compaction"></a>
 
 ### 6.1 Session 会一直累积吗？
 
-**磁盘原始记录会累积；不再把全部旧历史无限塞回 128K。** 仅压缩旧协议历史，不删除原始 tool_turns/events，不改当前任务、回答、领域 memory、文件工件或完成状态。没有自动磁盘清理/归档，也不保证超长 Session 的存储或重写成本恒定。
+**磁盘原始记录会累积；不再把全部旧历史无限塞回 256K。** 仅压缩旧协议历史，不删除原始 tool_turns/events，不改当前任务、回答、领域 memory、文件工件或完成状态。没有自动磁盘清理/归档，也不保证超长 Session 的存储或重写成本恒定。
 
 - 完整请求超过有效输入的 80%，或组装必需段时实际超限，才考虑压缩。每轮最多做一次；没有更早完整前缀就不做。
 - 至少保留最新一个完整 turn（包含全部 tool calls/receipts/reasoning），再尽量保留合计不超过有效输入 20% 的近期完整回合。20% 是选择目标，不是切断单个回合的刀。

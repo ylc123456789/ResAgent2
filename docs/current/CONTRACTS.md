@@ -285,7 +285,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，更新编辑 revision 及验证新鲜度，不承诺原子回滚。删除文件中的内容仍用 replace_text。
 
-**协议与格式纠错**：OpenAICompatibleClient 区分响应封装/传输失败与模型输出拒绝。前者保持现有至多三次尝试（受剩余额度限制）；正文 JSON 解析失败，或原生 tool arguments 不是 JSON object，则完成本次 trace 后直接交回 Loop，不在客户端原样重试。原生每轮接受 1–8 个 tool calls，整批先做参数/权限预检，再逐项复核权限/超时并串行执行。finish/ask_user/request_work 必须单独一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果并取消余下项，不做事务回滚，assistant `content` 不作为备用动作解析。AgentLoop 记录已发生的全部 HTTP 尝试，把简短原因和“未执行工具”送入 required `runtime_feedback`，同 Session/Attempt 继续；不把坏正文或 reasoning 复制到反馈。JSON、原生 framing 和 schema 错误共用连续失败上限 5、LLM 调用预算和超时；成功非 finish 工具清除该反馈并重置失败计数，完成时也清除反馈。耗尽后沿用已有失败出口，不保证模型一定纠正成功。
+**协议与格式纠错**：OpenAICompatibleClient 区分响应封装/传输失败与模型输出拒绝。前者保持现有至多三次尝试（受剩余额度限制）；正文 JSON 解析失败，或原生 tool arguments 不是 JSON object，则完成本次 trace 后直接交回 Loop，不在客户端原样重试。原生每轮接受 1–8 个 tool calls，整批先做参数/权限预检，再逐项复核权限/超时并串行执行。finish/ask_user/request_work 必须单独一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果并取消余下项，不做事务回滚，assistant `content` 不作为备用动作解析。AgentLoop 记录已发生的全部 HTTP 尝试，把简短原因和“未执行工具”送入 required `runtime_feedback`，同 Session/Attempt 继续；不把坏正文或 reasoning 复制到反馈。JSON、原生 framing 和 schema 错误共用连续失败上限 5、LLM 调用预算和超时；成功非 finish 工具重置失败计数。工具正常返回 observation 后清除 tool_error 来源的旧反馈，完成检查反馈按完成检查流程更新；完成时清除反馈。耗尽后沿用已有失败出口，不保证模型一定纠正成功。
 
 Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `PromptLLMClient.next_action` 从正文 JSON 获取结构。其 JSONDecodeError 在已有“最多两版 draft”内携带解析原因重编，所有消耗保留；没有新一层重试。PromptLLMClient 只透传异常并记录 last_attempts，不自行纠错。JSON 能解析但字段不符仍走原有 schema 校验。响应封装缺失/非字符串 content 等协议错误不伪装成模型正文解析错误。
 
@@ -382,7 +382,7 @@ Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：requi
 
 <a id="final-report"></a>
 
-最终 Run gate 校验科学意见、证据归属、观察记录、所需证据种类、明确输出名及未解决工作对应的局限。它通过 ArtifactRegistry 查询同一 Run 的实际登记表，共用授权 reader 和冻结 hash 规则；跨 Run 产物、仅磁盘存在的文件或未登记候选不满足要求。缺失输出返回 `code=required_artifact_missing`、`message="required artifact was not produced"`、`subject=名称`，阻止完成并保留证据。损坏或不可读的登记文件仍沿原错误路径拒绝，不伪装成普通缺失。通过后由确定性报告渲染器登记最终报告，再将 Run 标为 completed。inconclusive 可以是合法完成；Run completed 不保证假设成立或科学结论正确。
+最终 Run gate 校验科学意见的结构、证据归属、观察记录、所需证据种类及明确输出名；存在失败或阻塞工作时，检查 limitations 非空，局限是否充分解释其科研影响由 Scientific 判断。它通过 ArtifactRegistry 查询同一 Run 的实际登记表，共用授权 reader 和冻结 hash 规则；跨 Run 产物、仅磁盘存在的文件或未登记候选不满足要求。缺失输出返回 `code=required_artifact_missing`、`message="required artifact was not produced"`、`subject=名称`，阻止完成并保留证据。损坏或不可读的登记文件仍沿原错误路径拒绝，不伪装成普通缺失。通过后由确定性报告渲染器登记最终报告，再将 Run 标为 completed。inconclusive 可以是合法完成；Run completed 不保证假设成立或科学结论正确。
 
 <a id="identities"></a>
 <a id="attempt-session"></a>

@@ -13,7 +13,7 @@ ResAgent2 可以先用一句话理解：**让模型决定科研上需要什么�
 | Coding Agent | 程序员 | 代码分析、修改、验证记录和工件 |
 | Experiment Agent | 实验执行者 | 已有结果分析、真实命令记录和证据工件 |
 
-ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有三个分工：Controller 管整个过程，Compiler 把当前需求翻成任务图，Scheduler 执行图中的任务。
+ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有四个分工：Controller 管整个过程，Compiler 把当前需求翻成任务图，Scheduler 执行图中的任务，Interpreter 用固定代码整理目录和已记录报告。
 
 <a id="walkthrough"></a>
 
@@ -51,7 +51,7 @@ LLM 生成一个包含 instruction 的任务草图，代码分配正式身份、
 
 三个 Agent 都通过 ModulePort.invoke 接收 AgentRequest：一条 instruction、授权 input_artifacts，以及工作区、权限、预算和恢复身份。Coding 没有“理解/修改”两种接口；一次调用可以先读代码，再根据任务决定是否修改。可写权限允许修改，并不要求为了完成任务必须修改。
 
-Coding 内部运行共享 AgentLoop：读取 → 按需修改 → 调工具 → 看真实结果 → 验证。完成检查从本 Attempt 基线、工具回执和环境代次生成 patch 与验证工件，标明验证是否覆盖当前代码。任务明确要求成功执行时，Scheduler 再按冻结的 acceptance_requirements 工件验收。
+Coding 内部运行共享 AgentLoop：读取 → 按需修改 → 调工具 → 看真实结果 → 验证。完成检查从本 Attempt 基线、工具回执和环境代次生成 patch 与验证工件，标明验证是否覆盖当前代码。任务是否完成由 Agent 根据目标与证据声明；Scheduler 按冻结的 acceptance_requirements 检查显式产物要求，不判断任务语义。
 
 AgentResult 的业务输出只有 report 和 artifacts，另有机器状态、消费、Session 引用及必要控制信号。报告解释过程，不能替代真实执行记录。长说明可作为 module_report 工件交给下游按需读取。
 
@@ -125,7 +125,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 普通文件授权、Git、进程、环境和工件校验放在 components；暴露给模型的工具入口放在 capabilities。Agent 的普通代码也可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
 
-Compiler 需要上下文和 LLM，不需要整个工具循环，因此只复用 PromptLLMClient。**复用能力不等于采用同一个业务流程。**
+Compiler 复用模型客户端、上下文和共享执行预算，不运行 AgentLoop。**复用能力不等于采用同一个业务流程。**
 
 ## 6. 上下文不是一直塞入所有历史
 

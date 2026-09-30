@@ -157,7 +157,7 @@ Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权�
 
 需要验证而绑定尚未认证时，建议动作是 run_verification，由获准执行的工具自动核验环境；不再要求先单独 audit_env。没有验证记录时 verification_stale 为 false、verification_passed 为 null，verification_issue 说明未验证。Coding/Experiment 在同一 finish 中按目标声明 completed 或 failed，并在 report 解释依据；两种声明均先检查产物事实，纯分析不强制执行命令。
 
-这些字段是确定性事实与建议，不是另一种业务模式。finalizer 生成验证工件，Scheduler 根据明确的验收要求判断是否必须成功执行。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
+这些字段是确定性事实与建议，不是另一种业务模式。finalizer 生成验证工件，Scheduler 检查明确的工件交付条件；命令结果与新鲜度作为事实保留，任务是否完成由 Agent 结合目标判断。读文件、search_text、git_diff 等工具结果保留在原生 receipt 历史中，但仍受工具原始 IO 截断和总输入预算约束；文件正文另进工作集，命令与验证信息继续使用各自投影。
 
 **源码与测试**：[context](../../packages/agents/coding/src/resagent2_coding/context.py)、[Agent 装配](../../packages/agents/coding/src/resagent2_coding/agent.py)、[验证状态与完成检查](../../packages/agents/coding/src/resagent2_coding/completion.py)、[验证状态测试](../../tests/coding/test_control_state.py)、[验证有效性测试](../../tests/coding/test_verification_validity.py)。
 
@@ -179,7 +179,7 @@ Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权�
 
 调用开始不强制探测硬件或执行命令；需要时通过工具观察。环境绑定是工具和上下文共用的实际对象，原生历史中的旧 audit receipt 不能代替当前绑定。
 
-run_command 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；数值交付与成功执行等精确要求在 Scheduler 按要求工件检查，报告自报数字不算测量证据。
+run_command 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；Scheduler 按明确要求检查工件名称、种类、路径和 JSON 顶层有限数值键，报告自报数字不算测量证据。执行记录保留实际结果，不用命令退出码代替任务完成判断。
 
 **源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/components/test_workspace_context.py)。
 
@@ -270,7 +270,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 - 正文参与统一材料分配，空余空间优先借给诊断（priority=96），然后读取材料（80）、目录（62）。一个日志尾部仍最多2000字符；裁剪和未放入的结果数量明确标记。选中后按原始事件顺序呈现。额度很小时保留省略提示，不宣称全部根因始终可见。
 - 同一工具较新的命令结果取代投影中的旧结果，但不删除Session事件；后续普通读文件不会把最近的验证失败挤出这个段。
 - 该段只选择含合法 exit_code 的真实命令结果，不展开 env_audit。前置审计失败、无环境或等待批准均不是已执行命令，可能仍保留此前的命令诊断；本次阻断原因应结合最新 receipt、environment 和运行反馈读取。
-- 这些是历史执行诊断，不是当前状态或科学测量。验证是否仍有效，由 verification_state 与确定性验证记录说明；是否满足任务的成功执行要求由验收决定。
+- 这些是历史执行诊断，不是当前状态或科学测量。验证是否仍有效，由 verification_state 与确定性验证记录说明；明确的工件交付条件由接收端验收，执行结果对任务完成意味着什么，由 Agent 判断并在报告中说明。
 
 此处没有IO、LLM摘要或第二份状态缓存。完整日志仍留原处，也不承诺有限摘录覆盖所有失败原因。[源码](../../packages/components/src/resagent2_components/context.py)与[共享投影测试](../../tests/components/test_workspace_context.py)。
 

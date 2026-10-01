@@ -1,14 +1,19 @@
 """The same Experiment entry supports analysis, execution and reporting."""
 
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ErrorCode, ModuleStatus, TaskBudget,
+    AgentOwner, AgentPermissions, AgentRequest, ArtifactCandidate, ErrorCode,
+    ModuleStatus, QuestionDraft, RecordedAnswer, TaskBudget, VerificationResult,
     WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
+from resagent2_components import PreparedEnvironment
 from resagent2_experiment import NativeExperimentAgent
+from resagent2_orchestrator import ArtifactRegistry
 from resagent2_runtime import ScriptedLLMClient
 
 
@@ -33,7 +38,7 @@ def test_existing_result_analysis_finishes_without_new_execution(tmp_path, monke
     result = agent.invoke(request(tmp_path, writable=writable, confirm_commands=True))
     assert result.status == ModuleStatus.COMPLETED, result.report
     persisted = agent.loop.store.load(result.session.id)
-    assert persisted.memory["command_count"] == 0
+    assert not any(event.tool == "run_shell" for event in persisted.events)
 
 
 def test_generic_finish_delivers_named_file(tmp_path):
@@ -49,33 +54,68 @@ def test_generic_finish_delivers_named_file(tmp_path):
 
 
 def test_command_permission_denied_before_environment_access(tmp_path):
-    result = NativeExperimentAgent(ScriptedLLMClient([{'tool': 'run_command', 'arguments': {'command': 'python train.py'}}])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
+    result = NativeExperimentAgent(ScriptedLLMClient([{'tool': 'run_shell', 'arguments': {'command': 'python train.py'}}])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
     assert result.status == ModuleStatus.FAILED
 
 
-@pytest.mark.parametrize("command", ["pip install numpy", "python -m pip install numpy", "ls"])
 @pytest.mark.parametrize("confirm_commands", [False, True])
-def test_non_experiment_command_is_denied_before_approval(tmp_path, monkeypatch, command, confirm_commands):
-    def forbidden(*args, **kwargs):
-        raise AssertionError("Rejected commands must not reach execution or audit")
+def test_shell_always_requires_approval_before_audit_or_execution(tmp_path, monkeypatch, confirm_commands):
+    calls = []
+    environment = PreparedEnvironment(
+        env_id="resenv_test", prefix=tmp_path / "environment", python_version="3.12",
+    )
+    manager = SimpleNamespace(conda_exe="conda", inspect=lambda **_: environment)
 
-    monkeypatch.setattr("resagent2_experiment.tools.RunCommandTool.execute", forbidden)
-    monkeypatch.setattr("resagent2_components.EnvironmentBinding.audit", forbidden)
+    def audit(current):
+        assert current == environment
+        calls.append("audit")
+        return {"success": True}
+
+    def run_shell(self, command, **kwargs):
+        calls.append(command)
+        return VerificationResult(
+            command=command, exit_code=0, timed_out=False,
+            stdout_path="out.stdout", stderr_path="out.stderr", duration_seconds=0.1,
+        )
+
+    manager.audit = audit
+    monkeypatch.setattr("resagent2_experiment.agent.EnvironmentManager", lambda **_: manager)
+    monkeypatch.setattr("resagent2_components.ProcessRunner.run_shell", run_shell)
+    action = {"tool": "run_shell", "arguments": {"command": "ls | sort"}}
     agent = NativeExperimentAgent(ScriptedLLMClient([
-        {"tool": "run_command", "arguments": {"command": command}},
-        {"tool": "finish", "arguments": {"report": "No experiment was executed."}},
+        action, action, {"tool": "finish", "arguments": {"report": "Inspected the files."}},
     ]))
-    result = agent.invoke(request(tmp_path, writable=True, confirm_commands=confirm_commands))
-
-    assert result.status == ModuleStatus.COMPLETED, result.report
-    assert all(artifact.kind != "question" for artifact in result.artifacts)
-    state = agent.loop.store.load(result.session.id)
+    req = request(tmp_path, writable=True, confirm_commands=confirm_commands)
+    first = agent.invoke(req)
+    assert first.status == ModuleStatus.NEEDS_USER_INPUT, first.report
+    assert calls == []
+    question = QuestionDraft.model_validate_json(
+        next(item.content for item in first.artifacts if item.kind == "question"))
+    answer = RecordedAnswer(
+        question_id=f"question_{question.action.action_id}", question_text=question.text,
+        requested_fields=question.requested_fields, options=question.options,
+        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
+        action=question.action,
+    )
+    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
+        ArtifactCandidate(kind="answer", path="answer.json", media_type="application/json",
+                          summary="Approve the exact shell command", content=answer.model_dump_json()),
+        run_id=req.run_id, source_type="controller_answer",
+        task_id=req.task_id, attempt_number=req.attempt_number,
+    )
+    resumed = agent.invoke(req.model_copy(update={
+        "parent_session_id": first.session.id,
+        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
+    }))
+    assert resumed.status == ModuleStatus.COMPLETED, resumed.report
+    assert resumed.session.id == first.session.id
+    assert calls == ["audit", "ls | sort"]
+    state = agent.loop.store.load(resumed.session.id)
     assert state.pending_action is None
-    assert state.memory["command_count"] == 0
-    rejected = [event.data for event in state.events
-                if event.type == "observation" and event.tool == "run_command"]
-    assert len(rejected) == 1 and rejected[0]["ok"] is False
-    assert "run_command only runs experiment commands" in rejected[0]["summary"]
+    executed = [event for event in state.events if event.tool == "run_shell"
+                and event.type == "observation" and (event.data.get("value") or {}).get("exit_code") == 0]
+    assert len(executed) == 1
 
 
 def test_missing_result_path_cannot_be_claimed(tmp_path):
@@ -109,5 +149,4 @@ def test_explicit_failure_needs_no_fabricated_command_and_keeps_partial_artifact
     assert result.report == report
     assert [item.path for item in result.artifacts] == ["findings.json"]
     state = agent.loop.store.load(result.session.id)
-    assert state.memory["command_count"] == 0
-    assert not any(event.tool == "run_command" for event in state.events)
+    assert not any(event.tool == "run_shell" for event in state.events)

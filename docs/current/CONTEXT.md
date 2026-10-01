@@ -178,12 +178,12 @@ Agent 决定需要验证而绑定尚未认证时，run_verification 在获准执
 | `material_<artifact_id>` | acceptance_requirements，以及本次 resume_artifact_ids 指定的 answer | 对已选材料必需；与 Coding 共用函数 |
 | `environment` | 实际环境绑定与认证状态 | 有绑定时必需；每次构造读取同一绑定 |
 | `file_reads` / `artifact_reads` | 文件与工件两组正文 | 各自导航框必需，正文共享空余额度 |
-| `command_results` | run_command/run_setup 最近的命令结果与有界失败诊断 | 有结果才出现，必需；与 Coding 共用机制 |
+| `command_results` | run_shell/run_setup 最近的命令结果与有界失败诊断 | 有结果才出现，必需；与 Coding 共用机制 |
 | `directory` | 最近一次有界目录观察 | 可选，priority=62 |
 
 调用开始不强制探测硬件或执行命令；需要时通过工具观察。环境绑定是工具和上下文共用的实际对象，原生历史中的旧 audit receipt 不能代替当前绑定。
 
-run_command 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；Scheduler 按明确要求检查工件名称、种类、路径和 JSON 顶层有限数值键，报告自报数字不算测量证据。执行记录保留实际结果，不用命令退出码代替任务完成判断。
+run_shell 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；每次脚本执行前使环境认证失效，回执中的执行前 env_audit 不代表执行后仍已认证；Coding 还保留实际 changed_paths，使原读取可标为过期。Shell 日志不会自动生成工件已读资格；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；Scheduler 按明确要求检查工件名称、种类、路径和 JSON 顶层有限数值键，报告自报数字不算测量证据。执行记录保留实际结果，不用命令退出码代替任务完成判断。
 
 **源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/components/test_workspace_context.py)。
 
@@ -217,7 +217,9 @@ Interpreter 不再读取执行日志来生成解释，没有 Session、工具循
 
 ### 4.1 读取工具先限制一次返回
 
-`read_file` 与 `read_artifact` 共用 `slice_text_lines`：先取从 1 开始、两端包含的行范围，再保留最多128000字符的前缀（共享 `MAX_READ_CHARS`）。这是原始工具返回的IO边界，不是128K tokens；实际送入模型的部分还要按模块有效额度选择。范围超过文件末尾可得到短结果或空串，不自动寻找另一个范围。 read_artifact 可先按 start_char/end_char 选择所选行内的字符窗口（零基、末端不含），再应用同一 IO 上限；用于超长 JSON 字符串，文件内容与物理行号不变。
+`read_file` 与 `read_artifact` 仅读取 UTF-8 文本，共用严格解码：含 NUL 或无效 UTF-8 的文件返回可恢复错误，不替换乱码、不自动解析二进制，也不新增成功读取记录。检查整份内容后才选择窗口，缩小范围不能绕过文本检查；工作区读取保持原有换行规范化，工件保留原换行及字符偏移。工件仍先校验授权和整份 hash；二进制工件仍可登记及验证存在，不能因此算作已读。
+
+两入口共用 `slice_text_lines`：先取从 1 开始、两端包含的行范围，再保留最多128000字符的前缀（共享 `MAX_READ_CHARS`）。这是原始工具返回的IO边界，不是128K tokens；实际送入模型的部分还要按模块有效额度选择。范围超过文件末尾可得到短结果或空串，不自动寻找另一个范围。 read_artifact 可先按 start_char/end_char 选择所选行内的字符窗口（零基、末端不含），再应用同一 IO 上限；用于超长 JSON 字符串，文件内容与物理行号不变。
 
 start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默认 0，其余可为 null）；不是裁剪后实际可见正文的精确范围，context_truncated 时不能用首尾片段长度推算后续偏移。`truncated=False` 仅表示所选范围未被字符上限裁掉，不表示已读完整个文件。
 
@@ -239,7 +241,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 |---|---|---|
 | `observed_at` | 原始 Session 事件序号 | 不是文件版本、当前 step 或时钟时间 |
 | `kind / provenance` | 工件原有种类及登记表中的生产者、Task/Attempt 或 Session 归属；随读取片段保留 | 不是候选 metadata 的自报来源，不证明不同工件在科研上独立 |
-| `modified_after_read_at` | 记录中有同路径、较晚的内置编辑或已完成删除（含部分删除中的完成项） | 无标记不证明外部没改文件；不用于冻结工件 |
+| `modified_after_read_at` | 记录中有同路径、较晚的内置编辑、已完成删除或 Coding 实测的 Shell 变化（包括失败操作已完成的变化） | 无标记不证明外部没改文件；不用于冻结工件 |
 | `truncated` | 当前显示正文是否遭到工具或工作集裁剪 | 不代表整个原文件都读完了 |
 | `context_truncated` | 工作集又裁剪了工具返回的正文 | 不会覆盖或修改原事件的截断标志 |
 | `previously_read` | 所在文件/工件段中最多20个、合计600字符的来源提示，不切断单个标识 | 不是完整读史，没有已发现结论或语义定位目录 |
@@ -267,7 +269,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 
 ### 4.4 命令结果：先选失败原因，再限制长度
 
-`command_context` 从原事件读取 run_verification、run_setup、run_command 各自最近一次带结果的观察，生成 required `command_results`：
+`command_context` 从原事件读取 run_verification、run_setup、run_shell 各自最近一次带结果的观察，生成 required `command_results`：
 
 - 先按 exit_code/timed_out 选择失败项，再尝试放入成功项；不把整批JSON剪成首尾。
 - 失败项展示命令、退出/超时状态和已捕获的 stdout_tail/stderr_tail；没有捕获到输出就明确说明，不编造根因。
@@ -368,4 +370,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 19.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 20.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

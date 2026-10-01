@@ -6,7 +6,6 @@ import pytest
 from pydantic import BaseModel
 
 from resagent2_capabilities import DeletePathTool
-from resagent2_components import CommandPermissionDecision
 from resagent2_components.operations import command_decision
 from resagent2_components.permissions import OperationPermissionPolicy
 from resagent2_components.workspace import WorkspaceBoundary
@@ -26,15 +25,12 @@ class CommandInput(BaseModel):
 
 
 class Command:
-    name = "run_command"
+    name = "run_shell"
     input_model = CommandInput
 
     def __init__(self):
         self.calls = []
         self.before_execute = lambda: None
-
-    def check_command(self, command):
-        return CommandPermissionDecision(allowed=True)
 
     def execute(self, state, arguments):
         self.before_execute()
@@ -60,7 +56,7 @@ def request(root, **changes):
     return AgentRequest(**(fields | changes))
 
 
-def execute(req, actions, tool, store):
+def execute(req, actions, tool, store, *, binding=None):
     boundary = WorkspaceBoundary(req.workspace)
     tools = (tool, FinishTool())
     definition = AgentDefinition(
@@ -69,7 +65,7 @@ def execute(req, actions, tool, store):
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary,
-            binding=SimpleNamespace(current=None, hard_constraint=None), request=req,
+            binding=binding or SimpleNamespace(current=None, hard_constraint=None), request=req,
         ),
         completion_check=Completion(),
     )
@@ -98,7 +94,7 @@ def answer(tmp_path, req, result):
 
 
 def command(text):
-    return {"tool": "run_command", "arguments": {"command": text}}
+    return {"tool": "run_shell", "arguments": {"command": text}}
 
 
 FINISH = {"tool": "finish", "arguments": {"report": "Done"}}
@@ -192,3 +188,56 @@ def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash
 def test_fixed_rules_use_executable_and_argv(tmp_path, text, outcome):
     (tmp_path / "first.py").write_text("pass")
     assert command_decision(text, WorkspaceBoundary(request(tmp_path).workspace)).outcome == outcome
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
+    req = request(tmp_path, confirm_commands=confirm,
+                  permissions=AgentPermissions(execute_commands=True, prepare_environment=False))
+    tool, store = Command(), JsonSessionStore(tmp_path / "sessions")
+    script = "  printf 'one\n' | cat\n"
+    first = execute(req, [command(script)], tool, store)
+    assert first.status == "needs_user_input" and tool.calls == []
+    draft = QuestionDraft.model_validate_json(first.artifacts[0].content)
+    assert draft.action.arguments == {"command": script}
+    assert draft.action.context["cwd"] == str(tmp_path)
+    assert draft.action.context["shell"] == "/bin/bash"
+    assert draft.action.context["pipefail"] is True
+    result = execute(answer(tmp_path, req, first), [command(script), FINISH], tool, store)
+    assert result.status == "completed" and tool.calls == [script]
+
+
+def test_changed_shell_script_requires_its_own_approval(tmp_path):
+    req, tool = request(tmp_path, confirm_commands=False), Command()
+    store = JsonSessionStore(tmp_path / "sessions")
+    first = execute(req, [command("printf first")], tool, store)
+    result = execute(answer(tmp_path, req, first), [command("printf second")], tool, store)
+    assert result.status == "needs_user_input" and tool.calls == []
+    assert QuestionDraft.model_validate_json(result.artifacts[0].content).action.arguments == {
+        "command": "printf second",
+    }
+
+
+def test_shell_approval_does_not_follow_a_changed_environment_prefix(tmp_path):
+    req, tool = request(tmp_path, confirm_commands=False), Command()
+    binding = SimpleNamespace(
+        current=SimpleNamespace(prefix=tmp_path / "env_first", python_version="3.12"),
+        hard_constraint=None,
+    )
+    store = JsonSessionStore(tmp_path / "sessions")
+    action = command("python measure.py")
+    first = execute(req, [action], tool, store, binding=binding)
+    resumed = answer(tmp_path, req, first)
+    original_action = QuestionDraft.model_validate_json(first.artifacts[0].content).action
+    binding.current = SimpleNamespace(prefix=tmp_path / "env_second", python_version="3.12")
+
+    second = execute(resumed, [action], tool, store, binding=binding)
+    assert second.status == "needs_user_input" and tool.calls == []
+    next_action = QuestionDraft.model_validate_json(second.artifacts[0].content).action
+    assert next_action.arguments == original_action.arguments
+    assert next_action.action_id != original_action.action_id
+    assert original_action.context["environment"] == str(tmp_path / "env_first")
+    assert next_action.context["environment"] == str(tmp_path / "env_second")
+
+    final = execute(answer(tmp_path, resumed, second), [action, FINISH], tool, store, binding=binding)
+    assert final.status == "completed" and tool.calls == ["python measure.py"]

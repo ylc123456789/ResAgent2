@@ -19,7 +19,7 @@ from resagent2_contracts import VerificationResult
 from resagent2_components.environment import EnvironmentBinding
 from resagent2_components.git import GitBaseline, GitWorkspace
 from resagent2_components.process import (
-    CommandPermissionDecision, ProcessRunner, UnsafeCommandError, parse_command,
+    CommandPermissionDecision, ProcessRunner, UnsafeCommandError, output_tail, parse_command,
 )
 
 
@@ -246,16 +246,8 @@ class RunVerificationTool:
         observations = [
             {
                 **result.model_dump(mode="json"),
-                "stdout_tail": (
-                    self.runner.boundary.root / result.stdout_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
-                if Path(result.stdout_path).exists()
-                else "",
-                "stderr_tail": (
-                    self.runner.boundary.root / result.stderr_path
-                ).read_text(encoding="utf-8", errors="replace")[-2_000:]
-                if Path(result.stderr_path).exists()
-                else "",
+                "stdout_tail": output_tail(self.runner.boundary.root / result.stdout_path),
+                "stderr_tail": output_tail(self.runner.boundary.root / result.stderr_path),
             }
             for result in results
         ]

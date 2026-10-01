@@ -28,6 +28,7 @@ from .environment import (
     AuditEnvInput,
     AuditEnvTool,
 )
+from .execution import RunShellInput, RunShellTool
 from .literature import (
     LiteratureSearchToolInput,
     LiteratureSearchTool,
@@ -54,6 +55,8 @@ __all__ = [
     'ReadFileTool',
     'ReplaceTextInput',
     'ReplaceTextTool',
+    'RunShellInput',
+    'RunShellTool',
     'RunSetupInput',
     'RunSetupTool',
     'SearchTextInput',

@@ -10,7 +10,7 @@ from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 from resagent2_components.context import remember_source as _remember
-from resagent2_components.text import MAX_READ_CHARS, slice_text_lines
+from resagent2_components.text import MAX_READ_CHARS, decode_text, slice_text_lines
 from resagent2_components.workspace import WorkspaceBoundary
 
 class ReadFileInput(RuntimeModel):
@@ -27,6 +27,7 @@ class ReadFileTool:
     name = "read_file"
     input_model = ReadFileInput
     model_guidance = (
+        "Read UTF-8 text only; NUL bytes or invalid UTF-8 are rejected. "
         "If a read result is truncated, search for the symbol then read a "
         "bounded start_line/end_line range; do not repeat the same unbounded read."
     )
@@ -49,7 +50,8 @@ class ReadFileTool:
         path = self.boundary.resolve_read_file(args.path)
         if path.stat().st_size > self.max_bytes:
             raise ValueError(f"file is too large to read: {path.stat().st_size} bytes")
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # Preserve the universal-newline behavior of the workspace reader.
+        text = decode_text(path.read_bytes()).replace("\r\n", "\n").replace("\r", "\n")
         return ToolObservation(
             summary=f"Read {args.path}",
             value={

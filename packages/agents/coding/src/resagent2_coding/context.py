@@ -40,12 +40,13 @@ infer, and for the shared environment decision below.
 Reuse suitable existing code. Make the changes needed for the assigned objective
 and its concrete prerequisites. Add abstractions, configuration layers or extra
 deliverables only when the task or an observed requirement needs them.
-Edit with replace_text, add with create_file, remove with delete_path;
+Prefer replace_text for edits, create_file for additions and delete_path for removal;
 nonempty directories require confirmation.
 Review the actual diff after edits.
 When execution is needed, inspect project Python and dependency requirements
 and the current binding. Prepare an environment or install dependencies only
 when needed, through prepare_environment and run_setup; reuse a suitable binding.
+Use run_shell for necessary commands and diagnostics within Coding responsibilities.
 Use run_verification for bounded correctness checks following its command rules.
 It audits the environment automatically when needed, including after approval.
 Use audit_env when facts are missing or compatibility needs investigation.

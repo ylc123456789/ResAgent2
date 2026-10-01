@@ -9,7 +9,7 @@ from resagent2_capabilities import (
 )
 
 from resagent2_coding.verification import RunVerificationTool
-from resagent2_experiment.tools import RunCommandTool
+from resagent2_capabilities import RunShellTool
 from resagent2_runtime import AgentAction, AskUserTool, FinishTool
 from resagent2_scientific.tools import (
     AskUserTool as ScientificAskUserTool, RequestWorkTool,
@@ -81,7 +81,7 @@ def test_tool_contracts_include_optional_model_guidance() -> None:
 @pytest.mark.parametrize("tool_class", [
     PrepareEnvironmentTool, AuditEnvTool, RunSetupTool, ReplaceTextTool,
     RequestWorkTool, ScientificAskUserTool, FinishTool, AskUserTool,
-    RunVerificationTool, RunCommandTool,
+    RunVerificationTool, RunShellTool,
 ])
 def test_operational_guidance_reaches_both_model_protocols(tool_class) -> None:
     # Guidance is class-level. Rendering it needs no environment or filesystem.

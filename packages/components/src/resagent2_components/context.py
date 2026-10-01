@@ -51,17 +51,20 @@ def _path_key(value: object) -> str | None:
 
 
 def _recorded_file_edits(state: AgentState) -> dict[str, int]:
-    """Project successful built-in writes, not inferred or external changes."""
+    """Project tool-recorded writes and measured shell changes, not guesses."""
     latest: dict[str, int] = {}
     for event in reversed(state.events):
-        if event.type != "observation" or event.tool not in ("create_file", "replace_text", "delete_path"):
+        if event.type != "observation" or event.tool not in ("create_file", "replace_text", "delete_path", "run_shell"):
             continue
         data = event.data if isinstance(event.data, dict) else {}
         value = data.get("value")
         if not isinstance(value, dict):
             continue
-        paths = value.get("deleted_paths", []) if event.tool == "delete_path" else [value.get("path")]
-        if event.tool != "delete_path" and data.get("ok") is not True:
+        if event.tool == "run_shell":
+            paths = value.get("changed_paths", [])
+        else:
+            paths = value.get("deleted_paths", []) if event.tool == "delete_path" else [value.get("path")]
+        if event.tool not in {"delete_path", "run_shell"} and data.get("ok") is not True:
             continue
         for value in paths:
             path = _path_key(value)
@@ -219,7 +222,7 @@ def command_context(state: AgentState, *, max_chars: int) -> ContextSection | No
     seen: set[str] = set()
     for event in reversed(state.events):
         if event.type != "observation" or event.tool not in {
-            "run_verification", "run_setup", "run_command",
+            "run_verification", "run_setup", "run_shell",
         } or event.tool in seen:
             continue
         value = event.data.get("value")

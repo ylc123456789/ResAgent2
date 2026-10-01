@@ -7,8 +7,8 @@ Other workspace, artifact, literature and environment tools retain their surface
 Schema 14, 15, 16 and 17 only update the embedded public schema version constants.
 Schema 18 restores completed/failed on the unified finish and clarifies keyword search.
 Schema 19 replaces internal feedback briefs and adds artifact character windows.
-The prompt-consistency review updates descriptions/guidance only; all tool names
-and complete parameter schemas remain unchanged.
+Schema 20 replaces experiment/run_command with shared/run_shell, preserves exact
+script text and updates the embedded public version. Text readers reject lossy decoding.
 """
 
 import hashlib
@@ -30,7 +30,7 @@ from resagent2_capabilities import (
     SearchTextTool,
 )
 from resagent2_coding.verification import RunVerificationTool
-from resagent2_experiment.tools import RunCommandTool
+from resagent2_capabilities import RunShellTool
 from resagent2_runtime import AskUserTool, FinishTool
 from resagent2_runtime.tool_calling import native_tool_schemas
 from resagent2_scientific.tools import (
@@ -44,9 +44,8 @@ def tool_surface_fingerprints() -> dict[str, str]:
     groups = {
         "shared": (AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
                    LiteratureSearchTool, PrepareEnvironmentTool, ReadArtifactTool,
-                   ReadFileTool, ReplaceTextTool, RunSetupTool, SearchTextTool),
+                   ReadFileTool, ReplaceTextTool, RunSetupTool, RunShellTool, SearchTextTool),
         "coding": (RunVerificationTool, DeletePathTool),
-        "experiment": (RunCommandTool,),
         "runtime": (AskUserTool, FinishTool),
         "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool),
     }

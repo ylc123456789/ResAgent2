@@ -16,6 +16,7 @@ from resagent2_contracts import (
     ModuleError,
     ModuleStatus,
     QuestionDraft,
+    RecordedAnswer,
     ResearchRequest,
     RunBudget,
     RunStatus,
@@ -184,7 +185,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     from resagent2_components.environment import PreparedEnvironment
     from resagent2_contracts import WorkspaceAccess, WorkspaceSpec
     from resagent2_experiment import NativeExperimentAgent
-    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_orchestrator.handoffs import read_json, system_artifact
     from resagent2_runtime import ScriptedLLMClient
 
     workspace = tmp_path / "workspace"
@@ -213,7 +214,8 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     monkeypatch.setattr("resagent2_experiment.agent.EnvironmentBinding", prepared_binding)
     command = f"{shlex.quote(sys.executable)} train.py"
     agent = NativeExperimentAgent(ScriptedLLMClient([
-        {"tool": "run_command", "arguments": {"command": command}},
+        {"tool": "run_shell", "arguments": {"command": command}},
+        {"tool": "run_shell", "arguments": {"command": command}},
         {"tool": "finish", "arguments": {
             "status": "failed", "report": "Training failed before producing metrics",
             "artifacts": [{
@@ -243,7 +245,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
         run_id="run_boundary", status="running",
         request=ResearchRequest(
             goal="Run the provided experiment", permissions=RunPermissions(execute_commands=True),
-            budget=RunBudget(max_llm_calls=2, timeout_seconds=30),
+            budget=RunBudget(max_llm_calls=3, timeout_seconds=30),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2),
         ), workspaces=engine._resolve_workspaces("run_boundary"),
         created_at=now, updated_at=now,
@@ -256,10 +258,35 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
         )],
     ))
     run = engine.run_until_stable(run.run_id)
+    assert run.status == RunStatus.PAUSED
+    assert len(results) == 1 and results[0].status == ModuleStatus.NEEDS_USER_INPUT
+    question = run.pending_question
+    assert question is not None
+    paused_session_id = run.workflow.tasks[0].attempts[0].session.id
+    assert not any(item.kind == "execution_record" for item in run.artifacts.values())
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text,
+        requested_fields=question.requested_fields, options=question.options,
+        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=run.run_id, task_id="task_boundary", attempt_number=1,
+        action=question.action,
+    )
+    run.answers.append(answer)
+    system_artifact(
+        engine.artifact_registry, run, "answer", answer,
+        task_id="task_boundary", attempt_number=1,
+    )
+    run.pending_question = None
+    run.status = RunStatus.RUNNING
+    engine.resume_task_in_place(run, "task_boundary")
+    engine.store.save(run)
+    run = engine.run_until_stable(run.run_id)
     task = run.workflow.tasks[0]
-    assert len(task.attempts) == len(results) == 1
+    assert len(task.attempts) == 1
+    assert len(results) == 2
     attempt = task.attempts[0]
-    result = results[0]
+    result = results[-1]
+    assert attempt.session.id == paused_session_id
     state = agent.loop.store.load(attempt.session.id)
     assert task.status == result.status == state.status == "failed"
     expected_code = ErrorCode.BUDGET_EXHAUSTED if missing_output else ErrorCode.AGENT_REPORTED_FAILURE
@@ -267,7 +294,8 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     assert attempt.error == result.error
     assert attempt.session == result.session
     assert attempt.report == result.report
-    assert run.llm_calls_used == result.llm_calls == state.llm_calls_used == 2
+    assert run.llm_calls_used == state.llm_calls_used == sum(item.llm_calls for item in results) == 3
+    assert result.llm_calls == 2
     assert attempt.error.retryable is False
     if missing_output:
         assert "artifact_path_missing" in state.runtime_feedback.summary
@@ -275,12 +303,19 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     else:
         assert state.runtime_feedback is None
     observations = [event.data["value"] for event in state.events
-                    if event.type == "observation" and event.tool == "run_command"]
-    assert len(observations) == state.memory["command_count"] == 1
+                    if event.type == "observation" and event.tool == "run_shell"
+                    and isinstance(event.data.get("value"), dict)
+                    and "exit_code" in event.data["value"]]
+    assert len(observations) == 1
     assert observations[0]["exit_code"] == 7
     assert observations[0]["stderr_tail"].strip() == "training failed"
-    assert len(attempt.artifact_ids) == len(run.artifacts) == len(result.artifacts) == 1
-    record = run.artifacts[attempt.artifact_ids[0]]
+    assert len(result.artifacts) == 1
+    assert len(attempt.artifact_ids) == 2
+    assert {item.kind for item in run.artifacts.values()} == {"question", "answer", "execution_record"}
+    records = [run.artifacts[key] for key in attempt.artifact_ids
+               if run.artifacts[key].kind == "execution_record"]
+    assert len(records) == 1
+    record = records[0]
     assert record.kind == result.artifacts[0].kind == "execution_record"
     rows = read_json(record)["results"]
     assert len(rows) == 1

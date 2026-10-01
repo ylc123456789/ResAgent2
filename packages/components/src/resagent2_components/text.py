@@ -1,9 +1,25 @@
-"""Small, shared text-window projection; no filesystem access or state."""
+"""Shared text decoding and window projection; no filesystem access or state."""
 
 
 # Raw tool-result IO bound, not the model input budget. Context projections
 # pack these records against each Agent's effective input limit.
 MAX_READ_CHARS = 128_000
+
+
+def decode_text(content: bytes) -> str:
+    """Read UTF-8 without lossy substitution or NUL-bearing binary content."""
+    if b"\x00" in content:
+        raise ValueError(
+            "Cannot read as UTF-8 text: file contains NUL bytes. "
+            "Use a format-aware reader or authorized processing to inspect the file."
+        )
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(
+            "Cannot read as UTF-8 text: file contains invalid UTF-8 bytes. "
+            "Use a format-aware reader or authorized processing to inspect the file."
+        ) from None
 
 
 def wrap_text_lines(text: str, *, max_chars: int = 1_000) -> str:

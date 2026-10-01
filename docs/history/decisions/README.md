@@ -29,4 +29,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0019：Agent 声明任务完成状态，固定代码验证结构事实](0019-agent-declared-completion.md)
 - [ADR-0020：Interpreter 固定组织原报告](0020-deterministic-work-interpreter.md)（取代 LLM 二次简报，保留完整索引与观察边界）
 
+- [ADR-0021：共享 Linux Shell 与逐次批准](0021-shared-approved-linux-shell.md)（取代 Experiment 专有普通命令入口，保留专业安装/验证）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

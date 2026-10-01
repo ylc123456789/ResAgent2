@@ -10,7 +10,7 @@ from resagent2_contracts import (
 )
 from resagent2_capabilities import (
     AuditEnvTool, ListFilesTool, PrepareEnvironmentTool, ReadArtifactTool,
-    ReadFileTool, RunSetupTool, SearchTextTool,
+    ReadFileTool, RunSetupTool, RunShellTool, SearchTextTool,
 )
 from resagent2_components import (
     ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
@@ -28,7 +28,6 @@ from resagent2_runtime import (
 from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
-from .tools import RunCommandTool
 from resagent2_components.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
@@ -114,7 +113,7 @@ class NativeExperimentAgent:
                          timeout_seconds=request.budget.timeout_seconds,
                          allowed=request.permissions.execute_commands and request.permissions.prepare_environment),
             AuditEnvTool(binding, allowed=request.permissions.execute_commands),
-            RunCommandTool(
+            RunShellTool(
                 runner, binding,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
@@ -136,7 +135,6 @@ class NativeExperimentAgent:
         result = self.loop.run(
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
-            initial_memory={"command_count": 0},
         )
         if (result.status != ModuleStatus.FAILED or result.session is None
                 or any(item.kind == "execution_record" for item in result.artifacts)):

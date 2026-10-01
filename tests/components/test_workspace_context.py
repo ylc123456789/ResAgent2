@@ -361,6 +361,24 @@ def test_only_successful_recorded_writes_mark_earlier_reads(tool, ok, path, even
     assert "modified_after_read_at" not in _reads(state)["file_snippets"][0]
 
 
+def test_failed_shell_marks_only_files_with_recorded_changes():
+    state = _state()
+    _observe(state, "read_file", {"path": "train.py", "start_line": 1, "content": "old"})
+    _observe(state, "read_file", {"path": "requirements.txt", "content": "torch"})
+    _observe(state, "run_shell", {
+        "command": "generate-code; exit 7", "exit_code": 7,
+        "changed_paths": ["train.py"],
+    }, ok=False)
+    _observe(state, "read_file", {"path": "train.py", "start_line": 2, "content": "new"})
+    before = state.model_dump_json()
+
+    snippets = _reads(state)["file_snippets"]
+    assert [item["content"] for item in snippets] == ["old", "torch", "new"]
+    assert [item.get("modified_after_read_at") for item in snippets] == [3, None, None]
+    assert state.model_dump_json() == before
+    assert _reads(AgentState.model_validate_json(before))["file_snippets"] == snippets
+
+
 def test_marker_uses_latest_successful_write_without_invalidating_new_reads():
     state = _state()
     _observe(state, "read_file", {"path": "train.py", "start_line": 1, "content": "old"})
@@ -454,7 +472,7 @@ def test_command_projection_is_bounded_and_keeps_failure_before_success(limit):
 def test_new_command_pass_replaces_failure_projection_not_original_events():
     state = _state()
     _observe(state, "run_verification", {"results": [_command_result(failed=True, stderr="OLD_FAILURE")]}, ok=False)
-    _observe(state, "run_command", _command_result(failed=True, stderr="EXPERIMENT_FAILURE"), ok=False)
+    _observe(state, "run_shell", _command_result(failed=True, stderr="EXPERIMENT_FAILURE"), ok=False)
     _observe(state, "run_verification", {"results": [_command_result()]})
     content = next(s.content for s in workspace_context(state) if s.name == "command_results")
     assert "OLD_FAILURE" not in content

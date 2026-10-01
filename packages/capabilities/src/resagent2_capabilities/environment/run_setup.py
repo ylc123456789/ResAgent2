@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.environment import EnvironmentBinding, SetupCommandPolicy
-from resagent2_components.process import ProcessRunner, parse_command
+from resagent2_components.process import ProcessRunner, output_tail, parse_command
 
 class RunSetupInput(RuntimeModel):
     """One shell-free dependency-installation command."""
@@ -51,15 +51,6 @@ class RunSetupTool:
         self.timeout_seconds = timeout_seconds
         self.policy = policy or SetupCommandPolicy()
         self.allowed = allowed
-
-    def _tail(self, path_str: str, *, limit: int = 2000) -> str:
-        path = Path(path_str)
-        if not path.is_absolute():
-            path = self.runner.boundary.root / path
-        try:
-            return path.read_text(encoding="utf-8", errors="replace")[-limit:]
-        except OSError:
-            return ""
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         if not self.allowed:
@@ -111,8 +102,8 @@ class RunSetupTool:
         )
         ok = result.exit_code == 0 and not result.timed_out
         value = result.model_dump(mode="json")
-        value["stdout_tail"] = self._tail(result.stdout_path)
-        value["stderr_tail"] = self._tail(result.stderr_path)
+        value["stdout_tail"] = output_tail(self.runner.boundary.root / result.stdout_path)
+        value["stderr_tail"] = output_tail(self.runner.boundary.root / result.stderr_path)
         value["environment_information"] = self.binding.refresh_information()
         return ToolObservation(
             summary=f"Setup command exited with code {result.exit_code}",

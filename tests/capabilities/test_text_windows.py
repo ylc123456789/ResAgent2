@@ -1,6 +1,8 @@
 """Text windows work across workspace and frozen evidence without weakening grants."""
 
 import hashlib
+import io
+import zipfile
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -237,3 +239,122 @@ def test_artifact_tool_rejects_inverted_character_window(tmp_path, start, end):
     tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
     with pytest.raises(ValueError, match="character range"):
         tool.execute(_state(), tool.input_model(artifact_id=ref.id, start_char=start, end_char=end))
+
+
+@pytest.mark.parametrize("content", [
+    b"first line\n" + b"a" * 140_000 + b"\x00",
+    b"first line\n" + b"a" * 140_000 + b"\xff",
+])
+@pytest.mark.parametrize("registered", [False, True])
+def test_text_reads_reject_binary_even_outside_selected_window(tmp_path, content, registered):
+    path = tmp_path / "data.json"
+    path.write_bytes(content)
+    state = _state()
+    if registered:
+        ref = _artifact(path)
+        tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+        args = tool.input_model(artifact_id=ref.id, start_line=1, end_line=1)
+        error_type = ArtifactReadError
+    else:
+        tool = ReadFileTool(_boundary(tmp_path))
+        args = tool.input_model(path=path.name, start_line=1, end_line=1)
+        error_type = ValueError
+    with pytest.raises(error_type, match="Cannot read as UTF-8 text") as error:
+        tool.execute(state, args)
+    assert len(str(error.value)) < 200
+    assert "\ufffd" not in str(error.value)
+    assert not state.memory.get("read_artifact_ids")
+    assert not state.memory.get("read_paths")
+    assert path.read_bytes() == content
+
+
+def test_zip_is_verifiable_but_cannot_be_read_as_text(tmp_path):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("metrics.json", '{"accuracy": 0.95}')
+    path = tmp_path / "code_bundle.zip"
+    path.write_bytes(buffer.getvalue())
+    ref = _artifact(path).model_copy(update={"media_type": "application/zip"})
+    reader = RegisteredArtifactReader([ref], run_id=ref.run_id)
+    reader.verify(ref.id)
+    with pytest.raises(ArtifactReadError, match="Cannot read as UTF-8 text"):
+        reader.read_text(ref.id)
+    tool = ReadFileTool(_boundary(tmp_path))
+    with pytest.raises(ValueError, match="Cannot read as UTF-8 text"):
+        tool.execute(_state(), tool.input_model(path=path.name))
+    # A binary format error must not hide a frozen-content integrity failure.
+    path.write_bytes(buffer.getvalue() + b"changed")
+    with pytest.raises(ArtifactReadError, match="sha256"):
+        reader.read_text(ref.id)
+
+
+@pytest.mark.parametrize("body", ["", "中文 α 😀\n", "one\r\ntwo\rthree\n", "literal \ufffd\n"])
+def test_text_reads_preserve_valid_utf8_regardless_of_file_label(tmp_path, body):
+    path = tmp_path / "unknown.bin"
+    path.write_bytes(body.encode("utf-8"))
+    ref = _artifact(path).model_copy(update={"media_type": "application/octet-stream"})
+    file_tool = ReadFileTool(_boundary(tmp_path))
+    artifact_tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+    assert file_tool.execute(_state(), file_tool.input_model(path=path.name)).value["content"] == body.replace("\r\n", "\n").replace("\r", "\n")
+    result = artifact_tool.execute(_state(), artifact_tool.input_model(artifact_id=ref.id))
+    assert result.value["content"] == body
+    assert result.memory_updates["read_artifact_ids"] == [ref.id]
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, registered):
+    from resagent2_contracts import AgentPermissions, AgentRequest, ModuleStatus, TaskBudget
+    from resagent2_runtime import (
+        AgentAction, AgentDefinition, AgentLoop, AllowListPermissionPolicy,
+        CompletionDecision, ContextSection, FinishTool, InMemorySessionStore,
+        ScriptedLLMClient,
+    )
+
+    bad = tmp_path / "binary.dat"
+    bad.write_bytes(b"binary\x00\xff")
+    good = tmp_path / "report.txt"
+    good.write_text("original evidence", encoding="utf-8")
+    if registered:
+        refs = [_artifact(path).model_copy(update={"id": id_}) for path, id_ in
+                [(bad, "artifact_bad"), (good, "artifact_good")]]
+        tool = ReadArtifactTool(RegisteredArtifactReader(refs, run_id="run_reader"))
+        arguments = [{"artifact_id": ref.id} for ref in refs]
+        memory_key, expected = "read_artifact_ids", [refs[1].id]
+    else:
+        tool = ReadFileTool(_boundary(tmp_path))
+        arguments = [{"path": path.name} for path in (bad, good)]
+        memory_key, expected = "read_paths", [good.name]
+
+    class AcceptFinish:
+        def evaluate(self, state, candidate):
+            return CompletionDecision(complete=candidate is not None, report="Finished")
+
+    llm = ScriptedLLMClient([
+        *(AgentAction(tool=tool.name, arguments=args) for args in arguments),
+        AgentAction(tool="finish", arguments={"report": "Finished"}),
+    ])
+    store = InMemorySessionStore()
+    result = AgentLoop(store=store).run(
+        AgentDefinition(
+            name="reader", owner=AgentOwner.CODING, system_prompt="Read the evidence.",
+            tools=(tool, FinishTool()), llm_client=llm,
+            context_builder=lambda request, state, limit: [
+                ContextSection(name="task", content=request.instruction, required=True),
+            ],
+            permission_policy=AllowListPermissionPolicy({tool.name, "finish"}),
+            completion_check=AcceptFinish(),
+        ),
+        AgentRequest(
+            run_id="run_reader", task_id="task_reader", attempt_number=1,
+            agent=AgentOwner.CODING, instruction="Read the evidence.",
+            budget=TaskBudget(max_llm_calls=3, timeout_seconds=60), permissions=AgentPermissions(),
+        ),
+        session_id="session_reader",
+    )
+    assert result.status == ModuleStatus.COMPLETED
+    assert "runtime_feedback" in llm.contexts[1].included_sections
+    assert "Cannot read as UTF-8 text" in llm.contexts[1].text
+    assert "\ufffd" not in llm.contexts[1].text
+    state = store.load("session_reader")
+    assert state.memory[memory_key] == expected
+    assert state.runtime_feedback is None

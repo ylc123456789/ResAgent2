@@ -98,7 +98,7 @@ def test_report_does_not_self_certify_command_failure(tmp_path):
 def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, exit_code, timed_out, status):
     current = state()
     current.events.append(AgentEvent(
-        sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
+        sequence=1, step=1, type="observation", tool="run_shell", created_at=current.created_at,
         data={"ok": False, "value": {
             "command": "python train.py", "exit_code": exit_code, "timed_out": timed_out,
             "stdout_path": "out.stdout", "stderr_path": "out.stderr", "stderr_tail": "real error",
@@ -125,7 +125,7 @@ def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, 
 def test_unexecuted_failure_text_is_not_command_evidence(tmp_path):
     current = state()
     current.events.append(AgentEvent(
-        sequence=1, step=1, type="observation", tool="run_command", created_at=current.created_at,
+        sequence=1, step=1, type="observation", tool="run_shell", created_at=current.created_at,
         data={"ok": False, "value": {"blocked": True, "reason": "No environment"}},
     ))
     decision = check(tmp_path).evaluate(current, FinishCandidate(status="failed", report="Cannot execute"))

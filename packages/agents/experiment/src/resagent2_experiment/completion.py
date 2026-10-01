@@ -53,7 +53,7 @@ class ExperimentCompletionCheck:
     def _execution_records(state: AgentState) -> list[dict]:
         records = []
         for event in state.events:
-            if event.type != "observation" or event.tool != "run_command" or not isinstance(event.data, dict):
+            if event.type != "observation" or event.tool != "run_shell" or not isinstance(event.data, dict):
                 continue
             value = event.data.get("value")
             if not isinstance(value, dict) or "exit_code" not in value:

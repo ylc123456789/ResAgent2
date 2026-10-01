@@ -21,7 +21,7 @@ class AuditEnvTool:
     input_model = AuditEnvInput
     model_guidance = (
         "Use for diagnostics when current environment facts are missing or suspect. "
-        "run_verification and run_command audit automatically when needed. A passing "
+        "run_verification and run_shell audit automatically when needed. A passing "
         "audit certifies only Python identity/version and pip availability. Package "
         "and device observations do not prove GPU initialization or task capability; "
         "verify needed capabilities through authorized execution tools."

@@ -11,7 +11,7 @@ from resagent2_contracts import (
 from resagent2_capabilities import (
     AuditEnvTool, CreateFileTool, DeletePathTool, GitDiffTool, ListFilesTool,
     PrepareEnvironmentTool, ReadArtifactTool, ReadFileTool, ReplaceTextTool,
-    RunSetupTool, SearchTextTool,
+    RunSetupTool, RunShellTool, SearchTextTool,
 )
 from resagent2_components import (
     ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
@@ -129,6 +129,13 @@ class NativeCodingAgent:
                          timeout_seconds=request.budget.timeout_seconds,
                          allowed=request.permissions.execute_commands and request.permissions.prepare_environment),
             AuditEnvTool(binding, allowed=request.permissions.execute_commands),
+            RunShellTool(
+                runner, binding, repository=repository,
+                timeout_seconds=request.budget.timeout_seconds,
+                extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
+                log_dir=f"{output_root}/commands",
+                allowed=request.permissions.execute_commands,
+            ),
             RunVerificationTool(
                 runner, repository, log_root=f"{output_root}/verification",
                 timeout_seconds=request.budget.timeout_seconds,

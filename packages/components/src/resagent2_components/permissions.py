@@ -7,7 +7,7 @@ from .operations import command_decision
 from resagent2_runtime import AllowListPermissionPolicy, PermissionDecision
 
 
-_PROCESS_TOOLS = frozenset({"run_command", "run_setup", "run_verification", "audit_env"})
+_PROCESS_TOOLS = frozenset({"run_shell", "run_setup", "run_verification", "audit_env"})
 _ENVIRONMENT_TOOLS = frozenset({"prepare_environment", "run_setup"})
 
 
@@ -34,7 +34,7 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             return PermissionDecision(outcome="deny", reason="Process execution is not authorized")
         if environment and not request.permissions.prepare_environment:
             return PermissionDecision(outcome="deny", reason="Environment preparation is not authorized")
-        if action.tool in {"run_command", "run_setup", "run_verification"} and not self.boundary.grant.access.unrestricted:
+        if action.tool in {"run_shell", "run_setup", "run_verification"} and not self.boundary.grant.access.unrestricted:
             return PermissionDecision(outcome="deny", reason="Script execution requires a fully readable/writable trusted workspace; scoped execution needs an isolation backend")
         tool = self.tools[action.tool]
         arguments = tool.input_model.model_validate(action.arguments)
@@ -46,10 +46,6 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             workflow = tool.policy.check(arguments.command)
             if not workflow.allowed:
                 return PermissionDecision(outcome="deny", reason=workflow.reason)
-        if action.tool == "run_command":
-            workflow = tool.check_command(arguments.command)
-            if not workflow.allowed:
-                return PermissionDecision(outcome="deny", reason=workflow.reason)
         context = {"cwd": str(self.boundary.root)}
         prepared = None
         if action.tool == "delete_path":
@@ -57,9 +53,12 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             context["deletion"] = prepared
             if prepared["requires_confirmation"]:
                 decision = PermissionDecision(outcome="ask", reason=f"Confirm deletion of {prepared['path']} ({len(prepared['entries'])} entries)")
-        elif action.tool in {"run_command", "run_verification"}:
-            commands = [arguments.command] if action.tool == "run_command" else arguments.commands
-            for command in commands:
+        elif action.tool == "run_shell":
+            context["shell"] = "/bin/bash"
+            context["pipefail"] = True
+            decision = PermissionDecision(outcome="ask", reason="Confirm this Bash script before execution")
+        elif action.tool == "run_verification":
+            for command in arguments.commands:
                 current = command_decision(command, self.boundary)
                 if current.outcome == "deny":
                     return current

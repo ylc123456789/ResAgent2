@@ -74,7 +74,7 @@ def proposal() -> WorkflowProposal:
     )
 
 
-@pytest.mark.parametrize("schema_version", ["8.0", "9.0"])
+@pytest.mark.parametrize("schema_version", ["8.0", "9.0", "19.0"])
 def test_old_schema_run_is_rejected_without_rewriting_its_file(tmp_path: Path, schema_version) -> None:
     now = datetime.now(UTC)
     run = ResearchRun(

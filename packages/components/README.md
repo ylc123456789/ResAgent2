@@ -10,14 +10,14 @@
 | [permissions.py](src/resagent2_components/permissions.py)、[operations.py](src/resagent2_components/operations.py) | Run 操作授权、固定命令规则、allow/ask/deny 和单次确认匹配 |
 | [git.py](src/resagent2_components/git.py) | Coding 使用的 GitBaseline、恢复与 Attempt 相对变化 |
 | [repo.py](src/resagent2_components/repo.py) | 仓库物化 |
-| [process.py](src/resagent2_components/process.py) | shell-free 命令解析/执行、凭据过滤、日志、进程树超时终止 |
+| [process.py](src/resagent2_components/process.py) | 直接 argv / Linux Bash 执行、凭据过滤、有界日志尾部、进程树超时终止 |
 | [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
 | [context.py](src/resagent2_components/context.py)、[text.py](src/resagent2_components/text.py) | 共享读取/环境/诊断投影；文本窗口与长行呈现 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、平级文献来源、共用 HTTP 节奏 |
 
-`process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Experiment 的执行策略在其 Agent。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
+`process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Shell 是 Capabilities 的共享模型入口，Experiment 从实际执行回执生成实验记录。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
 
 ## 依赖与状态
 
@@ -27,7 +27,7 @@
 
 WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denied_paths 均为相对前缀，空允许列表拒绝全部，排除项优先。每次文件操作检查解析路径；写范围是读范围的子集。`.git`、`.resagent2` 受保护，普通可重建缓存只是展示时忽略，可按写权限清理。prepare_delete/delete_prepared 先快照准确删除集合，再重验执行；只 unlink 最终链接自身，内容变化或中断时保留部分完成记录。
 
-OperationPermissionPolicy 共用 Run 权限和固定安全规则。先检查授权、工作区及工具自身约束，再返回 allow/ask/deny；确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；命令黑名单、shell-free 和路径 Tool 都不是 OS 沙箱。
+OperationPermissionPolicy 共用 Run 权限和固定安全规则。先检查授权、工作区及工具自身约束，再返回 allow/ask/deny；确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。run_shell 每次精确审批，不套用单 argv 命令分类；验证和安装保留各自范围。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；命令黑名单、shell-free 和路径 Tool 都不是 OS 沙箱。
 
 ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化、环境准备也使用这一执行路径。数据集/环境身份和缓存机制不变，不新增通用资源配额或镜像预检。
 

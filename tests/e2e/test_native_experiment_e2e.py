@@ -7,6 +7,7 @@ from resagent2_contracts import (
     AgentOwner,
     WorkflowAgentKind,
     ResearchRequest,
+    RecordedAnswer,
     RunBudget,
     RunStatus,
     TaskProposal,
@@ -50,16 +51,18 @@ from resagent2_components import (
 from resagent2_runtime import (
     AgentDefinition,
     AgentLoop,
-    AllowListPermissionPolicy,
     FinishTool,
     InMemorySessionStore,
     ScriptedLLMClient,
 )
 
+from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_orchestrator.handoffs import system_artifact
+
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
 from resagent2_experiment.models import ExperimentAction
-from resagent2_experiment.tools import RunCommandTool
+from resagent2_capabilities import RunShellTool
 
 
 class _FakeManager:
@@ -71,6 +74,9 @@ class _FakeManager:
         return "resenv_x"
 
     def inspect(self, *, run_id: str, workspace_id: str):
+        prefix = self.env_root / "resenv_x"
+        if prefix.exists():
+            return PreparedEnvironment(env_id="resenv_x", prefix=prefix, python_version="3.12")
         return None
 
     def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
@@ -95,11 +101,11 @@ class _FakeRunner:
     def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
 
-    def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
+    def run_shell(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
         stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
         stderr_rel = f"{log_dir}/command_{index:02d}.stderr"
-        stdout = self.boundary.resolve_system_write(stdout_rel)
-        stderr = self.boundary.resolve_system_write(stderr_rel)
+        stdout = Path(stdout_rel)
+        stderr = Path(stderr_rel)
         stdout.parent.mkdir(parents=True, exist_ok=True)
         stderr.parent.mkdir(parents=True, exist_ok=True)
         (self.boundary.root / "metrics.json").write_text(
@@ -135,7 +141,8 @@ class _NativeExperimentPort:
         tools = (
             PrepareEnvironmentTool(binding),
             AuditEnvTool(binding),
-            RunCommandTool(runner, binding, timeout_seconds=request.budget.timeout_seconds),
+            RunShellTool(runner, binding, timeout_seconds=request.budget.timeout_seconds,
+                         log_dir=f"{request.output_dir}/commands"),
             FinishTool(),
         )
         definition = AgentDefinition(
@@ -144,10 +151,11 @@ class _NativeExperimentPort:
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
             llm_client=ScriptedLLMClient(
-                [
+                ([] if request.parent_session_id else [
                     {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
                     {"tool": "audit_env", "arguments": {}},
-                    {"tool": "run_command", "arguments": {"command": "python train.py"}},
+                ]) + [
+                    {"tool": "run_shell", "arguments": {"command": "python train.py"}},
                     {
                         "tool": "finish",
                         "arguments": {
@@ -161,7 +169,9 @@ class _NativeExperimentPort:
                 ]
             ),
             context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
-            permission_policy=AllowListPermissionPolicy({tool.name for tool in tools}),
+            permission_policy=OperationPermissionPolicy(
+                tools, boundary=boundary, binding=binding, request=request,
+            ),
             completion_check=ExperimentCompletionCheck(
                 boundary,
             ),
@@ -174,7 +184,6 @@ class _NativeExperimentPort:
             initial_memory={
                 "hardware": "",
                 "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
-                "command_count": 0,
             },
         )
 
@@ -203,9 +212,35 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     _create_run(scheduler, "run_native_experiment", request, proposal)
     run = scheduler.run_until_stable("run_native_experiment")
 
+    assert run.status == RunStatus.PAUSED
+    assert run.pending_question is not None
+    assert not (workspace / "metrics.json").exists()
+    question = run.pending_question
+    attempt = run.workflow.tasks[0].attempts[0]
+    session_id = attempt.session.id
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text,
+        requested_fields=question.requested_fields, options=question.options,
+        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=run.run_id, task_id="task_experiment_native", attempt_number=1,
+        action=question.action,
+    )
+    run.answers.append(answer)
+    system_artifact(
+        scheduler.artifact_registry, run, "answer", answer,
+        task_id="task_experiment_native", attempt_number=1,
+    )
+    run.pending_question = None
+    run.status = RunStatus.RUNNING
+    scheduler.resume_task_in_place(run, "task_experiment_native")
+    scheduler.store.save(run)
+    run = scheduler.run_until_stable(run.run_id)
+
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
+    assert len(run.workflow.tasks[0].attempts) == 1
+    assert run.workflow.tasks[0].attempts[0].session.id == session_id
     artifacts = list(run.artifacts.values())
     assert {artifact.kind for artifact in artifacts} == {
-        "experiment_result", "execution_record", "acceptance_requirements",
+        "experiment_result", "execution_record", "acceptance_requirements", "question", "answer",
     }
     assert all(len(artifact.sha256) == 64 for artifact in artifacts)

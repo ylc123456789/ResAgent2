@@ -23,7 +23,7 @@ from resagent2_runtime.budget import execution_budget
 FINISH = {"tool": "finish", "arguments": {"report": "Recorded the actual outcome"}}
 
 
-@pytest.fixture(params=["coding", "experiment"])
+@pytest.fixture(params=["coding", "coding_shell", "experiment"])
 def case(tmp_path, monkeypatch, request):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -54,7 +54,8 @@ def case(tmp_path, monkeypatch, request):
         f"#!{sys.executable}\nimport os, sys\n"
         "args = sys.argv[1:]\n"
         "command = args[args.index('-p') + 2:]\n"
-        "os.execv(sys.executable, [sys.executable, *command[1:]])\n"
+        "os.environ['PATH'] = os.path.dirname(sys.executable) + os.pathsep + os.environ['PATH']\n"
+        "os.execvp(command[0], command)\n"
     )
     conda.chmod(0o755)
     manager = SimpleNamespace(
@@ -77,7 +78,7 @@ def case(tmp_path, monkeypatch, request):
         }
 
     manager.audit = audit
-    kind = request.param
+    kind = request.param.split("_")[0]
     monkeypatch.setattr(
         f"resagent2_{kind}.agent.EnvironmentManager", lambda **kwargs: manager,
     )
@@ -96,16 +97,17 @@ def case(tmp_path, monkeypatch, request):
     )
     return SimpleNamespace(
         root=tmp_path, repo=repo, manager=manager, request=req, kind=kind,
+        shell=request.param != "coding",
         agent_type=NativeCodingAgent if kind == "coding" else NativeExperimentAgent,
     )
 
 
 def command(case, tag):
-    if case.kind == "coding":
+    if not case.shell:
         return {"tool": "run_verification", "arguments": {
             "commands": [f"python -m unittest test_markers.Markers.test_{tag}"],
         }}
-    return {"tool": "run_command", "arguments": {"command": f"python measure.py {tag}"}}
+    return {"tool": "run_shell", "arguments": {"command": f"python measure.py {tag}"}}
 
 
 def invoke(case, req, actions):
@@ -173,7 +175,7 @@ def test_native_commands_resume_with_fresh_audit_and_single_use_approval(case, s
     executed = [
         event.data for event in state.events
         if event.type == "observation"
-        and event.tool in {"run_command", "run_verification"}
+        and event.tool in {"run_shell", "run_verification"}
         and isinstance(event.data.get("value"), dict)
         and "env_audit" in event.data["value"]
     ]
@@ -192,7 +194,7 @@ def test_pipeline_module_runs_once_after_approval(case, mode):
         "with Path(sys.argv[1] + '.marker').open('a') as f:\n"
         "    f.write('executed\\n')\n"
     )
-    action = {"tool": "run_command", "arguments": {"command": f"python -m pipeline.run {mode}"}}
+    action = {"tool": "run_shell", "arguments": {"command": f"python -m pipeline.run {mode}"}}
 
     first = invoke(case, case.request, [action])
     assert first.status == "needs_user_input"
@@ -205,7 +207,9 @@ def test_pipeline_module_runs_once_after_approval(case, mode):
     assert (case.repo / f"{mode}.marker").read_text() == "executed\n"
     state = JsonSessionStore(case.root / "sessions").load(result.session.id)
     assert state.pending_action is None
-    assert state.memory["command_count"] == 1
+    assert sum(1 for event in state.events if event.tool == "run_shell"
+               and event.type == "observation"
+               and "exit_code" in (event.data.get("value") or {})) == 1
 
 
 def test_failed_audit_after_approval_blocks_actual_command(case):

@@ -14,7 +14,7 @@ from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId
 
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 
-from .text import MAX_READ_CHARS, slice_text_lines, wrap_text_lines
+from .text import MAX_READ_CHARS, decode_text, slice_text_lines, wrap_text_lines
 
 
 def research_artifacts(artifacts: list[ArtifactRef]) -> list[ArtifactRef]:
@@ -154,7 +154,10 @@ class RegisteredArtifactReader:
         digest = hashlib.sha256(content).hexdigest()
         if digest != artifact.sha256:
             raise ArtifactReadError("artifact sha256 does not match frozen content")
-        text = content.decode("utf-8", errors="replace")
+        try:
+            text = decode_text(content)
+        except ValueError as error:
+            raise ArtifactReadError(str(error)) from error
         window = slice_text_lines(
             text, start_line=start_line, end_line=end_line, max_chars=len(text),
         )

@@ -17,7 +17,7 @@ from resagent2_components import (
 )
 from resagent2_runtime import AgentState
 
-from resagent2_experiment.tools import RunCommandTool, classify_command
+from resagent2_capabilities import RunShellTool
 
 
 def _state(**memory) -> AgentState:
@@ -43,11 +43,11 @@ class _FakeRunner:
     def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
 
-    def run(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
+    def run_shell(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
         stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
         stderr_rel = f"{log_dir}/command_{index:02d}.stderr"
-        stdout = self.boundary.resolve_system_write(stdout_rel)
-        stderr = self.boundary.resolve_system_write(stderr_rel)
+        stdout = Path(stdout_rel)
+        stderr = Path(stderr_rel)
         stdout.parent.mkdir(parents=True, exist_ok=True)
         stderr.parent.mkdir(parents=True, exist_ok=True)
         stdout.write_text("ok", encoding="utf-8")
@@ -74,43 +74,17 @@ def _binding(tmp_path: Path, *, certified: bool = False) -> EnvironmentBinding:
     return binding
 
 
-def test_classify_command_is_deterministic() -> None:
-    assert classify_command("pip install numpy") == "setup"
-    assert classify_command("python -m pip install numpy") == "setup"
-    assert classify_command("python --version") == "setup"
-    assert classify_command("ls") == "setup"
-    assert classify_command("python train.py --epochs 2") == "experiment"
-    assert classify_command("./run.sh") == "experiment"
-    assert classify_command("python -c \"print(1)\"") == "experiment"
-
-
-@pytest.mark.parametrize("python", ["python", "python3"])
-@pytest.mark.parametrize("module,expected", [
-    ("pip", "setup"), ("pipeline.run", "experiment"), ("pipelines", "experiment"),
-])
-def test_classify_python_module_by_exact_name(python, module, expected):
-    assert classify_command(f"{python} -m {module} all") == expected
-
-
 @pytest.mark.parametrize("writable,allowed", [(False, True), (True, False)])
-def test_run_command_enforces_permission_at_tool_entry(tmp_path, writable, allowed):
+def test_run_shell_enforces_permission_at_tool_entry(tmp_path, writable, allowed):
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])))
-    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30, allowed=allowed)
+    tool = RunShellTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30, log_dir=str(tmp_path / "commands"), allowed=allowed)
     with pytest.raises(PermissionError):
         tool.execute(_state(), tool.input_model(command="python train.py"))
 
 
-def test_classify_command_does_not_treat_wrapper_run_as_setup() -> None:
-    assert classify_command("conda install numpy") == "setup"
-    assert classify_command("conda run -p /env python train.py") == "experiment"
-    assert classify_command("poetry run python train.py") == "experiment"
-    assert classify_command("uv run python train.py") == "experiment"
-    assert classify_command("bash -c 'echo hi'") == "experiment"
-
-
-def test_run_command_blocks_experiment_when_automatic_audit_fails(tmp_path, monkeypatch) -> None:
+def test_run_shell_blocks_experiment_when_automatic_audit_fails(tmp_path, monkeypatch) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=False), timeout_seconds=30)
+    tool = RunShellTool(_FakeRunner(boundary), _binding(tmp_path, certified=False), timeout_seconds=30, log_dir=str(tmp_path / "commands"))
     monkeypatch.setattr(tool.binding.manager, "audit", lambda _: {"success": False})
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
@@ -123,16 +97,18 @@ def test_run_command_blocks_experiment_when_automatic_audit_fails(tmp_path, monk
 
 
 @pytest.mark.parametrize("command", [
-    "python train.py", "python -m pipeline.run validate", "python -m pipeline.run all",
+    "python train.py", "python -m pipeline.run validate", "ls | sort",
+    "python -m pip install numpy",
 ])
-def test_run_command_allows_experiment_after_certification(tmp_path, command) -> None:
+def test_run_shell_allows_experiment_after_certification(tmp_path, command) -> None:
     boundary = _boundary(tmp_path)
-    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30)
+    tool = RunShellTool(_FakeRunner(boundary), _binding(tmp_path, certified=True), timeout_seconds=30, log_dir=str(tmp_path / "commands"))
 
     observation = tool.execute(_state(), tool.input_model(command=command))
 
     assert observation.value["exit_code"] == 0
     assert observation.value["command"] == command
+    assert tool.binding.certified is False
 
 
 @pytest.mark.parametrize("kind", ["prepare", "audit", "setup"])
@@ -154,31 +130,14 @@ def test_environment_tools_reject_disabled_operations_before_effects(tmp_path, k
     assert binding.certified
 
 
-@pytest.mark.parametrize("command", ["pip install numpy", "python -m pip install numpy", "ls"])
-def test_run_command_rejects_setup_commands_before_effects(tmp_path, monkeypatch, command) -> None:
-    boundary = _boundary(tmp_path)
-    tool = RunCommandTool(_FakeRunner(boundary), _binding(tmp_path), timeout_seconds=30)
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("Rejected commands must not audit or execute")
-
-    monkeypatch.setattr(tool.binding, "audit", forbidden)
-    monkeypatch.setattr(tool.runner, "run", forbidden)
-    observation = tool.execute(_state(), tool.input_model(command=command))
-
-    assert observation.ok is False
-    assert observation.value["reason"] == "not_an_experiment_command"
-    assert observation.memory_updates == {}
-
-
-def test_run_command_blocks_without_environment(tmp_path) -> None:
+def test_run_shell_blocks_without_environment(tmp_path) -> None:
     boundary = _boundary(tmp_path)
     binding = EnvironmentBinding(
         EnvironmentManager(env_root=tmp_path / "envs", conda_exe="conda"),
         run_id="run_test",
         workspace_id="ws_test",
     )
-    tool = RunCommandTool(_FakeRunner(boundary), binding, timeout_seconds=30)
+    tool = RunShellTool(_FakeRunner(boundary), binding, timeout_seconds=30, log_dir=str(tmp_path / "commands"))
 
     observation = tool.execute(_state(), tool.input_model(command="python train.py"))
 

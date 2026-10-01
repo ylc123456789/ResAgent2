@@ -1,4 +1,4 @@
-"""Shell-free process execution with durable stdout/stderr logs."""
+"""Shared argv and explicit Linux shell execution with durable process logs."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -22,6 +23,8 @@ class UnsafeCommandError(ValueError):
 
 _SHELL_TOKENS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "<<"})
 
+_SHELL_ENVIRONMENT = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH"})
+
 _SENSITIVE_ENV_MARKERS = (
     "API_KEY",
     "API_TOKEN",
@@ -37,7 +40,7 @@ _SENSITIVE_ENV_MARKERS = (
 )
 
 
-def _sanitized_environment(base: dict[str, str]) -> dict[str, str]:
+def _sanitized_environment(base: dict[str, str], *, shell: bool = False) -> dict[str, str]:
     """Drop credential-like variables before launching a child process.
 
     This is a best-effort guard, not a sandbox: it removes API keys, SSH agent
@@ -47,9 +50,23 @@ def _sanitized_environment(base: dict[str, str]) -> dict[str, str]:
     env = dict(base)
     for name in list(env):
         upper = name.upper()
-        if any(marker in upper for marker in _SENSITIVE_ENV_MARKERS):
+        if (any(marker in upper for marker in _SENSITIVE_ENV_MARKERS)
+                or shell and (name in _SHELL_ENVIRONMENT or name.startswith("BASH_FUNC_"))):
             env.pop(name, None)
     return env
+
+
+def output_tail(path: str | Path, *, limit: int = 2000) -> str:
+    """Read a bounded UTF-8 log tail without loading the complete log."""
+    if limit <= 0:
+        return ""
+    try:
+        with Path(path).open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit * 4))
+            return handle.read(limit * 4).decode("utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
 
 
 def parse_command(command: str) -> list[str]:
@@ -178,8 +195,46 @@ class ProcessRunner:
         argv_prefix: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
     ) -> VerificationResult:
+        return self._run_argv(
+            [*(argv_prefix or []), *parse_command(command)], command=command,
+            log_dir=log_dir, index=index, timeout_seconds=timeout_seconds,
+            extra_env=extra_env,
+        )
+
+    def run_shell(
+        self,
+        script: str,
+        *,
+        log_dir: str,
+        index: int,
+        timeout_seconds: int,
+        argv_prefix: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> VerificationResult:
+        """Run an exact script in fixed non-login Bash, with pipeline failures retained."""
+        if sys.platform != "linux":
+            raise RuntimeError("Shell execution is supported only on Linux")
+        if not script.strip() or "\x00" in script:
+            raise ValueError("shell script must be nonempty and contain no NUL bytes")
+        return self._run_argv(
+            [*(argv_prefix or []), "/bin/bash", "--noprofile", "--norc",
+             "-o", "pipefail", "-c", script], command=script,
+            log_dir=log_dir, index=index, timeout_seconds=timeout_seconds,
+            extra_env=extra_env, shell=True,
+        )
+
+    def _run_argv(
+        self,
+        argv: list[str],
+        *,
+        command: str,
+        log_dir: str,
+        index: int,
+        timeout_seconds: int,
+        extra_env: dict[str, str] | None,
+        shell: bool = False,
+    ) -> VerificationResult:
         timeout_seconds = remaining_timeout(timeout_seconds)
-        argv = [*(argv_prefix or []), *parse_command(command)]
         stdout_path, stderr_path = self._log_paths(log_dir, index)
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         started = monotonic()
@@ -187,7 +242,7 @@ class ProcessRunner:
         environment = os.environ.copy()
         if extra_env:
             environment.update(extra_env)
-        environment = _sanitized_environment(environment)
+        environment = _sanitized_environment(environment, shell=shell)
         environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(

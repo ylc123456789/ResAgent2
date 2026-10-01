@@ -6,7 +6,8 @@ CODING_PROMPT 和 CodingCompletionCheck。解释、调查、修改均由 instruc
 读写权限由 WorkspaceGrant 约束；只读源码仍可以通过受控输出通道提交报告。
 可写不表示必须修改，无修改也可结束本次调用。
 
-共享 capabilities 提供文件、Git、artifact 和环境工具。
+共享 capabilities 提供文件、Git、artifact、环境及 run_shell 工具。Shell 每次审批，
+运行前使旧环境认证及验证失效，按实际变化更新编辑记录；它的成功不自动成为验证结果。
 [verification.py](src/resagent2_coding/verification.py) 保留 shell-free 验证命令策略：
 测试进程需要执行授权、完整可读写且无用户排除路径的可信工作区，以及已准备的环境。
 操作获准后，run_verification 在执行前自动核验尚未认证的环境；批准恢复不会信任旧认证，

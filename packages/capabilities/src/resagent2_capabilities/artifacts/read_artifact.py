@@ -27,6 +27,8 @@ class ReadArtifactTool:
     name = "read_artifact"
     input_model = ReadArtifactInput
     model_guidance = (
+        "Read UTF-8 text only; NUL bytes or invalid UTF-8 are rejected "
+        "and failed reads are not recorded as read. "
         "If an artifact read is truncated, read a bounded start_line/end_line "
         "range. For a long line or JSON string, use start_char/end_char to read "
         "small character windows within those same lines (zero-based, end exclusive). "

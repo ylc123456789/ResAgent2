@@ -140,7 +140,7 @@ Python 的 Protocol 描述接口形状，不要求具体实现继承同一个基
 | 替换模型、存储或文献源 | 修改接口实现和入口装配；预算、协议身份、错误和持久化约定仍需保持 |
 | 新增顶层 Agent 类型或公共字段 | 明确职责与契约变化，同步枚举、生产者、消费者、装配、版本和测试；不保留两套业务协议 |
 
-Capabilities 是模型工具入口，Components 是普通操作与共享呈现。两者不要求一一对应或强制逐层调用。Coding 的 run_verification 与 Experiment 的 run_command 各自保留专业规则，共用 ProcessRunner。
+Capabilities 是模型工具入口，Components 是普通操作与共享呈现。两者不要求一一对应或强制逐层调用。共享 run_shell 提供通用命令入口；Coding 的 run_verification 与共享 run_setup 保留验证、安装的专业记录和约束，均共用 ProcessRunner。系统内部的固定 Git、环境操作直接调用 Components，不经模型工具。
 
 最小模型客户端与原生工具客户端、Compiler JSON 与 Agent 工具调用，是底层调用协议的区别，不是 Agent 的业务模式。Interpreter 不调用模型。Session 固定自己的协议身份，恢复时不能自动降级或静默换协议。
 
@@ -176,3 +176,5 @@ Capabilities 是模型工具入口，Components 是普通操作与共享呈现�
 本文明确总体设计目标，并汇总仍有效的规则。历史 ADR 中已被取代的字段、接口和实现不会因此重新生效。发现目标与实现有差距时，应记录差距，再决定具体改动；不能把设计目标写成已经实现或验证的能力。
 
 - [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)：固定整理原报告，取代 ADR-0017 的 LLM 二次简报；保留索引、原件读取和验证边界。
+
+- [ADR-0021：共享 Linux Shell 与逐次批准](../history/decisions/0021-shared-approved-linux-shell.md)：Components 提供全系统执行部件，Capabilities 提供 LLM 工具；复用原审批、环境和执行事实记录。

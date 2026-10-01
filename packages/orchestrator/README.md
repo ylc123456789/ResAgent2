@@ -36,7 +36,7 @@ ResAgent2 的顶层控制模块。
 
 Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 19.0，旧 Run 保留但不迁移或恢复。
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 20.0，旧 Run 保留但不迁移或恢复。
 
 Controller 创建 Run 时将 `ResearchRequest.required_artifacts` 冻结到 `conclusion_requirements`。最终缺失诊断为 `required_artifact_missing`，message 为 `required artifact was not produced`，subject 为要求的名称；不能完成 Run，保留已有证据。此要求不额外要求观察或引用，原有 `required_evidence_kinds` 单独检查。
 

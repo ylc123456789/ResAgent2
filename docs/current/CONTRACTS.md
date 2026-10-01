@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 19.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 20.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -271,17 +271,18 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
 
-`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围，再检查工具自身命令约束与固定 argv 规则。run_command 与执行入口复用同一职责检查，安装及目录检查命令在请求确认前拒绝；Python 模块按完整名称识别 pip，不把 pipeline 等同名前缀的科研模块当成安装命令。常规受支持验证及直接工作区脚本可放行；内联解释器代码和未覆盖命令询问；裸 rm/rmdir、提权、shell 包装及明确破坏性系统操作拒绝。环境安装仍走受控环境 Tool。confirm_commands 为允许范围内的操作增加确认，不能把 deny 改为 allow；需确认的验证一次只提交一条命令。
+`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。共享 `run_shell` 替代 Experiment 的旧 `run_command`，每次都要求精确脚本、起始目录、绑定环境和 Bash 配置的单次确认，即使 confirm_commands=False；批准不能扩大 Run 授权。它执行 Linux `/bin/bash --noprofile --norc -o pipefail -c`，保留脚本首尾空白，不隐式开启 errexit，不提供持久终端或后台任务管理。通用脚本不套用单条 argv 分类或语义猜测；安装和角色职责由工具指引及用户审核约束，不宣称脚本内部被沙箱隔离。`run_verification` 和 `run_setup` 保留自己的命令范围与固定规则；confirm_commands 可为它们增加确认，需确认的验证一次只提交一条命令。环境创建/安装仍使用受控环境 Tool。
 
 | 操作 | 所需操作授权 | 额外边界 |
 |---|---|---|
 | `prepare_environment` | `prepare_environment=True` | 可调用受控环境创建子进程，不要求 `execute_commands=True` |
 | `run_setup` | 两项权限均为 True | 完整可读写工作区及安装命令策略 |
-| `run_command` / `run_verification` | `execute_commands=True` | 已有绑定环境、完整可读写工作区及命令策略；使用已有环境不要求准备权限 |
+| `run_shell` | `execute_commands=True` | 已有绑定环境、完整可读写工作区；逐次批准；使用已有环境不要求准备权限 |
+| `run_verification` | `execute_commands=True` | 已有绑定环境、完整可读写工作区及验证命令策略 |
 | 显式 `audit_env` | `execute_commands=True` | 已有绑定环境；执行固定诊断，不获得通用脚本权限 |
 | 文件读取、创建、修改及 Coding 的 `delete_path` | 对应 WorkspaceAccess 范围 | 模块必须提供该工具；不依赖命令或环境准备权限 |
 
-`confirm_commands=True` 对前四行顶层工具逐次询问，包括显式 `audit_env`。命令执行内部的自动环境核验属于已批准动作的前置检查，不另发问题。`confirm_commands=False` 仍保留固定规则要求的确认，例如非空目录递归删除或未覆盖的命令；它不等于自动批准所有操作。
+`confirm_commands=True` 对进程和环境顶层工具逐次询问，包括显式 `audit_env`。命令执行内部的自动环境核验属于已批准动作的前置检查，不另发问题。`confirm_commands=False` 仍保留固定规则要求的确认，例如所有 Shell 调用、非空目录递归删除；它不等于自动批准所有操作。
 
 Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，更新编辑 revision 及验证新鲜度，不承诺原子回滚。删除文件中的内容仍用 replace_text。
 
@@ -295,7 +296,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 
 下一轮原生请求由系统指令、已配对的历史 assistant/tool 消息和最新一次重建的业务 Context 组成；不保存或重发此前每轮完整业务 prompt。输入压力下使用可选 summarize_history 生成旧完整交互摘要；history_checkpoint 同时保存摘要与绝对历史边界，近期完整回合继续原样发送。原始历史不删，摘要不替代当前领域状态、回答、证据或完成门禁；失败不推进边界。具体比例和失败边界见[上下文](CONTEXT.md#compaction)。`reasoning_content` 仅用于同一 Session 的供应商协议续传，不进入业务 memory、ToolObservation 或完成证据。
 
-读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用行切片，Artifact 先核对整份 hash。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配。
+读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用严格 UTF-8 解码与行切片；含 NUL 或无效 UTF-8 时返回可恢复错误，不新增成功读取记录；失败仍保留反馈。Artifact 先核对整份 hash，纯存在/完整性验证不要求其为文本。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配。
 
 **容量**：ModelProfile 声明窗口、输出预留、安全余量，模块声明输入上限；有效额度取模块与剩余模型容量之小值。正文 JSON 路径计量渲染后的 Context，Action schema 另在有Profile时从模型容量预留，不计入Context的estimated_tokens；原生路径计量 `messages + tools` 完整 JSON 序列化，包括历史、schema 与转义开销。均使用字符/4近似；三个Agent及Compiler默认均为256000。不另加隐藏调用额度；压缩、动作和重试共用 Run 剩余 calls，step 仅记录时序。required 保持顺序，optional 按优先级稳定选入；大可选段放不下不阻挡后续小段。不查询或按模型名猜容量，不新增长期记忆系统；只对旧协议历史做共享的有损检查点。
 
@@ -350,7 +351,7 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以来源及请求行范围为片段身份，工件另含 start_char/end_char、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。components 对有后续同路径内置写入或已完成删除的文件片段附 `modified_after_read_at`；部分删除只标记确实删除的条目，不把未执行项当修改。不清空旧片段、不标记冻结 Artifact；无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
 - 三个Agent及Compiler默认输入上限同源为256000 tokens，模块分别可配置；CLI与real E2E的Compiler复用同一默认常量，Compiler仍无Session或历史压缩。固定段、工具schema、完整历史与材料导航框先计量；剩余材料空间按反馈/文件/工件/诊断/目录16/16/16/4/1相对权重起步，再按priority借用空余，扩展至整包80%软水位。必需固定内容可超过软水位但不超过总硬上限。正文JSON请求计完整section，原生请求计完整messages+tools及转义；最终仍不足就报错，不自动扩容/暂停/追加摘要重试。默认工具返回上限128000字符是独立IO边界，不是tokens容量；详见[上下文预算](CONTEXT.md#budgets)；
-- 共享command_results从原事件中选择run_verification/run_setup/run_command各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
+- 共享command_results从原事件中选择run_verification/run_setup/run_shell各自最近一次带命令结果的观察。先选失败命令及stdout/stderr尾部，再限长，标记事件号、裁剪和省略数量；有结果时为required，不依赖400字符历史预览。它是执行诊断，不替代当前状态或完成校验；原事件和日志不删除；
 - directory附observed_at并明确是历史目录观察，创建文件不会自动重写旧清单。Coding控制投影用edited_since_verification表达编辑/验证版本差，不再把它叫workspace_changed；这些是模型可见投影，不增加业务schema字段；
 - 按行读取的工件工作集从 Session 工具观测投影；要求和当前恢复材料则由共享读取函数直接校验并装入必需段。已读 ID、工件说明和检索短预览不是完整正文，也不是当前论断的支持证明；需要精确内容时按工件行范围读取。冻结工件、原始观测与 full trace 不因工作集淘汰而删除；
 - 共享客户端的每次 HTTP 尝试（含重试）都在发送前占用 Run 请求次数；格式纠正与摘要也共用余额。Session 和结果用量从共享用量差额投影，不再次扣费；
@@ -451,7 +452,7 @@ WorkspaceSpec/WorkspaceGrant 共用必填 access。路径是工作区相对前�
 
 WorkspaceBoundary 每次检查真实路径、软链逃逸与授权；`.git`、`.resagent2` 受保护，`__pycache__`、`.pytest_cache` 等只是可忽略的普通缓存，可按写权限清理。系统输出目录、冻结工件、数据集和环境缓存由各自组件管理，不因此授予源目录写权限。
 
-当前进程使用宿主账户，shell-free 和固定命令规则不是 OS 沙箱。没有隔离后端时，仅完整可读写、无用户 denied_paths 的工作区允许通用脚本/验证/安装执行；只读或局部授权即使打开执行权限并批准也不能绕过。完整授权仅适合可信代码，不保证脚本无法访问宿主其他路径或元数据。
+当前进程使用宿主账户，Shell 审批和固定命令规则不是 OS 沙箱。execute_commands 授权程序执行，prepare_environment 管受控环境工具；后一开关不构成任意脚本的环境写入隔离。没有隔离后端时，仅完整可读写、无用户 denied_paths 的工作区允许通用脚本/验证/安装执行；只读或局部授权即使打开执行权限并批准也不能绕过。完整授权仅适合可信代码，不保证脚本无法访问宿主其他路径或元数据。
 
 Coding 失败后在原期限内尽力收集诊断 patch；诊断失败保留原结果的错误、Session、计量和已有工件，以 error.details.diagnostic_patch_error 说明原因，并禁止自动重试。
 
@@ -487,15 +488,15 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 环境能力由 Coding 与 Experiment 共用（ADR-0009）：
 
-依赖需求可由代码和运行时反馈发现，需要时 prepare_environment / run_setup。run_verification / run_command 在操作获准后、实际命令执行前自动核验尚未认证的绑定；audit_env 仍可显式调用以诊断环境。镜像与 pip/conda 包缓存属于部署/包管理器配置，不新增到 ResearchRequest，也不与数据集登记表合并；同名依赖或缓存命中不代替环境审计。
+依赖需求可由代码和运行时反馈发现，需要时 prepare_environment / run_setup。run_verification / run_shell 在操作获准后、实际命令执行前自动核验尚未认证的绑定；run_shell 随后在执行前使旧认证及关联验证失效（即使只读脚本也如此），避免任意脚本修改依赖后沿用旧成功；Coding 记录 Shell 的实际文件变化，非零退出和超时也保留变化。audit_env 仍可显式调用以诊断环境。镜像与 pip/conda 包缓存属于部署/包管理器配置，不新增到 ResearchRequest，也不与数据集登记表合并；同名依赖或缓存命中不代替环境审计。
 
 新 Run/Workspace 绑定可能需要创建环境并重新安装依赖；包管理器缓存不等于可直接复用的已认证环境，也不保证无需网络或安装开销。安装计入 Run 执行时间。长任务中的实际成本及待调查项见 [L3 待办 O2](../history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md#follow-ups)。
 
 - `EnvironmentSpec.python_version` 有值表示硬约束，Agent 不得静默覆盖；为空表示 Agent 依据项目自行判断；
 - 环境归属 `run_id + workspace_id`：同 Run 同 Workspace 共用（Coding/Experiment 共用、Task 重试复用），不同 Workspace/Run 隔离；`env_id = resenv_<sha256(run_id + "\0" + workspace_id)[:12]>`；
-- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup 时，`EnvironmentBinding.generation` 更新且 `certified=False`，清除旧环境信息快照；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
+- 三个共享 Tool（capabilities 的公开 Python API）：`prepare_environment` / `run_setup` / `audit_env`。新绑定或真正开始 prepare/setup/shell 时，`EnvironmentBinding.generation` 更新且 `certified=False`，清除旧环境信息快照；执行成功、失败或抛异常都不能保留旧认证，参数/策略拒绝则不改变代次；
 - 问答恢复不信任旧认证。获准命令执行前的自动核验使用同一 Run 截止时间，失败则不运行命令；这是该命令的固定前置检查，不新增模型调用或另一轮命令批准。实际自动核验结果保存在该命令的 ToolObservation.value.env_audit 和 Session memory.env_audit；已有认证时不重复执行探针；
-- Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
+- Coding 的成功验证还须属于最新 edit revision、当前已审计的 generation。setup/shell 后或新进程恢复后，只重新 audit 不会让旧验证复活，必须再验证；
 - run_setup 接受裸名 python/python3 -m pip install、pip/pip3 install 及 conda env update；pip 实际运行绑定环境的绝对 Python。拒绝调用者指定其他解释器、目标目录或用户安装位置（含参数缩写）。确认继续绑定原工具参数和环境前缀，执行记录保存实际构造命令；部署层 pip 配置、镜像与缓存仍为可信输入，不改变或禁用。安装构建脚本仍属于可信进程，不构成系统沙箱。
 - prepare 成功、setup 返回（包括非零退出）和显式/自动 audit 的工具回执附 environment_information，来自同次受控只读查询。平台、设备、驱动与绑定 Python 的包版本（含 PyTorch version.py 静态构建信息）供 Agent 判断，不纳入基础审计 success；查询缺失、失败或局部超时只标明未知，不选择依赖、不导入框架、不证明 GPU 可运行。查询遵守 Run 截止时间；若已完成安装后预算耗尽，保留安装回执并标明诊断未完成，后续操作仍由原预算检查限制。环境信息不是新增公共请求字段或资源授权。
 - Python 版本优先级、硬约束不可覆盖、每 Attempt 最多两次版本切换：见 ADR-0009。
@@ -504,9 +505,9 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 19.0，字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 20.0；本版用共享 run_shell 替代 run_command，旧 schema 19 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
-本版以 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。schema 18 及更早 Run 不支持恢复，不保留兼容读取分支。
+schema 19 已用 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。不保留旧反馈格式的兼容读取分支。
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 

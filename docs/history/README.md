@@ -2,6 +2,14 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+<a id="prompt-shell-closeout"></a>
+
+## 2026-10-01：提示词一致性、共享 Shell 与委托约束收尾
+
+`refactor/prompt-consistency` 的产品验收基线为 **`e902698d13e5f1391e9a6b315f5b89d03a620950`（schema 20.0）**。本轮文档收尾不改变产品，也不表示已合入 main。服务器 pip check 干净、全量 **1563 passed / 1 skipped**、mock completed（13 工件）；A/B/C 定向补测均通过，并已只读核对原始记录。A/B 补齐旧验证失效与独立失败回执覆盖；C 在相同原始输入下验证指定方式完整传递、创建被拒后不执行且如实收尾。C 两次只读批准只产生一次实际执行，不把批准次数写成执行次数。
+
+此前 `c13f672` 的五个行为场景和校准 L3 通过由测试方报告，其中依赖成功修复路径补齐了 09-29 的未覆盖项；后续 schema 20 未重跑完整 L3。各提交的验证范围、首轮失败/覆盖缺口、报告勘误、证据路径和剩余边界集中在 [本轮验收收尾](reviews/PROMPT_SHELL_ACCEPTANCE_2026-10-01.md)。原报告与现场保留，不把单次模型成功说成普遍保证；没有本轮必须追加的产品修复或测试。
+
 <a id="code-health-closeout"></a>
 
 ## 2026-09-29：代码健康、固定 Interpreter 与 GPU 环境验收收尾

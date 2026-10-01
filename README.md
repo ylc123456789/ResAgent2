@@ -38,7 +38,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `19.0`（`SCHEMA_VERSION="19.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `20.0`（`SCHEMA_VERSION="20.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 
@@ -54,7 +54,7 @@ Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instructio
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 
-已完成一个真实仓库 L3 案例：自主查资料、实现一个学习率调度候选、完成两组配对训练并交付负结果；这是单案例闭环证据，不是通用成功率或统计显著性的保证。产品提交、原始证据复核、报告勘误及后续优化项见 [Compiler 额度与 L3 收尾记录](docs/history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。
+已有学习率调度与置信度校准的真实仓库 L3 案例；提示词一致性阶段完成校准 L3，后续 schema 20 的共享 Shell、文本读取和委托约束完成定向验收。具体提交、证据与覆盖边界见 [本轮收尾](docs/history/reviews/PROMPT_SHELL_ACCEPTANCE_2026-10-01.md)，早期调度案例见 [原验收记录](docs/history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。这些是已测案例的闭环证据，不代表当前版本重跑过所有 L3 或具有通用成功率保证。
 
 ## 通用部分如何复用
 

@@ -132,7 +132,7 @@ Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下�
 | `--max-tasks` / `--max-attempts` | 8 / 2；图中任务数和每任务尝试数上限，属于 ExecutionLimits |
 | `--no-execute-commands` | 关闭命令执行；CLI 默认明确授权执行，包含验证、实验和环境审计 |
 | `--no-prepare-environment` | 关闭环境准备和安装；CLI 默认明确授权受控环境管理 |
-| `--confirm-commands` | 默认关闭；开启后，权限允许的 Agent 顶层外部操作需逐次确认 |
+| `--confirm-commands` | 默认关闭；开启后，权限允许的 Agent 顶层外部操作需逐次确认。`run_shell` 无论此开关是否开启，每次都需确认 |
 | `--read-path` / `--write-path` | 可重复的工作区相对前缀，各默认 `.`；写范围必须属于读范围 |
 | `--read-only` | 写范围为空，与 `--write-path` 互斥 |
 | `--deny-path` | 可重复的排除前缀，对读取和写入优先拒绝 |

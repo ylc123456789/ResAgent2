@@ -27,7 +27,7 @@ CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 
 
 查具体操作的实现可看 [Components](../packages/components/README.md)；查模型可调用入口看 [Capabilities](../packages/capabilities/README.md)。二者没有一一对应关系，调用约定统一在 [普通组件接口](current/CONTRACTS.md#components)。
 
-想看系统能否完成真实研究任务，使用[当前 L3 规程](guides/L3_RESEARCH_TEST.md)：2026-09-26 改为置信度校准案例，通过真实 CLI、有限用户问答和独立证据复核评价；产品 `f8439c23` 已完成 R4 验收，范围与限制见[本轮收尾](history/README.md#code-health-closeout)。指南说明公开科研 Agent 基准的做法、新题目、当前产物/交接验收和预算边界。
+想看系统能否完成真实研究任务，使用[当前 L3 规程](guides/L3_RESEARCH_TEST.md)：2026-09-26 改为置信度校准案例，通过真实 CLI、有限用户问答和独立证据复核评价；`f8439c23` 的 R4 与 `c13f672` 的提示词阶段已分别完成校准 L3，后续 schema 20 完成定向工具补测，范围与限制见[最新收尾](history/README.md#prompt-shell-closeout)。指南说明公开科研 Agent 基准的做法、新题目、当前产物/交接验收和预算边界。
 
 旧学习率调度的[规程](history/reviews/L3_RESEARCH_TEST_2026-09-16.md)与 [e6688f3 验收](history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)保留为历史；旧暂停、超限和文献后端补验均不改写，也不代表新案例通过。更早的外部基准与自进化取舍见[当时调研](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。
 

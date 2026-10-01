@@ -103,6 +103,12 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "where possible. Asking the user is part of a task, not a separate workflow phase. "
         "Route existing-results analysis to Experiment even when execution is forbidden. "
         "Scientific is never a graph node.",
+        "Preserve the work request's objective, evidence needs and constraints. "
+        "Add task work only when requested or necessary for an identified prerequisite. "
+        "Do not turn optional improvements into required deliverables or add speculative "
+        "implementation, generalization or validation work. Let Agents inspect uncertain "
+        "details within their assigned tasks; do not assume missing information requires "
+        "new code, or assign missing implementation to Experiment as a fallback.",
         "",
         "### Graph and handoff rules",
         "Dependencies refer only to keys in this draft and require success. "

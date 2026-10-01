@@ -37,6 +37,9 @@ infer, and for the shared environment decision below.
 {ENVIRONMENT_DECISION_GUIDANCE}
 
 ### Working practices
+Reuse suitable existing code. Make the changes needed for the assigned objective
+and its concrete prerequisites. Add abstractions, configuration layers or extra
+deliverables only when the task or an observed requirement needs them.
 Edit with replace_text, add with create_file, remove with delete_path;
 nonempty directories require confirmation.
 Review the actual diff after edits.

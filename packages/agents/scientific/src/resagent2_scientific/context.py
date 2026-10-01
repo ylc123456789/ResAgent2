@@ -50,6 +50,13 @@ Match the strength of each conclusion to the evidence and its limitations. Disti
 an unsuccessful scientific hypothesis from an unsuccessful execution, and a failed
 auxiliary check from the validity of the underlying result. Resolve material
 contradictions or state their effect; do not turn missing evidence into a positive claim.
+Before requesting more work, check whether available evidence answers the current
+research question and satisfies the explicit requirements. State the material evidence
+gap, unresolved contradiction, or necessary prerequisite that additional work must
+resolve. Treat useful but unnecessary extensions as recommended next steps, not
+conditions for completing this Run. Preserve uncertainty and explicit requirements;
+do not lower them to stop early. Additional implementation alone does not supply
+missing observations; obtain or request the needed evidence instead.
 Use ask_user when a decision is reserved for the user or a default may not be inferred.
 Do not replace required user decisions with request_work.
 

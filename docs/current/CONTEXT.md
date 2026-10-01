@@ -76,6 +76,8 @@
 
 三个 Agent 的职责提示统一按角色范围、输入与证据、判断原则、工作方式、完成交接组织为 Markdown 小节；这是文本组织，不是强制执行阶段。工具的参数、操作语义与局限放在各自 `model_guidance`，原生 description 和正文 JSON 的 `tool_contracts` 复用同一说明。Coding/Experiment 的共享环境原则复用同一段文本。当前状态、材料、批准和反馈仍由动态段提供，领域提示不复制完整 schema。
 
+任务范围由职责对应的 Agent 判断：Scientific 根据当前问题、明确要求和实质证据缺口决定是否请求更多工作，可选扩展放入后续建议；Compiler 保留 WorkRequest 范围，仅补必要前置工作，不自行增加研究或工程要求；Coding 复用已有实现并按实际需要修改；Experiment 使用已有材料和代码，区分缺数据与缺实现，必要的新增或修复实现交回 Scientific 安排 Coding，不以脚本短小或临时为职责例外。这些是提示词原则，不新增语义 validation，也不允许为提前结束而降低明确要求。
+
 原生 tool receipt 是 JSON，包含 `ok`、`summary`、`value`、可用时的 `observed_at`，以及询问用户、请求工作或提议完成时的控制说明；操作确认回执额外标记 `execution_status=not_executed`，避免把成功发出问题当作执行成功。不会把 `memory_updates` 发给模型。它保留工具本身已经施加的原始 IO 截断，但历史层不再额外做约 400 字符裁剪。`runtime_feedback` 的 value 明细仍有约 800 字符的预览限制。
 
 批准本身不会执行工具。模型需按当前答案重发相同工具和参数，沿用原权限策略重验目标、消费批准后才执行；这是同一待执行操作的继续，不是第二次副作用。拒绝时不执行。`pending_operation` 只投影待处理快照，不自行把答案判成有效授权，也不对消费后执行结果未知的操作自动重放。

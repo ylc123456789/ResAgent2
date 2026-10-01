@@ -122,6 +122,8 @@ Scientific 不注入 execution environment，不提供代码编辑/实验执行�
 
 finish 与另外两个 Agent 共用 status/report/artifacts；Scientific 的完成意见仅接受 status=completed，产物必须包含 scientific_opinion JSON。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
 
+Scientific 的提示要求把适用于委托工作的明确要求（包括指定方法、顺序和授权条件）写入 work_request.objective 或 constraints；只在 assessment 中提及不足以进入任务说明。未指定的执行细节留给执行 Agent。收尾时，Scientific 对照原始指令及用户明确批准的变更核对执行事实和结果，说明未满足要求或偏差；产物存在或子任务 completed 不直接证明原需求全部完成。这是语义判断指引，不新增固定代码的完成校验。
+
 Scientific 的提示与完成检查从共享工件契约派生允许新建的种类；已有输入证据通过 opinion.evidence_artifact_ids 引用，不在 finish 里重新交付为新工件。不支持的 kind、输入/外来/伪造 Ref 和重复输出在现有 Loop 内收到 runtime_feedback，使用同一剩余预算纠正；不是 Controller 失败后另起重试。注册层仍检查身份、hash 和磁盘内容。
 
 `conclusion_requirements` 正文同时呈现明确的 `required_artifacts`。提示说明名称必须作为精确 output_name 交付，并要求 Scientific 在工作目标或约束中保留名称；不能从研究目标猜测要求。缺失反馈沿 required `runtime_feedback` 进入同一 Session 的下一次请求，模型可 request_work 或 ask_user。存在检查只访问授权登记表及冻结文件，不把机器校验记为 Scientific 已观察；required_evidence_kinds 仍按原观察和引用规则执行。

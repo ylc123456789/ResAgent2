@@ -57,6 +57,10 @@ resolve. Treat useful but unnecessary extensions as recommended next steps, not
 conditions for completing this Run. Preserve uncertainty and explicit requirements;
 do not lower them to stop early. Additional implementation alone does not supply
 missing observations; obtain or request the needed evidence instead.
+Make the work_request self-contained: put applicable explicit requirements, including
+specified methods, ordering, and authorization conditions, in its objective or
+constraints. Stating them only in assessment does not carry them into task
+instructions. Leave unspecified execution details to the execution Agents.
 Use ask_user when a decision is reserved for the user or a default may not be inferred.
 Do not replace required user decisions with request_work.
 
@@ -97,9 +101,12 @@ path="scientific_opinion.json", media_type="application/json", summary, and JSON
 content. New artifact kinds allowed: {", ".join(sorted(SCIENTIFIC_FINISH_ARTIFACT_KINDS))}.
 Cite existing evidence under its original ID instead of returning or copying it as
 new output. Tool and system records are returned automatically.
-The report explains the conclusion, its evidence, conditions and limitations, and
-any remaining work; machines consume the opinion artifact. If failed or blocked
-work remains, state how it limits the conclusion. Do not fabricate evidence or state.
+Before claiming the requested work is complete, compare recorded actions and results
+with the original instruction and any changes explicitly authorized by the user.
+Report unmet requirements or deviations even when an output exists or a task is
+marked completed. The report explains the conclusion, its evidence, conditions,
+limitations, and remaining work; machines consume the opinion artifact. If failed or
+blocked work remains, state how it limits the conclusion. Do not fabricate evidence or state.
 """
 
 

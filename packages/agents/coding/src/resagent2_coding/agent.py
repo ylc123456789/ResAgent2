@@ -30,7 +30,7 @@ from .completion import CodingCompletionCheck, derive_control_state
 from .context import CODING_PROMPT, build_context
 from .models import CodingAction
 from .verification import RunVerificationTool
-from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
 

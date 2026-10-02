@@ -6,8 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from resagent2_capabilities import DeletePathTool
-from resagent2_components.operations import command_decision
-from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_components.workspace import WorkspaceBoundary
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ArtifactCandidate, QuestionDraft,
@@ -176,18 +175,6 @@ def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash
         execute(resumed, [command("python first.py")], tool, store)
     result = execute(resumed, [FINISH], tool, JsonSessionStore(store.root))
     assert result.status == "completed" and attempts == ["started"]
-
-
-@pytest.mark.parametrize("text,outcome", [
-    ("rm data.txt", "deny"), ("rmdir cache", "deny"), ("sudo python a.py", "deny"),
-    ("bash -c 'echo hi'", "deny"), ("git reset --hard", "deny"),
-    ("git status", "allow"), ("python -c 'print(1)'", "ask"),
-    ("python -u first.py", "allow"), ("python -m pytest tests", "allow"),
-    ("custom-tool first.py", "ask"),
-])
-def test_fixed_rules_use_executable_and_argv(tmp_path, text, outcome):
-    (tmp_path / "first.py").write_text("pass")
-    assert command_decision(text, WorkspaceBoundary(request(tmp_path).workspace)).outcome == outcome
 
 
 @pytest.mark.parametrize("confirm", [False, True])

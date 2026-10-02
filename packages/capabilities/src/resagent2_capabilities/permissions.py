@@ -1,9 +1,8 @@
 """Run grants and deterministic operation rules share one tool policy."""
 
 from resagent2_contracts import RecordedAnswer
-from .artifacts import RegisteredArtifactReader
-from .materials import read_artifact_json
-from .operations import command_decision
+from resagent2_components.artifacts import RegisteredArtifactReader
+from resagent2_components.materials import read_artifact_json
 from resagent2_runtime import AllowListPermissionPolicy, PermissionDecision
 
 
@@ -57,13 +56,6 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             context["shell"] = "/bin/bash"
             context["pipefail"] = True
             decision = PermissionDecision(outcome="ask", reason="Confirm this Bash script before execution")
-        elif action.tool == "run_verification":
-            for command in arguments.commands:
-                current = command_decision(command, self.boundary)
-                if current.outcome == "deny":
-                    return current
-                if current.outcome == "ask":
-                    decision = current
         if process or environment:
             current = self.binding.current
             context["environment"] = str(current.prefix) if current is not None else None

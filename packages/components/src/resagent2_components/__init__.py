@@ -1,6 +1,9 @@
 """Reusable operations and presentation; no Tool entry points or Agent loop."""
 
-from .materials import read_artifact_json, read_request_material, request_materials_context, request_dataset_refs
+from .materials import (
+    read_artifact_json, read_request_material, read_work_feedback_source,
+    request_materials_context, request_dataset_refs,
+)
 from .artifacts import (
     ArtifactRegistrationPort,
     ArtifactReadError,
@@ -61,6 +64,7 @@ from .literature import (
 __all__ = [
     'read_artifact_json',
     'read_request_material',
+    'read_work_feedback_source',
     'request_materials_context',
     'request_dataset_refs',
     'ArxivLiteratureBackend',

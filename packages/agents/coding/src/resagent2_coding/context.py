@@ -8,7 +8,7 @@ from resagent2_components import (
     DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
     request_materials_context,
 )
-from resagent2_components.context import ENVIRONMENT_DECISION_GUIDANCE
+from resagent2_capabilities.environment.guidance import ENVIRONMENT_DECISION_GUIDANCE
 from resagent2_contracts import AgentRequest
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection,

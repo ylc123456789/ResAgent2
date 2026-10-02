@@ -47,8 +47,10 @@ def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=Non
     return value
 
 
-def _work_feedback_context(ref: ArtifactRef, feedback: WorkFeedback,
-                           reader: RegisteredArtifactReader) -> ContextMaterial:
+def read_work_feedback_source(
+    feedback: WorkFeedback, reader: RegisteredArtifactReader,
+) -> tuple[ArtifactRef, WorkRecord]:
+    """Validate and load the WorkRecord referenced by shared feedback."""
     record_ref = reader.resolve_ref(feedback.work_record_artifact_id)
     if (record_ref is None or record_ref.kind != "work_record"
             or record_ref.session_id != feedback.session_id):
@@ -57,37 +59,24 @@ def _work_feedback_context(ref: ArtifactRef, feedback: WorkFeedback,
     if (record.run_id, record.session_id, record.work_request_id) != (
             feedback.run_id, feedback.session_id, feedback.work_request_id):
         raise ArtifactReadError("work record does not belong to this feedback")
-    # These are source facts, not conclusions extracted from the rendered report.
-    fields = {"task_id", "status", "error", "warnings", "artifact_ids"}
-    frame = {
-        "work_request_id": record.work_request_id,
-        "previous_work_request": record.previous_work_request.model_dump(
-            mode="json", exclude={"schema_version"},
-        ),
-        "index_artifact_id": feedback.index_artifact_id,
-        "work_record_artifact_id": record_ref.id,
-        "tasks": [task.model_dump(mode="json", include=fields, exclude_none=True)
-                  for task in record.work_outcome.tasks],
-        "unresolved_task_outcomes": [
-            task.model_dump(mode="json", include=fields, exclude_none=True)
-            for task in record.unresolved_task_outcomes
-        ],
-    }
+    return record_ref, record
 
+
+def _generic_work_feedback_context(ref: ArtifactRef, feedback: WorkFeedback) -> ContextMaterial:
+    """Keep non-Scientific callers on a bounded, source-only material view."""
     def render(chars: int) -> str:
         window = slice_text_lines(feedback.report, max_chars=chars)
         return json.dumps({
             "artifact_id": ref.id, "kind": ref.kind,
             "content": {
-                **frame, "report": window["content"],
+                "work_request_id": feedback.work_request_id,
+                "work_record_artifact_id": feedback.work_record_artifact_id,
+                "report": window["content"],
                 "report_truncated": window["truncated"],
                 "report_omitted": not window["content"],
             },
         }, ensure_ascii=False)
-
-    return ContextMaterial(
-        name=f"material_{ref.id}", render=render, weight=16, priority=100,
-    )
+    return ContextMaterial(name=f"material_{ref.id}", render=render, weight=16, priority=100)
 
 
 def request_materials_context(request: AgentRequest) -> list[ContextSection | ContextMaterial]:
@@ -99,7 +88,9 @@ def request_materials_context(request: AgentRequest) -> list[ContextSection | Co
             continue
         value = read_request_material(request, ref, reader=reader)
         if ref.kind == "work_feedback":
-            sections.append(_work_feedback_context(ref, WorkFeedback.model_validate(value), reader))
+            feedback = WorkFeedback.model_validate(value)
+            read_work_feedback_source(feedback, reader)
+            sections.append(_generic_work_feedback_context(ref, feedback))
             continue
         sections.append(ContextSection(
             name=f"material_{ref.id}", content=json.dumps({"artifact_id": ref.id, "kind": ref.kind, "content": value}),

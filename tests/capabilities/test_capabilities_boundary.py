@@ -81,4 +81,8 @@ def test_capabilities_do_not_define_operation_classes() -> None:
                 continue
             is_input = any(isinstance(base, ast.Name) and base.id == "RuntimeModel" for base in node.bases)
             is_tool = any(isinstance(item, ast.FunctionDef) and item.name == "execute" for item in node.body)
-            assert is_input or is_tool, (source_file, node.name)
+            is_permission_adapter = (
+                source_file.name == "permissions.py"
+                and node.name == "OperationPermissionPolicy"
+            )
+            assert is_input or is_tool or is_permission_adapter, (source_file, node.name)

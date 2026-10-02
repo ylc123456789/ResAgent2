@@ -45,7 +45,9 @@
 | 所在位置 | 负责什么 | 不负责什么 |
 |---|---|---|
 | Agent 的 context builder / Orchestrator Interpreter | 领域信息的选择、组织和用途说明 | 不替代上层调度，不变更执行事实 |
-| components 的共享投影 | 环境、数据集、读取材料等可复用内容 | 不决定科学结论，不保管第二份 Run |
+| components 的共享投影 | 环境事实、数据集、读取材料与通用作用域校验 | 不决定科学结论，不保管第二份 Run |
+| capabilities 的共享指引 | Tool 权限适配与环境处理行为指引 | 不执行底层操作，不承担 Agent 角色判断 |
+| Scientific context 的专用呈现 | WorkFeedback 事实框与可伸缩报告 | 不改变来源校验或执行事实 |
 | runtime 的 Loop / Composer | 运行反馈、原生协议历史/检查点、工具 schema 与完整请求预算 | 不理解哪篇论文更重要，不自动总结或压缩研究发现 |
 | 外层组合根 | 注入模型、容量及模块配置 | 不负责每步阅读内容的选择 |
 

@@ -123,7 +123,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 它们都需要请求模型、调工具、记录观测、处理失败，所以复用 runtime.AgentLoop，只装配不同 prompt、工具、权限、上下文和完成检查。
 
-普通文件授权、Git、进程、环境和工件校验放在 components；暴露给模型的工具入口放在 capabilities。Agent 的普通代码也可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
+工作区/文件、Git、进程、环境事实和工件校验放在 components；Capabilities 的 OperationPermissionPolicy 组合 Run 授权与这些执行边界，模型工具入口和共享 Tool 指引也放在 capabilities。Agent 的普通代码可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
 
 Compiler 复用模型客户端、上下文和共享执行预算，不运行 AgentLoop。**复用能力不等于采用同一个业务流程。**
 

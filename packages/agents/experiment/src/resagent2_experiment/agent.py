@@ -28,7 +28,7 @@ from resagent2_runtime import (
 from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
 from .models import ExperimentAction
-from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
 

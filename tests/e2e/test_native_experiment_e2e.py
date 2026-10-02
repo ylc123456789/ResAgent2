@@ -56,7 +56,7 @@ from resagent2_runtime import (
     ScriptedLLMClient,
 )
 
-from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_orchestrator.handoffs import system_artifact
 
 from resagent2_experiment.completion import ExperimentCompletionCheck

@@ -51,14 +51,16 @@ cd "$repo_dir"
 | 代码修改策略 | agents/coding | 真实变更、当前版本验证和失败记录 |
 | 实验执行或指标 | agents/experiment | 命令记录、完整证据集和 warnings |
 | Run、图、暂停恢复 | orchestrator | 身份、状态、重复交付、消费保留 |
-| 文件授权、环境、进程、文献后端、资源与共享呈现 | components | 所有同语义消费者，别复制进另一 Agent |
+| 工作区/文件、进程、环境事实、文献后端、资源与通用材料校验 | components | 所有同语义消费者，别复制进另一 Agent |
+| 模型 Tool、权限适配器与共享 Tool 行为指引 | capabilities | 复用 components/runtime，不复制底层边界 |
+| Scientific WorkFeedback 事实框与报告呈现 | agents/scientific/context.py | 保持 Scientific 专用展示与通用材料校验分离 |
 | 模型工具入口、参数与局部工具逻辑 | capabilities | 复用 components/runtime，不要求对应组件；领域控制与验证策略留在 Agent |
 | 上下文、反馈、工具派发 | runtime | 三个 Agent；Compiler 是否经相同适配受影响 |
 | 公共字段和组合规则 | contracts | 生产/接收端、持久化、恢复与版本 |
 
 先找现有组件，能补一个函数或判据就不新增框架。内部算法未变更外部约定时，调用方不应被迫一起改。
 
-判断位置可以问三句：是“怎样驱动模型与工具循环”吗？放 Runtime。是模型可调用的通用 Tool 吗？放 Capabilities 对应目录。是普通调用方需要的具体操作或共享投影吗？放 Components。领域任务规则仍归 Agent，不属于这三者的兜底共用代码。参见 [工具目录](../../packages/capabilities/README.md) / [组件目录](../../packages/components/README.md)。
+判断位置可以问三句：是“怎样驱动模型与工具循环”吗？放 Runtime。是模型可调用的通用 Tool、权限适配或共享 Tool 指引吗？放 Capabilities。是普通调用方需要的具体操作、事实投影或通用材料校验吗？放 Components。领域任务规则仍归 Agent，不属于这三者的兜底共用代码。参见 [工具目录](../../packages/capabilities/README.md) / [组件目录](../../packages/components/README.md)。
 
 修改提示词时按职责放置规则：角色 prompt 描述目标、判断原则和跨工具选择；Tool 的 `model_guidance` 描述参数、操作语义、副作用与限制；动态 Context 提供本轮事实；Runtime 说明协议、历史与当前状态的关系。使用清楚的 Markdown 小节，条件指引写明何时适用，不把小节变成所有任务必经的阶段。共享规则优先复用普通文本常量，不新建提示词框架。
 

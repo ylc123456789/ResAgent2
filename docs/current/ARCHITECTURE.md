@@ -192,7 +192,7 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 
 RunBudget 只限制模型请求次数与时间；ExecutionLimits 单独限制任务数和每任务尝试数。Controller/Scheduler 注入同一共享用量接口，模型每次 HTTP 尝试发送前先在 Run 原子快照登记；三个 Agent、Compiler、重试、格式纠正和摘要都占用余额，固定 Interpreter 不占用模型次数。结果用量仅用于诊断；中断留下的 unknown 占用不退款，内部调用不能另开预算。
 
-Run 的操作授权与 WorkspaceAccess 是内部权限上限。Components 的 OperationPermissionPolicy 共用 allow / ask / deny 判定，文件和进程组件在执行前仍检查边界；领域命令约束保留在各自工具。ask 复用现有 question/answer 工件与 Session，批准绑定单次动作、参数、上下文和身份，派发前持久消费。Coding 的 delete_path 允许授权文件和空目录删除，非空目录使用待删除目标快照确认；不新增审批服务。
+Run 的操作授权与 WorkspaceAccess 是内部权限上限。Capabilities 的 OperationPermissionPolicy 组合 allow / ask / deny 判定，文件和进程组件在执行前仍检查边界；领域命令约束保留在各自工具。ask 复用现有 question/answer 工件与 Session，批准绑定单次动作、参数、上下文和身份，派发前持久消费。Coding 的 delete_path 允许授权文件和空目录删除，非空目录使用待删除目标快照确认；不新增审批服务。
 
 Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者不要求每项配一个 Agent、Session 或管理器。只服务单个 Tool 的小逻辑可留在 Tool 内；业务策略留在所属 Agent，不一概塞进“共用”目录。
 

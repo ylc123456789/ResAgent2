@@ -14,7 +14,7 @@ from resagent2_contracts import (
     TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
 from resagent2_components import WorkspaceBoundary
-from resagent2_components.permissions import OperationPermissionPolicy
+from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_orchestrator import ArtifactRegistry
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_runtime import (

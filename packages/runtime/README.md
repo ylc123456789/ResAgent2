@@ -29,7 +29,7 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 
 `render(chars)` 负责来源、截断/省略语义；Composer 不自行切开代码、JSON或工具调用/回执。文件、工件、诊断、目录通过 components 共用此机制，不给三个Agent分别写分配器。最终仍放不下就走现有超限失败，不增加自动暂停或摘要重试。字符估算不是供应商的精确token数。规则与例子见[上下文预算](../../docs/current/CONTEXT.md#budgets)。
 
-三个 Agent 通过 Components 的材料读取/校验函数从正式工件取得验收要求及本次恢复材料；Scientific 工作反馈呈现本轮执行事实与已记录报告，完整科研目录由 Scientific 上下文单独展示；依据 `resume_artifact_ids` 选择 answer/work_feedback 并校验作用域。原题与回答作为必需材料交给同一 ContextComposer 计量，装不下明确失败，不静默遗漏。Runtime 不负责工件读取或问题路由；历史 `ask_user [ok]` 只表示问题已发出，不能代替原题、真实回答或前提已满足的证据。
+三个 Agent 通过 Components 的材料读取/校验函数从正式工件取得验收要求及本次恢复材料；Scientific 工作反馈的事实框与已记录报告由 Scientific 上下文呈现，完整科研目录由 Scientific 上下文单独展示；依据 `resume_artifact_ids` 选择 answer/work_feedback 并校验作用域。原题与回答作为必需材料交给同一 ContextComposer 计量，装不下明确失败，不静默遗漏。Runtime 不负责工件读取或问题路由；历史 `ask_user [ok]` 只表示问题已发出，不能代替原题、真实回答或前提已满足的证据。
 
 非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 使用它；Interpreter 用固定代码组织材料，不调用模型。runtime 不认识编译或解释业务。
 
@@ -54,7 +54,7 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 
 `AgentAction.arguments` 保持通用对象，以便同一 Loop 复用不同 Tool 集。`OpenAICompatibleClient` 的 AgentLoop 走 `next_tool_call`，把每个 Tool 既有 `input_model` 的完整 JSON Schema 放进原生 `tools` 参数；Compiler 经 `PromptLLMClient.next_action` 从正文读取 JSON。没有 `next_tool_call` 的测试或注入客户端继续使用 `next_action`，Loop 为它们从同一 `input_model` 渲染简短必填参数契约。Agent 的两种客户端路径最终都由 ToolRegistry 做完整输入模型校验；Compiler 的 JSON 结果由其调用方校验。底层协议不改变这些模块的业务接口。
 
-PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，固定命令/删除规则由 Components 的 OperationPermissionPolicy 提供；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过现有 question/answer 工件确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
+PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，Capabilities 的 OperationPermissionPolicy 适配 Components 的固定规则与执行边界；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过现有 question/answer 工件确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
 
 原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work` 必须单独调用；零个、超量或混入控制工具的批次整体拒绝，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
 

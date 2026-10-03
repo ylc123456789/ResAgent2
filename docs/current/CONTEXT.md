@@ -290,13 +290,15 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 1. **Scientific 发起检索。** CLI/E2E 将 arXiv、OpenAlex 作为平级来源装配，沿用最近成功来源和有界切换规则。搜索返回来源元信息、摘要和可用的全文入口；摘要缺失留空，不补写 LLM 摘要。搜索成功与全文可获取是两件事。
 2. **按论文登记材料。** 每篇结果独立登记为 `literature_paper`，正文明确是元信息与摘要，`metadata.paper` 保留规范化记录。`literature_search` 只保存本次查询及论文引用，作为搜索回执。重复搜索按明确的规范化论文 key 识别论文，保留 arXiv 版本；规范化元信息快照相同才复用同 Run 条目，同 key 内容变化登记新快照。不按标题猜测合并，也不重写旧冻结工件。
 3. **浏览和按需深入。** 工具返回论文引用和有限预览，科研目录展示论文及直接来源关系。Scientific 可用 `read_artifact` 阅读单篇条目；需要方法、实验设置、表格或原文依据时，再调用 `fetch_literature_fulltext(paper_artifact_id)`。元信息、摘要、原始 PDF 与解析文本的区别始终保留。
-4. **取得全文并复用。** 全文工具只接收已授权论文 ID，按该论文的登记来源获取可用 PDF；Registry 分别冻结 `literature_pdf` 与 `literature_fulltext`。`metadata.paper_artifact_id` 指向论文，`metadata.source_artifact_id` 标明直接来源（PDF→论文，文本→PDF），目录只投影这条关系。工具按 paper_artifact_id 复用本 Run 已冻结材料，解析失败重试可复用 PDF，不因重复请求重新下载成功的原件。
+4. **取得全文并复用。** 全文工具只接收已授权论文 ID；优先复用本 Run 导入或检索后冻结的 PDF，没有原件时再按登记来源获取可用 PDF；Registry 分别冻结 `literature_pdf` 与 `literature_fulltext`。`metadata.paper_artifact_id` 指向论文，`metadata.source_artifact_id` 标明直接来源（PDF→论文，文本→PDF），目录只投影这条关系。工具按 paper_artifact_id 复用本 Run 已冻结材料，解析失败重试可复用 PDF，不因重复请求重新下载成功的原件。
 5. **阅读和判断。** PDF 由 PyMuPDF4LLM 提取为可供现有 `read_artifact` 按范围读取的文本，关闭 OCR，不新增 LLM 阅读笔记。摘要预览或下载成功都不代表读取了全文；空文本、解析错误和材料局限应如实处理。Scientific 根据问题判断哪些正文足够以及是否还需工作，不要求逐篇读完整篇。
 6. **记录与检查。** 访问历史保留为诊断事实，不再作为 ask_user、request_work、引用或 finish 的前置门槛。引用仍须指向本 Run 授权登记的完整工件；`required_evidence_kinds` 检查已引用的 `literature_paper` 或 `literature_fulltext`，搜索回执不能代替论文。`required_artifacts` 继续按精确 output_name 与冻结 hash 检查交付，不评价内容含义。
 
-**当前局限：**只处理检索得到且公开可获取的资料；本轮不提供任意外部文件导入，不绕过付费墙或访问限制。无可用 PDF、下载失败、扫描件无文本、公式/表格提取不完整都不等于资料不存在，也不意味着可以编造全文内容。没有完整来源图、按语义自动证明引用、向量库或持久阅读笔记。正文仍受工具 IO 上限和统一上下文预算约束，材料可按范围重读，不承诺永久记忆。
+用户也可通过 CLI 论文清单向新 Run 或 paused 的 Run 导入元信息和可选本地 PDF。论文条目进入同一科研目录，PDF 继续按需解析；本地原件存在时全文获取不必联网。导入不代表在线检索成功，也不自动读取全文。补充材料不回答当前问题、不恢复 Run、不重置用量。
 
-外部 timeout/429、全文不可获取与本地上下文截断是不同问题。所需材料已在冻结工件时可直接读取；不能把当前片段缺失当成从未检索或下载。具体网络和提取边界见[文献组件](../../packages/components/README.md#literature)，设计取舍见 [ADR-0022](../history/decisions/0022-paper-materials-and-access-records.md)。
+**当前局限：**支持本地清单和 PDF 导入，以及按登记来源获取公开资料；不绕过付费墙或访问限制。无可用 PDF、下载失败、扫描件无文本、公式/表格提取不完整都不等于资料不存在，也不意味着可以编造全文内容。没有完整来源图、按语义自动证明引用、向量库或持久阅读笔记。正文仍受工具 IO 上限和统一上下文预算约束，材料可按范围重读，不承诺永久记忆。
+
+外部 timeout/429、全文不可获取与本地上下文截断是不同问题。所需材料已在冻结工件时可直接读取；不能把当前片段缺失当成从未检索或下载。具体网络和提取边界见[文献组件](../../packages/components/README.md#literature)，资料粒度和访问记录取舍见 [ADR-0022](../history/decisions/0022-paper-materials-and-access-records.md)，外部导入见 [ADR-0023](../history/decisions/0023-external-literature-import.md)。
 
 **源码与测试**：[文献组件](../../packages/components/src/resagent2_components/literature/)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。确定性测试证明材料和引用链路的事实边界，不证明真实模型一定选对材料或得出正确结论。
 
@@ -373,4 +375,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 21.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 22.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

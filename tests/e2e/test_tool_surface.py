@@ -11,6 +11,7 @@ Schema 20 replaces experiment/run_command with shared/run_shell, preserves exact
 script text and updates the embedded public version. Text readers reject lossy decoding.
 Schema 21 registers per-paper metadata/abstract sources, adds full-text acquisition,
 and treats reading records as diagnostics rather than completion gates.
+Schema 22 updates embedded contract versions and documents imported PDF reuse.
 """
 
 import hashlib

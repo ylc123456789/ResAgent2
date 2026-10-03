@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 21.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 22.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -10,7 +10,7 @@
 
 | 调用方向 | 入口 | 输入 → 输出 | 位置 |
 |---|---|---|---|
-| 用户入口 → Controller | create_run / answer_question / run_until_stable | ResearchRequest / UserAnswer → ResearchRun | [用户与控制](#entry) |
+| 用户入口 → Controller | create_run / import_literature / answer_question / run_until_stable | ResearchRequest / PreparedLiteratureImport / UserAnswer → ResearchRun | [用户与控制](#entry) |
 | Controller → Scientific | ModulePort.invoke | AgentRequest → AgentResult | [统一调用](#module)、[科学决策](#scientific) |
 | Controller → Interpreter | WorkInterpreter.interpret | 已配对 WorkRecord → 固定组织的原报告正文 | [反向交接](#interpreter) |
 | Controller → Compiler | WorkflowCompiler.compile | WorkRequest + 图/路由/执行限制 → CompilationResult | [工作编译](#compiler) |
@@ -38,6 +38,16 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 
 <a id="research-request"></a>
 
+### 外部论文导入
+
+外部论文清单由 CLI 调用 load_literature_manifest(path) 规范化为
+PreparedLiteratureImport(paper, pdf_path)，再传给 ResearchController.create_run(...,
+literature=...)；已存在的 Run 只能调用 import_literature(run_id, literature) 且状态必须
+为 paused。Controller 负责以 source_type=import 登记 literature_paper 和可选
+literature_pdf，刷新科研目录后原样返回 paused Run。导入操作不调用 Agent、不回答问题、
+不恢复执行、不重置预算；pdf_path 只由用户清单提供并在 Components 中相对清单目录解析，
+不暴露给 LLM。
+
 `ResearchRequest` 包含 `goal`、可选 `hypothesis`、`context`、`constraints`、`input_artifacts: list[ArtifactImport]`、`required_evidence_kinds`、`required_artifacts: list[OutputName]`（默认空），以及下列 Run 控制字段。创建 Run 时保存授权与执行限制，内部调用只能继承或收紧。
 
 | 字段 | 含义 |
@@ -55,7 +65,7 @@ Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套�
 
 当前 Scheduler 将 Run 剩余调用数和时间传给下一次 Agent 调用，没有预先给各 Task 分钱包；等待回答、重试或追加任务都不重置 Run 用量。脱离 Controller 单独调用原生 Agent 时，TaskBudget 只限制该次调用；需要跨调用累计时，由可信调用方绑定共享执行预算。
 
-调用者用 ArtifactImport 提交本地输入的 URI、kind、media_type、summary 和可选 expected_sha256。Controller 校验并冻结为已登记工件。数据集目录由部署环境提供，不是 ResearchRequest 的逐次路径参数。
+调用者用 ArtifactImport 提交本地输入的 URI、kind、media_type、summary、metadata 和可选 expected_sha256。Controller 校验并冻结为已登记工件。数据集目录由部署环境提供，不是 ResearchRequest 的逐次路径参数。
 
 <a id="questions"></a>
 
@@ -221,7 +231,7 @@ Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifact
 
 `fetch_literature_fulltext(paper_artifact_id)` 接收本 Run 授权的论文工件 ID，按登记来源获取可用 PDF，并生成 `literature_pdf` 与解析文本 `literature_fulltext`。衍生工件的 `metadata.paper_artifact_id` 标明所属论文；`metadata.source_artifact_id` 表示直接来源，PDF 指向 paper，解析文本指向 PDF。目录投影该直接关系，不复制文件、权限或完整来源图。
 
-同 Run 按 paper_artifact_id 复用已冻结 PDF/解析文本；解析失败后的重试可复用 PDF。所有材料经原 Registry 登记和 hash 校验；搜索摘要、原始 PDF 与解析文本不可互相冒称。全文工具不改变 read_artifact 的 UTF-8 文本边界；本轮不增加专门的外部论文导入入口或自动 OCR。
+同 Run 按 paper_artifact_id 复用已冻结 PDF/解析文本；解析失败后的重试可复用 PDF。所有材料经原 Registry 登记和 hash 校验；搜索摘要、原始 PDF 与解析文本不可互相冒称。全文工具不改变 read_artifact 的 UTF-8 文本边界；不自动 OCR。外部导入的元信息与本地 PDF 通过同一授权输入和科研目录进入 Scientific，不伪装为在线搜索回执。原件已登记时优先复用并解析，不需要联网。
 
 <a id="compiler"></a>
 
@@ -272,7 +282,7 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
 | PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
-| PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Components，不是 OS 沙箱 |
+| PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Capabilities，组合 Components 提供的基础边界；不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
 
 LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 的 task/attempt 可为空。领域指令、工件和授权由注入的 builder、工具、finalizer 使用。EnvironmentBinding、GitBaseline 留在 components，不变成 wire 消息。
@@ -325,6 +335,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | [ResourceLayout](../../packages/components/src/resagent2_components/resources.py) | 部署配置 → 数据集与环境根目录 | 不管理 pip/conda 下载缓存，不成为 ResearchRequest 字段 |
 | [RegisteredArtifactReader / build_module_report](../../packages/components/src/resagent2_components/artifacts.py) | 授权 ID + 行范围 → 正文；模块说明 → ArtifactCandidate | 读取先校验 Run 与整份 hash；报告生成纯函数，不自行登记或生成科学证据 |
 | [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、数量和年份 → 规范化论文列表 | 两源保持平级切换；服务不可用与合法空结果区分，不伪造全文 |
+| [load_literature_manifest](../../packages/components/src/resagent2_components/literature/imports.py) | 本地 JSON 清单 → PreparedLiteratureImport 列表 | 验证元信息及可选 PDF，路径相对清单目录；不联网、不登记或恢复 Run |
 | [workspace_context](../../packages/components/src/resagent2_components/context.py)、[文本切片](../../packages/components/src/resagent2_components/text.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 / 文本窗口 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
 
 文献 Tool 通过工件组件中的 `ArtifactRegistrationPort` 接受组合根注入的登记/解析对象；实现仍是 Orchestrator 的 ScientificArtifactRegistration，Components 不反向 import Orchestrator。错误如何转为 ToolObservation、反馈、ModuleError 仍由已有 Tool/Loop/Agent 边界处理，组件不另建恢复机制。
@@ -513,7 +524,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 21.0；本版按篇登记文献及全文来源，将访问记录改为日志，删除 Run 的已读门禁字段。旧 schema 20 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 22.0；本版补充外部论文导入，沿用按篇材料、全文来源和访问日志边界。旧 schema 21 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
 schema 19 已用 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。不保留旧反馈格式的兼容读取分支。
 

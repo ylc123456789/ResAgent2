@@ -22,6 +22,7 @@ from resagent2_contracts import (
     WorkspaceSpec,
     WorkspaceAccess,
 )
+from resagent2_components.literature import load_literature_manifest
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 
 from . import render
@@ -226,6 +227,7 @@ def _parser(
     run.add_argument("--data-root", default=_default_data_root())
     run.add_argument("--hypothesis")
     run.add_argument("--context", default="")
+    run.add_argument("--literature-file", help="JSON paper manifest with optional local PDFs")
     run.add_argument("--constraint", action="append", default=[])
     run.add_argument(
         "--required-artifact", action="append", default=[], metavar="NAME",
@@ -239,6 +241,13 @@ def _parser(
     run.add_argument("--prepare-environment", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--confirm-commands", action="store_true")
     _workspace_args(run)
+
+    literature = subparsers.add_parser("literature", help="manage caller-supplied paper materials")
+    literature_commands = literature.add_subparsers(dest="literature_command", required=True)
+    literature_import = literature_commands.add_parser("import", help="add papers to a paused Run")
+    literature_import.add_argument("run_id")
+    literature_import.add_argument("--file", required=True, help="JSON paper manifest")
+    literature_import.add_argument("--data-root", default=_default_data_root())
 
     show = subparsers.add_parser("show", help="show one persisted ResearchRun")
     show.add_argument("run_id")
@@ -286,14 +295,29 @@ def cli(
 
     if args.command == "run":
         request = _request_from_args(args)
+        prepared = load_literature_manifest(args.literature_file) if args.literature_file else None
         application = application_builder(
             data_root=data_root,
             workspaces=_workspace_specs(args),
         )
+        literature_kwargs = {"literature": prepared} if prepared is not None else {}
         run = application.controller.create_run(
             args.run_id or _new_run_id(),
             request,
+            **literature_kwargs,
         )
+    elif args.command == "literature":
+        prepared = load_literature_manifest(args.file)
+        existing = store_factory(data_root).load(args.run_id)
+        if existing.status != RunStatus.PAUSED:
+            raise ValueError("literature may only be appended to a paused Run")
+        application = application_builder(
+            data_root=data_root,
+            workspaces={key: record.source for key, record in existing.workspaces.items()},
+        )
+        run = application.controller.import_literature(args.run_id, prepared)
+        _render_run(run)
+        return EXIT_COMPLETED
     else:
         existing = store_factory(data_root).load(args.run_id)
         application = application_builder(

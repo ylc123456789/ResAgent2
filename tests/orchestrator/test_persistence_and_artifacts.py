@@ -398,3 +398,60 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
     assert second.id == first.id
     assert second.sha256 == first.sha256
     assert Path(second.uri.removeprefix("file://")).is_file()
+
+
+def test_import_identity_preserves_kind_and_source_provenance(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 evidence")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    base = dict(uri=str(source), kind="literature_pdf", media_type="application/pdf", summary="Paper")
+    first = registry.register_import(
+        ArtifactImport(**base, metadata={"paper_artifact_id": "artifact_source_a"}),
+        run_id="run_import",
+    )
+    repeated = registry.register_import(
+        ArtifactImport(**base, metadata={"paper_artifact_id": "artifact_source_a"}),
+        run_id="run_import",
+    )
+    other = registry.register_import(
+        ArtifactImport(**base, metadata={"paper_artifact_id": "artifact_source_b"}),
+        run_id="run_import",
+    )
+    other_kind = registry.register_import(
+        ArtifactImport(**{**base, "kind": "data"}, metadata={"paper_artifact_id": "artifact_source_a"}),
+        run_id="run_import",
+    )
+    assert first == repeated
+    assert len({first.id, other.id, other_kind.id}) == 3
+    assert first.metadata == {"source_type": "import", "paper_artifact_id": "artifact_source_a"}
+
+
+def test_import_reuse_rejects_tampered_frozen_copy(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 evidence")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
+    first = registry.register_import(spec, run_id="run_import")
+    Path(first.uri.removeprefix("file://")).write_bytes(b"tampered")
+    with pytest.raises(ArtifactRegistrationError, match="hash changed"):
+        registry.register_import(spec, run_id="run_import")
+
+
+def test_import_detects_source_mutation_during_copy(tmp_path, monkeypatch):
+    import resagent2_orchestrator.artifacts as implementation
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 evidence")
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    original_copy = implementation.shutil.copyfile
+
+    def changing_copy(original, destination):
+        original.write_bytes(b"changed before copy")
+        return original_copy(original, destination)
+
+    monkeypatch.setattr(implementation.shutil, "copyfile", changing_copy)
+    with pytest.raises(ArtifactRegistrationError, match="changed while freezing"):
+        registry.register_import(
+            ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper"),
+            run_id="run_import",
+        )
+    assert not list((tmp_path / "artifacts" / "run_import").glob("artifact_import_*"))

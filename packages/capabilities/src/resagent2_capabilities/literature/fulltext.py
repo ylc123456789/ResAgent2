@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from resagent2_components.artifacts import ArtifactRegistrationPort, RegisteredArtifactReader
 from resagent2_components.literature import LiteraturePaper
 from resagent2_components.literature.fulltext import PdfFetchError, PdfParseError, fetch_pdf, parse_pdf
-from resagent2_contracts import ArtifactCandidate, ArtifactId
+from resagent2_contracts import ArtifactCandidate, ArtifactId, ArtifactRef
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import RuntimeModel
 
@@ -29,7 +29,8 @@ class FetchLiteratureFulltextTool:
     name = "fetch_literature_fulltext"
     input_model = FetchLiteratureFulltextInput
     model_guidance = (
-        "Fetch the source-provided PDF of a registered literature_paper and extract "
+        "Use an already imported PDF, or fetch the source-provided PDF of a registered "
+        "literature_paper, and extract "
         "page-labelled text with OCR disabled. Input is the paper artifact ID, not "
         "a URL. The original PDF is preserved even if parsing fails. Repeated calls "
         "reuse registered originals/text. No PDF URL, network failure or unreadable "
@@ -38,14 +39,18 @@ class FetchLiteratureFulltextTool:
         "Extracted text may omit figures, formulas or table structure."
     )
 
-    def __init__(self, register: ArtifactRegistrationPort, *, download=None, parse=None):
+    def __init__(self, register: ArtifactRegistrationPort, *,
+                 input_artifacts: list[ArtifactRef] | None = None, download=None, parse=None):
         self.register = register
+        self.input_artifacts = list(input_artifacts or [])
         self.download = download or fetch_pdf
         self.parse = parse or parse_pdf
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(FetchLiteratureFulltextInput, arguments)
-        registered = self.register.list_artifacts(run_id=state.run_id)
+        registered = list({ref.id: ref for ref in [
+            *self.register.list_artifacts(run_id=state.run_id), *self.input_artifacts,
+        ]}.values())
         reader = RegisteredArtifactReader(registered, run_id=state.run_id)
         paper_ref = reader.resolve_ref(args.paper_artifact_id)
         if paper_ref is None or paper_ref.kind != "literature_paper":
@@ -59,10 +64,15 @@ class FetchLiteratureFulltextTool:
         if text is not None:
             reader.verify(text.id)
             source = reader.resolve_ref(text.metadata.get("source_artifact_id", ""))
-            if source is None or source.kind != "literature_pdf" or source.metadata.get("paper_artifact_id") != paper_ref.id:
+            if (source is None or source.kind != "literature_pdf"
+                    or source.metadata.get("paper_artifact_id") != paper_ref.id
+                    or source.metadata.get("source_artifact_id") != paper_ref.id):
                 raise ValueError("full text has no registered source PDF for this paper")
             reader.verify(source.id)
             return self._result(state, paper_ref, source, text, cached=True)
+
+        if pdf is not None and pdf.metadata.get("source_artifact_id") != paper_ref.id:
+            raise ValueError("PDF has no registered source paper")
 
         if pdf is None:
             if not paper.pdf_url:

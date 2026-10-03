@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from resagent2_components.literature import load_literature_manifest
 from resagent2_contracts import RunStatus
 
 from . import render
@@ -283,13 +284,15 @@ class Shell:
         run_id = args.run_id or _new_run_id()
         request = _request_from_args(args)
         workspaces = _workspace_specs(args)
+        prepared = load_literature_manifest(args.literature_file) if args.literature_file else None
+        literature_kwargs = {"literature": prepared} if prepared is not None else {}
         application = self.application_builder(
             data_root=self.data_root,
             workspaces=workspaces,
         )
         self.current_run_id = run_id
         self.runner.start(
-            lambda: application.controller.create_run(run_id, request)
+            lambda: application.controller.create_run(run_id, request, **literature_kwargs)
         )
         self._watch(run_id)
         return False

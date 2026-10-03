@@ -115,3 +115,31 @@ def test_shell_answer_reaches_controller_and_resumes_same_session(
     answer_refs = [ref for ref in saved.artifacts.values() if ref.kind == "answer"]
     assert len(answer_refs) == 1
     assert read_json(answer_refs[0], RecordedAnswer).question_text == paused.pending_question.text
+
+
+def test_shell_run_passes_same_literature_option_as_one_shot_cli(tmp_path):
+    from types import SimpleNamespace
+    from resagent2_cli.shell import Shell
+
+    manifest = tmp_path / "papers.json"
+    manifest.write_text(json.dumps({"papers": [{"title": "External shell paper"}]}))
+    calls = []
+
+    class Controller:
+        def create_run(self, run_id, request, *, literature=()):
+            calls.append((run_id, request, literature))
+            return None
+
+    class Runner:
+        def start(self, fn):
+            fn()
+
+    shell = Shell(data_root=tmp_path, application_builder=lambda **kwargs: SimpleNamespace(controller=Controller()),
+                  store=InMemoryRunStore(), stream=io.StringIO())
+    shell.runner = Runner()
+    shell._watch = lambda *args, **kwargs: None
+    shell._dispatch(shlex.join(["/run", "--run-id", "run_shell_import", "--goal", "Use paper",
+                               "--literature-file", str(manifest)]))
+    assert calls[0][0] == "run_shell_import"
+    assert calls[0][1].goal == "Use paper"
+    assert calls[0][2][0].paper.title == "External shell paper"

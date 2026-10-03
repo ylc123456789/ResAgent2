@@ -80,7 +80,7 @@ Scientific 负责科学意义，不负责具体 Agent 调用、任务状态或�
 | 默认呈现 | 每轮交接提供完整科研目录、必需事实框和按共享额度展示的原报告；保留原件入口，不额外展开完整登记表或执行记录 |
 | 资料与访问记录 | 目录、工作反馈和原件读取使用同一登记来源及既有身份；访问记录说明返回过的内容，不是提问、委托或完成的资格门槛。阅读答案不等于批准或恢复 |
 
-Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的固定组织不替代 Scientific 的语义综合，结构有效也不证明语义正确。目录和工作反馈不授予权限；读目录不等于读到原证据。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已引用或科学有效；访问记录保留，但不再作为引用和控制动作的前置门槛。新增统一运行前 Validation 暂缓实现；现有请求、依赖、预算、权限和读取时校验继续生效。只有具体问题证明需要时，再评估最小补充，详见 [Validation 方案](../history/reviews/VALIDATION_DESIGN.md)。
+Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的固定组织不替代 Scientific 的语义综合，结构有效也不证明语义正确。目录和工作反馈不授予权限；读目录不等于读到原证据。外部文献通过 Controller 登记为本 Run 授权材料，不新增来源数据库；paused 时补入不消费答案、不启动执行、不重置预算或改变权限。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已引用或科学有效；访问记录保留，但不再作为引用和控制动作的前置门槛。新增统一运行前 Validation 暂缓实现；现有请求、依赖、预算、权限和读取时校验继续生效。只有具体问题证明需要时，再评估最小补充，详见 [Validation 方案](../history/reviews/VALIDATION_DESIGN.md)。
 
 ## 2. 修改时保持的十二条约束
 
@@ -126,7 +126,7 @@ Scheduler 要调用 Agent，但它在源码中只认识 ModulePort 这个公开�
 
 Python 的 Protocol 描述接口形状，不要求具体实现继承同一个基类。替换实现还必须遵守身份、暂停、预算、失败和工件等行为约定，仅有同名方法不够。
 
-完整依赖范围看[模块边界](ARCHITECTURE.md#modules)。当前 Orchestrator 除 contracts 外，还使用 runtime.budget 的共享执行预算，以及 components.workspace/artifacts/materials 的工作区边界和已登记工件读取。Controller 与 Scheduler 同包内共用 store/registry 和必要辅助函数，也不等于跨 Agent 读取私有状态。稳定的普通组件不必再套一层接口。
+完整依赖范围看[模块边界](ARCHITECTURE.md#modules)。当前 Orchestrator 除 contracts 外，还使用 runtime.budget 的共享执行预算，以及 components.workspace/artifacts/materials 的工作区边界和已登记工件读取，以及 components.literature 的论文规范化与呈现。Controller 与 Scheduler 同包内共用 store/registry 和必要辅助函数，也不等于跨 Agent 读取私有状态。稳定的普通组件不必再套一层接口。
 
 ### 3.3 开闭原则：沿已有接口扩展，控制修改范围
 

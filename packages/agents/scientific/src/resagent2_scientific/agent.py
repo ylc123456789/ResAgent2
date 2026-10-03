@@ -109,7 +109,9 @@ class ScientificAgent:
         if self.literature_backend is not None and self.registration_port is not None:
             tools.append(LiteratureSearchTool(self.literature_backend, self.registration_port))
         if self.registration_port is not None:
-            tools.append(FetchLiteratureFulltextTool(self.registration_port))
+            tools.append(FetchLiteratureFulltextTool(
+                self.registration_port, input_artifacts=request.input_artifacts,
+            ))
         definition = AgentDefinition(
             name="scientific", owner=AgentOwner.SCIENTIFIC,
             system_prompt=SCIENTIFIC_PROMPT, tools=tuple(tools), llm_client=self.llm_client,

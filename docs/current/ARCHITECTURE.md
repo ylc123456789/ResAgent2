@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **21.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **22.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -72,7 +72,7 @@ flowchart TB
     Agents --> Contracts
     Orch[orchestrator] --> Contracts
     Orch -->|仅 runtime.budget| Runtime
-    Orch -->|路径边界与工件读取| Components
+    Orch -->|路径边界、工件读取、论文规范化与呈现| Components
     Root[CLI / E2E 各自的组合根] --> Orch
     Root --> Agents
     Root --> Caps
@@ -81,7 +81,7 @@ flowchart TB
     linkStyle default stroke:#597fa6,stroke-width:3px
 ```
 
-Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。除 Contracts 外，它仅依赖 runtime.budget 的共享执行上下文和 Components 的路径边界和已登记工件读取，不调用具体 Tool 或 Agent 实现。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
+Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不 import 具体 Agent；外层组合根负责接线。除 Contracts 外，它仅依赖 runtime.budget 的共享执行上下文和 Components 的路径边界、已登记工件读取，以及论文导入的规范化与内容呈现，不调用具体 Tool 或 Agent 实现。Port 是可信进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。
 
 Runtime 不 import Components 或 Capabilities；Components 不 import Capabilities、Agent 或 Orchestrator；Capabilities 不 import Agent 或 Orchestrator。组件与 Tool **没有一一对应关系**，不建立注册器、适配器基类或自动映射。
 
@@ -140,7 +140,7 @@ Task 可有多个 Attempt；**问答续跑不是 retry**：回答后继续同一
 
 Scientific Session 属于 Run，跨工作回合复用；Coding/Experiment Session 属于 Run + Task + Attempt。上层保存 SessionRef，不读 Agent 私有 memory 驱动调度。
 
-Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定状态，不只是插入记录；answer_question 保存答案再续跑；run_until_stable 不制造答案，也不绕过 paused。
+Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定状态，不只是插入记录；answer_question 保存答案再续跑；run_until_stable 不制造答案，也不绕过 paused。外部论文导入也是 Controller 的入口操作：创建时接收清单，或仅在 paused 时追加材料并刷新科研目录；导入不答题、不恢复、不重置预算。CLI 只读取参数并调用现有入口，Components 负责论文/本地来源规范化，Registry 冻结文件与来源，不增加独立论文库。
 
 ### 恢复保证的范围
 

@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "21.0"
+SCHEMA_VERSION = "22.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["21.0"] = SCHEMA_VERSION
+    schema_version: Literal["22.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +443,7 @@ class ArtifactImport(ContractModel):
     media_type: NonEmptyStr
     summary: NonEmptyStr
     expected_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 RequiredEvidenceKind = Literal["literature_paper", "literature_fulltext"]

@@ -188,7 +188,11 @@ class ArtifactRegistry:
                 f"import sha256 mismatch for {spec.uri}: "
                 f"expected {spec.expected_sha256}, got {digest}"
             )
-        artifact_id = f"artifact_import_{digest[:16]}"
+        import_metadata = {**spec.metadata, "source_type": "import"}
+        identity = hashlib.sha256(
+            f"{digest}:{spec.kind}:{json.dumps(import_metadata, sort_keys=True, ensure_ascii=False)}".encode()
+        ).hexdigest()
+        artifact_id = f"artifact_import_{identity[:24]}"
         destination_dir = self.root / run_id / artifact_id
         destination = destination_dir / source.name
         if not destination.exists():
@@ -200,12 +204,16 @@ class ArtifactRegistry:
                 ) as handle:
                     temporary = Path(handle.name)
                 shutil.copyfile(source, temporary)
+                if _sha256(temporary) != digest:
+                    raise ArtifactRegistrationError("import source changed while freezing")
                 os.replace(temporary, destination)
             except Exception:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
                 shutil.rmtree(destination_dir, ignore_errors=True)
                 raise
+        if not destination.is_file() or _sha256(destination) != digest:
+            raise ArtifactRegistrationError("registered import artifact hash changed")
         return ArtifactRef(
             id=artifact_id,
             kind=spec.kind,
@@ -215,7 +223,7 @@ class ArtifactRegistry:
             sha256=digest,
             media_type=spec.media_type,
             summary=spec.summary,
-            metadata={"source_type": "import"},
+            metadata=import_metadata,
         )
 
     def register_scientific(

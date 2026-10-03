@@ -27,6 +27,11 @@ CLI 接收目标、工作区和配置，组成 ResearchRequest，调用 Research
 
 CLI 只是入口，不再实现一套调度。它和 E2E 脚本都负责装配依赖，但两者是独立入口。
 
+如果已用其他工具找到论文，可在创建时提供论文清单，或在 Run 等待用户时补充。
+Controller 将元信息与可选本地 PDF 冻结，放入同一材料登记表和科研目录。Scientific
+因此能按论文 ID 读取摘要、复用 PDF 并解析正文；导入动作本身不替你回答问题或恢复执行。
+命令和清单例子见 [CLI 外部论文导入](../../apps/cli/README.md#literature-import)。
+
 ### 第二步：Scientific 说“我需要这些工作”
 
 Scientific 关心：“为了回答这个研究问题，还缺什么证据？”它可以先检索文献、读工件；需要修改和比较时，提出 WorkRequestDraft。

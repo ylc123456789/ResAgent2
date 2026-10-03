@@ -280,3 +280,62 @@ def test_changed_paper_snapshot_preserves_old_fulltext_cache(setup):
     cached = fetch.execute(state, FetchLiteratureFulltextInput(paper_artifact_id=first_paper))
     assert cached.ok and cached.value["cached"]
     assert cached.value["fulltext_artifact_id"] == first.value["fulltext_artifact_id"]
+
+def test_authorized_imported_pdf_is_parsed_offline_without_exposing_all_run_inputs(setup):
+    state, register, paper_id = setup
+    fetched = FetchLiteratureFulltextTool(register, download=download, parse=parse).execute(
+        state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id),
+    )
+    paper = register.refs[paper_id]
+    pdf = register.refs[fetched.value["pdf_artifact_id"]]
+    # Imported refs are supplied by the controller; the live bridge still lists
+    # Scientific outputs only, as it does in production.
+    imported = [ref.model_copy(update={
+        "producer": AgentOwner.ORCHESTRATOR, "session_id": None,
+        "metadata": {**ref.metadata, "source_type": "import"},
+    }) for ref in (paper, pdf)]
+    register.refs.clear()
+    def unexpected(*args):
+        raise AssertionError("an imported local PDF must not trigger a download")
+    tool = FetchLiteratureFulltextTool(
+        register, input_artifacts=imported, download=unexpected, parse=parse,
+    )
+    result = tool.execute(state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id))
+    assert result.ok and result.value["pdf_artifact_id"] == pdf.id
+    assert result.value["fulltext_artifact_id"] in register.refs
+    assert result.value["fulltext_artifact_id"] == fetched.value["fulltext_artifact_id"]
+    assert len(register.refs) == 1
+    # A new tool instance on the same authorized inputs reuses the generated text.
+    cached = FetchLiteratureFulltextTool(
+        register, input_artifacts=imported, download=unexpected, parse=unexpected,
+    ).execute(state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id))
+    assert cached.ok and cached.value["cached"]
+    # Omitting the grant cannot recover the controller-owned paper by guessing its ID.
+    with pytest.raises(ValueError, match="registered paper"):
+        FetchLiteratureFulltextTool(register, download=unexpected).execute(
+            state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id),
+        )
+
+
+def test_imported_inputs_from_other_run_or_mismatched_pdf_are_rejected(setup):
+    state, register, paper_id = setup
+    fetched = FetchLiteratureFulltextTool(register, download=download, parse=parse).execute(
+        state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id),
+    )
+    paper = register.refs[paper_id]
+    pdf = register.refs[fetched.value["pdf_artifact_id"]]
+    register.refs.clear()
+    def unexpected(*args):
+        raise AssertionError("must reject invalid grants before accessing a PDF")
+    foreign = paper.model_copy(update={"run_id": "run_other"})
+    with pytest.raises(ValueError, match="registered paper"):
+        FetchLiteratureFulltextTool(register, input_artifacts=[foreign], download=unexpected).execute(
+            state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id),
+        )
+    bad_pdf = pdf.model_copy(update={"metadata": {
+        **pdf.metadata, "source_artifact_id": "artifact_other_paper",
+    }})
+    with pytest.raises(ValueError, match="source paper"):
+        FetchLiteratureFulltextTool(
+            register, input_artifacts=[paper, bad_pdf], download=unexpected, parse=unexpected,
+        ).execute(state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id))

@@ -57,6 +57,8 @@ from .literature import (
     LiteraturePaper,
     LiteratureSearchBackend,
     render_paper,
+    PreparedLiteratureImport,
+    load_literature_manifest,
     LiteratureSearchError,
     LiteratureUnavailableError,
 )
@@ -73,6 +75,8 @@ __all__ = [
     'LiteraturePaper',
     'LiteratureSearchBackend',
     'render_paper',
+    'PreparedLiteratureImport',
+    'load_literature_manifest',
     'LiteratureSearchError',
     'LiteratureUnavailableError',
     'ArtifactRegistrationPort',

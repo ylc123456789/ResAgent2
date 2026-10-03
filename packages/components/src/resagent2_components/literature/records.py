@@ -37,7 +37,7 @@ def render_paper(paper: LiteraturePaper) -> str:
     """Preserve supplied source text; this is not an LLM-generated summary."""
     return wrap_text_lines(
         f"# {paper.title}\n\n"
-        "Bibliographic record and retrieved abstract, not paper full text.\n"
+        "Bibliographic record and provided abstract, not paper full text.\n"
         "Abstracts support only abstract-level claims.\n\n"
         f"Paper ID: {paper.paper_id}\n"
         f"Source: {paper.source_url}\n"
@@ -45,5 +45,5 @@ def render_paper(paper: LiteraturePaper) -> str:
         f"Published: {paper.published_at or '(not supplied)'}\n"
         f"Authors: {', '.join(paper.authors) or '(not supplied)'}\n"
         f"PDF URL: {paper.pdf_url or '(not supplied)'}\n\n"
-        f"## Retrieved abstract\n\n{paper.abstract or '(not supplied)'}"
+        f"## Provided abstract\n\n{paper.abstract or '(not supplied)'}"
     ) + "\n"

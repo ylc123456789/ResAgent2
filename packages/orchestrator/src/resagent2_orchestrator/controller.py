@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
+from pathlib import Path
+import tempfile
 from typing import Protocol
 from pydantic import BaseModel
+from resagent2_components.literature import PreparedLiteratureImport, render_paper
 from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, execution_budget
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, AgentResult, ConclusionRequirements,
+    AgentOwner, AgentPermissions, AgentRequest, AgentResult, ArtifactImport, ConclusionRequirements,
     DatasetRef, ErrorCode, ModuleError, ModuleStatus, PendingQuestion,
     QuestionDraft, RecordedAnswer, ResearchRequest, ResearchIndex, RunStatus, ScientificAssessment,
     SessionRef, SessionStatus, TaskBudget, UserAnswer, WorkFeedback, WorkRequest,
@@ -57,7 +61,7 @@ class ResearchController:
         self.report_renderer = report_renderer or FinalReportRenderer()
         self.dataset_ref_source = dataset_ref_source
 
-    def create_run(self, run_id, request):
+    def create_run(self, run_id, request, *, literature=()):
         if self.scheduler.store.exists(run_id):
             raise ValueError("run already exists")
         now = datetime.now(UTC)
@@ -68,6 +72,7 @@ class ResearchController:
         for item in request.input_artifacts:
             ref = self.scheduler.artifact_registry.register_import(item, run_id=run_id)
             run.artifacts[ref.id] = ref
+        self._import_literature(run, literature)
         run.conclusion_requirements_ref = system_artifact(
             self.scheduler.artifact_registry, run, "conclusion_requirements",
             ConclusionRequirements(
@@ -77,6 +82,52 @@ class ResearchController:
         )
         self._save(run)
         return self.run_until_stable(run_id)
+
+    def import_literature(self, run_id, literature):
+        """Add frozen caller-supplied papers without answering or resuming a Run."""
+        run = self.scheduler.store.load(run_id)
+        if run.status != RunStatus.PAUSED:
+            raise ValueError("literature may only be appended to a paused Run")
+        self._import_literature(run, literature)
+        _, run.research_index_ref = self._research_index(run)
+        self._save(run)
+        return run
+
+    def _import_literature(self, run, literature):
+        prepared = [PreparedLiteratureImport.model_validate(item) for item in literature]
+        additions = {}
+        with tempfile.TemporaryDirectory(prefix="resagent2-literature-") as temporary:
+            paper_path = Path(temporary) / "paper.md"
+            for item in prepared:
+                metadata = {"paper_key": item.paper.key, "paper": item.paper.model_dump(mode="json")}
+                pdf_digest = None
+                if item.pdf_path is not None:
+                    with item.pdf_path.open("rb") as handle:
+                        if handle.read(5) != b"%PDF-":
+                            raise ValueError("imported file has no PDF signature")
+                        handle.seek(0)
+                        pdf_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+                    metadata["import_pdf_sha256"] = pdf_digest
+                paper_path.write_text(render_paper(item.paper), encoding="utf-8")
+                paper_ref = self.scheduler.artifact_registry.register_import(
+                    ArtifactImport(uri=str(paper_path), kind="literature_paper",
+                                   media_type="text/markdown", summary=item.paper.title,
+                                   metadata=metadata), run_id=run.run_id,
+                )
+                additions[paper_ref.id] = paper_ref
+                if item.pdf_path is not None:
+                    pdf_ref = self.scheduler.artifact_registry.register_import(
+                        ArtifactImport(
+                            uri=str(item.pdf_path), kind="literature_pdf",
+                            media_type="application/pdf", summary=item.paper.title + " — original PDF",
+                            expected_sha256=pdf_digest,
+                            metadata={"paper_artifact_id": paper_ref.id,
+                                      "source_artifact_id": paper_ref.id,
+                                      "source_url": item.paper.source_url},
+                        ), run_id=run.run_id,
+                    )
+                    additions[pdf_ref.id] = pdf_ref
+        run.artifacts.update(additions)
 
     def answer_question(self, run_id, answer: UserAnswer):
         run = self.scheduler.store.load(run_id)

@@ -15,7 +15,7 @@
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
 | [context.py](src/resagent2_components/context.py)、[text.py](src/resagent2_components/text.py) | 环境事实、读取/诊断投影；文本窗口与长行呈现 |
 | [materials.py](src/resagent2_components/materials.py) | 通用工件读取、作用域与冻结 hash 校验；Scientific 专用反馈呈现在 Scientific 上下文 |
-| [literature/](src/resagent2_components/literature/) | 规范化论文、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
+| [literature/](src/resagent2_components/literature/) | 规范化论文、本地导入清单、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
 
 `process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Shell 是 Capabilities 的共享模型入口，Experiment 从实际执行回执生成实验记录。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
 
@@ -41,7 +41,7 @@ workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环�
 
 ## 文献实现与失败规则
 
-[literature/](src/resagent2_components/literature/) 提供规范化论文记录、LiteratureSearchBackend、arXiv/OpenAlex 平级来源、论文呈现，以及全文获取和 PDF 提取。[backends.py](src/resagent2_components/literature/backends.py) 处理检索来源，[_http.py](src/resagent2_components/literature/_http.py) 提供共享 HTTP 规则。Tool 在 Capabilities，不在这个目录。
+[literature/](src/resagent2_components/literature/) 提供规范化论文记录、LiteratureSearchBackend、arXiv/OpenAlex 平级来源、论文呈现，以及全文获取和 PDF 提取。[backends.py](src/resagent2_components/literature/backends.py) 处理检索来源，[_http.py](src/resagent2_components/literature/_http.py) 提供共享 HTTP 规则。[imports.py](src/resagent2_components/literature/imports.py) 提供 load_literature_manifest，返回规范化论文与可选本地 PDF 的 PreparedLiteratureImport 列表。清单拒绝未知字段，PDF 路径相对清单目录解析并校验普通文件及 %PDF 签名；不从文件名或正文猜作者/摘要，不联网。Tool 在 Capabilities，不在这个目录。
 
 CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表，互为备份。初次按配置顺序尝试（目前 arXiv 在前）；成功后继续用该源，不可用时依次试其他源，每次最多遍历一轮。只保存实例内索引；没有探活、健康表、持久选择记录，也不同时查询/合并两个源。
 
@@ -57,7 +57,7 @@ HTTP 复用 Runtime 的 httpx 总超时传输；节奏等待、退避和请求�
 
 OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送，不进 URL、工件或模型上下文；匿名额度由服务端决定。摘要缺失就留空；检索记录明确区分元信息、摘要和可用全文入口，不新增 LLM 摘要。每篇论文独立登记，搜索回执只连接本次查询与论文引用；规范化 key 用于识别论文并保留 arXiv 版本；同 Run 仅复用相同元信息快照，同 key 内容变化则登记新不可变快照，不按标题猜测合并。
 
-全文获取使用已登记论文的来源，按需下载公开可获取的 PDF；PyMuPDF4LLM 解析文本，显式关闭 OCR。原始 PDF 与解析文本分别冻结，直接来源链为论文→PDF→文本；解析失败仍保留已登记原件，重试可复用。无法获取或提取时返回明确结果，不把检索摘要冒充全文，不绕过访问限制，不处理本轮范围外的任意外部导入。read_artifact 继续只读取严格 UTF-8，PDF 提取不塞进通用文件读取器。
+全文获取使用已登记论文的来源，按需下载公开可获取的 PDF；PyMuPDF4LLM 解析文本，显式关闭 OCR。原始 PDF 与解析文本分别冻结，直接来源链为论文→PDF→文本；解析失败仍保留已登记原件，重试可复用。无法获取或提取时返回明确结果，不把检索摘要冒充全文，不绕过访问限制。外部论文清单的格式和本地来源规范化也在此目录；Components 不修改 Run，不更新索引，导入冻结和归属由 Controller/Registry 完成。read_artifact 继续只读取严格 UTF-8，PDF 提取不塞进通用文件读取器。
 
 节奏/冷却只协调同进程，重启不保留；多进程及同出口其他程序由部署方协调。不轮换 IP，不新增跨 Run 下载缓存、队列或多源融合框架；同 Run 复用来自已登记且通过 hash 校验的材料，不维护第二份论文库。
 

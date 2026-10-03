@@ -9,13 +9,13 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 21.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 22.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：
 
-当前共 9 个包（包含新增 `resagent2-components`）。它承接资源、环境等普通实现，不增加 CLI 参数；切换 checkout 时须一并更新全部 editable 指针。命令和 E2E 仍独立装配。
+当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。命令和 E2E 仍独立装配。
 
 ```bash
 conda env create -f environment.yml
@@ -151,6 +151,60 @@ resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报�
 回答同意后，同一个 Agent 恢复并再次提交原操作，经过复验才真正执行；确认问题不是成功执行记录。用户仍只需通过 answer 回答，最终以实际工具回执和产物判断结果。
 
 三个 Agent、Compiler、历史压缩及模型重试共用 Run 用量；固定 Interpreter 不调用模型。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
+
+<a id="literature-import"></a>
+
+## 外部论文导入
+
+可以把其他工具找到的论文资料作为用户输入交给同一个 Run。清单是 UTF-8 JSON，
+顶层必须是 papers 数组；每项 title 必填，其他字段可选：
+
+```json
+{
+  "papers": [
+    {
+      "title": "Temperature scaling",
+      "doi": "10.XXXX/example",
+      "authors": ["A. Researcher"],
+      "abstract": "摘要可以为空，也可以填写来源提供的摘要。",
+      "pdf_path": "papers/temperature-scaling.pdf",
+      "source_url": "https://example.org/paper"
+    }
+  ]
+}
+```
+
+支持的字段是 paper_id、source_url、doi、authors、published_at
+（YYYY-MM-DD）、abstract、pdf_url 和 pdf_path。pdf_path 相对于清单文件
+所在目录解析；文件必须是普通文件并以 %PDF- 开头。清单不会联网，也不会从 PDF
+自动猜作者或摘要。没有明确 ID 时，组件根据 DOI、来源 URL 或输入快照生成稳定的
+外部标识；不会仅按标题合并。
+
+创建 Run 时导入；交互 shell 的 /run 也接受同一 --literature-file 参数：
+
+```bash
+resagent2 run --workspace /path/to/repo \
+  --goal "比较这些论文中的方法" \
+  --literature-file papers.json
+```
+
+向等待用户的 Run 追加：
+
+```bash
+resagent2 literature import RUN_ID --file papers.json --data-root /data/resagent2
+```
+
+追加命令只接受 paused Run；导入操作成功返回退出码 0，Run 仍保持 paused。它更新现有科研目录，
+不回答当前问题、不恢复执行、不重置预算或权限。先用 show 查看问题，再用原有
+answer 继续。重复导入相同论文快照和相同 PDF 会复用冻结材料；更换 PDF 会形成
+新的不可变快照，不覆盖旧材料。没有本地 PDF 时，若条目提供 pdf_url，Scientific
+后续按需获取；有本地 PDF 时优先离线复用。
+
+论文元信息登记为 literature_paper，本地 PDF 登记为 literature_pdf，解析后为
+literature_fulltext。它们进入同一 Run 的 ArtifactRegistry 和 research index。
+导入的论文元信息和 PDF 由 Orchestrator 登记，来源为 import；按需解析的正文由
+Scientific 生成，直接来源指向冻结 PDF。导入成功不等于 Scientific 已阅读全文，
+也不等于在线检索成功。
 
 ## 4. 数据集资源库
 
@@ -288,7 +342,7 @@ arXiv 和 OpenAlex 是平级来源，互为备份。新建实例初始按 arXiv�
 
 可选环境变量 `OPENALEX_API_KEY` 是 OpenAlex 服务密钥，与 LLM key 无关；未设置时使用匿名访问，是否可用及额度以服务端为准。通过现有安全方式加载，勿写入命令行、goal 或日志；后端只通过 Authorization header 发送，不放进 URL/工件/上下文。需要密钥或新费用时先由用户决定，不自动注册或付费。
 
-arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与摘要按论文保存为 literature_paper，literature_search 是查询回执，不代表全文。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告；本轮不增加专门的外部论文导入入口。
+arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与摘要按论文保存为 literature_paper，literature_search 是查询回执，不代表全文。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告。用户提供的离线资料可经 [外部论文导入](#literature-import) 进入同一 Run；这不算在线检索成功，也不改变服务限流规则。
 
 ### 退出码
 

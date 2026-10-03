@@ -388,3 +388,71 @@ def test_recovery_workspace_flags_can_only_repeat_persisted_grants(tmp_path, fla
     assert _specs_for_existing_run(_parser().parse_args(["resume", run.run_id]), run) == {
         "ws_main": source,
     }
+
+
+def test_run_passes_normalized_literature_to_controller(tmp_path):
+    import json
+
+    class Controller(_Controller):
+        def create_run(self, run_id, request, *, literature=()):
+            self.literature = literature
+            return super().create_run(run_id, request)
+
+    manifest = tmp_path / "papers.json"
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    manifest.write_text(json.dumps({"papers": [{"title": "External paper", "doi": "10.1/example",
+                                             "pdf_path": "paper.pdf"}]}))
+    controller = Controller(_run())
+    result = cli(
+        ["run", "--goal", "Use this paper", "--literature-file", str(manifest), "--data-root", str(tmp_path)],
+        application_builder=_Builder(controller),
+    )
+    assert result == EXIT_COMPLETED
+    assert controller.literature[0].paper.title == "External paper"
+    assert controller.literature[0].pdf_path == pdf.resolve()
+
+
+def test_literature_import_returns_success_without_advancing_paused_run(tmp_path):
+    import json
+
+    class Controller(_Controller):
+        def import_literature(self, run_id, literature):
+            self.imported = (run_id, literature)
+            return self.result
+
+    paused = _run(RunStatus.PAUSED)
+    store = InMemoryRunStore()
+    store.save(paused)
+    controller = Controller(paused)
+    builder = _Builder(controller)
+    manifest = tmp_path / "papers.json"
+    manifest.write_text(json.dumps({"papers": [{"title": "External paper"}]}))
+    result = cli(
+        ["literature", "import", paused.run_id, "--file", str(manifest), "--data-root", str(tmp_path)],
+        application_builder=builder, store_factory=lambda root: store,
+    )
+    assert result == EXIT_COMPLETED
+    assert controller.imported[0] == paused.run_id
+    assert controller.imported[1][0].paper.title == "External paper"
+    assert controller.created is controller.answered is controller.resumed is None
+    assert store.load(paused.run_id).status == RunStatus.PAUSED
+
+
+@pytest.mark.parametrize("status", [RunStatus.RUNNING, RunStatus.COMPLETED, RunStatus.FAILED])
+def test_literature_import_rejects_non_paused_run_before_building(tmp_path, status):
+    import json
+    run = _run(status)
+    store = InMemoryRunStore()
+    store.save(run)
+    controller = _Controller(run)
+    builder = _Builder(controller)
+    manifest = tmp_path / "papers.json"
+    manifest.write_text(json.dumps({"papers": [{"title": "External paper"}]}))
+    with pytest.raises(ValueError, match="paused Run"):
+        cli(
+            ["literature", "import", run.run_id, "--file", str(manifest), "--data-root", str(tmp_path)],
+            application_builder=builder, store_factory=lambda root: store,
+        )
+    assert builder.calls == []
+    assert store.load(run.run_id) == run

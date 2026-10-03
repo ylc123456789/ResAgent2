@@ -32,4 +32,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0021：共享 Linux Shell 与逐次批准](0021-shared-approved-linux-shell.md)（取代 Experiment 专有普通命令入口，保留专业安装/验证）
 - [ADR-0022：论文粒度资料与访问事实记录](0022-paper-materials-and-access-records.md)（区分搜索回执、论文与全文材料，访问记录不再作为控制门槛）
 
+- [ADR-0023：外部论文导入复用 Run 材料登记](0023-external-literature-import.md)（补足用户清单入口，复用论文/PDF/正文链路，追加不恢复 Run）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

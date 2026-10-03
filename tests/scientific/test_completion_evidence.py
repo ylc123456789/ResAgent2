@@ -2,9 +2,11 @@
 
 from datetime import UTC, datetime
 import json
+import hashlib
 
 import pytest
 
+from resagent2_components import RegisteredArtifactReader
 from resagent2_contracts import AgentOwner, ArtifactCandidate, ArtifactRef, missing_required_evidence_kinds
 from resagent2_runtime import AgentState, FinishCandidate
 from resagent2_scientific.completion import ScientificCompletionCheck
@@ -41,29 +43,32 @@ def _finish(evidence: list[str], *, verdict="supports") -> FinishCandidate:
 
 
 def test_required_literature_evidence_blocks_completion() -> None:
-    check = ScientificCompletionCheck([], ["literature_search"])
-    state = _state({"read_artifact_ids": ["artifact_other_1"]})
-    decision = check.evaluate(state, _finish(["artifact_other_1"]))
+    check = ScientificCompletionCheck([], ["literature_paper"])
+    state = _state({})
+    decision = check.evaluate(state, _finish([], verdict="inconclusive"))
     assert decision.complete is False
-    assert "literature_search" in decision.report
+    assert "literature_paper" in decision.report
 
 
-def _registered_artifact(*, kind="literature_search", run_id="run_r") -> ArtifactRef:
+def _registered_artifact(tmp_path, *, kind="literature_paper", run_id="run_r") -> ArtifactRef:
+    path = tmp_path / "literature.json"
+    content = b'{"title": "Paper", "abstract": "Source abstract"}'
+    path.write_bytes(content)
     return ArtifactRef(
         id="artifact_lit_1", kind=kind, run_id=run_id,
         producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": "import"},
-        uri="file:///frozen/literature.json", sha256="0" * 64,
+        uri=path.as_uri(), sha256=hashlib.sha256(content).hexdigest(),
         media_type="application/json", summary="Imported evidence",
     )
 
 
-@pytest.mark.parametrize("observation_key", ["read_artifact_ids", "literature_artifact_ids"])
-def test_required_literature_evidence_is_satisfied_by_citation(observation_key) -> None:
-    artifact = _registered_artifact()
+@pytest.mark.parametrize("logged", [False, True])
+def test_required_literature_evidence_is_satisfied_by_citation(tmp_path, logged) -> None:
+    artifact = _registered_artifact(tmp_path)
     check = ScientificCompletionCheck(
-        [], ["literature_search"], resolve_artifact=lambda _: artifact,
+        [], ["literature_paper"], reader=RegisteredArtifactReader([artifact], run_id="run_r"),
     )
-    state = _state({observation_key: ["artifact_lit_1"]})
+    state = _state({"read_artifact_ids": ["artifact_lit_1"]} if logged else {})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert decision.complete is True
     assert decision.report == json.loads(decision.artifacts[0].content)["statement"] == "supported"
@@ -80,54 +85,53 @@ def test_scientific_finish_rejects_a_second_model_written_summary() -> None:
 
 
 def test_search_history_cannot_self_certify_an_unregistered_artifact() -> None:
-    check = ScientificCompletionCheck([], ["literature_search"])
-    state = _state({"literature_artifact_ids": ["artifact_lit_1"]})
+    check = ScientificCompletionCheck([], ["literature_paper"])
+    state = _state({"literature_output_artifact_ids": ["artifact_lit_1"]})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert not decision.complete
-    assert "literature_search" in decision.report
+    assert "authorized artifact" in decision.report
 
 
-def test_required_kind_comes_from_registry_not_search_memory() -> None:
-    artifact = _registered_artifact(kind="experiment_result")
+def test_required_kind_comes_from_registry_not_search_memory(tmp_path) -> None:
+    artifact = _registered_artifact(tmp_path, kind="experiment_result")
     check = ScientificCompletionCheck(
-        [], ["literature_search"], resolve_artifact=lambda _: artifact,
+        [], ["literature_paper"], reader=RegisteredArtifactReader([artifact], run_id="run_r"),
     )
-    state = _state({"literature_artifact_ids": [artifact.id]})
+    state = _state({"literature_output_artifact_ids": [artifact.id]})
     assert not check.evaluate(state, _finish([artifact.id])).complete
 
 
-def test_module_report_cannot_satisfy_required_literature() -> None:
-    artifact = _registered_artifact(kind="module_report")
+def test_module_report_cannot_satisfy_required_literature(tmp_path) -> None:
+    artifact = _registered_artifact(tmp_path, kind="module_report")
     check = ScientificCompletionCheck(
-        [], ["literature_search"], resolve_artifact=lambda _: artifact,
+        [], ["literature_paper"], reader=RegisteredArtifactReader([artifact], run_id="run_r"),
     )
     state = _state({"read_artifact_ids": [artifact.id]})
 
     decision = check.evaluate(state, _finish([artifact.id]))
 
     assert not decision.complete
-    assert "literature_search" in decision.report
+    assert "literature_paper" in decision.report
 
 
 @pytest.mark.parametrize(
     "registered,observed,cited,kind,run_id,missing",
     [
-        (True, True, True, "literature_search", "run_r", []),
-        (False, True, True, "literature_search", "run_r", ["literature_search"]),
-        (True, False, True, "literature_search", "run_r", ["literature_search"]),
-        (True, True, False, "literature_search", "run_r", ["literature_search"]),
-        (True, True, True, "experiment_result", "run_r", ["literature_search"]),
-        (True, True, True, "literature_search", "run_other", ["literature_search"]),
+        (True, True, True, "literature_paper", "run_r", []),
+        (False, True, True, "literature_paper", "run_r", ["literature_paper"]),
+        (True, False, True, "literature_paper", "run_r", []),
+        (True, True, False, "literature_paper", "run_r", ["literature_paper"]),
+        (True, True, True, "experiment_result", "run_r", ["literature_paper"]),
+        (True, True, True, "literature_paper", "run_other", ["literature_paper"]),
     ],
 )
-def test_shared_evidence_requirement_uses_registered_observed_cited_intersection(
-    registered, observed, cited, kind, run_id, missing,
+def test_shared_evidence_requirement_uses_registered_cited_intersection(
+    tmp_path, registered, observed, cited, kind, run_id, missing,
 ) -> None:
-    artifact = _registered_artifact(kind=kind, run_id=run_id)
+    artifact = _registered_artifact(tmp_path, kind=kind, run_id=run_id)
     assert missing_required_evidence_kinds(
-        ["literature_search"], run_id="run_r",
+        ["literature_paper"], run_id="run_r",
         artifacts=[artifact] if registered else [],
-        observed_artifact_ids=[artifact.id] if observed else [],
         cited_artifact_ids=[artifact.id] if cited else [],
     ) == missing
 
@@ -145,7 +149,7 @@ def _named_output(tmp_path, *, output_name="metrics", run_id="run_r"):
     )
 
 
-@pytest.mark.parametrize("available_as", ["input", "observed", "literature_observed"])
+@pytest.mark.parametrize("available_as", ["input", "registry", "tool_output"])
 def test_required_output_does_not_require_observation_or_citation(tmp_path, available_as):
     from resagent2_components import RegisteredArtifactReader
 
@@ -153,12 +157,12 @@ def test_required_output_does_not_require_observation_or_citation(tmp_path, avai
     reader = RegisteredArtifactReader(
         [ref] if available_as == "input" else [], run_id="run_r", resolve=lambda _: ref,
     )
-    memory_key = "literature_artifact_ids" if available_as == "literature_observed" else "read_artifact_ids"
-    state = _state({memory_key: [ref.id]} if available_as != "input" else {})
+    state = _state({"literature_output_artifact_ids": [ref.id]} if available_as == "tool_output" else {})
     before = state.model_dump(mode="json")
     check = ScientificCompletionCheck(
         [], required_artifacts=["metrics"], resolve_artifact=reader.resolve_ref, reader=reader,
         input_artifact_ids=[ref.id] if available_as == "input" else [],
+        registered_artifacts=(lambda: [ref]) if available_as == "registry" else None,
     )
     decision = check.evaluate(state, _finish([], verdict="inconclusive"))
     assert decision.complete

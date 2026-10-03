@@ -13,11 +13,10 @@ from urllib.parse import urlencode
 import httpx
 
 from defusedxml import ElementTree
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 
-from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_runtime.http import send_request
-from ..text import wrap_text_lines
+from .records import LiteraturePaper, render_paper
 from ._http import (
     USER_AGENT, LiteratureHTTP, LiteratureSearchError, LiteratureUnavailableError,
 )
@@ -25,17 +24,6 @@ from ._http import (
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV_HTTP = LiteratureHTTP("arXiv", interval_seconds=3.0)
 _OPENALEX_HTTP = LiteratureHTTP("OpenAlex", interval_seconds=1.0)
-
-
-class LiteraturePaper(RuntimeModel):
-    """One normalized paper; raw backend responses never reach the prompt."""
-
-    paper_id: NonEmptyStr
-    title: NonEmptyStr
-    authors: list[NonEmptyStr] = Field(default_factory=list)
-    published_at: date | None = None
-    abstract: str = ""
-    source_url: NonEmptyStr
 
 
 class LiteratureSearchBackend(Protocol):
@@ -181,6 +169,8 @@ class ArxivLiteratureBackend:
             published_at=published_at,
             abstract=abstract,
             source_url=f"https://arxiv.org/abs/{paper_id}",
+            pdf_url=f"https://arxiv.org/pdf/{paper_id}",
+            doi=entry.findtext("{http://arxiv.org/schemas/atom}doi"),
         )
 
     @staticmethod
@@ -190,9 +180,8 @@ class ArxivLiteratureBackend:
 
     @staticmethod
     def _paper_id(id_url: str) -> str:
-        """Turn an arXiv id URL like ``.../abs/2301.12345v2`` into ``2301.12345``."""
-        fragment = id_url.rsplit("/", 1)[-1]
-        return fragment.split("v", 1)[0] if "v" in fragment else fragment
+        """Preserve the provider-supplied arXiv identifier, including its version."""
+        return id_url.split("/abs/", 1)[-1]
 
 
 class MultiSourceLiteratureBackend:
@@ -239,28 +228,6 @@ class MultiSourceLiteratureBackend:
         )
 
 
-def render_literature(papers: list[LiteraturePaper]) -> str:
-    """Present retrieved records by paper, without LLM summaries or new facts."""
-    sections = [
-        "# Literature search results",
-        "Retrieved bibliographic records and abstracts, not paper full text or "
-        "independently verified findings. Read each relevant entry before using "
-        "its contents; an abstract supports only abstract-level claims.",
-    ]
-    if not papers:
-        sections.append("No papers returned.")
-    for index, paper in enumerate(papers, start=1):
-        sections.append(wrap_text_lines(
-            f"## Paper {index}: {paper.title}\n\n"
-            f"Paper ID: {paper.paper_id}\n"
-            f"Source: {paper.source_url}\n"
-            f"Published: {paper.published_at or '(not supplied)'}\n"
-            f"Authors: {', '.join(paper.authors) or '(not supplied)'}\n\n"
-            f"### Retrieved abstract\n\n{paper.abstract or '(not supplied)'}"
-        ))
-    return "\n\n".join(sections) + "\n"
-
-
 class OpenAlexLiteratureBackend:
     """Normalize indexed records/abstracts, without fetching or inventing full text."""
 
@@ -290,7 +257,7 @@ class OpenAlexLiteratureBackend:
         params = {
             "search": query,
             "per_page": max_results,
-            "select": "id,display_name,publication_date,authorships,abstract_inverted_index",
+            "select": "id,doi,display_name,publication_date,authorships,abstract_inverted_index,best_oa_location",
         }
         filters = []
         if start_year is not None:
@@ -365,6 +332,8 @@ class OpenAlexLiteratureBackend:
             published_at=date.fromisoformat(published) if published else None,
             abstract=self._abstract(record.get("abstract_inverted_index")),
             source_url=source_url,
+            doi=record.get("doi"),
+            pdf_url=(record.get("best_oa_location") or {}).get("pdf_url"),
         )
 
     def _abstract(self, index: dict[str, list[int]] | None) -> str:

@@ -49,10 +49,6 @@ class ReadArtifactTool:
             summary=f"Read registered Artifact {args.artifact_id}",
             value=value,
             memory_updates={
-                "read_artifact_ids": _remember(
-                    state,
-                    "read_artifact_ids",
-                    args.artifact_id,
-                ),
-            },
+                "read_artifact_ids": _remember(state, "read_artifact_ids", args.artifact_id),
+            } if value["content"] else {},
         )

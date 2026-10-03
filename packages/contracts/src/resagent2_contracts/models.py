@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "20.0"
+SCHEMA_VERSION = "21.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["20.0"] = SCHEMA_VERSION
+    schema_version: Literal["21.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -250,12 +250,13 @@ SYSTEM_ARTIFACT_PROVENANCE = {
 }
 SYSTEM_ARTIFACT_KINDS = frozenset(SYSTEM_ARTIFACT_PROVENANCE)
 SCIENTIFIC_ARTIFACT_KINDS = frozenset({
-    "literature_search", "scientific_opinion", "scientific_assessment",
+    "literature_search", "literature_paper", "literature_pdf", "literature_fulltext",
+    "scientific_opinion", "scientific_assessment",
     "observation_trace", "module_report",
 })
 SYSTEM_GENERATED_ARTIFACT_KINDS = SYSTEM_ARTIFACT_KINDS | frozenset({
     "code_patch", "verification_result", "execution_record", "observation_trace",
-    "literature_search", "final_report",
+    "literature_search", "literature_paper", "literature_pdf", "literature_fulltext", "final_report",
 })
 
 
@@ -444,7 +445,7 @@ class ArtifactImport(ContractModel):
     expected_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 
-RequiredEvidenceKind = Literal["literature_search"]
+RequiredEvidenceKind = Literal["literature_paper", "literature_fulltext"]
 
 
 class ResearchRequest(ContractModel):
@@ -1232,11 +1233,13 @@ class ResearchArtifactEntry(ContractModel):
     output_name: OutputName | None = None
     attempt_number: int | None = Field(default=None, ge=1)
     execution_status: AttemptStatus | None = None
+    source_artifact_id: ArtifactId | None = None
 
     @classmethod
     def from_ref(cls, ref: ArtifactRef, **source):
         return cls(artifact_id=ref.id, kind=ref.kind, summary=ref.summary,
-                   output_name=ref.output_name, attempt_number=ref.attempt_number, **source)
+                   output_name=ref.output_name, attempt_number=ref.attempt_number,
+                   source_artifact_id=ref.metadata.get("source_artifact_id"), **source)
 
 
 class ResearchIndexGroup(ContractModel):

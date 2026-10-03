@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **20.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **21.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -105,7 +105,7 @@ CLI 是产品入口；[real_e2e.py](../../e2e/real_e2e.py) 是独立验收装配
 
 Interpreter 不再调用 LLM；报告原文来自最新 Attempt，任务状态、错误和累计警告来自结构字段，旧尝试保留编号及状态入口。目标、任务和产物沿用 WorkRequest、Task、Artifact 的原身份与名称。它不调度任务、不改 Run、不拥有独立 Session；Scientific 负责语义综合及科学判断。
 
-发现、结果和局限通过 report 表达，需要下游分页读取的长说明可提交 `kind=module_report` 工件。解释与原始测量分别具有明确用途；工件经 Registry 冻结后按授权读取，报告文字不能替代实际命令回执、测量文件或已读文献。
+发现、结果和局限通过 report 表达，需要下游分页读取的长说明可提交 `kind=module_report` 工件。解释与原始测量分别具有明确用途；工件经 Registry 冻结后按授权读取，报告文字不能替代实际命令回执、测量文件或论文原文。
 
 ### 三个循环，不要混在一起
 
@@ -161,7 +161,7 @@ Controller 是唯一 Run 业务入口：create_run 创建后会执行到稳定�
 
 Run.artifacts 是唯一的产物登记表。科研目录 research_index 从已授权登记材料、工作目标及历次 Attempt 派生，按初始材料、Scientific 材料和工作需求分组，只保留原 Artifact ID 及展示字段。失败尝试不会被后续成功覆盖；完整问答按原 Task/Attempt 或 Scientific 归属收入目录，不作为 Agent 自报产出。目录不扫描未登记文件，也不递归收入目录、反馈和观察记录。work_record 保存原需求、执行结果和历次尝试，是无文件输出时仍可引用的执行事实。
 
-WorkRequest 稳定后，Interpreter 生成累计目录并固定组织原报告，Controller 保存目录指针和 feedback_refs。Scientific 收到最新完整目录，以及本轮反馈的必需事实框和可伸缩报告正文；共享 Composer 分配正文空间，省略或截断明确标注，完整原件仍可读取。目录与工具共用登记来源，子任务答案可按原 ID 阅读；批准和恢复的作用域不变。目录与报告呈现不增加 observed，也不赋予其引用原件已读资格。
+WorkRequest 稳定后，Interpreter 生成累计目录并固定组织原报告，Controller 保存目录指针和 feedback_refs。Scientific 收到最新完整目录，以及本轮反馈的必需事实框和可伸缩报告正文；共享 Composer 分配正文空间，省略或截断明确标注，完整原件仍可读取。目录与工具共用登记来源，子任务答案可按原 ID 阅读；批准和恢复的作用域不变。目录与报告呈现不冒充工具访问记录；observed 用于追溯，不再作为引用和控制动作的前置门槛。
 
 ArtifactCandidate 是生产方提出的文件；Registry 校验授权和来源、冻结内容并计算 hash 后，才产生 ArtifactRef。授权可以读不等于已经读，已经读过也不保证正文一直留在模型上下文。
 
@@ -178,7 +178,7 @@ Run 级 `required_artifacts` 从 ResearchRequest 显式传入，Controller 冻�
 两级完成检查职责不同：
 
 - Agent completion check 生成本次变更、验证/实验命令和观察记录，校验领域事实；Scheduler 根据冻结要求验收实际交付。
-- Run 最终 gate 从完整 Run 核对任务、证据归属、观察集合、明确逻辑输出、观点与局限；失败任务身份由代码写入报告，不要求 Scientific 回传 Task ID。
+- Run 最终 gate 从完整 Run 核对任务、引用证据的归属与完整性、明确逻辑输出、观点格式与局限；失败任务身份由代码写入报告，不要求 Scientific 回传 Task ID。
 
 inconclusive 可以是合法完成的科学意见；completed_with_warnings 必须保留缺口。字段合法、工具成功、Run 完成和科学结论正确不能互相替代。
 
@@ -201,7 +201,7 @@ Components 是普通 Python 对象/函数，Capabilities 是模型 Tool；两者
 - DatasetCatalog 读取部署登记表，Controller 持有 Run 内已知引用。共享 resolve_dataset_refs 区分登记与实际目录可用性；三个 Agent 的上下文和脚本映射使用同次检查结果。缺少不相关数据不阻塞；需要的数据缺失时通过已有 ask_user 请求用户准备，恢复时重新检查，不擅自下载。
 - RegisteredArtifactReader 先核对 Run 授权和整份 hash，再严格解码 UTF-8 并按行切片；文件读取复用相同解码与切片逻辑。含 NUL 或无效 UTF-8 的内容拒绝文本读取，不生成乱码或成功读取记录。
 - Runtime先确定模块/模型有效输入额度，再由builder声明固定段与可伸缩材料，Composer统一计量和分配。三个Agent与Compiler共用256000默认输入额度；Compiler使用无状态JSON编译，Interpreter不调用模型。workspace_context及工作反馈共用材料分配，材料扩展至整包80%软水位，真正超限仍报错，不另建缓存或恢复状态机。旧观察带时序和后续内置修改标记，不冒充最新磁盘全文。文献以每篇论文一个条目的检索摘要工件呈现，不新增阅读笔记。详见[材料与预算](CONTEXT.md#budgets)。
-- 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，不改变 Scientific、工件格式或上下文；详见[文献组件](../../packages/components/README.md#literature)。
+- 文献来源由 CLI/E2E 组合根装配：arXiv、OpenAlex 平级，互为备份；继续使用最近成功来源，不可用时试其他源，每次最多遍历一轮。复用 LiteratureSearchBackend 与同一套 HTTP 节奏/冷却，每篇结果登记为 literature_paper，literature_search 只作为搜索回执；Scientific 按需调用 fetch_literature_fulltext 获取并冻结 PDF 与解析文本，沿原登记表和科研目录建立直接来源关系。正文提取由 Components 的 PyMuPDF4LLM 实现，OCR 关闭，不增加 Agent/LLM 或来源图管理器；详见[文献组件](../../packages/components/README.md#literature)。
 
 Agent 选择 ContextSection，Runtime 统一加入工具协议、反馈和历史，再由 Composer 计量。OpenAICompatibleClient 的 AgentLoop 使用原生 `tools`，每项 schema 直接来自既有 `Tool.input_model`；没有原生能力的测试/注入客户端仍可走 `next_action` 正文 JSON 和简短 `tool_contracts`。Session 的 `tool_protocol_key` 固定调用协议与原生配置身份，恢复不能降级或换 endpoint/model。模块输入上限与注入的 ModelProfile 共同限制容量；必需段装不下明确失败。**不根据模型名字猜容量，不自动扩容。**
 

@@ -21,3 +21,11 @@ actually advertised through the native protocol.
 Schema 14 only updates embedded public schema const/default values. Before
 updating the fixture, normalizing those exact values back to 13.0 reproduced
 every schema-13 fingerprint. No tool names, parameters or descriptions changed.
+
+Schema 21 adds `shared/fetch_literature_fulltext` for a registered paper's original
+PDF and extracted text. `shared/literature_search` now describes independent paper
+metadata/abstract artifacts and a separate query receipt. Its input fields are
+unchanged. Scientific `ask_user`/`request_work` describe registered citations,
+without making reading logs a control gate. Shared finish and Scientific control
+schemas embed version 21.0. These are the five changed fingerprints plus the one
+new tool; no other existing tool fingerprint changed.

@@ -150,9 +150,9 @@ def test_empty_expected_evidence_rejected_before_tool_execution(monkeypatch):
 
 
 def test_imported_literature_can_satisfy_requirements_after_reading(tmp_path):
-    ref = artifact(tmp_path, kind="literature_search")
+    ref = artifact(tmp_path, kind="literature_paper")
     requirements = artifact(tmp_path, "artifact_requirements", kind="conclusion_requirements",
-                            content={"required_evidence_kinds": ["literature_search"]})
+                            content={"required_evidence_kinds": ["literature_paper"]})
     client = ScriptedLLMClient([
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
         finish(evidence=[ref.id], verdict="supports"),
@@ -173,33 +173,38 @@ def test_literature_search_ref_is_returned_without_duplicate_registration(tmp_pa
                                     abstract="Result", source_url="https://example.com/paper")]
 
     class Register:
-        calls = 0
-        ref = None
+        def __init__(self):
+            self.calls = 0
+            self.refs = {}
 
         def register_scientific(self, candidate, *, run_id, session_id):
             self.calls += 1
-            path = tmp_path / "literature.md"
+            path = tmp_path / candidate.path
             path.write_text(candidate.content)
-            self.ref = ArtifactRef(
-                id="artifact_lit", kind="literature_search", producer=AgentOwner.SCIENTIFIC,
+            ref = ArtifactRef(
+                id=f"artifact_{candidate.kind}", kind=candidate.kind, producer=AgentOwner.SCIENTIFIC,
                 run_id=run_id, session_id=session_id, uri=path.as_uri(),
                 sha256=hashlib.sha256(candidate.content.encode()).hexdigest(),
-                media_type="text/markdown", summary="Literature",
+                media_type=candidate.media_type, summary=candidate.summary, metadata=candidate.metadata,
             )
-            return self.ref
+            self.refs[ref.id] = ref
+            return ref
 
         def resolve(self, artifact_id, *, run_id):
-            return self.ref if self.ref and self.ref.id == artifact_id else None
+            return self.refs.get(artifact_id)
+
+        def list_artifacts(self, *, run_id):
+            return list(self.refs.values())
 
     register = Register()
     result = ScientificAgent(ScriptedLLMClient([
         {"tool": "literature_search", "arguments": {"query": "method"}},
-        finish(evidence=["artifact_lit"]),
+        finish(evidence=["artifact_literature_paper"]),
     ]), literature_backend=Backend(), registration_port=register).invoke(request())
     assert result.status == "completed", result.report
-    assert register.calls == 1
-    assert register.ref in result.artifacts
-    assert content(result, "observation_trace")["observed_artifact_ids"] == ["artifact_lit"]
+    assert register.calls == 2
+    assert all(ref in result.artifacts for ref in register.refs.values())
+    assert content(result, "observation_trace")["observed_artifact_ids"] == []
 
 
 def test_question_pauses_with_content_reference():

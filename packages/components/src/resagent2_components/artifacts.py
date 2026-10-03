@@ -136,6 +136,11 @@ class RegisteredArtifactReader:
         if digest != artifact.sha256:
             raise ArtifactReadError("artifact sha256 does not match frozen content")
 
+    def verified_path(self, artifact_id: str) -> Path:
+        """Resolve a local frozen source for parsers without granting read status."""
+        self.verify(artifact_id)
+        return self._resolve_file(artifact_id)[1]
+
     def read_text(
         self,
         artifact_id: str,
@@ -255,8 +260,12 @@ class ArtifactRegistrationPort(Protocol):
         *,
         run_id: RunId,
         session_id: SessionId,
+        content_bytes: bytes | None = None,
     ) -> ArtifactRef:
-        """Freeze one candidate with session provenance and return its Ref."""
+        """Freeze trusted tool output; binary content is never an LLM parameter."""
+
+    def list_artifacts(self, *, run_id: RunId) -> list[ArtifactRef]:
+        """List Scientific outputs in this Run, not private control artifacts."""
 
     def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
         """Return a live-authorized artifact of this Run, or ``None``.

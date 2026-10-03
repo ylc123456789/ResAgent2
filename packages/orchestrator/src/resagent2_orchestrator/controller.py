@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, execution_budget
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ConclusionRequirements,
-    DatasetRef, ErrorCode, ModuleError, ModuleStatus, ObservationTrace, PendingQuestion,
+    DatasetRef, ErrorCode, ModuleError, ModuleStatus, PendingQuestion,
     QuestionDraft, RecordedAnswer, ResearchRequest, ResearchIndex, RunStatus, ScientificAssessment,
     SessionRef, SessionStatus, TaskBudget, UserAnswer, WorkFeedback, WorkRequest,
     WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, WorkspaceDescriptor, WorkRecord, WorkAttemptRecord,
@@ -247,12 +247,7 @@ class ResearchController:
             if result.session and (result.session.module != AgentOwner.SCIENTIFIC or result.session.id != run.scientific_session.id):
                 raise ValueError("Scientific result has a foreign session")
             refs, control_ref = receive_artifacts(self.scheduler.artifact_registry, run, request, result)
-            traces = [ref for ref in refs if ref.kind == "observation_trace"]
-            observed = read_json(traces[0], ObservationTrace).observed_artifact_ids if len(traces) == 1 else []
-            if not set(observed) <= {ref.id for ref in request.input_artifacts} | {ref.id for ref in refs}:
-                raise ValueError("observations reference unknown artifacts")
             accepted = run.model_copy(deep=True)
-            accepted.scientific_observed_artifact_ids = sorted(set(accepted.scientific_observed_artifact_ids) | set(observed))
             for work in accepted.work_requests:
                 if work.status == WorkRequestStatus.STABLE:
                     _transition_work_request(work, WorkRequestStatus.CONSUMED)

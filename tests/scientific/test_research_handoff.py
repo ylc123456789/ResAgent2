@@ -222,19 +222,17 @@ def test_directory_citation_cannot_satisfy_original_evidence_requirement(tmp_pat
     assert "experiment_result" in decision.report
 
 
-def test_listing_sources_does_not_allow_citation_before_actual_read(tmp_path):
+def test_reading_directory_does_not_mark_sources_read_or_block_unread_citation(tmp_path):
     refs = handoff(tmp_path)
     client = ScriptedLLMClient([
         {"tool": "read_artifact", "arguments": {"artifact_id": refs[2].id}},
         finish([refs[0].id]),
-        {"tool": "read_artifact", "arguments": {"artifact_id": refs[0].id}},
-        finish([refs[0].id]),
     ])
     result = ScientificAgent(client).invoke(request(refs[:3]))
     assert result.status == "completed"
-    assert "Cite only observed evidence" in client.contexts[2].text
+    assert len(client.contexts) == 2
     trace = json.loads(next(item.content for item in result.artifacts if item.kind == "observation_trace"))
-    assert trace["observed_artifact_ids"] == [refs[2].id, refs[0].id]
+    assert trace["observed_artifact_ids"] == [refs[2].id]
 
 
 @pytest.mark.parametrize("mismatch", ["run", "session", "hash"])

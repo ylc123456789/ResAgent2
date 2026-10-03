@@ -65,7 +65,7 @@ def registered_result(prepared, *, verdict="inconclusive", cited=(), observed=()
 
 def evidence(prepared, *, run_id=None):
     registry, run, _ = prepared
-    ref = registry.register_scientific(candidate("literature_search", {"papers": ["paper"]}),
+    ref = registry.register_scientific(candidate("literature_paper", {"papers": ["paper"]}),
         run_id=run_id or run.run_id, session_id=run.scientific_session.id)
     run.artifacts[ref.id] = ref
     return ref
@@ -75,7 +75,6 @@ def evidence(prepared, *, run_id=None):
 def test_all_verdicts_pass_with_valid_registered_evidence(prepared, verdict):
     _, run, gate = prepared
     ref = evidence(prepared)
-    run.scientific_observed_artifact_ids = [ref.id]
     result, refs = registered_result(prepared, verdict=verdict, cited=[ref.id], observed=[ref.id])
     accepted = gate.validate(run, result, refs)
     assert accepted.ok
@@ -83,28 +82,26 @@ def test_all_verdicts_pass_with_valid_registered_evidence(prepared, verdict):
 
 
 @pytest.mark.parametrize("run_observed,trace_observed,cited", [(False, True, True), (True, False, True), (True, True, False)])
-def test_required_evidence_must_be_registered_observed_and_cited(prepared, run_observed, trace_observed, cited):
+def test_required_evidence_depends_on_registration_and_citation_only(prepared, run_observed, trace_observed, cited):
     registry, run, gate = prepared
     ref = evidence(prepared)
     run.conclusion_requirements_ref = system_artifact(registry, run, "conclusion_requirements",
-        ConclusionRequirements(required_evidence_kinds=["literature_search"]))
-    run.scientific_observed_artifact_ids = [ref.id] if run_observed else []
+        ConclusionRequirements(required_evidence_kinds=["literature_paper"]))
     result, refs = registered_result(prepared, cited=[ref.id] if cited else [], observed=[ref.id] if trace_observed else [])
     actual = gate.validate(run, result, refs)
-    assert not actual.ok
-    assert CompletionViolationCode.MISSING_EVIDENCE_KIND in {v.code for v in actual.violations}
+    assert actual.ok is cited
+    assert (CompletionViolationCode.MISSING_EVIDENCE_KIND in {v.code for v in actual.violations}) is (not cited)
 
 
-def test_unknown_observation_is_rejected(prepared):
+def test_unknown_observation_log_does_not_reject_completion(prepared):
     _, run, gate = prepared
     result, refs = registered_result(prepared, observed=["artifact_fake"])
-    assert not gate.validate(run, result, refs).ok
+    assert gate.validate(run, result, refs).ok
 
 
 def test_cross_run_evidence_is_rejected(prepared):
     _, run, gate = prepared
     ref = evidence(prepared, run_id="run_other")
-    run.scientific_observed_artifact_ids = [ref.id]
     result, refs = registered_result(prepared, verdict="supports", cited=[ref.id], observed=[ref.id])
     assert not gate.validate(run, result, refs).ok
 
@@ -224,7 +221,6 @@ def test_required_output_does_not_force_observation_or_citation(prepared):
     accepted = gate.validate(run, result, refs)
     assert accepted.ok
     assert accepted.report.evidence == []
-    assert run.scientific_observed_artifact_ids == []
     assert ref.id not in accepted.report.opinion.evidence_artifact_ids
 
 
@@ -330,3 +326,27 @@ def test_registry_uses_supplied_run_map_and_verifies_frozen_delivery(prepared):
     assert registry.missing_required_artifacts(
         ["metrics"], run_id="run_other", artifacts={ref.id: ref},
     ) == ["metrics"]
+
+
+def test_completion_does_not_require_an_observation_trace(prepared):
+    _, run, gate = prepared
+    ref = evidence(prepared)
+    result, refs = registered_result(prepared, cited=[ref.id])
+    refs = [item for item in refs if item.kind != "observation_trace"]
+    result.artifacts = refs
+    assert gate.validate(run, result, refs).ok
+
+
+@pytest.mark.parametrize("fault", ["unknown", "missing", "corrupt"])
+def test_unread_citations_still_require_registered_frozen_content(prepared, fault):
+    from pathlib import Path
+
+    _, run, gate = prepared
+    ref = evidence(prepared)
+    cited = "artifact_unknown" if fault == "unknown" else ref.id
+    if fault == "missing":
+        Path(ref.uri.removeprefix("file://")).unlink()
+    elif fault == "corrupt":
+        Path(ref.uri.removeprefix("file://")).write_text("changed")
+    result, refs = registered_result(prepared, cited=[cited])
+    assert not gate.validate(run, result, refs).ok

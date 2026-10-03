@@ -9,6 +9,8 @@ Schema 18 restores completed/failed on the unified finish and clarifies keyword 
 Schema 19 replaces internal feedback briefs and adds artifact character windows.
 Schema 20 replaces experiment/run_command with shared/run_shell, preserves exact
 script text and updates the embedded public version. Text readers reject lossy decoding.
+Schema 21 registers per-paper metadata/abstract sources, adds full-text acquisition,
+and treats reading records as diagnostics rather than completion gates.
 """
 
 import hashlib
@@ -20,6 +22,7 @@ from resagent2_capabilities import (
     CreateFileTool,
     DeletePathTool,
     GitDiffTool,
+    FetchLiteratureFulltextTool,
     ListFilesTool,
     LiteratureSearchTool,
     PrepareEnvironmentTool,
@@ -43,7 +46,7 @@ from resagent2_scientific.tools import (
 def tool_surface_fingerprints() -> dict[str, str]:
     groups = {
         "shared": (AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
-                   LiteratureSearchTool, PrepareEnvironmentTool, ReadArtifactTool,
+                   LiteratureSearchTool, FetchLiteratureFulltextTool, PrepareEnvironmentTool, ReadArtifactTool,
                    ReadFileTool, ReplaceTextTool, RunSetupTool, RunShellTool, SearchTextTool),
         "coding": (RunVerificationTool, DeletePathTool),
         "runtime": (AskUserTool, FinishTool),

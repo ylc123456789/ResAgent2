@@ -9,7 +9,7 @@ from resagent2_runtime.tools import AskUserToolInput
 
 
 class ScientificAction(AgentAction):
-    tool: Literal["read_artifact", "literature_search", "request_work", "finish", "ask_user"]
+    tool: Literal["read_artifact", "literature_search", "fetch_literature_fulltext", "request_work", "finish", "ask_user"]
 
 
 class RequestWorkInput(RuntimeModel):

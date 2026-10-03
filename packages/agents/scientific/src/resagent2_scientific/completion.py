@@ -1,4 +1,4 @@
-"""Validate a scientific opinion artifact against observed evidence."""
+"""Validate registered citations and required Scientific deliverables."""
 
 from __future__ import annotations
 
@@ -23,15 +23,21 @@ SCIENTIFIC_FINISH_ARTIFACT_KINDS = SCIENTIFIC_ARTIFACT_KINDS - SYSTEM_GENERATED_
 
 
 def _observed_artifact_ids(state: AgentState) -> list[str]:
-    """Only successful artifact-reading tools update these persisted lists."""
-    return list(dict.fromkeys([
-        *state.memory.get("read_artifact_ids", []),
-        *state.memory.get("literature_artifact_ids", []),
-    ]))
+    """Historical access log only; never evidence or completion authority."""
+    return list(dict.fromkeys(state.memory.get("read_artifact_ids", [])))
 
 
-def unobserved_artifact_ids(cited: list[str], observed: list[str]) -> list[str]:
-    return sorted(set(cited) - set(observed))
+def cited_artifacts(cited_ids: list[str], *, run_id: str,
+                    reader: RegisteredArtifactReader | None) -> list[ArtifactRef]:
+    """Check registered source identity and bytes without recording a read."""
+    refs = []
+    for artifact_id in cited_ids:
+        ref = reader.resolve_ref(artifact_id) if reader is not None else None
+        if ref is None or ref.run_id != run_id:
+            raise ValueError(f"Citation is not an authorized artifact of this Run: {artifact_id}")
+        reader.verify(artifact_id)
+        refs.append(ref)
+    return refs
 
 
 class ScientificCompletionCheck:
@@ -42,6 +48,7 @@ class ScientificCompletionCheck:
         resolve_artifact: Callable[[str], ArtifactRef | None] | None = None,
         reader: RegisteredArtifactReader | None = None,
         input_artifact_ids: list[str] | None = None,
+        registered_artifacts: Callable[[], list[ArtifactRef]] | None = None,
     ) -> None:
         self._unresolved = unresolved_task_outcomes
         self._required_evidence_kinds = required_evidence_kinds or []
@@ -49,6 +56,7 @@ class ScientificCompletionCheck:
         self._resolve_artifact = resolve_artifact
         self._reader = reader
         self._input_artifact_ids = frozenset(input_artifact_ids or [])
+        self._registered_artifacts = registered_artifacts
 
     def evaluate(self, state: AgentState, candidate: FinishCandidate | None) -> CompletionDecision:
         if candidate is None:
@@ -80,33 +88,31 @@ class ScientificCompletionCheck:
                 raise ValueError("Registered opinion has no authorized reader")
         except (ValueError, ValidationError) as error:
             return CompletionDecision(complete=False, report=f"Opinion artifact is invalid: {error}")
-        observed = _observed_artifact_ids(state)
-        unobserved = unobserved_artifact_ids(opinion.evidence_artifact_ids, observed)
-        if unobserved:
-            return CompletionDecision(
-                complete=False, report="Cite only observed evidence before finishing: " + ", ".join(unobserved),
+        try:
+            artifacts = cited_artifacts(
+                opinion.evidence_artifact_ids, run_id=state.run_id, reader=self._reader,
             )
-        artifacts = []
-        if self._resolve_artifact is not None:
-            artifacts = [
-                artifact for item_id in opinion.evidence_artifact_ids
-                if (artifact := self._resolve_artifact(item_id)) is not None
-            ]
+        except (ValueError, OSError) as error:
+            return CompletionDecision(complete=False, report=f"Invalid evidence citation: {error}")
         missing = missing_required_evidence_kinds(
             self._required_evidence_kinds, run_id=state.run_id, artifacts=artifacts,
-            observed_artifact_ids=observed, cited_artifact_ids=opinion.evidence_artifact_ids,
+            cited_artifact_ids=opinion.evidence_artifact_ids,
         )
         if missing:
             return CompletionDecision(
                 complete=False,
                 report="Still missing required evidence of kind " + ", ".join(missing)
-                + "; observe and cite registered artifacts of those kinds",
+                + "; cite registered artifacts of those kinds",
             )
         if self._required_artifacts:
             if self._reader is None:
                 raise ValueError("Required artifacts have no authorized registry reader")
+            registered = self._registered_artifacts() if self._registered_artifacts else []
             available_ids = [
-                *sorted(self._input_artifact_ids), *observed,
+                *sorted(self._input_artifact_ids),
+                *[item.id for item in registered if item.run_id == state.run_id],
+                *state.memory.get("literature_output_artifact_ids", []),
+                *opinion.evidence_artifact_ids,
                 *[item.id for item in candidate.artifacts if isinstance(item, ArtifactRef)],
             ]
             # This pre-registration boundary may propose its own valid outputs.

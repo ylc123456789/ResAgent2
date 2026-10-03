@@ -41,7 +41,6 @@ class CompletionViolationCode(StrEnum):
     INVALID_SESSION = "invalid_session"
     ACTIVE_CONTROL_STATE = "active_control_state"
     INVALID_OPINION = "invalid_opinion"
-    UNOBSERVED_EVIDENCE = "unobserved_evidence"
     MISSING_EVIDENCE_KIND = "missing_evidence_kind"
     REQUIRED_ARTIFACT_MISSING = "required_artifact_missing"
     MISSING_LIMITATIONS = "missing_limitations"
@@ -95,7 +94,6 @@ class ResearchRun(OrchestratorModel):
     scientific_session: SessionRef | None = None
     latest_scientific_assessment: ScientificAssessment | None = None
     work_requests: list[WorkRequest] = Field(default_factory=list)
-    scientific_observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
     final_opinion: ScientificOpinion | None = None
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)

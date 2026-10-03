@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 from resagent2_components import (
     ArtifactReadError,
+    LiteraturePaper,
     RegisteredArtifactReader,
     ResourceLayout,
 )
@@ -226,10 +227,23 @@ def test_live_registration_binds_identity_and_content_to_run_scope(registration)
     assert registration.resolve(second.id, run_id="run_b") == second
 
 
+def _paper():
+    return LiteraturePaper(
+        paper_id="2401.00001", title="Run-scoped literature source",
+        abstract="The registered abstract remains available across a pause.",
+        source_url="https://arxiv.org/abs/2401.00001",
+    )
+
+
+def _paper_ref(registration):
+    return next(ref for ref in registration.list_artifacts(run_id="run_a")
+                if ref.kind == "literature_paper")
+
+
 def test_scientific_reads_new_literature_in_the_same_turn(registration):
     class Backend:
         def search(self, query, **kwargs):
-            return []
+            return [_paper()]
 
     class Client:
         step = 0
@@ -240,54 +254,81 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             if self.step == 1:
                 return {"tool": "literature_search", "arguments": {"query": "scope test"}}
             if self.step == 2:
-                self.artifact_id = next(iter(registration._store.load("run_a").artifacts))
+                self.artifact_id = _paper_ref(registration).id
                 return {"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}
+            assert self.step == 3
             assert "artifact_reads" in context.included_sections
-            assert self.artifact_id in context.text
-            assert "# Literature search results" in context.text
-            assert "No papers returned" in context.text
-            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "No papers found",
+            section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
+            snippets = json.loads(section.split("\n", 1)[1])["snippets"]
+            assert len(snippets) == 1
+            assert snippets[0]["artifact_id"] == self.artifact_id
+            assert _paper().abstract in snippets[0]["content"]
+            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
                             "evidence_artifact_ids": [self.artifact_id]})}]}}
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
     result = agent.invoke(AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_a', instruction='Check Run isolation', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
-    assert result.status == "completed"
+    assert result.status == "completed", result.model_dump(mode="json")
     state = agent.store.load(result.session.id)
-    assert client.artifact_id in state.memory["read_artifact_ids"]
+    assert state.memory["read_artifact_ids"] == [client.artifact_id]
     reads = [e for e in state.events if e.type == "observation" and e.tool == "read_artifact"]
-    assert "No papers returned" in reads[-1].data["value"]["content"]
+    assert len(reads) == 1
+    assert _paper().abstract in reads[0].data["value"]["content"]
     assert "read_artifact_summaries" not in state.memory
+    assert registration.resolve(client.artifact_id, run_id="run_b") is None
 
 
 def test_resumed_scientific_does_not_return_historical_input_refs(registration):
     class Backend:
         def search(self, query, **kwargs):
-            return []
+            return [_paper()]
 
-    client = ScriptedLLMClient([
-        {"tool": "literature_search", "arguments": {"query": "history"}},
-        {"tool": "ask_user", "arguments": {
-            "assessment": {"statement": "Need permission to conclude"},
-            "text": "Proceed with this evidence?", "requested_fields": ["approve"],
-        }},
-        {"tool": "finish", "arguments": {
-            "report": "No papers found",
-            "artifacts": [{
-                "kind": "scientific_opinion", "path": "opinion.json",
-                "media_type": "application/json", "summary": "Conclusion",
-                "content": '{"verdict": "inconclusive", "statement": "No papers found"}',
-            }],
-        }},
-    ])
-    agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
+    class Client:
+        step = 0
+
+        def next_action(self, context, action_type):
+            self.step += 1
+            if self.step == 1:
+                return {"tool": "literature_search", "arguments": {"query": "history"}}
+            if self.step == 2:
+                return {"tool": "read_artifact", "arguments": {"artifact_id": _paper_ref(registration).id}}
+            if self.step == 3:
+                return {"tool": "ask_user", "arguments": {
+                    "assessment": {"statement": "Need permission to conclude"},
+                    "text": "Proceed with this evidence?", "requested_fields": ["approve"],
+                }}
+            assert self.step == 4
+            assert _paper().abstract in context.text
+            return {"tool": "finish", "arguments": {
+                "report": "Only abstract-level evidence is available",
+                "artifacts": [{
+                    "kind": "scientific_opinion", "path": "opinion.json",
+                    "media_type": "application/json", "summary": "Conclusion",
+                    "content": json.dumps({
+                        "verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
+                        "evidence_artifact_ids": [_paper_ref(registration).id],
+                    }),
+                }],
+            }}
+
+    agent = ScientificAgent(Client(), literature_backend=Backend(), registration_port=registration)
     request = AgentRequest(run_id='run_a', agent=AgentOwner.SCIENTIFIC, instruction='Review evidence', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     first = agent.invoke(request)
-    ref = next(item for item in first.artifacts if isinstance(item, ArtifactRef))
+    assert first.status == "needs_user_input", first.model_dump(mode="json")
+    historical_refs = [item for item in first.artifacts if isinstance(item, ArtifactRef)]
+    assert {ref.kind for ref in historical_refs} == {"literature_paper", "literature_search"}
+    ref = next(item for item in historical_refs if item.kind == "literature_paper")
     second = agent.invoke(request.model_copy(update={
-        "parent_session_id": first.session.id, "input_artifacts": [ref],
+        "parent_session_id": first.session.id, "input_artifacts": historical_refs,
     }))
     assert second.status == "completed", second.report
-    assert not any(isinstance(item, ArtifactRef) and item.id == ref.id for item in second.artifacts)
+    assert second.session.id == first.session.id
+    historical_ids = {item.id for item in historical_refs}
+    assert not any(isinstance(item, ArtifactRef) and item.id in historical_ids for item in second.artifacts)
     trace = json.loads(next(item.content for item in second.artifacts if item.kind == "observation_trace"))
-    assert ref.id in trace["observed_artifact_ids"]
+    assert trace["observed_artifact_ids"] == [ref.id]
+    reads = [event for event in agent.store.load(second.session.id).events
+             if event.type == "observation" and event.tool == "read_artifact"]
+    assert len(reads) == 1  # Resume retains the actual historical read, not a search-as-read flag.
+    assert reads[0].data["value"]["artifact_id"] == ref.id

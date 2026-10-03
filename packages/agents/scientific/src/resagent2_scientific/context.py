@@ -17,13 +17,20 @@ from resagent2_contracts import (
 )
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
 
-from .completion import SCIENTIFIC_FINISH_ARTIFACT_KINDS, _observed_artifact_ids
+from .completion import SCIENTIFIC_FINISH_ARTIFACT_KINDS
 
 
 SCIENTIFIC_PROMPT = f"""### Role and scope
 You are the Scientific Agent responsible for the scientific direction and final
 judgment of one research run. Interpret the instruction, investigate the literature,
 assess evidence, and decide whether further work or a user decision is needed.
+Literature search returns individual metadata/abstract artifacts and a query receipt.
+For details beyond an abstract, fetch_literature_fulltext obtains a registered
+paper's PDF and page-labelled text; read the returned text as needed. Query
+receipts, abstracts, raw PDFs and extracted text are different materials.
+Metadata snapshots or alternate formats of one paper are not independent sources.
+Fulltext acquisition and parsing may fail; retain the stated gaps rather than
+assuming a saved PDF or extracted text includes its figures and formulas.
 Use request_work for code inspection, implementation, or experiments; execution
 Agents own that work. Literature search and scientific judgment remain yours.
 
@@ -41,12 +48,12 @@ key evidence behind a conclusion. Read historical reports only when needed.
 Feedback can omit report text within the context budget; its registered source
 contains the remainder. Work records, not report prose, establish execution state.
 
-Reports and index entries do not observe the artifacts they mention. Cite only
-ArtifactIds observed through read_artifact or literature_search; the system records
-observation evidence independently. A short result preview is not proof of support.
-An observed id records past access, not that its full contents remain visible.
-Use read_artifact with the needed start_line/end_line range; do not guess the missing
-contents. Assess whether the observed content actually supports the cited claim.
+Cite registered artifacts under their original IDs. Reports, index entries, and
+short search previews do not establish what the underlying sources support.
+Read the needed source sections when assessing a claim; do not guess omitted content.
+Reading records are historical logs, not proof of complete reading or understanding.
+Choose whether more source material is needed and match each claim to the content
+actually available; distinguish an abstract from full text and preserve limitations.
 
 ### Decision principles
 Match the strength of each conclusion to the evidence and its limitations. Distinguish
@@ -111,16 +118,6 @@ marked completed. The report explains the conclusion, its evidence, conditions,
 limitations, and remaining work; machines consume the opinion artifact. If failed or
 blocked work remains, state how it limits the conclusion. Do not fabricate evidence or state.
 """
-
-
-def _evidence_control_state(request: AgentRequest, state: AgentState) -> dict:
-    observed = _observed_artifact_ids(state)
-    pending = state.memory.get("pending_citation_artifact_ids", [])
-    return {
-        "observed_artifact_ids": observed,
-        "pending_citation_artifact_ids": pending,
-        "required_next_action": "read_artifact_or_remove_citation" if pending else "none",
-    }
 
 
 def _research_materials(request: AgentRequest, reader: RegisteredArtifactReader) -> dict:
@@ -209,11 +206,6 @@ def build_context(
 ) -> list[ContextSection | ContextMaterial]:
     reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
     sections = [
-        ContextSection(
-            name="evidence_control_state",
-            content=json.dumps(_evidence_control_state(request, state)),
-            priority=1000, required=True,
-        ),
         ContextSection(
             name="research", content=json.dumps({"instruction": request.instruction}),
             priority=100, required=True,

@@ -56,7 +56,7 @@ from .literature import (
     MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchBackend,
-    render_literature,
+    render_paper,
     LiteratureSearchError,
     LiteratureUnavailableError,
 )
@@ -72,7 +72,7 @@ __all__ = [
     'MultiSourceLiteratureBackend',
     'LiteraturePaper',
     'LiteratureSearchBackend',
-    'render_literature',
+    'render_paper',
     'LiteratureSearchError',
     'LiteratureUnavailableError',
     'ArtifactRegistrationPort',

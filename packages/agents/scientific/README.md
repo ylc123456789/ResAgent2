@@ -3,26 +3,31 @@
 `ScientificAgent.invoke(AgentRequest) -> AgentResult` 与执行 Agent 使用相同协议。
 Scientific 保留一套提示词与动作 schema，Session 归属 Run，不伪造 Task。
 
-工具包括 read_artifact、可注入的 literature_search、request_work、ask_user 和共享 finish。
-request_work 需要系统明确授权，其 assessment 与工作正文进入 work_request artifact；
-ask_user 的问题进入 question artifact，当前判断保存在 scientific_assessment artifact。
-控制信号只引用产物，不复制领域正文。
+工具包括 read_artifact、可注入的 literature_search / fetch_literature_fulltext、
+request_work、ask_user 和共享 finish。request_work 需要系统明确授权，
+assessment 与工作正文进入 work_request artifact；ask_user 的问题进入 question
+artifact，当前判断保存在 scientific_assessment artifact。控制信号只引用产物，
+不复制领域正文。
 
-finish 提交 report 及一个 scientific_opinion JSON artifact。完成检查验证内容格式、
-真实观察过的引用、要求的证据 kind，以及失败工作对应的科研限制说明。
-`conclusion_requirements.required_artifacts` 给出用户显式声明的逻辑输出名，精确、区分大小写地匹配本 Run 已登记的 `output_name`。缺失时已有 CompletionCheck 返回 runtime_feedback，同一 Session 可继续 request_work 或 ask_user，共用原预算。Scientific 自己合法命名的 finish 候选可先提出，最终仍由接收端登记并独立检查。
+finish 提交 report 及一个 scientific_opinion JSON artifact。完成检查验证格式、
+引用工件的授权/归属与冻结完整性、要求的证据 kind，以及失败工作对应的局限。
+`required_evidence_kinds` 要求引用 literature_paper 或 literature_fulltext，搜索回执
+literature_search 不能代替论文。访问历史不再阻塞提问、委托、引用或完成；
+Scientific 仍应根据实际可见材料判断支持程度，缺少关键正文时主动读取或说明限制。
 
-存在检查不要求读取或引用对应产物，不增加 observation_trace；`required_evidence_kinds` 的观察和引用规则保持独立。Scientific 应在工作目标或约束中保留用户的明确名称，让执行 Agent 按同名 output_name 提交，不能把文件名或科学结论当成交付事实。
+`conclusion_requirements.required_artifacts` 给出用户显式声明的逻辑输出名，精确、
+区分大小写地匹配本 Run 已登记的 output_name。缺失时原 CompletionCheck 返回
+runtime_feedback，同一 Session 可继续请求工作或提问，共用原预算；存在检查不要求
+引用或读取产物，也不评价科学有效性。Scientific 在工作目标或约束中保留明确名称，
+让执行 Agent 按同名 output_name 提交。
 
-observation_trace 由工具记录确定性生成；模型不能自行填报观察历史。
-文献检索中途登记的 ArtifactRef 可以同轮读取，并按原 ID 返回。
+每篇论文有独立 literature_paper，包含元信息与摘要；需要全文时按论文工件 ID 调用
+fetch_literature_fulltext，得到 literature_pdf 与 literature_fulltext 的引用。
+检索预览、元信息、摘要、解析正文和原始 PDF 不互相冒称；同 Run 已登记材料可复用。
+observation_trace 从真实工具访问确定性生成，模型不能自行填报，也不代表读完全文。
 
-恢复回答和成对工作反馈从正式快照读取，按照 resume_artifact_ids 投影到每步
-必需上下文；材料出现不代表已观察其引用的证据。重复调用使用本 Session 的
-持久化结果，重复反馈不重新消耗 LLM 调用。
-
-Scientific 只消费 Orchestrator 的 [Interpreter](../../orchestrator/src/resagent2_orchestrator/interpreter.py)
-交付的最新完整科研目录和本轮带引用简报；它不生成另一份目录或简报。目录中的完整问答
-可按原 ID 读取，阅读答案不消费批准或改变恢复范围。机器侧仍检查
-授权和执行事实，原证据可通过 read_artifact 按需读取。读目录不等于读到其引用的证据。
-共享 workspace_context 投影真实阅读片段，超出上下文预算时保留分页入口。
+回答与工作反馈按 resume_artifact_ids 从正式快照投影到必需上下文。Scientific
+消费固定 Interpreter 组织的完整科研目录和本轮原报告，不生成另一份目录或简报。
+目录保留原 Artifact ID 及可选直接来源 ID；原文和身份仍以 Registry 为准。
+阅读答案不消费批准或改变恢复范围；同一 Session 的持久结果沿原恢复链复用。
+共享 workspace_context 投影真实阅读片段，超出上下文预算时保留原件读取入口。

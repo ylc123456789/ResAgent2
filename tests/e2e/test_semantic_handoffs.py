@@ -153,7 +153,12 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     assert f"## uncertainty\n\n{uncertainty}" in body["content"]
     assert "## evidence_files" in body["content"]
     assert "util.py" in body["content"]
-    assert report_id in restored.scientific_observed_artifact_ids
+    scientific_state = JsonSessionStore(tmp_path / "scientific_sessions").load(restored.scientific_session.id)
+    read_ids = {
+        event.data["value"]["artifact_id"] for event in scientific_state.events
+        if event.type == "observation" and event.tool == "read_artifact" and event.data.get("ok")
+    }
+    assert report_id in read_ids  # Access history is checked, not used as a completion gate.
     assert restored.llm_calls_used == 10  # 2 + 3 + 2 Coding calls, 3 Scientific calls.
     assert not (repo / "module_report.md").exists()
     assert subprocess.check_output(["git", "status", "--porcelain"], cwd=repo) == b""

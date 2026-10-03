@@ -75,7 +75,7 @@ def test_workspace_and_artifact_share_line_range_semantics(tmp_path, start, end,
         assert result.value["end_line"] == end
         assert result.value["content"] == expected
         assert result.value["truncated"] is False
-    assert artifact_result.memory_updates["read_artifact_ids"] == [ref.id]
+    assert artifact_result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if expected else [])
     assert artifact_result.value["provenance"] == {
         "producer": "experiment", "task_id": "task_reader", "attempt_number": 1,
     }
@@ -215,7 +215,7 @@ def test_artifact_tool_pages_long_json_without_rewriting_source(tmp_path):
             artifact_id=ref.id, start_char=start, end_char=start + 4_000,
         ))
         assert result.value["truncated"] is False
-        assert result.memory_updates["read_artifact_ids"] == [ref.id]
+        assert result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if body else [])
         pieces.append(result.value["content"])
     assert "".join(pieces) == body
     assert read_artifact_json(reader, ref.id) == json.loads(body)
@@ -298,7 +298,7 @@ def test_text_reads_preserve_valid_utf8_regardless_of_file_label(tmp_path, body)
     assert file_tool.execute(_state(), file_tool.input_model(path=path.name)).value["content"] == body.replace("\r\n", "\n").replace("\r", "\n")
     result = artifact_tool.execute(_state(), artifact_tool.input_model(artifact_id=ref.id))
     assert result.value["content"] == body
-    assert result.memory_updates["read_artifact_ids"] == [ref.id]
+    assert result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if body else [])
 
 
 @pytest.mark.parametrize("registered", [False, True])

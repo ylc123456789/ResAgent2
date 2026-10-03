@@ -2,6 +2,15 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-03：文献基础改造（本地验证完成）
+
+`refactor/literature-foundation` 将搜索回执、单篇论文、原始 PDF 和解析文本分开登记，
+并把访问记录移出运行门禁。schema 升为 21.0，旧 Run 不迁移；外部论文导入留待后续。
+本地全量 **1612 passed / 1 skipped**、mock completed（13 工件），隔离项目环境依赖检查通过。
+本轮尚未进行真实服务器文献/LLM 验收，用户级依赖差异、测试边界及短 Run 步骤见
+[实施记录与测试交接](reviews/LITERATURE_FOUNDATION_2026-10-03.md)，设计见
+[ADR-0022](decisions/0022-paper-materials-and-access-records.md)。
+
 <a id="prompt-shell-closeout"></a>
 
 ## 2026-10-01：提示词一致性、共享 Shell 与委托约束收尾

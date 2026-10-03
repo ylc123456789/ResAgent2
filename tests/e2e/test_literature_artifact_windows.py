@@ -1,6 +1,4 @@
-"""Actual search/freeze/read/context chain, with scripted decisions, no network."""
-
-from resagent2_contracts import AgentPermissions
+"""Actual search/freeze/read/context and full-text chains; scripted, no network."""
 
 import hashlib
 import json
@@ -11,21 +9,17 @@ from urllib.request import url2pathname
 
 import pytest
 
-from resagent2_components import (
-    ArtifactReadError,
-    RegisteredArtifactReader,
-)
-from resagent2_components import LiteraturePaper
+from resagent2_components import ArtifactReadError, LiteraturePaper, RegisteredArtifactReader
+from resagent2_components.literature.fulltext import PdfText
 from resagent2_contracts import (
-    AgentOwner,
-    ArtifactCandidate,
-    ArtifactRef,
-    ResearchRequest,
-    RunBudget,
-    AgentRequest,
-    TaskBudget,
+    AgentOwner, ArtifactCandidate, ArtifactRef, ResearchRequest, RunBudget, RunPermissions,
+    WorkflowAgentRegistry,
 )
-from resagent2_orchestrator import ArtifactRegistry
+from resagent2_orchestrator import (
+    ArtifactRegistry, DeterministicWorkInterpreter, ResearchController,
+    ScientificArtifactRegistration, WorkflowScheduler,
+)
+from resagent2_orchestrator.interpreter import build_research_index
 from resagent2_scientific import ScientificAgent
 
 
@@ -43,6 +37,7 @@ def _papers():
             abstract=("Controlled settings and matched baselines. " * 40)
             + (TAIL_EVIDENCE if index == 5 else "No tail result in this paper."),
             source_url=f"https://arxiv.org/abs/2401.0000{index}",
+            pdf_url=f"https://arxiv.org/pdf/2401.0000{index}",
         )
         for index in range(6)
     ]
@@ -52,37 +47,43 @@ def _path(ref):
     return Path(url2pathname(urlparse(ref.uri).path))
 
 
-def _candidate(papers):
-    return ArtifactCandidate(
-        kind="literature_search", path="literature_search.json",
-        media_type="application/json", summary="Controlled comparisons",
-        metadata={"papers": [paper.model_dump(mode="json") for paper in papers]},
+def _finish(evidence, statement):
+    return {"tool": "finish", "arguments": {
+        "report": statement,
+        "artifacts": [{
+            "kind": "scientific_opinion", "path": "opinion.json",
+            "media_type": "application/json", "summary": "Scientific conclusion",
+            "content": json.dumps({
+                "verdict": "supports", "statement": statement,
+                "evidence_artifact_ids": [evidence],
+            }),
+        }],
+    }}
+
+
+def _controller(tmp_path, client, papers):
+    class Backend:
+        def search(self, query, **kwargs):
+            return papers
+
+    scheduler = WorkflowScheduler(
+        bindings={}, artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
+    registration = ScientificArtifactRegistration(scheduler.artifact_registry, scheduler.store)
+    client.registration = registration
+    agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
+    controller = ResearchController(
+        scientific_port=agent, compiler=None, scheduler=scheduler,
+        registry=WorkflowAgentRegistry(definitions=[]), interpreter=DeterministicWorkInterpreter(),
+    )
+    return controller, agent
+
+
+def _registered(client, kind):
+    return [ref for ref in client.registration.list_artifacts(run_id=RUN_ID) if ref.kind == kind]
 
 
 def test_literature_tail_reaches_actual_scientific_context(tmp_path):
-    class Backend:
-        def search(self, query, **kwargs):
-            return _papers()
-
-    class Registration:
-        registry = ArtifactRegistry(tmp_path / "artifacts")
-        ref = None
-        candidate = None
-
-        def register_scientific(self, candidate, *, run_id, session_id):
-            self.candidate = candidate
-            self.ref = self.registry.register_scientific(
-                candidate, run_id=run_id, session_id=session_id,
-            )
-            return self.ref
-
-        def resolve(self, artifact_id, *, run_id):
-            ref = self.ref
-            return ref if ref and (ref.id, ref.run_id) == (artifact_id, run_id) else None
-
-    registration = Registration()
-
     class Client:
         step = 0
         tail_line = None
@@ -91,20 +92,25 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             self.step += 1
             if self.step == 1:
                 return {"tool": "literature_search", "arguments": {"query": "comparison"}}
-            ref = registration.ref
+            papers = _registered(self, "literature_paper")
+            assert len(papers) == 6
+            ref = next(ref for ref in papers if ref.metadata["paper"]["paper_id"] == "2401.00005")
             if self.step == 2:
                 body = _path(ref).read_text()
-                assert len(body.encode("utf-8")) > 8000
-                assert body.index(TAIL_EVIDENCE) > 8000
-                assert TAIL_EVIDENCE not in context.text  # Absent from search previews.
+                assert body.index(TAIL_EVIDENCE) > 200
+                assert TAIL_EVIDENCE not in context.text  # Not in search previews.
+                receipt = _registered(self, "literature_search")[0]
+                receipt_body = json.loads(_path(receipt).read_text())
+                assert set(receipt_body["paper_artifact_ids"]) == {paper.id for paper in papers}
+                assert TAIL_EVIDENCE not in _path(receipt).read_text()
                 lines = body.splitlines()
                 self.tail_line = next(i for i, line in enumerate(lines, 1) if TAIL_EVIDENCE in line)
                 assert self.tail_line > 1
-                assert len(lines[self.tail_line - 1]) < 6000
                 return {"tool": "read_artifact", "arguments": {
                     "artifact_id": ref.id,
                     "start_line": self.tail_line, "end_line": self.tail_line,
                 }}
+            assert self.step == 3
             assert "artifact_reads" in context.included_sections
             section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
             snippets = json.loads(section.split("\n", 1)[1])["snippets"]
@@ -112,41 +118,34 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             assert snippets[0]["artifact_id"] == ref.id
             assert snippets[0]["truncated"] is False
             assert TAIL_EVIDENCE in snippets[0]["content"]
-            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "supports", "statement": TAIL_EVIDENCE,
-                            "evidence_artifact_ids": [ref.id]})}]}}
+            return _finish(ref.id, TAIL_EVIDENCE)
 
     client = Client()
-    agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
-    requirement = registration.registry.register_system_artifact(
-        ArtifactCandidate(
-            kind="conclusion_requirements", path="requirements.json", media_type="application/json",
-            summary="Required literature", content='{"required_evidence_kinds": ["literature_search"]}',
-        ),
-        run_id=RUN_ID, source_type="conclusion_requirement",
-    )
-    result = agent.invoke(AgentRequest(run_id=RUN_ID, agent=AgentOwner.SCIENTIFIC, instruction="Read the final comparison's result", input_artifacts=[requirement], budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
-    assert result.status == "completed"
-    state = agent.store.load(result.session.id)
+    controller, agent = _controller(tmp_path, client, _papers())
+    run = controller.create_run(RUN_ID, ResearchRequest(
+        goal="Read the final comparison's saved abstract", required_evidence_kinds=["literature_paper"],
+        budget=RunBudget(max_llm_calls=5, timeout_seconds=30),
+        permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+    ))
+    assert run.status == "completed", run.terminal_error
+    assert run.completion_violations == []
+    state = agent.store.load(run.scientific_session.id)
     read = next(e for e in state.events if e.tool == "read_artifact" and e.type == "observation")
     assert read.data["value"]["truncated"] is False
     assert TAIL_EVIDENCE in read.data["value"]["content"]
     assert "read_artifact_summaries" not in state.memory
 
-    ref = registration.ref
+    ref = run.artifacts[run.final_opinion.evidence_artifact_ids[0]]
     path = _path(ref)
-    assert ref.media_type == "text/markdown"
-    assert path.name == "literature_search.md"
-    assert "## Paper 6: Controlled comparison 5" in path.read_text()
+    assert ref.kind == "literature_paper" and ref.media_type == "text/markdown"
+    assert path.name.startswith("paper_")
+    assert "# Controlled comparison 5" in path.read_text()
+    assert "Controlled comparison 4" not in path.read_text()
     assert "not paper full text" in path.read_text()
     frozen = path.read_bytes()
     assert hashlib.sha256(frozen).hexdigest() == ref.sha256
-    repeated = registration.registry.register_scientific(
-        registration.candidate, run_id=RUN_ID, session_id=result.session.id,
-    )
-    assert repeated.id == ref.id and repeated.uri == ref.uri
-    assert path.read_bytes() == frozen
 
-    # Even a change outside the requested tail range must fail whole-file integrity.
+    # Changing another line must still fail whole-file integrity for a narrow read.
     path.write_bytes(b" " + frozen[1:])
     with pytest.raises(ArtifactReadError, match="sha256"):
         RegisteredArtifactReader([ref], run_id=RUN_ID).read_text(
@@ -154,9 +153,87 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
         )
 
 
-def test_multiline_registration_does_not_rewrite_a_legacy_frozen_file(tmp_path):
+def test_search_fetch_read_finish_preserves_registered_source_chain(tmp_path, monkeypatch):
+    from resagent2_capabilities.literature import fulltext as fulltext_tool
+
+    evidence = "FULLTEXT_ONLY: held-out accuracy was 0.83 under a fixed evaluation protocol."
+    calls = []
+
+    def download(url, destination):
+        calls.append(("download", url))
+        destination.write_bytes(b"%PDF-1.7\ncontrolled source bytes\n%%EOF")
+        return destination
+
+    def parse(path):
+        calls.append(("parse", Path(path)))
+        assert Path(path).read_bytes().startswith(b"%PDF-1.7")
+        return PdfText(
+            markdown=f"## Page 1\n\n{evidence}\n", page_count=1,
+            warnings=[], parser_version="controlled-test-parser",
+        )
+
+    monkeypatch.setattr(fulltext_tool, "fetch_pdf", download)
+    monkeypatch.setattr(fulltext_tool, "parse_pdf", parse)
+
+    class Client:
+        step = 0
+
+        def next_action(self, context, action_type):
+            self.step += 1
+            if self.step == 1:
+                return {"tool": "literature_search", "arguments": {"query": "controlled result"}}
+            paper = _registered(self, "literature_paper")[0]
+            if self.step == 2:
+                assert evidence not in context.text
+                return {"tool": "fetch_literature_fulltext", "arguments": {"paper_artifact_id": paper.id}}
+            text = _registered(self, "literature_fulltext")[0]
+            if self.step == 3:
+                assert evidence not in context.text  # Obtaining a file did not return its text.
+                return {"tool": "read_artifact", "arguments": {"artifact_id": text.id}}
+            assert self.step == 4
+            assert evidence in context.text
+            assert "artifact_reads" in context.included_sections
+            return _finish(text.id, evidence)
+
+    client = Client()
+    controller, agent = _controller(tmp_path, client, _papers()[:1])
+    run = controller.create_run(RUN_ID, ResearchRequest(
+        goal="Check the evaluation protocol from the retrieved paper's full text",
+        required_evidence_kinds=["literature_fulltext"],
+        budget=RunBudget(max_llm_calls=6, timeout_seconds=30),
+        permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+    ))
+    assert run.status == "completed", run.terminal_error
+    assert run.completion_violations == []
+    assert [name for name, _ in calls] == ["download", "parse"]
+    by_kind = {ref.kind: ref for ref in run.artifacts.values()}
+    paper, pdf, text = [by_kind[kind] for kind in ("literature_paper", "literature_pdf", "literature_fulltext")]
+    assert run.final_opinion.evidence_artifact_ids == [text.id]
+    assert pdf.metadata["paper_artifact_id"] == paper.id
+    assert text.metadata["paper_artifact_id"] == paper.id
+    assert text.metadata["ocr"] is False
+    index = build_research_index(
+        run_id=RUN_ID, artifacts=list(run.artifacts.values()), work_requests=run.work_requests,
+    )
+    entries = {item.artifact_id: item for group in index.groups for item in group.artifacts}
+    assert entries[paper.id].source_artifact_id is None
+    assert entries[pdf.id].source_artifact_id == paper.id
+    assert entries[text.id].source_artifact_id == pdf.id
+    state = agent.store.load(run.scientific_session.id)
+    observations = [event for event in state.events if event.type == "observation"]
+    assert [event.tool for event in observations] == [
+        "literature_search", "fetch_literature_fulltext", "read_artifact", "finish",
+    ]
+    read = next(event for event in observations if event.tool == "read_artifact")
+    assert evidence in read.data["value"]["content"]
+
+
+def test_registration_does_not_rewrite_existing_frozen_paper_bytes(tmp_path):
     registry = ArtifactRegistry(tmp_path / "artifacts")
-    candidate = _candidate(_papers())
+    candidate = ArtifactCandidate(
+        kind="literature_paper", path="paper.json", media_type="application/json",
+        summary="Controlled comparison", metadata={"paper": _papers()[0].model_dump(mode="json")},
+    )
     old_bytes = json.dumps(candidate.metadata, sort_keys=True, ensure_ascii=False).encode("utf-8")
     digest = hashlib.sha256(old_bytes).hexdigest()
     old_id = f"artifact_sci_{digest[:16]}"
@@ -169,14 +246,11 @@ def test_multiline_registration_does_not_rewrite_a_legacy_frozen_file(tmp_path):
         uri=old_path.as_uri(), sha256=digest, media_type=candidate.media_type,
         summary=candidate.summary, metadata=candidate.metadata,
     )
-    new_ref = registry.register_scientific(
-        candidate, run_id=RUN_ID, session_id=old_ref.session_id,
-    )
+    new_ref = registry.register_scientific(candidate, run_id=RUN_ID, session_id=old_ref.session_id)
     assert new_ref.id != old_ref.id and new_ref.uri != old_ref.uri
     assert old_path.read_bytes() == old_bytes
     assert json.loads(_path(new_ref).read_bytes()) == json.loads(old_bytes)
     assert len(_path(new_ref).read_text().splitlines()) > 1
-    # Existing refs remain integrity-valid, without silently rewriting their bytes.
     old_read = RegisteredArtifactReader([old_ref], run_id=RUN_ID).read_text(old_ref.id)
     assert old_read["content"] == old_bytes.decode("utf-8")
     assert old_read["truncated"] is False

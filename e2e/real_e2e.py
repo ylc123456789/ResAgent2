@@ -578,7 +578,6 @@ def _training_metrics(run):
             if (ref.media_type != "application/json"
                     or ref.metadata.get("source_path") != "metrics.json"
                     or ref.metadata.get("source_root") != "workspace"
-                    or ref.id not in run.scientific_observed_artifact_ids
                     or ref.id not in run.final_opinion.evidence_artifact_ids):
                 continue
             try:
@@ -729,15 +728,22 @@ def _ask_resume_succeeded(run) -> bool:
 
 
 def _literature_succeeded(run) -> bool:
-    """Scenario 5 acceptance: opinion cites a registered literature artifact."""
+    """Scenario 5 acceptance: cite an intact paper or its extracted full text."""
     cited = set(run.final_opinion.evidence_artifact_ids) if run.final_opinion else set()
-    literature_ids = [
-        a.id for a in run.artifacts.values() if a.kind == "literature_search"
-    ]
+    reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
+    literature_ids = []
+    for ref in run.artifacts.values():
+        if ref.kind not in {"literature_paper", "literature_fulltext"} or ref.id not in cited:
+            continue
+        try:
+            reader.verify(ref.id)
+        except (ValueError, OSError):
+            continue
+        literature_ids.append(ref.id)
     return (
         run.status == RunStatus.COMPLETED
         and run.final_opinion is not None
-        and run.final_report_artifact_id is not None
+        and run.final_report_artifact_id in run.artifacts
         and bool(literature_ids)
         and any(artifact_id in cited for artifact_id in literature_ids)
     )
@@ -855,7 +861,7 @@ def run_literature(workdir: Path) -> bool:
             "This is a literature-only review: use literature_search directly and "
             "do not request code or experiment work."
         ],
-        required_evidence_kinds=["literature_search"],
+        required_evidence_kinds=["literature_paper"],
         budget=RunBudget(
             max_llm_calls=60, timeout_seconds=900
         ),

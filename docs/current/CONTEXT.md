@@ -62,7 +62,7 @@
 - 必需段按传入顺序排列，不按 priority 排序；所有必需段之后才是选中的可选段。
 - Composer 不自行剪 JSON、代码或问答；调用材料的纯 `render(chars)` 投影，再按整包计量。具体如何保留片段、尾部或完整路径仍由共享能力决定。
 
-所以“priority=1000”不自动意味着放在全文最前面。Loop 主动把反馈放在领域输入之前；Scientific 的 builder 首先加入 evidence_control_state。这来自插入顺序。原生工具 schema 与历史不属于这些领域段，而在 Composer 的完整请求计量中单独呈现。
+所以“priority=1000”不自动意味着放在全文最前面。Loop 主动把反馈放在领域输入之前；领域段的呈现顺序来自 builder 的插入顺序。原生工具 schema 与历史不属于这些领域段，而在 Composer 的完整请求计量中单独呈现。
 
 ### 2.2 三个 Agent 共用的原生协议与运行段
 
@@ -112,7 +112,6 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 
 | 段名 | 从哪里来、给模型看什么 | 保留方式 |
 |---|---|---|
-| `evidence_control_state` | 本 Session 已观察工件编号、尚待补读/撤回的引用 | 必需；每步根据请求和 memory 重算 |
 | `research` | 当前调用的 `instruction`，由 Controller 组合目标、假设、背景和约束 | 必需；来自当前请求 |
 | `dataset_catalog` | 同次数据集解析得到的可用/不可用 ID 与共享用法说明 | 必需；不是数据正文 |
 | `research_materials` | 最新完整科研目录正文及原件读取入口；独立调用以同一结构组织传入材料 | 必需；累计保留历史条目，不裁成增量；原件按 ID 用 read_artifact 读取 |
@@ -120,7 +119,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | `material_<feedback_id>` | 原请求、任务状态与问题、跨轮未解决项、原件入口及已记录报告 | 仅本轮交付时呈现；事实框必需，报告按共享额度伸缩；完整目录单独展示 |
 | `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
-Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 只有在组合根同时提供 backend 和 registration port 时才加入工具集合。
+Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 与 `fetch_literature_fulltext` 由组合根注入相应来源组件和 registration port 后装配。
 
 finish 与另外两个 Agent 共用 status/report/artifacts；Scientific 的完成意见仅接受 status=completed，产物必须包含 scientific_opinion JSON。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
 
@@ -128,7 +127,7 @@ Scientific 的提示要求把适用于委托工作的明确要求（包括指定
 
 Scientific 的提示与完成检查从共享工件契约派生允许新建的种类；已有输入证据通过 opinion.evidence_artifact_ids 引用，不在 finish 里重新交付为新工件。不支持的 kind、输入/外来/伪造 Ref 和重复输出在现有 Loop 内收到 runtime_feedback，使用同一剩余预算纠正；不是 Controller 失败后另起重试。注册层仍检查身份、hash 和磁盘内容。
 
-`conclusion_requirements` 正文同时呈现明确的 `required_artifacts`。提示说明名称必须作为精确 output_name 交付，并要求 Scientific 在工作目标或约束中保留名称；不能从研究目标猜测要求。缺失反馈沿 required `runtime_feedback` 进入同一 Session 的下一次请求，模型可 request_work 或 ask_user。存在检查只访问授权登记表及冻结文件，不把机器校验记为 Scientific 已观察；required_evidence_kinds 仍按原观察和引用规则执行。
+`conclusion_requirements` 正文同时呈现明确的 `required_artifacts`。提示说明名称必须作为精确 output_name 交付，并要求 Scientific 在工作目标或约束中保留名称；不能从研究目标猜测要求。缺失反馈沿 required `runtime_feedback` 进入同一 Session 的下一次请求，模型可 request_work 或 ask_user。存在检查只访问授权登记表及冻结文件，不把机器校验记为 Scientific 已观察；required_evidence_kinds 仍要求引用对应 kind 的授权论文材料，不再要求预先记录为 observed。
 
 **科研目录与原报告反馈的分工：**
 
@@ -136,9 +135,9 @@ Orchestrator 的 Interpreter 从已登记材料生成科研目录，按初始材
 
 每轮稳定后，Controller 冻结 work_record，Interpreter 固定组织每个任务最新已记录报告。work_feedback 保存完整 report 和目录/记录引用。Scientific 接收必需事实框及可伸缩报告，research_materials 展示完整累计目录。事实框直接读取同源 WorkRecord，不从报告推断状态；回答恢复不重放旧报告，不重新解释历史。
 
-Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权引用仍完整供读取和校验使用。同轮检索材料从工具回执发现，下一次刷新收入目录。原报告可用于理解进展和选择下一步；报告未覆盖的细节、冲突和需引用的证据通过原件读取补足，正文展示不自动授予其引用原件已读资格。
+Scientific 不默认收到平铺 input_artifacts 或完整 work_record。授权引用仍完整供读取和校验使用。同轮检索材料从工具回执发现，下一次刷新收入目录。原报告可用于理解进展和选择下一步；报告未覆盖的细节、冲突和关键论断的支持依据通过原件读取补足；不为取得访问标记而机械重复读取已展示内容。
 
-当前 observed 集合来自成功 `read_artifact` **或** `literature_search` 的记录；它表示访问历史，不证明读过全文或当前仍能看到全部正文。仅列在授权清单里的编号不自动进入 observed。读过也不代表观点必然正确。
+observed 与 observation_trace 保留真实工具访问历史，不再形成补读/撤回引用的控制状态，也不阻塞提问、委托或完成。只有检索摘要就应说明摘要层面的信息，解析全文仍需核对实际内容；访问记录不证明读过全文、当前仍能看到全部正文或观点正确。引用的授权、登记身份和冻结完整性检查继续生效。
 
 **源码与测试**：[context](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[interpreter](../../packages/orchestrator/src/resagent2_orchestrator/interpreter.py)、[装配与回合](../../packages/agents/scientific/src/resagent2_scientific/agent.py)、[观察与完成检查](../../packages/agents/scientific/src/resagent2_scientific/completion.py)、[Interpreter 测试](../../tests/orchestrator/test_work_interpreter.py)、[证据控制测试](../../tests/scientific/test_evidence_control.py)。
 
@@ -187,7 +186,7 @@ Agent 决定需要验证而绑定尚未认证时，run_verification 在获准执
 
 调用开始不强制探测硬件或执行命令；需要时通过工具观察。环境绑定是工具和上下文共用的实际对象，原生历史中的旧 audit receipt 不能代替当前绑定。
 
-run_shell 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；每次脚本执行前使环境认证失效，回执中的执行前 env_audit 不代表执行后仍已认证；Coding 还保留实际 changed_paths，使原读取可标为过期。Shell 日志不会自动生成工件已读资格；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；Scheduler 按明确要求检查工件名称、种类、路径和 JSON 顶层有限数值键，报告自报数字不算测量证据。执行记录保留实际结果，不用命令退出码代替任务完成判断。
+run_shell 的回执包含实际命令、退出/超时状态、日志路径与有界 stdout_tail/stderr_tail；每次脚本执行前使环境认证失效，回执中的执行前 env_audit 不代表执行后仍已认证；Coding 还保留实际 changed_paths，使原读取可标为过期。Shell 日志不冒充工件正文访问记录；实际执行自动核验时还包含 env_audit。当前没有 evidence_files 自动发现清单，需通过 list_files/read_file 检查产物。`command_results` 再投影有界诊断，产物正文不会因此自动读入。execution_record 由代码从真实事件生成；Scheduler 按明确要求检查工件名称、种类、路径和 JSON 顶层有限数值键，报告自报数字不算测量证据。执行记录保留实际结果，不用命令退出码代替任务完成判断。
 
 **源码与测试**：[context](../../packages/agents/experiment/src/resagent2_experiment/context.py)、[初始记忆与装配](../../packages/agents/experiment/src/resagent2_experiment/agent.py)、[结果检查](../../packages/agents/experiment/src/resagent2_experiment/completion.py)、[Agent 测试](../../tests/experiment/test_experiment_agent.py)、[环境投影测试](../../tests/components/test_workspace_context.py)。
 
@@ -213,7 +212,7 @@ Compiler 没有 Session、工具读取工作集或 AgentLoop 的 runtime_feedbac
 
 Components 验证反馈与来源记录的 Run、Session、WorkRequest 配对及冻结完整性，以现有 ContextMaterial 构造必需事实框及可伸缩正文。正文截断/省略明确标记，剩余内容可用 read_artifact 的行范围或行内字符范围展开。完整目录与事实框仍需装入总硬额度，不自动扩容。
 
-Interpreter 不再读取执行日志来生成解释，没有 Session、工具循环、模型客户端或独立输入额度。Controller 保存并复用交付；Scientific 负责语义综合。索引、原报告呈现及系统读取不更新 observed，引用原件仍需既有成功正文读取。
+Interpreter 不再读取执行日志来生成解释，没有 Session、工具循环、模型客户端或独立输入额度。Controller 保存并复用交付；Scientific 负责语义综合。索引、原报告呈现及系统读取不冒充工具访问记录；是否进一步读取原件由 Scientific 根据已呈现内容、信息缺口和论断需要判断，不再以 observed 阻塞控制动作。
 
 <a id="reads"></a>
 
@@ -221,7 +220,7 @@ Interpreter 不再读取执行日志来生成解释，没有 Session、工具循
 
 ### 4.1 读取工具先限制一次返回
 
-`read_file` 与 `read_artifact` 仅读取 UTF-8 文本，共用严格解码：含 NUL 或无效 UTF-8 的文件返回可恢复错误，不替换乱码、不自动解析二进制，也不新增成功读取记录。检查整份内容后才选择窗口，缩小范围不能绕过文本检查；工作区读取保持原有换行规范化，工件保留原换行及字符偏移。工件仍先校验授权和整份 hash；二进制工件仍可登记及验证存在，不能因此算作已读。
+`read_file` 与 `read_artifact` 仅读取 UTF-8 文本，共用严格解码：含 NUL 或无效 UTF-8 的文件返回可恢复错误，不替换乱码、不自动解析二进制，也不新增成功读取记录。检查整份内容后才选择窗口，缩小范围不能绕过文本检查；工作区读取保持原有换行规范化，工件保留原换行及字符偏移。工件仍先校验授权和整份 hash；二进制工件仍可登记及验证存在，不能把存在校验当作返回过其正文。
 
 两入口共用 `slice_text_lines`：先取从 1 开始、两端包含的行范围，再保留最多128000字符的前缀（共享 `MAX_READ_CHARS`）。这是原始工具返回的IO边界，不是128K tokens；实际送入模型的部分还要按模块有效额度选择。范围超过文件末尾可得到短结果或空串，不自动寻找另一个范围。 read_artifact 可先按 start_char/end_char 选择所选行内的字符窗口（零基、末端不含），再应用同一 IO 上限；用于超长 JSON 字符串，文件内容与物理行号不变。
 
@@ -288,18 +287,18 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 
 ## 5. 文献的完整工作流及边界
 
-1. **Scientific 发起检索。** CLI/E2E 将 arXiv、OpenAlex 作为平级来源装配，成功后继续用该源，限流/临时网络故障时再试其他源，每次最多遍历一轮。正常空结果、坏请求和损坏响应不触发切换。两个后端都输出原有 LiteraturePaper：编号、标题、作者、日期、真实来源链接和摘要；每篇摘要最多 2000 字符，缺摘要留空。不是下载、解析 PDF，也不是另一次 LLM 总结。切换原因在应用日志，工件里的 OpenAlex ID/链接不会伪装成 arXiv。
-2. **按论文条目保存这一批结果。** LiteratureSearchTool 用确定性排版生成 `literature_search.md`，每篇一个标题，包含论文ID、来源、作者、日期和检索所得摘要；Registry 冻结并校验hash，metadata仍保留规范化记录。明确标为检索摘要而非全文或模型阅读结论。长物理行折到最多1000字符，未丢弃原字符。旧冻结JSON不改写。
-3. **返回检索预览。** 每篇摘要在 ToolObservation 的 brief 中最多 200 字符；该已受限结果进入原生 tool receipt 后不再附加约 400 字符的历史裁剪。完整协议历史仍受总输入预算，模型也不一定在一次检索预览里得到论文全文。
-4. **按需读本地工件。** Scientific 调用现有read_artifact；通常一读可看完这批条目，较大材料仍可按标题附近的行范围继续。工具默认返回最多128000字符，工件工作集由共享Composer按剩余空间分配。不需要再次访问论文检索服务。
-5. **判断和继续。** Scientific 可继续读取、搜索、询问用户或提出结论；没有自动为每篇论文保存一份 LLM 阅读笔记的步骤。
-6. **检查引用。** 工件身份、访问历史及要求的证据种类会被检查；这些不等于全文理解、结论正确或相关风险全部被考虑。
+1. **Scientific 发起检索。** CLI/E2E 将 arXiv、OpenAlex 作为平级来源装配，沿用最近成功来源和有界切换规则。搜索返回来源元信息、摘要和可用的全文入口；摘要缺失留空，不补写 LLM 摘要。搜索成功与全文可获取是两件事。
+2. **按论文登记材料。** 每篇结果独立登记为 `literature_paper`，正文明确是元信息与摘要，`metadata.paper` 保留规范化记录。`literature_search` 只保存本次查询及论文引用，作为搜索回执。重复搜索按明确的规范化论文 key 识别论文，保留 arXiv 版本；规范化元信息快照相同才复用同 Run 条目，同 key 内容变化登记新快照。不按标题猜测合并，也不重写旧冻结工件。
+3. **浏览和按需深入。** 工具返回论文引用和有限预览，科研目录展示论文及直接来源关系。Scientific 可用 `read_artifact` 阅读单篇条目；需要方法、实验设置、表格或原文依据时，再调用 `fetch_literature_fulltext(paper_artifact_id)`。元信息、摘要、原始 PDF 与解析文本的区别始终保留。
+4. **取得全文并复用。** 全文工具只接收已授权论文 ID，按该论文的登记来源获取可用 PDF；Registry 分别冻结 `literature_pdf` 与 `literature_fulltext`。`metadata.paper_artifact_id` 指向论文，`metadata.source_artifact_id` 标明直接来源（PDF→论文，文本→PDF），目录只投影这条关系。工具按 paper_artifact_id 复用本 Run 已冻结材料，解析失败重试可复用 PDF，不因重复请求重新下载成功的原件。
+5. **阅读和判断。** PDF 由 PyMuPDF4LLM 提取为可供现有 `read_artifact` 按范围读取的文本，关闭 OCR，不新增 LLM 阅读笔记。摘要预览或下载成功都不代表读取了全文；空文本、解析错误和材料局限应如实处理。Scientific 根据问题判断哪些正文足够以及是否还需工作，不要求逐篇读完整篇。
+6. **记录与检查。** 访问历史保留为诊断事实，不再作为 ask_user、request_work、引用或 finish 的前置门槛。引用仍须指向本 Run 授权登记的完整工件；`required_evidence_kinds` 检查已引用的 `literature_paper` 或 `literature_fulltext`，搜索回执不能代替论文。`required_artifacts` 继续按精确 output_name 与冻结 hash 检查交付，不评价内容含义。
 
-**当前局限：**文献内容按论文组织，但底层仍复用文本行读取，不新增按论文ID取片段的API。材料过大时仍可能裁剪一篇论文或淘汰较早条目；不会自动理解“哪篇最重要”或保存阅读发现。增大额度和改善排版不等于永久记忆，也不恢复backend未取得的全文。
+**当前局限：**只处理检索得到且公开可获取的资料；本轮不提供任意外部文件导入，不绕过付费墙或访问限制。无可用 PDF、下载失败、扫描件无文本、公式/表格提取不完整都不等于资料不存在，也不意味着可以编造全文内容。没有完整来源图、按语义自动证明引用、向量库或持久阅读笔记。正文仍受工具 IO 上限和统一上下文预算约束，材料可按范围重读，不承诺永久记忆。
 
-外部 timeout/429 与本地上下文丢失是两种问题。前者可能确实需要外部帮助；如果所需证据已在冻结工件里，是否还需要重新联网，应依据已有内容判断，不能把当前片段缺失等同于从未检索到。相关实际轨迹和候选策略见 [审查 C5](../history/reviews/CONTEXT_REVIEW_2026-09-13.md#c5)。
+外部 timeout/429、全文不可获取与本地上下文截断是不同问题。所需材料已在冻结工件时可直接读取；不能把当前片段缺失当成从未检索或下载。具体网络和提取边界见[文献组件](../../packages/components/README.md#literature)，设计取舍见 [ADR-0022](../history/decisions/0022-paper-materials-and-access-records.md)。
 
-**源码与测试**：[文献后端与呈现](../../packages/components/src/resagent2_components/literature/backends.py)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/literature_search.py)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。最后这类脚本化测试证明指定范围可达，不证明真实模型一定自己找到范围、也不证明翻页后不会遗忘。
+**源码与测试**：[文献组件](../../packages/components/src/resagent2_components/literature/)、[文献 Tool](../../packages/capabilities/src/resagent2_capabilities/literature/)、[Registry](../../packages/orchestrator/src/resagent2_orchestrator/artifacts.py)、[Scientific 提示](../../packages/agents/scientific/src/resagent2_scientific/context.py)、[文献能力测试](../../tests/capabilities/test_literature.py)、[冻结工件范围读取测试](../../tests/e2e/test_literature_artifact_windows.py)。确定性测试证明材料和引用链路的事实边界，不证明真实模型一定选对材料或得出正确结论。
 
 <a id="budgets"></a>
 
@@ -374,4 +373,4 @@ Composer 仍按 `ceil(字符数 / 4)` 估算，但原生路径计量的是序列
 - 同一事实沿用原权威来源；纯展示不另存一份可漂移的业务状态。
 - 当前实现与候选方案分开记录。优先复用已有能力，但不因为代码和文献都叫“文本”就宣称两者理解需求完全相同。
 
-当前 schema 20.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。
+当前 schema 21.0 保持三个 Agent 的 invoke、instruction/input_artifacts 输入和 report/artifacts 输出；业务材料通过冻结工件交接。RunBudget/TaskBudget 只含请求次数与时间，任务数/尝试数由 ExecutionLimits 控制，step 仅记时序。Coding/Experiment 模型可见 workspace_access 与明确操作授权；自然语言及历史回答不能扩权，操作确认依靠结构化单次快照。旧 Run 不支持恢复，state/session/trace 原样保留不迁移。Compiler 保留 JSON 编译路径，默认装配的三个 Agent 使用原生工具协议且不会在坏输出时降级。此前上下文阶段的结果见[验收记录](../history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout)，原生调用与续传边界见[续传计划](../history/reviews/RUNTIME_CONTINUATION_PLAN.md)。历史验证不代表本次变更的真实模型表现；确定性测试也不保证模型消除重复动作或循环。

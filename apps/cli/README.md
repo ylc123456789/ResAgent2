@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 20.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 21.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -288,7 +288,7 @@ arXiv 和 OpenAlex 是平级来源，互为备份。新建实例初始按 arXiv�
 
 可选环境变量 `OPENALEX_API_KEY` 是 OpenAlex 服务密钥，与 LLM key 无关；未设置时使用匿名访问，是否可用及额度以服务端为准。通过现有安全方式加载，勿写入命令行、goal 或日志；后端只通过 Authorization header 发送，不放进 URL/工件/上下文。需要密钥或新费用时先由用户决定，不自动注册或付费。
 
-arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。两源都只提供检索记录与可用摘要，不代表读过论文全文。
+arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因看 stdout/stderr 日志，实际来源看冻结文献工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与摘要按论文保存为 literature_paper，literature_search 是查询回执，不代表全文。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告；本轮不增加专门的外部论文导入入口。
 
 ### 退出码
 

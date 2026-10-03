@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 20.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 21.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -157,7 +157,7 @@ ArtifactRef 含 id、kind、producer、run_id、Task/Attempt 或 Session 归属�
 
 以上来源由 Orchestrator 登记；Agent 不得把普通候选工件伪装成系统材料。question/work_request 的候选由控制工具产生，接收端按对应控制语义登记。系统材料的 producer、归属形状和 source_type 在契约层与 Registry 使用同一规则。
 
-Scientific 的普通产物归属 Session，支持 literature_search、scientific_opinion、scientific_assessment、observation_trace 和 module_report；Coding/Experiment 产物归属 Task+Attempt。导入材料和最终报告归属 Run，由 Orchestrator 记录 import/final_report 来源。
+Scientific 的普通产物归属 Session，包括 literature_search、literature_paper、literature_pdf、literature_fulltext、scientific_opinion、scientific_assessment、observation_trace 和 module_report；Coding/Experiment 产物归属 Task+Attempt。导入材料和最终报告归属 Run，由 Orchestrator 记录 import/final_report 来源。
 
 ### 执行记录的信任范围
 
@@ -197,23 +197,31 @@ Controller 将原 WorkRequestDraft、WorkOutcome、未解决任务结果和本�
 
 - `WorkRecord` 冻结原 WorkRequest、任务结果、历次 Attempt 当前保存的报告和跨轮未解决任务。其中 `attempts[*].summary` 来自已记录 attempt.report；同一次尝试问答恢复会更新该报告，不代表每次调用完整历史。
 - `WorkFeedback` 保留 run_id、work_request_id、session_id、work_record_artifact_id、index_artifact_id，以 `report: str` 替换旧 brief。报告是可重建的展示正文，不是新的测量或状态权威。
-- ResearchIndex 含 run_id/groups；ResearchIndexGroup 含 key/title/artifacts；ResearchArtifactEntry 保留 artifact_id/kind/summary/output_name/attempt_number/execution_status。科研目录从已登记引用和执行事实派生，按初始材料、Scientific 材料和原 WorkRequest 组织完整累计目录；路径、hash 和权限只由底层登记表管理。成对问答按原作用域入目录，阅读不等于批准或恢复。
+- ResearchIndex 含 run_id/groups；ResearchIndexGroup 含 key/title/artifacts；ResearchArtifactEntry 保留 artifact_id/kind/summary/output_name/attempt_number/execution_status，以及可选 source_artifact_id，表示已登记的直接来源。科研目录从已登记引用和执行事实派生，按初始材料、Scientific 材料和原 WorkRequest 组织完整累计目录；路径、hash 和权限只由底层登记表管理。成对问答按原作用域入目录，阅读不等于批准或恢复。
 - Interpreter 按任务既有顺序及真实 attempt_number 选择最新已记录报告，逐字保留；空报告与未执行明确区分，不把 instruction 回退值当结果。历史尝试只列序号及状态，原文在 WorkRecord 中；状态、错误、任务累计警告和产物 ID 来自结构字段。
 - 原目标、期望证据及约束直接取 WorkRequest；任务沿用 task_id，尝试沿用 task_id + attempt_number，产物沿用 artifact_id。有 output_name 时使用精确原值，不用同名推断同一产物，不创建别名或解析报告以统一术语。
 - Controller 冻结并验证 WorkRecord 后固定组装报告，保存 feedback_refs 后复用；恢复只刷新完整目录，不重生成已保存报告。Scientific 有效返回后才消费 WorkRequest。结构配对、授权和 hash 错误明确失败；Interpreter 不读取私有 Session、不判断科学有效性，也不消费或重置模型用量，Run 时间边界继续生效。
 - Scientific 收到完整 required 目录，以及本轮工作反馈的必需事实框和可伸缩报告。框从同源冻结 WorkRecord 取得原请求、当前状态、错误、累计警告、跨轮未解决项和原件入口；正文共用 ContextMaterial/Composer 额度，明确标记截断或省略。最小必需内容装不下时显式超限，不另开额度。
 - 完整 WorkRecord 与 WorkFeedback 可通过原读取工具展开。`read_artifact` 的 start_line/end_line 保持物理行语义；可选 start_char/end_char 在选中行范围内再选择零基、末端不含的字符窗口，支持 JSON 长字符串续读，不改变冻结正文或完整 hash 校验。
-- 目录、报告呈现及系统校验均不新增 observed；引用原件仍需沿既有成功正文读取和引用检查。结构事实检查不扩展为科学语义 validation。
+- 目录、报告呈现及系统校验不冒充工具访问记录。observed 只用于追溯，不再阻塞提问、委托、引用或完成；实际引用仍需属于本 Run 授权登记表且通过完整性校验。结构事实检查不扩展为科学语义 validation。
 
 <a id="opinion"></a>
 
-Scientific finish 使用统一的 status/report/artifacts，完成意见只接受 status=completed，并提交一个 `scientific_opinion` JSON 工件。证据不足可表达 inconclusive、请求工作或提问，不能以 status=failed 绕过意见与明确交付检查。ScientificOpinion 含 verdict、statement、evidence_artifact_ids、limitations、unresolved_questions、recommended_next_steps；supports/refutes 至少引用一个工件。required_evidence_kinds 来自 conclusion_requirements，当前支持 literature_search。
+Scientific finish 使用统一的 status/report/artifacts，完成意见只接受 status=completed，并提交一个 `scientific_opinion` JSON 工件。证据不足可表达 inconclusive、请求工作或提问，不能以 status=failed 绕过意见与明确交付检查。ScientificOpinion 含 verdict、statement、evidence_artifact_ids、limitations、unresolved_questions、recommended_next_steps；supports/refutes 至少引用一个工件。required_evidence_kinds 来自 conclusion_requirements，当前支持 literature_paper 或 literature_fulltext；按精确 kind 检查，literature_search 搜索回执不能满足论文证据要求。
 
 Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifacts` 冻结为 `ConclusionRequirements`。后者仅按本 Run 已登记 `ArtifactRef.output_name` 精确、区分大小写地匹配，不按 path、文件名、kind 或 metadata 匹配，不从自然语言补全。`OutputName` 为 1–128 个 ASCII 字母、数字、下划线、点或连字符，以字母开头，不接受目录分隔符、空白或 glob。重复要求按存在语义去重；不同登记产物可同名，所有匹配的冻结文件都须通过 hash 校验。单次 finish 内原有输出名唯一性规则仍有效。
 
-`required_artifacts` 不要求 Scientific 观察或引用该产物，也不评价内容含义；`required_evidence_kinds` 仍独立要求已观察且已引用。两者是 Run 最终要求，不新增 WorkRequest/Task 字段；TaskAcceptanceSpec 继续检查其所属 Attempt 的明确交付。
+`required_artifacts` 不要求 Scientific 观察或引用该产物，也不评价内容含义；`required_evidence_kinds` 仍独立要求引用对应种类的授权工件，不要求预先进入 observed。两者是 Run 最终要求，不新增 WorkRequest/Task 字段；TaskAcceptanceSpec 继续检查其所属 Attempt 的明确交付。
 
-原生 finalizer 从成功 read_artifact/literature_search 观察生成 observation_trace；Controller 合并合法已观察 ID，最终验收据此检查引用。模型仅把某 ID 写进正文或候选意见不会使它成为“已读”。访问记录也不证明读完全文或论断成立。
+原生 finalizer 从真实工具访问生成 observation_trace；Controller 保留合法访问记录供追溯。模型不能自行填报访问历史，但是否访问过不再作为 ask_user、request_work 或 finish 的前置门槛。引用的身份、归属与冻结 hash 仍由代码检查；正文是否足够、能否支持论断由 Scientific 判断。访问记录不证明读完全文或论断成立。
+
+### 文献材料
+
+`literature_search` 保存一次检索的查询与论文引用，是搜索回执；每篇论文独立登记为 `literature_paper`，保存来源元信息和检索所得摘要，`metadata.paper` 保留规范化记录。按明确的规范化论文 key 识别论文，保留 arXiv 版本；同 Run 中仅在规范化元信息快照相同时复用条目，同 key 的元信息发生变化则登记新不可变快照。不按相同标题或摘要猜测同一论文。
+
+`fetch_literature_fulltext(paper_artifact_id)` 接收本 Run 授权的论文工件 ID，按登记来源获取可用 PDF，并生成 `literature_pdf` 与解析文本 `literature_fulltext`。衍生工件的 `metadata.paper_artifact_id` 标明所属论文；`metadata.source_artifact_id` 表示直接来源，PDF 指向 paper，解析文本指向 PDF。目录投影该直接关系，不复制文件、权限或完整来源图。
+
+同 Run 按 paper_artifact_id 复用已冻结 PDF/解析文本；解析失败后的重试可复用 PDF。所有材料经原 Registry 登记和 hash 校验；搜索摘要、原始 PDF 与解析文本不可互相冒称。全文工具不改变 read_artifact 的 UTF-8 文本边界；本轮不增加专门的外部论文导入入口或自动 OCR。
 
 <a id="compiler"></a>
 
@@ -505,7 +513,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 20.0；本版用共享 run_shell 替代 run_command，旧 schema 19 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 21.0；本版按篇登记文献及全文来源，将访问记录改为日志，删除 Run 的已读门禁字段。旧 schema 20 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
 schema 19 已用 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。不保留旧反馈格式的兼容读取分支。
 

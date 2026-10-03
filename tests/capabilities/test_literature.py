@@ -4,6 +4,9 @@ from datetime import UTC, datetime, date
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import json
+
+from resagent2_orchestrator import ArtifactRegistry
 import pytest
 
 from resagent2_components import (
@@ -83,28 +86,28 @@ class _FakeBackend:
 
 
 class _FakeRegister:
-    """Returns a fixed ArtifactRef, recording the provenance it was given."""
+    """Exercise actual freezing while keeping the Run store out of tool tests."""
 
-    def __init__(self) -> None:
-        self.last_run_id: RunId | None = None
-        self.last_session_id: SessionId | None = None
-        self.last_candidate = None
+    def __init__(self, root) -> None:
+        self.registry = ArtifactRegistry(root)
+        self.refs = {}
+        self.last_run_id = self.last_session_id = self.last_candidate = None
 
-    def register_scientific(self, candidate, *, run_id, session_id) -> ArtifactRef:
-        self.last_run_id = run_id
-        self.last_session_id = session_id
+    def register_scientific(self, candidate, *, run_id, session_id, content_bytes=None):
+        self.last_run_id, self.last_session_id = run_id, session_id
         self.last_candidate = candidate
-        return ArtifactRef(
-            id="artifact_lit",
-            kind="literature_search",
-            producer=AgentOwner.SCIENTIFIC,
-            run_id=run_id,
-            session_id=session_id,
-            uri="file:///artifacts/lit.json",
-            sha256="0" * 64,
-            media_type="application/json",
-            summary="literature results",
+        ref = self.registry.register_scientific(
+            candidate, run_id=run_id, session_id=session_id, content_bytes=content_bytes,
         )
+        self.refs[ref.id] = ref
+        return ref
+
+    def list_artifacts(self, *, run_id):
+        return [ref for ref in self.refs.values() if ref.run_id == run_id]
+
+    def resolve(self, artifact_id, *, run_id):
+        ref = self.refs.get(artifact_id)
+        return ref if ref and ref.run_id == run_id else None
 
 
 def paper(paper_id: str) -> LiteraturePaper:
@@ -118,83 +121,82 @@ def paper(paper_id: str) -> LiteraturePaper:
     )
 
 
-def test_tool_returns_artifact_and_papers_with_session_provenance() -> None:
-    register = _FakeRegister()
-    tool = LiteratureSearchTool(
-        _FakeBackend([paper("2301.00001")]), register
-    )
-    observation = tool.execute(
-        state(),
-        LiteratureSearchToolInput(query="electron", max_results=5),
-    )
-
-    assert isinstance(observation, ToolObservation)
+def test_tool_returns_separate_papers_and_search_receipt(tmp_path) -> None:
+    register = _FakeRegister(tmp_path)
+    tool = LiteratureSearchTool(_FakeBackend([paper("2301.00001"), paper("2301.00002")]), register)
+    observation = tool.execute(state(), LiteratureSearchToolInput(query="electron", max_results=5))
     value = observation.value
-    assert value["artifact"]["id"] == "artifact_lit"
-    assert len(value["papers"]) == 1
-    assert value["papers"][0]["paper_id"] == "2301.00001"
-    # Tool must pass run/session provenance, not assign its own id/hash.
+    assert value["artifact"]["kind"] == "literature_search"
+    assert len(value["papers"]) == 2
+    ids = [item["artifact_id"] for item in value["papers"]]
+    assert len(set(ids)) == 2
+    assert all(register.refs[key].kind == "literature_paper" for key in ids)
     assert register.last_run_id == "run_example"
     assert register.last_session_id == "session_sci"
+    receipt = json.loads(register.last_candidate.content)
+    assert receipt["paper_artifact_ids"] == ids
+    assert "An abstract" not in register.last_candidate.content
     assert "id" not in register.last_candidate.model_dump()
     assert "sha256" not in register.last_candidate.model_dump()
 
 
-def test_tool_records_observed_artifact_in_memory() -> None:
-    register = _FakeRegister()
+def test_tool_reuses_papers_and_tracks_outputs_not_read_status(tmp_path) -> None:
+    register = _FakeRegister(tmp_path)
     tool = LiteratureSearchTool(_FakeBackend([paper("1")]), register)
-    observation = tool.execute(
-        state(), LiteratureSearchToolInput(query="x", max_results=1)
-    )
-    assert observation.memory_updates["literature_artifact_ids"] == ["artifact_lit"]
-
-    # A second search must not duplicate the observed id.
-    second = tool.execute(
-        state(memory={"literature_artifact_ids": ["artifact_lit"]}),
-        LiteratureSearchToolInput(query="y", max_results=1),
-    )
-    assert second.memory_updates["literature_artifact_ids"] == ["artifact_lit"]
+    observation = tool.execute(state(), LiteratureSearchToolInput(query="x", max_results=1))
+    first_paper = observation.value["papers"][0]["artifact_id"]
+    assert "literature_artifact_ids" not in observation.memory_updates
+    original = state(memory=observation.memory_updates)
+    second = tool.execute(original, LiteratureSearchToolInput(query="y", max_results=1))
+    assert second.value["papers"][0]["artifact_id"] == first_paper
+    assert len([ref for ref in register.refs.values() if ref.kind == "literature_paper"]) == 1
+    assert len(second.memory_updates["literature_output_artifact_ids"]) == 3
 
 
-def test_tool_keeps_preview_and_full_artifact_without_summary_cache() -> None:
+def test_tool_keeps_preview_separate_from_frozen_abstract(tmp_path) -> None:
     full_abstract = "Scientific evidence. " * 100
     result_paper = paper("1").model_copy(update={"abstract": full_abstract})
-    register = _FakeRegister()
-    tool = LiteratureSearchTool(_FakeBackend([result_paper]), register)
-    original = state(memory={
-        "literature_artifact_ids": ["artifact_previous"],
-        "literature_summaries": [{"legacy": "do not mutate stored history"}],
-    })
+    register = _FakeRegister(tmp_path)
+    original = state()
     before = original.model_copy(deep=True)
-
-    observation = tool.execute(original, LiteratureSearchToolInput(query="evidence"))
-
-    assert observation.memory_updates == {
-        "literature_artifact_ids": ["artifact_previous", "artifact_lit"],
-    }
-    assert observation.value["papers"][0]["abstract"] == full_abstract[:200]
-    assert observation.value["artifact"]["id"] == "artifact_lit"
-    assert register.last_candidate.metadata["papers"][0]["abstract"] == full_abstract
+    observation = LiteratureSearchTool(_FakeBackend([result_paper]), register).execute(
+        original, LiteratureSearchToolInput(query="evidence"),
+    )
+    brief = observation.value["papers"][0]
+    assert brief["abstract"] == full_abstract[:200]
+    assert brief["abstract_truncated"] is True
+    ref = register.refs[brief["artifact_id"]]
+    assert ref.metadata["paper"]["abstract"] == full_abstract
+    assert len(observation.memory_updates["literature_output_artifact_ids"]) == 2
     assert original == before
 
 
-def test_tool_forwards_query_and_bounds() -> None:
+@pytest.mark.parametrize("failure", [False, True])
+def test_empty_or_failed_search_is_a_receipt_not_a_paper(tmp_path, failure):
+    class Backend:
+        def search(self, *args, **kwargs):
+            if failure:
+                raise LiteratureSearchError("provider unavailable")
+            return []
+    register = _FakeRegister(tmp_path)
+    result = LiteratureSearchTool(Backend(), register).execute(
+        state(), LiteratureSearchToolInput(query="missing"),
+    )
+    assert result.value["status"] == ("failed" if failure else "empty")
+    assert result.ok is (not failure)
+    assert result.value["papers"] == []
+    assert [ref.kind for ref in register.refs.values()] == ["literature_search"]
+
+
+def test_tool_forwards_query_and_bounds(tmp_path) -> None:
     backend = _FakeBackend([paper("1")])
-    tool = LiteratureSearchTool(backend, _FakeRegister())
-    tool.execute(
-        state(),
-        LiteratureSearchToolInput(
-            query="graph neural networks",
-            max_results=7,
-            start_year=2020,
-            end_year=2024,
+    LiteratureSearchTool(backend, _FakeRegister(tmp_path)).execute(
+        state(), LiteratureSearchToolInput(
+            query="graph neural networks", max_results=7, start_year=2020, end_year=2024,
         ),
     )
     assert backend.last_kwargs == {
-        "query": "graph neural networks",
-        "max_results": 7,
-        "start_year": 2020,
-        "end_year": 2024,
+        "query": "graph neural networks", "max_results": 7, "start_year": 2020, "end_year": 2024,
     }
 
 
@@ -243,13 +245,14 @@ def test_arxiv_backend_parses_deduplicates_and_normalizes() -> None:
     backend = _FakeArxivBackend(ARXIV_ATOM.encode("utf-8"))
     papers = backend.search("electron", max_results=10)
 
-    assert [p.paper_id for p in papers] == ["2301.00001", "2301.00002"]
+    assert [p.paper_id for p in papers] == ["2301.00001v2", "2301.00002v1"]
     first = papers[0]
     assert first.title == "First Paper"
     assert first.authors == ["Alice", "Bob"]
     assert first.published_at == date(2023, 1, 5)
     assert first.abstract == "A line break abstract that keeps going."
-    assert first.source_url == "https://arxiv.org/abs/2301.00001"
+    assert first.source_url == "https://arxiv.org/abs/2301.00001v2"
+    assert first.pdf_url == "https://arxiv.org/pdf/2301.00001v2"
 
 
 def test_arxiv_backend_truncates_abstract() -> None:
@@ -326,7 +329,6 @@ def test_arxiv_invalid_feed_is_not_an_empty_search(body):
 
 
 def test_arxiv_request_identifies_application(monkeypatch):
-    import httpx
     from resagent2_components.literature import backends as literature
 
     requests = []

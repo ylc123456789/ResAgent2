@@ -18,10 +18,10 @@ def test_scientific_prompt_keeps_own_tool_failures_out_of_request_work() -> None
 
 
 def test_scientific_prompt_distinguishes_previews_from_visible_evidence() -> None:
-    assert "short result preview is not proof" in SCIENTIFIC_GUIDANCE
-    assert "An observed id records past access" in SCIENTIFIC_GUIDANCE
-    assert "needed start_line/end_line range" in SCIENTIFIC_GUIDANCE
-    assert "do not guess the missing contents" in SCIENTIFIC_GUIDANCE
+    assert "short search previews do not establish" in SCIENTIFIC_GUIDANCE
+    assert "Reading records are historical logs" in SCIENTIFIC_GUIDANCE
+    assert "Read the needed source sections" in SCIENTIFIC_GUIDANCE
+    assert "do not guess omitted content" in SCIENTIFIC_GUIDANCE
 
 
 def test_scientific_prompt_separates_known_prerequisites_from_contingencies() -> None:

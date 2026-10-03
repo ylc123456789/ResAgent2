@@ -13,7 +13,7 @@ from resagent2_components import (
     ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader,
     ResourceLayout, read_artifact_json, read_request_material, request_dataset_refs, resolve_dataset_refs,
 )
-from resagent2_capabilities import LiteratureSearchTool, ReadArtifactTool
+from resagent2_capabilities import FetchLiteratureFulltextTool, LiteratureSearchTool, ReadArtifactTool
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, AgentState,
     AllowListPermissionPolicy, InMemorySessionStore, LLMClient, SessionStore,
@@ -65,6 +65,7 @@ class ScientificAgent:
             request.input_artifacts, run_id=request.run_id,
             resolve=(lambda artifact_id: resolve(artifact_id, run_id=request.run_id)) if resolve else None,
         )
+        list_registered = getattr(self.registration_port, "list_artifacts", None)
         session_id = request.parent_session_id or scientific_session_id(request.run_id)
         try:
             datasets = resolve_dataset_refs(
@@ -103,10 +104,12 @@ class ScientificAgent:
                 except ValidationError:
                     return self._failure("Stored Scientific result is invalid")
         tools = [ReadArtifactTool(reader),
-                 RequestWorkTool(allowed=request.permissions.request_work),
-                 AskUserTool(), FinishTool()]
+                 RequestWorkTool(allowed=request.permissions.request_work, reader=reader),
+                 AskUserTool(reader), FinishTool()]
         if self.literature_backend is not None and self.registration_port is not None:
             tools.append(LiteratureSearchTool(self.literature_backend, self.registration_port))
+        if self.registration_port is not None:
+            tools.append(FetchLiteratureFulltextTool(self.registration_port))
         definition = AgentDefinition(
             name="scientific", owner=AgentOwner.SCIENTIFIC,
             system_prompt=SCIENTIFIC_PROMPT, tools=tuple(tools), llm_client=self.llm_client,
@@ -119,6 +122,7 @@ class ScientificAgent:
                 required_artifacts=required_artifacts,
                 resolve_artifact=reader.resolve_ref, reader=reader,
                 input_artifact_ids=[item.id for item in request.input_artifacts],
+                registered_artifacts=(lambda: list_registered(run_id=request.run_id)) if list_registered else None,
             ),
             action_type=ScientificAction, max_context_tokens=self.max_context_tokens,
         )
@@ -137,13 +141,13 @@ class ScientificAgent:
                 ))
             delivered = {item.id for item in artifacts if hasattr(item, "id")}
             delivered.update(item.id for item in request.input_artifacts)
-            for artifact_id in owned.memory.get("literature_artifact_ids", []):
+            for artifact_id in owned.memory.get("literature_output_artifact_ids", []):
                 ref = reader.resolve_ref(artifact_id)
                 if ref is not None and ref.id not in delivered:
                     artifacts.append(ref)
             artifacts.append(ArtifactCandidate(
                 kind="observation_trace", path="observation_trace.json",
-                media_type="application/json", summary="Evidence observed by Scientific tools",
+                media_type="application/json", summary="Historical Scientific artifact-access log; not evidence qualification",
                 content=ObservationTrace(observed_artifact_ids=_observed_artifact_ids(owned)).model_dump_json(),
             ))
             result = result.model_copy(update={"artifacts": artifacts})

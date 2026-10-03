@@ -79,10 +79,11 @@ def _reads(context):
 
 
 def _assert_composed(context, limit=256_000):
-    assert {"artifact_reads", "tool_contracts", "evidence_control_state"} <= set(context.included_sections)
+    assert {"artifact_reads", "tool_contracts", "research", "research_materials"} <= set(context.included_sections)
+    assert "evidence_control_state" not in context.included_sections
     assert "read_artifact_summaries" not in context.included_sections
     contracts = context.text.split("## tool_contracts\n", 1)[1].split("\n\n## ", 1)[0]
-    for tool in ("read_artifact", "literature_search", "request_work", "ask_user", "finish"):
+    for tool in ("read_artifact", "literature_search", "fetch_literature_fulltext", "request_work", "ask_user", "finish"):
         assert f"{tool}:" in contracts
     assert context.estimated_tokens <= limit
     assert ContextComposer.estimate_tokens(context.text) <= limit

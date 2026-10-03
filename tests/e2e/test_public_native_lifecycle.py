@@ -35,6 +35,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     counts = Counter()
     requests = []
     scientific_requests = []
+    scientific_agents = []
     round_answer_ids = {}
     handoff_indexes = {}
     monkeypatch.setenv("RESAGENT2_MODEL", "chain-test")
@@ -48,6 +49,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
 
     def capture_scientific(self, request):
         scientific_requests.append(request)
+        scientific_agents.append(self)
         return invoke_scientific(self, request)
 
     monkeypatch.setattr(ScientificAgent, "invoke", capture_scientific)
@@ -67,6 +69,14 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     def evidence_id():
         run = store.load(run_id)
         return next(ref.id for ref in run.artifacts.values() if ref.kind == "metrics")
+
+    def scientific_read_ids():
+        run = store.load(run_id)
+        state = scientific_agents[-1].store.load(run.scientific_session.id)
+        return {
+            event.data["value"]["artifact_id"] for event in state.events
+            if event.type == "observation" and event.tool == "read_artifact" and event.data.get("ok")
+        }
 
     def work(objective):
         return "request_work", {
@@ -137,8 +147,8 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                     assert previous_ids <= indexed_ids
                     assert set(round_answer_ids.values()) <= indexed_ids
                     assert {"work_1", "work_2"} <= {group["key"] for group in materials["index"]["groups"]}
-                    # Delivered reports do not satisfy original evidence observation.
-                    assert evidence_id() not in store.load(run_id).scientific_observed_artifact_ids
+                    # Delivered reports do not fabricate a tool access event.
+                    assert evidence_id() not in scientific_read_ids()
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}
                 elif index == 4:
                     tool, args = "read_artifact", {"artifact_id": answer_ref("approve").id}
@@ -248,7 +258,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     answers = [read_json(ref) for ref in final.artifacts.values() if ref.kind == "answer"]
     assert {answer["question_text"] for answer in answers} == {first.pending_question.text, second.pending_question.text}
     assert final.final_opinion.evidence_artifact_ids == [evidence_id()]
-    assert {evidence_id(), *round_answer_ids.values()} <= set(final.scientific_observed_artifact_ids)
+    assert {evidence_id(), *round_answer_ids.values()} <= scientific_read_ids()
     assert final.artifacts[final.final_report_artifact_id].kind == "final_report"
     assert hashlib.sha256(metrics.read_bytes()).hexdigest() == original_hash
     assert not any(ref.kind == "execution_record" for ref in final.artifacts.values())

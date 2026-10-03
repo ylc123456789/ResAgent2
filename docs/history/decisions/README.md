@@ -30,5 +30,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 - [ADR-0020：Interpreter 固定组织原报告](0020-deterministic-work-interpreter.md)（取代 LLM 二次简报，保留完整索引与观察边界）
 
 - [ADR-0021：共享 Linux Shell 与逐次批准](0021-shared-approved-linux-shell.md)（取代 Experiment 专有普通命令入口，保留专业安装/验证）
+- [ADR-0022：论文粒度资料与访问事实记录](0022-paper-materials-and-access-records.md)（区分搜索回执、论文与全文材料，访问记录不再作为控制门槛）
 
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

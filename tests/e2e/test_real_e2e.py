@@ -6,7 +6,7 @@ import pytest
 
 from resagent2_contracts import AgentOwner, ArtifactRef, AttemptStatus, WorkflowAgentKind, RunStatus, TaskStatus
 
-from e2e.real_e2e import _new_llm_client, _real_e2e_succeeded, _repair_succeeded
+from e2e.real_e2e import _literature_succeeded, _new_llm_client, _real_e2e_succeeded, _repair_succeeded
 
 
 def _artifact(tmp_path, task, kind, content, *, number=1, metadata=None):
@@ -56,7 +56,6 @@ def _run(tmp_path, *, metrics=None) -> SimpleNamespace:
         run_id="run_real",
         status=RunStatus.COMPLETED,
         final_opinion=SimpleNamespace(evidence_artifact_ids=[measured.id]),
-        scientific_observed_artifact_ids=[measured.id],
         final_report_artifact_id="artifact_final_report",
         workflow=SimpleNamespace(tasks=tasks),
         artifacts=artifacts,
@@ -112,10 +111,10 @@ def test_real_e2e_rejects_uncited_metrics(tmp_path) -> None:
     assert not _real_e2e_succeeded(run)
 
 
-def test_real_e2e_rejects_unobserved_metrics(tmp_path) -> None:
+def test_real_e2e_accepts_cited_metrics_without_a_read_log_gate(tmp_path) -> None:
     run = _run(tmp_path)
-    run.scientific_observed_artifact_ids = []
-    assert not _real_e2e_succeeded(run)
+    assert not hasattr(run, "scientific_observed_artifact_ids")
+    assert _real_e2e_succeeded(run)
 
 
 def test_real_e2e_rejects_inline_model_metrics(tmp_path) -> None:
@@ -194,3 +193,25 @@ def test_direct_agent_dataset_material_is_a_frozen_registered_snapshot(tmp_path)
     data = read_artifact_json(RegisteredArtifactReader(refs, run_id="run_direct"), refs[0].id)
     assert data["datasets"][0]["dataset_id"] == "demo"
     assert refs[0].producer.value == "orchestrator"
+
+
+@pytest.mark.parametrize("kind,accepted", [
+    ("literature_paper", True), ("literature_fulltext", True),
+    ("literature_search", False), ("literature_pdf", False),
+])
+def test_literature_evaluation_distinguishes_sources_from_search_receipts(tmp_path, kind, accepted):
+    run = _run(tmp_path)
+    path = tmp_path / "literature.txt"
+    path.write_text("Registered source content")
+    ref = ArtifactRef(
+        id="artifact_literature", kind=kind, producer=AgentOwner.SCIENTIFIC,
+        run_id=run.run_id, session_id="session_literature", uri=path.as_uri(),
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        media_type="text/plain", summary="Registered literature",
+    )
+    run.artifacts[ref.id] = ref
+    run.final_opinion.evidence_artifact_ids = [ref.id]
+    assert _literature_succeeded(run) is accepted
+    if accepted:
+        path.write_text("Changed after registration")
+        assert not _literature_succeeded(run)

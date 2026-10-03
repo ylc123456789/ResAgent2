@@ -67,13 +67,13 @@ AgentResult 的业务输出只有 report 和 artifacts，另有机器状态、�
 
 Scheduler 登记工件、保存结果，再形成 WorkOutcome。Controller 冻结原工作需求和执行事实；Orchestrator 内的 Interpreter 用固定代码整理完整累计科研目录，并按原任务组织最新尝试的已记录报告、真实状态、错误、累计警告和产物入口，不再调用 LLM 转述。Scientific 用这些内容理解进展、决定下一步，需要补充细节、处理冲突或核查证据时，再沿原 Artifact ID 阅读正文。
 
-底层登记表记录文件身份和来源；科研目录只是给人和 Scientific 查找材料的视图，不维护另一套文件或权限。长报告复用现有上下文预算，省略会明确标记，原工作记录和反馈仍保留完整内容。展示目录或报告不使其提及的原件成为已读。Interpreter 不管 Run 状态、不调度任务，Controller 负责保存和恢复这次交付。
+底层登记表记录文件身份和来源；科研目录只是给人和 Scientific 查找材料的视图，不维护另一套文件或权限。长报告复用现有上下文预算，省略会明确标记，原工作记录和反馈仍保留完整内容。展示目录或报告不冒充原件工具访问记录；是否需要进一步读正文，由 Scientific 根据已有信息判断。Interpreter 不管 Run 状态、不调度任务，Controller 负责保存和恢复这次交付。
 
-Scientific 主动读取授权工件后判断结果是否支持假设，或还需下一轮工作。它不必替 Scheduler 抄回失败任务内部编号；报告里的执行问题由代码从 Run 核对。
+Scientific 根据已呈现材料和按需读取的授权工件判断结果是否支持假设，或还需下一轮工作。它不必替 Scheduler 抄回失败任务内部编号；报告里的执行问题由代码从 Run 核对。
 
 ### 第七步：意见完成，不代表整个 Run 自动通过
 
-Scientific 用同一个 finish 提交 report 和 scientific_opinion 工件；代码另生成 observation_trace。Orchestrator 根据这些公共输出检查执行状态、证据归属、已读引用和必要局限，通过后登记报告并标记 completed。它不读取 Scientific 的私有 Session。
+Scientific 用同一个 finish 提交 report 和 scientific_opinion 工件；代码另生成 observation_trace。Orchestrator 根据这些公共输出检查执行状态、引用证据的归属与完整性、明确交付要求和必要局限，通过后登记报告并标记 completed。访问记录用于追溯，不会因少了一次 read_artifact 而阻止提问、委托或完成。它不读取 Scientific 的私有 Session。
 
 “实验成功执行”和“假设被支持”不是同一回事。证据不足时给 inconclusive，也可能是诚实完成的研究过程。
 

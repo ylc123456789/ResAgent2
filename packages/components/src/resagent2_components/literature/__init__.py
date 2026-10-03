@@ -10,5 +10,6 @@ from .backends import (
     MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchBackend,
-    render_literature,
 )
+
+from .records import render_paper

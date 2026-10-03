@@ -149,7 +149,7 @@ def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     # arXiv remains in cooldown: do not make another HTTP request to it yet.
     assert calls == [("arxiv", 0), ("openalex", 0), ("openalex", 10)]
     clock[0] = 61
-    assert backend.search("x", max_results=3)[0].paper_id == "2301.00001"
+    assert backend.search("x", max_results=3)[0].paper_id == "2301.00001v2"
     # OpenAlex remains in cooldown until t=70; arXiv has recovered.
     assert calls[-1] == ("arxiv", 61)
     assert len(calls) == 4

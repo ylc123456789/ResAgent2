@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field
 from resagent2_contracts import (
     AgentOwner, ArtifactCandidate, ArtifactRef, AttemptStatus, ConclusionRequirements,
-    ModuleStatus, ObservationTrace, ScientificOpinion, SessionStatus, TaskStatus,
+    ModuleStatus, ScientificOpinion, SessionStatus, TaskStatus,
     WorkRequestStatus, WorkTaskOutcome, missing_required_evidence_kinds,
 )
+from resagent2_components.artifacts import RegisteredArtifactReader
 from .handoffs import read_json, check_acceptance
 from .models import CompletionViolation, CompletionViolationCode
 
@@ -65,24 +66,20 @@ class ScientificCompletionValidator:
             reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "non-terminal tasks prevent completion")
         try:
             opinions = [ref for ref in refs if ref.kind == "scientific_opinion"]
-            traces = [ref for ref in refs if ref.kind == "observation_trace"]
-            if len(opinions) != 1 or len(traces) != 1:
-                raise ValueError("completion requires one opinion and one execution observation trace")
-            for ref in [*opinions, *traces]:
+            if len(opinions) != 1:
+                raise ValueError("completion requires one scientific opinion")
+            for ref in opinions:
                 if run.artifacts.get(ref.id) != ref or ref.producer != AgentOwner.SCIENTIFIC or not session or ref.session_id != session.id:
                     raise ValueError("Scientific completion artifact has invalid ownership")
             opinion = read_json(opinions[0], ScientificOpinion)
-            observed = set(read_json(traces[0], ObservationTrace).observed_artifact_ids)
             cited = set(opinion.evidence_artifact_ids)
             if len(cited) != len(opinion.evidence_artifact_ids):
                 raise ValueError("duplicate opinion citations")
-            if not observed <= set(run.artifacts):
-                raise ValueError("observation trace contains unknown evidence")
-            if any(run.artifacts[key].run_id != run.run_id for key in observed | cited):
-                raise ValueError("evidence belongs to another Run")
-            valid = observed & set(run.scientific_observed_artifact_ids)
-            if not cited <= valid:
-                reject(CompletionViolationCode.UNOBSERVED_EVIDENCE, "opinion cites unobserved evidence", cited-valid)
+            reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
+            for artifact_id in cited:
+                if reader.resolve_ref(artifact_id) is None:
+                    raise ValueError(f"citation is not registered in this Run: {artifact_id}")
+                reader.verify(artifact_id)
             requirement = run.conclusion_requirements_ref
             if requirement is None or run.artifacts.get(requirement.id) != requirement or requirement.kind != "conclusion_requirements" or requirement.run_id != run.run_id:
                 raise ValueError("Run conclusion requirement binding missing or invalid")
@@ -93,9 +90,9 @@ class ScientificCompletionValidator:
                 reject(CompletionViolationCode.REQUIRED_ARTIFACT_MISSING,
                        "required artifact was not produced", subject=name)
             missing = missing_required_evidence_kinds(requirements.required_evidence_kinds, run_id=run.run_id, artifacts=run.artifacts.values(),
-                                                      observed_artifact_ids=valid, cited_artifact_ids=cited)
+                                                      cited_artifact_ids=cited)
             if missing:
-                reject(CompletionViolationCode.MISSING_EVIDENCE_KIND, "missing observed and cited evidence kinds", missing)
+                reject(CompletionViolationCode.MISSING_EVIDENCE_KIND, "missing registered and cited evidence kinds", missing)
         except (ValueError, OSError, KeyError) as error:
             reject(CompletionViolationCode.INVALID_OPINION, str(error))
             return CompletionValidation(tuple(violations))

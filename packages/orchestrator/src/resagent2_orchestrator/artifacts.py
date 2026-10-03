@@ -224,27 +224,33 @@ class ArtifactRegistry:
         *,
         run_id: RunId,
         session_id: SessionId,
+        content_bytes: bytes | None = None,
     ) -> ArtifactRef:
         """Freeze one session-bound Scientific artifact (e.g. literature search).
 
         Unlike task artifacts, the content is not a workspace file: the
         Scientific Tool already produced a normalized result and optionally
         its readable presentation. The content is hashed and written
-        atomically. The id is content-derived, so registering the same content
-        again is idempotent.
+        atomically. Identity includes content and source metadata, so registering
+        the same snapshot again is idempotent without overwriting provenance.
         """
         if candidate.kind not in SCIENTIFIC_ARTIFACT_KINDS:
             raise ArtifactRegistrationError(
                 f"unsupported scientific artifact kind: {candidate.kind}"
             )
-        # read_artifact pages by line before applying its character limit.
-        # Keep generated records multiline so later papers remain reachable.
+        if content_bytes is not None and candidate.content is not None:
+            raise ArtifactRegistrationError("supply text or binary content, not both")
         text = candidate.content if candidate.content is not None else json.dumps(
             candidate.metadata, sort_keys=True, ensure_ascii=False, indent=2
         )
-        encoded = text.encode("utf-8")
+        encoded = content_bytes if content_bytes is not None else text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
-        identity = hashlib.sha256(f"{session_id}:{candidate.kind}:{candidate.path}:{digest}".encode()).hexdigest()
+        # Provenance is part of identity too: identical PDF bytes attached to
+        # another source must not silently replace an existing Ref's metadata.
+        description = candidate.model_dump(mode="json", exclude={"content"})
+        identity = hashlib.sha256(
+            f"{session_id}:{digest}:{json.dumps(description, sort_keys=True)}".encode()
+        ).hexdigest()
         artifact_id = f"artifact_sci_{identity[:24]}"
 
         destination_dir = self.root / run_id / artifact_id
@@ -416,19 +422,27 @@ class ScientificArtifactRegistration:
     def __init__(self, registry: ArtifactRegistry, store: RunStore) -> None:
         self._registry = registry
         self._store = store
-        self._live: dict[tuple[RunId, ArtifactId], ArtifactRef] = {}
 
     def register_scientific(
         self, candidate: ArtifactCandidate, *, run_id: RunId, session_id: SessionId,
+        content_bytes: bytes | None = None,
     ) -> ArtifactRef:
         artifact = self._registry.register_scientific(
-            candidate, run_id=run_id, session_id=session_id,
+            candidate, run_id=run_id, session_id=session_id, content_bytes=content_bytes,
         )
         run = self._store.load(run_id)
         run.artifacts[artifact.id] = artifact
         self._store.save(run)
-        self._live[(run_id, artifact.id)] = artifact
         return artifact
 
     def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
-        return self._live.get((run_id, artifact_id))
+        if not self._store.exists(run_id):
+            return None
+        ref = self._store.load(run_id).artifacts.get(artifact_id)
+        # This seam adds only Scientific outputs to request-authorized inputs.
+        # It must not expose filtered control/requirement records by guessed ID.
+        return ref if ref is not None and ref.producer == AgentOwner.SCIENTIFIC else None
+
+    def list_artifacts(self, *, run_id: RunId) -> list[ArtifactRef]:
+        return [ref for ref in self._store.load(run_id).artifacts.values()
+                if ref.producer == AgentOwner.SCIENTIFIC]

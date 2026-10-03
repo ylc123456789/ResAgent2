@@ -88,7 +88,6 @@ def assert_unconsumed(run):
     assert run.work_requests[0].status == "stable"
     assert run.scientific_session.status == "paused"
     assert run.pending_question is None
-    assert run.scientific_observed_artifact_ids == []
     assert run.delivered_answer_ids == []
 
 
@@ -145,12 +144,14 @@ def test_final_report_storage_failure_has_durable_reason(tmp_path,monkeypatch):
     assert actual.final_opinion is None and actual.final_report_artifact_id is None
 
 
-def test_unknown_observation_does_not_consume_feedback(tmp_path):
+def test_unknown_observation_log_does_not_block_completion(tmp_path):
     controller,run,request = prepared(tmp_path)
     result = reply(run,"completed")
     result.artifacts[0].content=json.dumps({"observed_artifact_ids":["artifact_forged"]})
     actual = controller._apply_turn(run.run_id,request,result)
-    assert_unconsumed(actual)
+    assert actual.status == "completed"
+    assert actual.work_requests[0].status == "consumed"
+    assert actual.terminal_error is None
 
 
 @pytest.mark.parametrize("calls", [-1,True,"3"])

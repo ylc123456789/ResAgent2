@@ -159,7 +159,6 @@ def test_restart_reuses_committed_handoff_and_answer_does_not_reinterpret(tmp_pa
     assert answered.feedback_refs[WORK_ID] == feedback_ref
     assert answered_interpreter.records == [] and answered.llm_calls_used == 0
     assert answered.work_requests[0].status == "consumed"
-    assert answered.scientific_observed_artifact_ids == []
 
 
 def test_last_model_allowance_is_available_to_scientific_after_fixed_handoff(tmp_path):

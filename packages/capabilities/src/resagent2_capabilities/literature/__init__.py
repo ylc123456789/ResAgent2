@@ -8,4 +8,8 @@ from .literature_search import (
 __all__ = [
     "LiteratureSearchToolInput",
     "LiteratureSearchTool",
+    "FetchLiteratureFulltextInput",
+    "FetchLiteratureFulltextTool",
 ]
+
+from .fulltext import FetchLiteratureFulltextInput, FetchLiteratureFulltextTool

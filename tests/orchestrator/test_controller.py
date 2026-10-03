@@ -1061,7 +1061,7 @@ def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
     assert first_outcome.tasks[0].status == "failed"
 
 
-def test_forged_observed_artifact_is_rejected() -> None:
+def test_untrusted_reading_log_does_not_control_run_completion() -> None:
     class _ForgingPort:
         """A ScientificPort that reports an observed id that was never registered."""
 
@@ -1100,8 +1100,10 @@ def test_forged_observed_artifact_is_rejected() -> None:
 
     run = controller.create_run("run_forged", research_request())
 
-    assert run.status == RunStatus.FAILED
-    assert run.scientific_observed_artifact_ids == []
+    assert run.status == RunStatus.COMPLETED
+    assert "artifact_fake" not in run.artifacts
+    assert run.final_opinion is not None
+    assert "artifact_fake" not in run.final_opinion.evidence_artifact_ids
 
 
 def test_run_total_llm_budget_exhaustion() -> None:
@@ -1546,7 +1548,6 @@ def test_controller_registers_required_scientific_candidate_before_final_accepta
     assert deliveries[0].producer == AgentOwner.SCIENTIFIC
     assert deliveries[0].session_id == run.scientific_session.id
     assert run.final_opinion.evidence_artifact_ids == []
-    assert run.scientific_observed_artifact_ids == []
     assert run.final_report_artifact_id in run.artifacts
     assert controller.scheduler.artifact_registry.missing_required_artifacts(
         ["analysis"], run_id=run.run_id, artifacts=run.artifacts,
@@ -1573,7 +1574,6 @@ def test_missing_output_feedback_can_execute_work_and_resume_without_citation():
     assert run.work_requests[0].scientific_session_id == run.scientific_session.id
     assert any(ref.output_name == "metrics" for ref in run.artifacts.values())
     assert run.final_opinion.evidence_artifact_ids == []
-    assert run.scientific_observed_artifact_ids == []
     contexts = controller.scientific_port.llm_client.contexts
     assert len(contexts) == 3
     assert "required_artifact_missing" in contexts[1].text

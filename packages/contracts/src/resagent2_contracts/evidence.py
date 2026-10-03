@@ -28,16 +28,15 @@ def missing_required_evidence_kinds(
     *,
     run_id: RunId,
     artifacts: Iterable[ArtifactRef],
-    observed_artifact_ids: Iterable[str],
     cited_artifact_ids: Iterable[str],
 ) -> list[str]:
-    """Find required kinds not backed by registered, observed, cited evidence.
+    """Find required kinds not backed by registered, cited evidence.
 
     Callers supply trusted ArtifactRefs, not model-reported metadata. Imported
     evidence and newly produced evidence follow the same rule; a requirement
     names an artifact kind, not the tool that must run to produce it.
     """
-    used = set(observed_artifact_ids) & set(cited_artifact_ids)
+    used = set(cited_artifact_ids)
     present = {
         artifact.kind
         for artifact in artifacts

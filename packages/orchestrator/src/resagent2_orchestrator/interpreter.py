@@ -36,6 +36,9 @@ def build_research_index(*, run_id: str, artifacts: list[ArtifactRef],
     for ref in research_artifacts(artifacts):
         if ref.run_id != run_id:
             raise ValueError("research index cannot include a foreign Run artifact")
+        source_id = ref.metadata.get("source_artifact_id")
+        if source_id is not None and reader.resolve_ref(source_id) is None:
+            raise ValueError("research material has no registered source artifact in this Run")
         if ref.kind == "answer":
             answer = read_artifact_json(reader, ref.id, RecordedAnswer)
             if (answer.run_id, answer.task_id, answer.attempt_number, answer.session_id) != (

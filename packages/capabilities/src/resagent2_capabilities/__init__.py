@@ -30,11 +30,15 @@ from .environment import (
 )
 from .execution import RunShellInput, RunShellTool
 from .literature import (
+    FetchLiteratureFulltextInput,
+    FetchLiteratureFulltextTool,
     LiteratureSearchToolInput,
     LiteratureSearchTool,
 )
 
 __all__ = [
+    'FetchLiteratureFulltextInput',
+    'FetchLiteratureFulltextTool',
     'AuditEnvInput',
     'AuditEnvTool',
     'CreateFileInput',

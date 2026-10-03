@@ -78,9 +78,9 @@ Scientific 负责科学意义，不负责具体 Agent 调用、任务状态或�
 | 产物权威 | Run.artifacts 是唯一登记表，负责原产物身份与来源；科研目录只是可重新生成的导航，不复制路径、hash 或权限 |
 | 状态归属 | Controller 保存当前目录和每轮反馈引用；Interpreter 不修改 Run、不管理 Session、不调度任务 |
 | 默认呈现 | 每轮交接提供完整科研目录、必需事实框和按共享额度展示的原报告；保留原件入口，不额外展开完整登记表或执行记录 |
-| 阅读闭环 | 目录、工作反馈和原件读取使用同一登记来源及既有身份；展示不授予引用原件的已读资格。阅读答案不等于批准或恢复 |
+| 资料与访问记录 | 目录、工作反馈和原件读取使用同一登记来源及既有身份；访问记录说明返回过的内容，不是提问、委托或完成的资格门槛。阅读答案不等于批准或恢复 |
 
-Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的固定组织不替代 Scientific 的语义综合，结构有效也不证明语义正确。目录和工作反馈不授予权限；读目录不等于读到原证据。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已观察、已引用或科学有效。新增统一运行前 Validation 暂缓实现；现有请求、依赖、预算、权限和读取时校验继续生效。只有具体问题证明需要时，再评估最小补充，详见 [Validation 方案](../history/reviews/VALIDATION_DESIGN.md)。
+Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具体实现。Interpreter 的固定组织不替代 Scientific 的语义综合，结构有效也不证明语义正确。目录和工作反馈不授予权限；读目录不等于读到原证据。完成检查沿用原 AgentLoop 反馈与接收端登记边界；候选文件事实规则已共享。Run 级明确产物要求通过冻结的 conclusion_requirements 与精确 output_name 检查实现，Scientific 和 Registry 复用同一授权读取规则；存在不等于已引用或科学有效；访问记录保留，但不再作为引用和控制动作的前置门槛。新增统一运行前 Validation 暂缓实现；现有请求、依赖、预算、权限和读取时校验继续生效。只有具体问题证明需要时，再评估最小补充，详见 [Validation 方案](../history/reviews/VALIDATION_DESIGN.md)。
 
 ## 2. 修改时保持的十二条约束
 
@@ -98,7 +98,7 @@ Compiler 与 Interpreter 都在 Orchestrator 包内，通过小接口注入具�
 | 8. 回答继续原工作，重试另开尝试 | 任务 Agent 的回答继续同一 Task/Attempt/Session；Scientific 的回答继续同一 Run/Session。任务失败后的重试才创建新 Attempt。必须匹配原题和作用域，不能重复消费旧答案，或在恢复时重置预算、基线和授权。 |
 | 9. 内部预算和权限不超过 Run | 子调用只能继承或收紧 Run 的调用余额、期限和授权。三个 Agent、Compiler、重试、纠错和压缩共用总账；固定 Interpreter 不调用模型。人工等待按已有规则计算。资源不足不能自行扩大授权或替换数据集。 |
 | 10. 区分申请、批准和实际执行 | 批准绑定准确操作、参数、上下文和身份，执行前持久消费。执行仍需检查权限和目标；不能复用批准执行其他操作。结果未知时不自动重放可能已发生的副作用。 |
-| 11. 证据和完成按层检查 | 登记层校验来源并冻结工件，跨任务用显式 output_name 绑定；Agent 检查领域执行事实，接收端和 Run 最终检查各自规则。可读不等于已读，运行成功不等于假设成立。 |
+| 11. 证据和完成按层检查 | 登记层校验来源并冻结工件，跨任务用显式 output_name 绑定；Agent 检查领域执行事实，接收端和 Run 最终检查各自规则。可读、已返回内容和科学有效性是不同事实；不以访问标记代替证据充分性判断，运行成功不等于假设成立。 |
 | 12. 保留失败、消耗和历史 | 保留失败、警告、用量和中断记录；任务图按规则追加，执行历史不改写。接口清理同步生产者和消费者；旧 schema 不兼容恢复，不留下无人需要的兼容路径。 |
 
 这些约束允许精简内部实现，例如删除无消费者字段、合并重复函数或调整文件位置。改动必须保持相应行为；确实需要改变设计时，应说明理由和取代关系，同步契约、实现与测试。不能只改文档来掩盖意外的行为变化。
@@ -178,3 +178,4 @@ Capabilities 是模型工具入口，Components 是普通操作与共享呈现�
 - [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)：固定整理原报告，取代 ADR-0017 的 LLM 二次简报；保留索引、原件读取和验证边界。
 
 - [ADR-0021：共享 Linux Shell 与逐次批准](../history/decisions/0021-shared-approved-linux-shell.md)：Components 提供全系统执行部件，Capabilities 提供 LLM 工具；复用原审批、环境和执行事实记录。
+- [ADR-0022：论文粒度资料与访问事实记录](../history/decisions/0022-paper-materials-and-access-records.md)：按论文登记元信息，按需获取全文；访问历史用于追溯，不代替 Scientific 的判断或形成控制门槛。

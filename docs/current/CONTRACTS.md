@@ -227,6 +227,8 @@ Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifact
 
 ### 文献材料
 
+当前 PDF 解析上限为 120 秒，同时受 Run 剩余时间约束；真实论文可能超时，解析失败保留原件而不生成伪造全文。计时与后续计划见[验收记录](../history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。当前不提供让模型扩大该上限的 Tool 参数。
+
 `literature_search` 保存一次检索的查询与论文引用，是搜索回执；每篇论文独立登记为 `literature_paper`，保存来源元信息和检索所得摘要，`metadata.paper` 保留规范化记录。按明确的规范化论文 key 识别论文，保留 arXiv 版本；同 Run 中仅在规范化元信息快照相同时复用条目，同 key 的元信息发生变化则登记新不可变快照。不按相同标题或摘要猜测同一论文。
 
 `fetch_literature_fulltext(paper_artifact_id)` 接收本 Run 授权的论文工件 ID，按登记来源获取可用 PDF，并生成 `literature_pdf` 与解析文本 `literature_fulltext`。衍生工件的 `metadata.paper_artifact_id` 标明所属论文；`metadata.source_artifact_id` 表示直接来源，PDF 指向 paper，解析文本指向 PDF。目录投影该直接关系，不复制文件、权限或完整来源图。

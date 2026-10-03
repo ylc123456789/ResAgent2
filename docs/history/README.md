@@ -2,7 +2,18 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
-## 2026-10-03：文献基础改造（本地验证完成）
+<a id="literature-foundation-closeout"></a>
+
+## 2026-10-03：文献基础与外部导入（schema 22 验收完成）
+
+refactor/literature-foundation 的产品 ef5f836 + 61f4592720ca26985f0e598038611eb963806926
+已完成服务器回归和真实模型补测：1641 passed / 1 skipped、pip check 干净、mock 13 工件。
+首轮 A/B 是合成 PDF 链路验收；后续 MobileNets 真实论文成功与真实模型解析失败补齐缺口。
+Guo 论文两次 120 秒解析超时的 paused 现场保留。详见
+[验收收尾与性能边界](reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+本轮未合并、未推送；后续超时配置计划尚未实现。
+
+## 2026-10-03：文献基础改造（原本地阶段记录）
 
 `refactor/literature-foundation` 将搜索回执、单篇论文、原始 PDF 和解析文本分开登记，
 并把访问记录移出运行门禁。schema 升为 21.0，旧 Run 不迁移；外部论文导入留待后续。

@@ -1,5 +1,7 @@
 # 文献基础改造：实现与测试交接（2026-10-03）
 
+> 以下保留 schema 21 本地阶段的原结果与当时待验收范围。后续 schema 22 外部导入、服务器验收、真实论文补测和解析超时发现见[验收收尾](LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+
 分支：`refactor/literature-foundation`，基线 `main@00fb5df`，公共 schema 21.0。
 实现及本地确定性验证已完成；尚未进行本轮服务器真实文献/模型验收，不借用旧 L3 结果。
 设计取舍见 [ADR-0022](../decisions/0022-paper-materials-and-access-records.md)。

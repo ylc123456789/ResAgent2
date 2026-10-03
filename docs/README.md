@@ -23,6 +23,8 @@
 
 [上下文审查与方案演变](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 保留最初问题与随后获批的实现；[最终验收与边界](history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout) 记录真实回归、文献回放补验和报告勘误。历史候选不代替当前行为。
 
+文献基础与外部导入的 schema 22 验收及 120 秒解析边界见[本轮收尾](history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)；后续性能计划不代表当前已实现可调超时。
+
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
 查具体操作的实现可看 [Components](../packages/components/README.md)；查模型可调用入口看 [Capabilities](../packages/capabilities/README.md)。二者没有一一对应关系，调用约定统一在 [普通组件接口](current/CONTRACTS.md#components)。

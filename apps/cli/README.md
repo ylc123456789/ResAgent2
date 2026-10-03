@@ -359,3 +359,5 @@ arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒�
 - 所需数据集不可用：准备目录并登记，按当前问题字段回答；无关条目暂缺不会提前使整个任务失败；
 - 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。
+
+文献 PDF 当前解析上限为 120 秒，并受 Run 剩余时间约束。较长或复杂的真实论文可能超时；增加 Run 总超时不会自动扩大解析上限。真实验收、保留的失败与尚未实现的性能计划见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

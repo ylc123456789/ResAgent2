@@ -64,3 +64,5 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 既有来源规范：[arXiv 使用约定](https://info.arxiv.org/help/api/tou.html)、[OpenAlex 鉴权](https://help.openalex.org/api/authentication/)、[Work 字段](https://github.com/ourresearch/openalex-docs/blob/main/api-entities/works/work-object/README.md)。
 
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。
+
+文献 PDF 当前解析上限为 120 秒，并受 Run 剩余时间约束。较长或复杂的真实论文可能超时；增加 Run 总超时不会自动扩大解析上限。真实验收、保留的失败与尚未实现的性能计划见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

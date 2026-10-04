@@ -48,6 +48,12 @@ class RequestWorkTool:
         error = _citation_error(self.reader, state, args.assessment.evidence_artifact_ids)
         if error is not None:
             return error
+        try:
+            cited_artifacts(
+                args.work_request.input_artifact_ids, run_id=state.run_id, reader=self.reader,
+            )
+        except (ValueError, OSError) as error:
+            return ToolObservation(summary=f"Invalid work input artifacts: {error}", ok=False)
         return ToolObservation(
             summary=args.assessment.statement,
             request_work=args.model_dump(mode="json"),

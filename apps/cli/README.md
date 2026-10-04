@@ -197,7 +197,7 @@ resagent2 literature import RUN_ID --file papers.json --data-root /data/resagent
 追加命令只接受 paused Run；导入操作成功返回退出码 0，Run 仍保持 paused。它更新现有科研目录，
 不回答当前问题、不恢复执行、不重置预算或权限。先用 show 查看问题，再用原有
 answer 继续。重复导入相同论文快照和相同 PDF 会复用冻结材料；更换 PDF 会形成
-新的不可变快照，不覆盖旧材料。没有本地 PDF 时，若条目提供 pdf_url，Scientific
+新的不可变快照，不覆盖旧材料。同身份 PDF 改名重导仍使用原冻结 URI；导入失败不删除已保存的证据。没有本地 PDF 时，若条目提供 pdf_url，Scientific
 后续按需获取；有本地 PDF 时优先离线复用。
 
 论文元信息登记为 literature_paper，本地 PDF 登记为 literature_pdf，解析后为

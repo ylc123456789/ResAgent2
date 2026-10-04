@@ -188,7 +188,7 @@ bash "$L3_CLI" "$L3_ROOT/cli-config.sh" resume "$L3_RUN_ID" --data-root "$L3_ROO
 |---|---|
 | 正向目标传递 | goal → Scientific WorkRequest → Compiler → 统一 `instruction + input_artifacts`，研究约束没有丢失；Run 的 conclusion_requirements 被 Scientific 保留到相关工作请求及实际交付，不要求 required_artifacts 自动转为每个 Task 的 acceptance_requirements，也不固定 Task ID/数量 |
 | 子任务交付 | 当前 `report + artifacts` 与登记来源匹配，报告、失败和局限可读；不再核对旧 understand/modify 模式或旧结果外壳 |
-| 反向交接 | 固定 WorkInterpreter 按原任务和尝试组织已记录报告，保留状态、错误、累计警告及产物 ID；完整 research_index 可导航，长正文省略可见且可补读。Scientific 按需读取原始证据，不把多份报告当独立测量，报告展示不自动赋予原件引用资格 |
+| 反向交接 | 固定 WorkInterpreter 按原任务和尝试组织已记录报告，保留状态、错误、累计警告及产物 ID；完整 research_index 可导航，长正文省略可见且可补读。Scientific 按需读取原始证据，不把多份报告当独立测量，报告展示不能代替原件内容依据；访问记录只用于审计 |
 | 明确交付 | `comparison_results` 按精确 output_name 登记、同 Run 归属和冻结 hash 可核对；完成检查通过不等于结论正确 |
 | 问答和恢复 | 仅检查实际发生的路径；原题/答案和归属准确，继续同 Run/对应 Session，不重置预算；未发生就写“未触发” |
 | 拒绝与纠错 | 原始 Session 的参数拒绝、命令失败、completion feedback 与最终结果分开；`action_valid=true` 不等于工具执行或科学内容正确 |

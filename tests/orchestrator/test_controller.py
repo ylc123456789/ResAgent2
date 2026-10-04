@@ -1581,3 +1581,21 @@ def test_missing_output_feedback_can_execute_work_and_resume_without_citation():
     persisted = controller.scientific_port.store.load(run.scientific_session.id)
     assert persisted.session_id == run.scientific_session.id
     assert persisted.llm_calls_used == run.llm_calls_used == 3
+
+
+def test_invalid_work_input_is_corrected_in_same_scientific_session():
+    invalid = request_work_action()
+    invalid["arguments"]["work_request"]["input_artifact_ids"] = ["artifact_typo"]
+    controller = build_controller(actions=[
+        invalid, request_work_action(), finish_action(),
+    ])
+    run = controller.create_run("run_correct_work_input", research_request())
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
+    assert run.llm_calls_used == 3
+    assert len(run.work_requests) == 1
+    assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
+    client = controller.scientific_port.llm_client
+    assert "Invalid work input artifacts" in client.contexts[1].text
+    state = controller.scientific_port.store.load(run.scientific_session.id)
+    assert state.run_id == run.run_id
+    assert state.llm_calls_used == 3

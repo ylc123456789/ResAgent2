@@ -28,6 +28,7 @@ from resagent2_contracts import (
 )
 from resagent2_coding.completion import CodingCompletionCheck, derive_control_state
 from resagent2_runtime import AgentState, FinishCandidate
+from resagent2_runtime.budget import DeadlineExceededError
 
 
 DIFF = "diff --git a/code.py b/code.py\n-old\n+new\n"
@@ -338,3 +339,255 @@ def test_reverification_preserves_logs_at_same_revision_and_timestamp(setup, mon
         assert previous[key] != current[key]
         assert Path(previous[key]).read_bytes() == content
         assert b"second-passed" in Path(current[key]).read_bytes()
+
+
+
+@pytest.mark.parametrize("command", [
+    "/usr/bin/python3 -m unittest", "./python -m pytest", "/tmp/pytest -q",
+])
+def test_bound_verification_rejects_external_python_before_approval(setup, command):
+    from resagent2_capabilities.permissions import OperationPermissionPolicy
+    from resagent2_contracts import AgentPermissions, AgentRequest, TaskBudget
+    from resagent2_runtime import AgentAction
+
+    class UnusedRunner(Runner):
+        def run(self, *args, **kwargs):
+            raise AssertionError("Rejected interpreter must not be executed")
+
+    tool = RunVerificationTool(
+        UnusedRunner(setup.boundary), setup.repository,
+        log_root=str(setup.root / "verify"), timeout_seconds=30,
+        baseline=setup.baseline, env_binding=setup.binding,
+    )
+    request = AgentRequest(
+        run_id="run_test", task_id="task_test", attempt_number=1,
+        agent="coding", instruction="Verify using the bound environment",
+        permissions=AgentPermissions(execute_commands=True),
+        confirm_commands=True, workspace=setup.boundary.grant,
+        budget=TaskBudget(max_llm_calls=4, timeout_seconds=30),
+    )
+    policy = OperationPermissionPolicy(
+        [tool], boundary=setup.boundary, binding=setup.binding, request=request,
+    )
+    decision = policy.check(
+        AgentAction(tool="run_verification", arguments={"commands": [command]}),
+        setup.state, request,
+    )
+    assert decision.outcome == "deny"
+    assert "bound interpreter" in decision.reason
+    with pytest.raises(ValueError, match="bound interpreter"):
+        tool.execute(setup.state, tool.input_model(commands=[command]))
+    assert setup.binding.certified
+
+
+@pytest.mark.parametrize("command", [
+    "python -m unittest test_runtime", "python3 -m unittest test_runtime",
+    "pytest -q -s test_runtime.py",
+])
+def test_python_verification_uses_bound_interpreter_despite_path_shadowing(
+    setup, monkeypatch, command,
+):
+    import os
+
+    setup.binding.current = PreparedEnvironment(
+        env_id="resenv_test", prefix=Path(sys.prefix), python_version="3.12",
+    )
+    # Exercise the real ProcessRunner without depending on a host conda CLI.
+    monkeypatch.setattr(setup.binding, "argv_prefix", lambda: [])
+    (setup.root / "code.py").unlink()  # Avoid shadowing stdlib code imported by pytest.
+    fake_bin = setup.root / "fake-bin"
+    fake_bin.mkdir()
+    for name in ("python", "python3", "pytest"):
+        executable = fake_bin / name
+        executable.write_text("#!/bin/sh\necho WRONG_INTERPRETER\nexit 99\n")
+        executable.chmod(0o755)
+    (setup.root / "test_runtime.py").write_text(
+        "import os,sys,unittest\n"
+        "class BoundRuntime(unittest.TestCase):\n"
+        " def test_prefix(self):\n"
+        "  print('BOUND_PREFIX='+sys.prefix,flush=True)\n"
+        "  self.assertEqual(sys.prefix,os.environ['EXPECTED_PREFIX'])\n",
+    )
+    tool = RunVerificationTool(
+        ProcessRunner(setup.boundary), setup.repository,
+        log_root=str(setup.root / "verify"), timeout_seconds=30,
+        baseline=setup.baseline, env_binding=setup.binding,
+        extra_env={"EXPECTED_PREFIX": sys.prefix, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]},
+    )
+    observation = tool.execute(setup.state, tool.input_model(commands=[command]))
+    result = observation.value["results"][0]
+    assert observation.ok
+    assert shlex.split(result["command"])[0] == str(Path(sys.prefix) / "bin" / "python")
+    stdout = Path(result["stdout_path"]).read_text()
+    assert "BOUND_PREFIX=" + sys.prefix in stdout
+    assert "WRONG_INTERPRETER" not in stdout
+    if command.startswith("pytest"):
+        assert shlex.split(result["command"])[1:3] == ["-m", "pytest"]
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("Git diagnostic unavailable"),
+    DeadlineExceededError(
+        "execution deadline exceeded",
+    ),
+])
+def test_post_command_diagnostic_failure_preserves_receipts_and_stays_stale(
+    setup, error,
+):
+    calls = []
+
+    def diff_since(baseline):
+        calls.append(baseline)
+        if len(calls) > 1:
+            raise error
+        return DIFF
+
+    setup.repository.diff_since = diff_since
+    setup.repository.changed_paths_since = lambda _: []
+    (setup.root / "stdout.log").write_text("Executed the real check")
+    observation = reverify(setup)
+    assert not observation.ok
+    assert observation.value["workspace_unchanged"] is False
+    assert observation.value["workspace_error"].endswith(str(error))
+    assert len(observation.value["results"]) == 1
+    assert observation.value["results"][0]["exit_code"] == 0
+    assert observation.value["results"][0]["stdout_tail"] == "Executed the real check"
+    assert setup.state.memory["verification_diff_sha256"] is None
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is True  # Execution result, independent of freshness.
+    record = finish(setup.check, setup.state)
+    assert not record["covers_current_workspace"]
+    assert record["passed"] is True
+    assert "freshness could not be confirmed" in record["issue"]
+    assert len(calls) == 2  # Completion does not retry the failed freshness probe.
+    setup.repository.diff_since = lambda _: DIFF
+    assert reverify(setup).ok
+    assert finish(setup.check, setup.state)["covers_current_workspace"]
+
+
+@pytest.mark.parametrize("failure", ["shared_deadline", "batch_deadline", "runner_io"])
+def test_partial_verification_keeps_actual_results_without_inventing_missing_outcomes(
+    setup, monkeypatch, failure,
+):
+    from resagent2_runtime.budget import DeadlineExceededError
+
+    commands = ["python -m unittest first", "python -m unittest second", "python -m unittest third"]
+
+    class PartialRunner(Runner):
+        calls = []
+
+        def run(self, command, **kwargs):
+            self.calls.append(command)
+            if len(self.calls) == 2:
+                if failure == "runner_io":
+                    raise OSError("Could not start the next interpreter")
+                raise DeadlineExceededError("execution deadline exceeded")
+            return super().run(command, **kwargs)
+
+    runner = PartialRunner(setup.boundary)
+    if failure == "batch_deadline":
+        times = iter([0, 0, 31])
+        monkeypatch.setattr("resagent2_coding.verification.monotonic", lambda: next(times))
+    tool = RunVerificationTool(
+        runner, setup.repository, log_root=str(setup.root / "verify"),
+        timeout_seconds=30, baseline=setup.baseline, env_binding=setup.binding,
+    )
+    observation = tool.execute(setup.state, tool.input_model(commands=commands))
+    setup.state.memory.update(observation.memory_updates)
+    assert not observation.ok
+    assert len(observation.value["results"]) == 1
+    assert observation.value["results"][0]["exit_code"] == 0
+    assert observation.value["unrecorded_commands"] == commands[1:]
+    assert len(runner.calls) == (1 if failure == "batch_deadline" else 2)
+    control = derive_control_state(setup.state, setup.binding)
+    assert control["verification_stale"]
+    assert control["verification_passed"] is False
+    record = finish(setup.check, setup.state)
+    assert not record["covers_current_workspace"]
+    assert record["passed"] is False
+    assert record["unrecorded_commands"] == commands[1:]
+    assert len(record["results"]) == 1
+    assert "no recorded outcome" in record["issue"]
+    if failure == "batch_deadline":
+        monkeypatch.setattr("resagent2_coding.verification.monotonic", __import__("time").monotonic)
+    assert reverify(setup).ok
+    assert setup.state.memory["verification_unrecorded_commands"] == []
+
+
+def test_loop_persists_real_verification_receipt_when_shared_deadline_expires(
+    tmp_path,
+):
+    import subprocess
+    from resagent2_components import GitWorkspace
+    from resagent2_contracts import AgentPermissions, AgentRequest, ErrorCode, TaskBudget
+    from resagent2_runtime import (
+        AgentDefinition, AgentLoop, AllowListPermissionPolicy,
+        InMemorySessionStore, NativeToolCall, ToolCallTurn,
+    )
+    from resagent2_runtime.budget import execution_budget
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "test_quick.py").write_text(
+        "import unittest\nclass QuickCheck(unittest.TestCase):\n"
+        " def test_execution(self):\n"
+        "  print('execution_recorded',flush=True)\n"
+        "  self.assertEqual(1+1,2)\n",
+    )
+    boundary = WorkspaceBoundary(WorkspaceGrant(
+        root=str(tmp_path), source="local",
+        access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
+    ))
+    repository = GitWorkspace(boundary)
+    baseline = repository.snapshot()
+    clock = [0.0]
+
+    class DeadlineAfterCommand(ProcessRunner):
+        def run(self, *args, **kwargs):
+            result = super().run(*args, **kwargs)
+            clock[0] = 31.0
+            return result
+
+    tool = RunVerificationTool(
+        DeadlineAfterCommand(boundary), repository, log_root=str(tmp_path / ".resagent2" / "logs"),
+        timeout_seconds=30, baseline=baseline,
+    )
+    store = InMemorySessionStore()
+    request = AgentRequest(
+        run_id="run_deadline", task_id="task_deadline", attempt_number=1,
+        agent="coding", instruction="Run the small correctness check",
+        workspace=boundary.grant, permissions=AgentPermissions(execute_commands=True),
+        budget=TaskBudget(max_llm_calls=2, timeout_seconds=30),
+    )
+    class NativeClient:
+        tool_session_key = "verification-deadline-test"
+
+        def next_tool_call(self, context, schemas, turns, **kwargs):
+            return ToolCallTurn(tool_calls=[NativeToolCall(
+                id="verify", name="run_verification", arguments=json.dumps({
+                    "commands": [shlex.quote(sys.executable) + " -m unittest test_quick"],
+                }),
+            )])
+
+    definition = AgentDefinition(
+        name="coding", owner=AgentOwner.CODING, system_prompt="Verify the supplied code.",
+        tools=(tool,), llm_client=NativeClient(),
+        context_builder=lambda *_: [],
+        permission_policy=AllowListPermissionPolicy({tool.name}),
+        completion_check=CodingCompletionCheck(repository, boundary, baseline=baseline),
+    )
+    with execution_budget(max_llm_calls=2, timeout_seconds=30, clock=lambda: clock[0]):
+        result = AgentLoop(store=store).run(definition, request, session_id="session_deadline")
+    assert result.status == "failed"
+    assert result.error.code == ErrorCode.TIMEOUT
+    state = store.load("session_deadline")
+    records = state.memory["verification_results"]
+    assert len(records) == 1
+    assert records[0]["exit_code"] == 0
+    assert records[0]["timed_out"] is False
+    assert "execution_recorded" in Path(records[0]["stdout_path"]).read_text()
+    assert "DeadlineExceededError" in state.memory["verification_workspace_error"]
+    assert state.memory["verification_workspace_unchanged"] is False
+    event = next(e for e in state.events if e.type == "observation" and e.tool == tool.name)
+    assert event.data["value"]["results"][0]["exit_code"] == 0
+    assert len(state.tool_turns[0].tool_results) == 1

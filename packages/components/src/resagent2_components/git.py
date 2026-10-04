@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .workspace import WorkspaceBoundary
+from .workspace import WorkspaceBoundary, WorkspacePermissionError
 from .process import run_process
 
 
@@ -91,6 +91,24 @@ class GitWorkspace:
         Uses an empty temporary index and adds only authorized files. The real index,
         branch and working tree are untouched.
         """
+        # A gitlink lists only a submodule directory, not its mutable contents.
+        # Never certify a complete scoped snapshot while silently omitting it.
+        for entry in self._run(["ls-files", "--stage", "-z"]).stdout.split("\0"):
+            if not entry:
+                continue
+            metadata, path = entry.split("\t", 1)
+            if metadata.split(" ", 1)[0] != "160000" or not self._visible(path):
+                continue
+            try:
+                self.boundary.resolve_read_directory(path, traverse=True)
+            except WorkspacePermissionError:
+                continue
+            except OSError:
+                # An authorized uninitialized/missing submodule is unsupported too.
+                pass
+            raise GitWorkspaceError(
+                f"Git snapshots do not support submodule contents in the readable scope: {path}"
+            )
         fd, tmp_index = tempfile.mkstemp(prefix="resagent2-index-")
         os.close(fd)
         try:

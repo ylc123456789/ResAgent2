@@ -6,11 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
     AgentResult,
+    ArtifactId,
     ArtifactCandidate,
     ArtifactImport,
     ErrorCode,
@@ -19,6 +20,7 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
+    TaskId,
     TaskProposal,
     WorkflowAgentKind,
     WorkflowPatch,
@@ -426,13 +428,17 @@ def test_import_identity_preserves_kind_and_source_provenance(tmp_path):
     assert first.metadata == {"source_type": "import", "paper_artifact_id": "artifact_source_a"}
 
 
-def test_import_reuse_rejects_tampered_frozen_copy(tmp_path):
+@pytest.mark.parametrize("renamed", [False, True])
+def test_import_reuse_rejects_tampered_frozen_copy(tmp_path, renamed):
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF-1.4 evidence")
     registry = ArtifactRegistry(tmp_path / "artifacts")
     spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
     first = registry.register_import(spec, run_id="run_import")
     Path(first.uri.removeprefix("file://")).write_bytes(b"tampered")
+    if renamed:
+        source = source.rename(tmp_path / "renamed.pdf")
+        spec = spec.model_copy(update={"uri": str(source)})
     with pytest.raises(ArtifactRegistrationError, match="hash changed"):
         registry.register_import(spec, run_id="run_import")
 
@@ -455,3 +461,99 @@ def test_import_detects_source_mutation_during_copy(tmp_path, monkeypatch):
             run_id="run_import",
         )
     assert not list((tmp_path / "artifacts" / "run_import").glob("artifact_import_*"))
+
+
+def test_import_reuses_frozen_file_when_caller_renames_source(tmp_path, monkeypatch):
+    import resagent2_orchestrator.artifacts as implementation
+
+    source = tmp_path / "paper.pdf"
+    original = b"%PDF-1.4 evidence"
+    source.write_bytes(original)
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
+    first = registry.register_import(spec, run_id="run_import")
+    renamed = source.rename(tmp_path / "renamed.pdf")
+
+    def unexpected_copy(*args):
+        raise OSError(28, "No space left on device")
+
+    # A renamed but otherwise identical input must not copy or alter a frozen Ref.
+    monkeypatch.setattr(implementation.shutil, "copyfile", unexpected_copy)
+    second = registry.register_import(
+        spec.model_copy(update={"uri": str(renamed)}), run_id="run_import",
+    )
+    assert second == first
+    frozen = Path(first.uri.removeprefix("file://"))
+    assert frozen.read_bytes() == original
+    assert list(frozen.parent.iterdir()) == [frozen]
+
+
+def test_failed_new_import_preserves_existing_frozen_inputs(tmp_path, monkeypatch):
+    import resagent2_orchestrator.artifacts as implementation
+
+    source = tmp_path / "paper.pdf"
+    original = b"%PDF-1.4 evidence"
+    source.write_bytes(original)
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
+    first = registry.register_import(spec, run_id="run_import")
+    frozen = Path(first.uri.removeprefix("file://"))
+    source.write_bytes(b"%PDF-1.4 replacement")
+
+    def failed_copy(*args):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(implementation.shutil, "copyfile", failed_copy)
+    with pytest.raises(OSError, match="No space left"):
+        registry.register_import(spec, run_id="run_import")
+
+    assert frozen.read_bytes() == original
+    assert list(frozen.parent.parent.iterdir()) == [frozen.parent]
+
+
+def test_task_artifact_ids_support_longest_task_identity_without_collisions(tmp_path):
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    candidate = ArtifactCandidate(
+        kind="experiment_result", path="metrics.json", media_type="application/json",
+        summary="Metrics", content="{}",
+    )
+    first_task = TypeAdapter(TaskId).validate_python("task_" + "x" * 127 + "a")
+    second_task = TypeAdapter(TaskId).validate_python("task_" + "x" * 127 + "b")
+    scopes = [(first_task, 1, 1), (second_task, 1, 1), (first_task, 2, 1), (first_task, 1, 2)]
+    refs = [
+        registry.register(
+            candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_long",
+            task_id=task_id, attempt_number=attempt, index=index, existing_ids=set(),
+        )
+        for task_id, attempt, index in scopes
+    ]
+    assert len({ref.id for ref in refs}) == len(scopes)
+    for ref, (task_id, attempt, _) in zip(refs, scopes):
+        assert TypeAdapter(ArtifactId).validate_python(ref.id) == ref.id
+        assert ref.task_id == task_id and ref.attempt_number == attempt
+        assert Path(ref.uri.removeprefix("file://")).read_text() == "{}"
+    recovered = registry.register(
+        candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_long",
+        task_id=first_task, attempt_number=1, index=1, existing_ids=set(),
+    )
+    assert recovered == refs[0]
+
+    short = registry.register(
+        candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_short",
+        task_id="task_x", attempt_number=1, index=1, existing_ids=set(),
+    )
+    assert short.id == "artifact_x_1_1"
+
+
+def test_task_artifact_id_is_validated_before_creating_files(tmp_path):
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    candidate = ArtifactCandidate(
+        kind="experiment_result", path="metrics.json", media_type="application/json",
+        summary="Metrics", content="{}",
+    )
+    with pytest.raises(ValidationError):
+        registry.register(
+            candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_invalid",
+            task_id="task_bad.name", attempt_number=1, index=1, existing_ids=set(),
+        )
+    assert not (registry.root / "run_invalid").exists()

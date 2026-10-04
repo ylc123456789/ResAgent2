@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from pydantic import TypeAdapter
+
 from resagent2_components.artifacts import (
     ArtifactCandidateError, RegisteredArtifactReader, missing_required_artifacts,
     resolve_artifact_source,
@@ -84,8 +86,12 @@ class ArtifactRegistry:
         existing_ids: set[str],
         output_dir: str | None = None,
     ) -> ArtifactRef:
-        suffix = task_id.removeprefix("task_")
-        artifact_id = f"artifact_{suffix}_{attempt_number}_{index}"
+        suffix = f"{task_id.removeprefix('task_')}_{attempt_number}_{index}"
+        if len(suffix) > 128:
+            identity = f"{task_id}\0{attempt_number}\0{index}"
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+            suffix = f"{suffix[:95]}_{digest}"
+        artifact_id = TypeAdapter(ArtifactId).validate_python(f"artifact_{suffix}")
         if artifact_id in existing_ids:
             raise ArtifactRegistrationError(f"artifact id already exists: {artifact_id}")
 
@@ -194,23 +200,28 @@ class ArtifactRegistry:
         ).hexdigest()
         artifact_id = f"artifact_import_{identity[:24]}"
         destination_dir = self.root / run_id / artifact_id
-        destination = destination_dir / source.name
-        if not destination.exists():
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            temporary: Path | None = None
+        if destination_dir.exists():
+            # Identity excludes caller filenames. Reuse the original frozen file
+            # instead of changing the URI or copying a renamed duplicate.
+            files = list(destination_dir.iterdir())
+            if len(files) != 1 or not files[0].is_file():
+                raise ArtifactRegistrationError("registered import artifact directory is invalid")
+            destination = files[0]
+        else:
+            destination = destination_dir / source.name
+            destination_dir.parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(
+                dir=destination_dir.parent, prefix=f".{artifact_id}.",
+            ))
             try:
-                with tempfile.NamedTemporaryFile(
-                    dir=destination_dir, delete=False
-                ) as handle:
-                    temporary = Path(handle.name)
-                shutil.copyfile(source, temporary)
-                if _sha256(temporary) != digest:
+                staged_file = staging / source.name
+                shutil.copyfile(source, staged_file)
+                if _sha256(staged_file) != digest:
                     raise ArtifactRegistrationError("import source changed while freezing")
-                os.replace(temporary, destination)
+                os.replace(staging, destination_dir)
             except Exception:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
-                shutil.rmtree(destination_dir, ignore_errors=True)
+                # Never remove a formal directory: it may contain frozen inputs.
+                shutil.rmtree(staging, ignore_errors=True)
                 raise
         if not destination.is_file() or _sha256(destination) != digest:
             raise ArtifactRegistrationError("registered import artifact hash changed")

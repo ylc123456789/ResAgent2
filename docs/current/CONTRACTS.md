@@ -46,7 +46,7 @@ literature=...)；已存在的 Run 只能调用 import_literature(run_id, litera
 为 paused。Controller 负责以 source_type=import 登记 literature_paper 和可选
 literature_pdf，刷新科研目录后原样返回 paused Run。导入操作不调用 Agent、不回答问题、
 不恢复执行、不重置预算；pdf_path 只由用户清单提供并在 Components 中相对清单目录解析，
-不暴露给 LLM。
+不暴露给 LLM。相同导入身份复用原冻结文件和 URI，不受来源文件改名影响；新材料先在独立临时目录复制并核对 hash，再发布正式目录。失败只清理本次临时目录，不删除既有证据。
 
 `ResearchRequest` 包含 `goal`、可选 `hypothesis`、`context`、`constraints`、`input_artifacts: list[ArtifactImport]`、`required_evidence_kinds`、`required_artifacts: list[OutputName]`（默认空），以及下列 Run 控制字段。创建 Run 时保存授权与执行限制，内部调用只能继承或收紧。
 
@@ -147,7 +147,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 
 ## 3. 工件、来源与可信边界
 
-ArtifactCandidate 含 `kind`、相对 `path`、`media_type`、`summary`、可选 `output_name`、`metadata` 和 UTF-8 `content`。有 content 时 path 是存储文件名；无 content 时须在授权工作区或本次 output_dir 解析唯一实际文件，同一路径在两个根目录都存在时拒绝。绝对路径、`..` 和越界软链拒绝。Registry 冻结内容、计算 sha256 并记录来源后生成 ArtifactRef。用于路径验收的 source_path 由实际源文件解析，忽略候选 metadata 中的自报值。
+ArtifactCandidate 含 `kind`、相对 `path`、`media_type`、`summary`、可选 `output_name`、`metadata` 和 UTF-8 `content`。有 content 时 path 是存储文件名；无 content 时须在授权工作区或本次 output_dir 解析唯一实际文件，同一路径在两个根目录都存在时拒绝。绝对路径、`..` 和越界软链拒绝。Registry 在写入前验证最终 ArtifactId；常规任务保持既有命名，可能超长的 Task/Attempt/Index 身份用有界前缀与完整身份 hash 生成 ID。随后冻结内容、计算 sha256 并记录来源后生成 ArtifactRef。用于路径验收的 source_path 由实际源文件解析，忽略候选 metadata 中的自报值。
 
 ArtifactRef 含 id、kind、producer、run_id、Task/Attempt 或 Session 归属、uri、sha256、media_type、summary、可选 output_name 和 metadata。Ref 不是自证：返回已有 Ref 时必须与可信登记记录完全一致，hash 正确且属于当前 Attempt 或 Scientific Session。输入材料及其他调用的产物不能冒充本次新输出。
 
@@ -177,7 +177,9 @@ Scientific 的普通产物归属 Session，包括 literature_search、literature
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
-Coding 每次实际验证使用独立日志目录（UTC 时间戳加唯一标识）。同一代码版本下重跑验证或恢复 Session 后再次验证，都保留各次 stdout/stderr；执行记录中的路径始终对应那次执行，不覆盖旧日志。
+Coding 每次实际验证使用独立日志目录（UTC 时间戳加唯一标识）。同一代码版本下重跑验证或恢复 Session 后再次验证，都保留各次 stdout/stderr；执行记录中的路径始终对应那次执行，不覆盖旧日志。绑定环境下，验证使用裸名 python/python3 或 pytest，由工具解析为绑定环境的 bin/python（pytest 通过 -m pytest），显式解释器路径在审批前拒绝。
+
+命令已返回的真实回执不因后置 Git 检查失败而丢失；诊断失败记录原因并标为新鲜度未确认。批量验证中断保留已记录结果，剩余命令列入 unrecorded_commands，不虚构退出码或声称它们一定未开始；该批次不能被当作完整通过。Run 期限继续生效，超时后 Session 仍保留已执行回执，不为了保存回执延长预算。
 
 报告用于解释；`module_report` 可保存需要下游分页读取的长说明。报告不替代原始测量、代码或文献。拿到 Ref 不代表已读正文，读过一次也不表示全文始终在模型上下文中。
 
@@ -189,7 +191,7 @@ Scientific 同样接收 AgentRequest 并返回 AgentResult，使用同一 prompt
 
 <a id="work-request"></a>
 
-`WorkRequestDraft` 表达 objective、expected_evidence、constraints、input_artifact_ids，不含 Task 身份、物理路径或调度字段。Scientific 的 request_work 工具同时接收 assessment，将 assessment 与 work_request 配对在一个 work_request 候选中；控制信号定位该工件。Controller 负责分配 WorkRequest 身份并编译。
+`WorkRequestDraft` 表达 objective、expected_evidence、constraints、input_artifact_ids，不含 Task 身份、物理路径或调度字段。Scientific 的 request_work 工具同时接收 assessment，将 assessment 与 work_request 配对在一个 work_request 候选中；控制信号定位该工件。request_work 在发出控制信号前复用授权 reader 检查 input_artifact_ids 的同 Run 登记与冻结 hash；未知、跨 Run、缺失或损坏输入返回 ok=False，由原 AgentLoop 反馈纠正，不把完整性检查记为阅读。Controller 保留接收端复验，负责分配 WorkRequest 身份并编译。
 
 `ScientificAssessment` 包含 statement、evidence_artifact_ids、limitations、unresolved_questions。ask_user 同样带当前 assessment，便于保留暂停时的科学判断。
 
@@ -396,7 +398,7 @@ Coding/Experiment 和 ArtifactRegistry 共用 Components 的 `resolve_artifact_s
 
 - Coding 观察本 Attempt 的实际差异，生成 patch、变更文件与已有验证记录；covers_current_workspace 表示版本、环境与工作区匹配，passed 单独表示该验证批次的退出结果。当前版本测试失败可以覆盖当前代码，旧版本测试通过也不证明当前版本通过。分析任务可以无修改完成，未执行验证不能被写成已通过。
 - Experiment 可分析已有结果；执行后由代码生成完整 execution_record。完成检查只验证候选事实，任务是否完成由 Agent 根据目标与证据声明；它无需制造失败命令来表达无法完成。
-- Scientific 校验意见、工件授权和已观察引用，并生成 observation_trace。完成检查复用共享种类集合，模型只能创建 SCIENTIFIC_ARTIFACT_KINDS 中排除系统/工具生成种类后的工件；已有输入证据必须引用其 ID，不能重新作为输出交付。输入/外来/未经登记或被改写的 Ref、重复 Ref 和重复 output_name 在原 AgentLoop 中反馈纠正；本 Session 新登记的合法工具 Ref 仍可原样交付。注册层的身份/hash/磁盘复验继续保留，未知故障不会被无限重试。
+- Scientific 校验意见、引用工件的登记授权和冻结 hash，并生成 observation_trace。完成检查复用共享种类集合，模型只能创建 SCIENTIFIC_ARTIFACT_KINDS 中排除系统/工具生成种类后的工件；已有输入证据必须引用其 ID，不能重新作为输出交付。输入/外来/未经登记或被改写的 Ref、重复 Ref 和重复 output_name 在原 AgentLoop 中反馈纠正；本 Session 新登记的合法工具 Ref 仍可原样交付。注册层的身份/hash/磁盘复验继续保留，未知故障不会被无限重试。
 
 Scientific 的 CompletionCheck 通过 Components 的 `missing_required_artifacts` 查询授权登记 Ref 并验证整份冻结 hash。缺少明确输出时返回 `required_artifact_missing` 与名称，经原 `runtime_feedback` 继续同一 Session，可 request_work 补交或 ask_user；预算、超时和连续拒绝上限继续生效。登记前，Scientific 自己的合法命名 finish 候选可作为本次拟交付；它们必须经接收端实际登记后才能满足最终 gate，候选提议本身不保证通过。
 
@@ -404,7 +406,7 @@ Scheduler 根据冻结的 TaskAcceptanceSpec 检查本 Attempt 的交付：requi
 
 <a id="final-report"></a>
 
-最终 Run gate 校验科学意见的结构、证据归属、观察记录、所需证据种类及明确输出名；存在失败或阻塞工作时，检查 limitations 非空，局限是否充分解释其科研影响由 Scientific 判断。它通过 ArtifactRegistry 查询同一 Run 的实际登记表，共用授权 reader 和冻结 hash 规则；跨 Run 产物、仅磁盘存在的文件或未登记候选不满足要求。缺失输出返回 `code=required_artifact_missing`、`message="required artifact was not produced"`、`subject=名称`，阻止完成并保留证据。损坏或不可读的登记文件仍沿原错误路径拒绝，不伪装成普通缺失。通过后由确定性报告渲染器登记最终报告，再将 Run 标为 completed。inconclusive 可以是合法完成；Run completed 不保证假设成立或科学结论正确。
+最终 Run gate 校验科学意见的结构、证据归属及冻结 hash、所需证据种类及明确输出名；访问记录只用于审计，不是完成或引用门禁；存在失败或阻塞工作时，检查 limitations 非空，局限是否充分解释其科研影响由 Scientific 判断。它通过 ArtifactRegistry 查询同一 Run 的实际登记表，共用授权 reader 和冻结 hash 规则；跨 Run 产物、仅磁盘存在的文件或未登记候选不满足要求。缺失输出返回 `code=required_artifact_missing`、`message="required artifact was not produced"`、`subject=名称`，阻止完成并保留证据。损坏或不可读的登记文件仍沿原错误路径拒绝，不伪装成普通缺失。通过后由确定性报告渲染器登记最终报告，再将 Run 标为 completed。inconclusive 可以是合法完成；Run completed 不保证假设成立或科学结论正确。
 
 <a id="identities"></a>
 <a id="attempt-session"></a>
@@ -465,7 +467,7 @@ class WorkspaceDescriptor:
     description: str = ""
 ```
 
-`WorkspaceSourceKind`：GIT（clone 到受管目录）/ LOCAL（原地绑定，managed=False）/ COPY（复制已有本地 Git 工作树）/ GENERATED（创建空受管工作区）。
+`WorkspaceSourceKind`：GIT（clone 到受管目录）/ LOCAL（原地绑定，managed=False）/ COPY（复制已有本地 Git 工作树）/ GENERATED（创建空受管工作区）。LOCAL/COPY 必须指定真实 Git 仓库根，不能指定子目录；LOCAL 可绑定 linked worktree，COPY 暂不支持 .git 指针文件或符号链接，避免副本共享源仓库的 Git 状态。Git 快照遇到可读范围内的 submodule 明确拒绝，不将遗漏其内容的快照认证为工作区未变化；被拒绝或无关范围中的 submodule 不阻塞其他范围。
 
 `WorkspaceSpec` 是逻辑来源声明，`location` 可包含仓库 URL 或本地来源路径，但不是 Attempt 的物理授权；`environment` 是 workspace 级的环境约束（上游指定 Python 版本时为硬约束）。`WorkspaceRecord` 是解析后的记录，`managed` 由 source_kind 派生（非 LOCAL 为 True）。`WorkspaceDescriptor` 是 Compiler 可见的最小工作区摘要，不含物理路径。
 

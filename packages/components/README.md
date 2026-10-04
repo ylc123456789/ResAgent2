@@ -29,7 +29,7 @@ WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denie
 
 底层工作区、进程和环境边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。run_shell 每次精确审批；验证和安装分别由各自 Capability 策略限定范围。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；shell-free 和路径 Tool 都不是 OS 沙箱。
 
-ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化、环境准备也使用这一执行路径。数据集/环境身份和缓存机制不变，不新增通用资源配额或镜像预检。
+ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化、环境准备也使用这一执行路径。LOCAL/COPY 来源须是实际 Git 仓库根；COPY 拒绝外部 .git 指针或链接，LOCAL 仍可绑定 linked worktree。可读范围中的 submodule 不在当前快照支持范围，明确报错，避免遗漏内容后声称工作区未变。数据集/环境身份和缓存机制不变，不新增通用资源配额或镜像预检。
 
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 

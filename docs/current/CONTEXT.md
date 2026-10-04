@@ -160,7 +160,7 @@ observed 与 observation_trace 保留真实工具访问历史，不再形成补�
 
 可写工作区允许修改，不要求修改；只读源目录仍可通过候选工件输出报告。Coding prompt 区分有限的代码正确性检查与产出研究证据的实验，不允许把后者包装成测试来执行；任务同时包含实验时，报告已实现的入口、实际检查及剩余工作。任务基线和验证记录由代码保存，模型不能自行声明“代码已改、验证已过”作为机器事实。
 
-**验证状态的含义：**verification_state.edited_since_verification 比较编辑与验证版本；verification_stale 仅表示已有验证记录是否过期，verification_passed 单独表示验证结果（无记录为 null）。当前版本失败与旧版本通过分别表达，不互相代替。不从这些事实推导建议行动；新编辑或环境变动不沿用旧验证。
+**验证状态的含义：**verification_state.edited_since_verification 比较编辑与验证版本；verification_stale 仅表示已有验证记录是否过期，verification_passed 单独表示验证结果（无记录为 null）。当前版本失败与旧版本通过分别表达，不互相代替。后置新鲜度诊断失败时保留命令结果并显示原因，verification_stale=true；批量中断时未记录的命令不会被虚构成执行回执，整批不能标为通过。不从这些事实推导建议行动；新编辑或环境变动不沿用旧验证。
 
 Agent 决定需要验证而绑定尚未认证时，run_verification 在获准执行后自动核验环境，不要求先单独 audit_env。没有验证记录时 verification_stale 为 false、verification_passed 为 null，verification_issue 说明未验证。Coding/Experiment 在同一 finish 中按目标声明 completed 或 failed，并在 report 解释依据；两种声明均先检查产物事实，纯分析不强制执行命令。
 

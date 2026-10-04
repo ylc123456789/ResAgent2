@@ -46,13 +46,13 @@ def _git_commit(repo_path: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _is_git_worktree(path: Path) -> bool:
-    """Return whether ``path`` is inside a Git worktree (independent of HEAD)."""
+def _is_git_worktree_root(path: Path) -> bool:
+    """Require the repository root, including repositories without a HEAD."""
     if not path.is_dir():
         return False
     try:
         result = run_process(
-            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
             text=True,
             capture_output=True,
             timeout=20,
@@ -61,7 +61,7 @@ def _is_git_worktree(path: Path) -> bool:
         raise
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0 and result.stdout.strip() == "true"
+    return result.returncode == 0 and Path(result.stdout.strip()).resolve() == path.resolve()
 
 
 def _has_content(path: Path) -> bool:
@@ -202,7 +202,7 @@ class RepoMaterializer:
     def _clone(
         self, workspace: Path, repo_url: str, metadata_path: Path
     ) -> MaterializedRepo:
-        if _is_git_worktree(workspace):
+        if _is_git_worktree_root(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.GIT.value, repo_url
             )
@@ -240,10 +240,16 @@ class RepoMaterializer:
     def _copy(
         self, workspace: Path, source: str, metadata_path: Path
     ) -> MaterializedRepo:
-        src = Path(source).expanduser()
-        if not _is_git_worktree(src):
-            raise RepoMaterializerError(f"copy source is not a usable git worktree: {src}")
-        if _is_git_worktree(workspace):
+        src = Path(source).expanduser().resolve()
+        if not _is_git_worktree_root(src):
+            raise RepoMaterializerError(f"COPY source must be a Git repository root: {src}")
+        git_metadata = src / ".git"
+        if git_metadata.is_file() or git_metadata.is_symlink():
+            raise RepoMaterializerError(
+                "COPY requires an independent .git directory; linked worktrees "
+                "and external Git metadata are not supported"
+            )
+        if _is_git_worktree_root(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.COPY.value, source
             )
@@ -267,14 +273,14 @@ class RepoMaterializer:
 
     def _bind(self, source: str) -> MaterializedRepo:
         repo = Path(source).expanduser().resolve()
-        if not _is_git_worktree(repo):
+        if not _is_git_worktree_root(repo):
             raise RepoMaterializerError(
-                f"LOCAL source is not a usable git repository: {repo}"
+                f"LOCAL source must be a Git repository root: {repo}"
             )
         return MaterializedRepo(repo, _git_commit(repo), "local")
 
     def _generate(self, workspace: Path, metadata_path: Path) -> MaterializedRepo:
-        if _is_git_worktree(workspace):
+        if _is_git_worktree_root(workspace):
             self._verify_source(
                 workspace, metadata_path, WorkspaceSourceKind.GENERATED.value, ""
             )

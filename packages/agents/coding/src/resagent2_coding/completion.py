@@ -55,10 +55,10 @@ class CodingCompletionCheck:
             )
         results, issue = _verification_status(state, self.env_binding)
         if results:
-            current_digest = hashlib.sha256(
+            fresh = issue is None and state.memory.get("verification_diff_sha256") == hashlib.sha256(
                 self.repository.diff_since(self.baseline).encode("utf-8")
             ).hexdigest()
-            fresh = issue is None and state.memory.get("verification_diff_sha256") == current_digest
+            unrecorded = state.memory.get("verification_unrecorded_commands", [])
             artifacts.append(ArtifactCandidate(
                 kind="verification_result", path="verification_result.json",
                 media_type="application/json",
@@ -66,7 +66,8 @@ class CodingCompletionCheck:
                 content=json.dumps({
                     "results": [item.model_dump(mode="json") for item in results],
                     "covers_current_workspace": fresh,
-                    "passed": all(item.exit_code == 0 and not item.timed_out for item in results),
+                    "passed": not unrecorded and all(item.exit_code == 0 and not item.timed_out for item in results),
+                    "unrecorded_commands": unrecorded,
                     "issue": issue if issue else (None if fresh else "Workspace changed after verification"),
                 }),
             ))
@@ -96,6 +97,14 @@ def _verification_status(
         return results, "The current environment binding is not certified"
     if binding is not None and state.memory.get("verification_environment_generation") != binding.generation:
         return results, "The environment binding changed or was restored after verification"
+    if state.memory.get("verification_unrecorded_commands"):
+        return results, "Some requested verification commands have no recorded outcome: " + str(
+            state.memory.get("verification_execution_error") or "Verification was interrupted"
+        )
+    if state.memory.get("verification_workspace_error"):
+        return results, "Verification freshness could not be confirmed: " + str(
+            state.memory["verification_workspace_error"]
+        )
     if not state.memory.get("verification_workspace_unchanged", False):
         return results, "Workspace changed during verification"
     return results, None
@@ -104,7 +113,8 @@ def _verification_status(
 def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) -> dict:
     """Expose execution facts without imposing a business mode or mandatory edit."""
     results, issue = _verification_status(state, binding)
-    passed = all(item.exit_code == 0 and not item.timed_out for item in results) if results else None
+    passed = (not state.memory.get("verification_unrecorded_commands")
+              and all(item.exit_code == 0 and not item.timed_out for item in results)) if results else None
     return {
         "edit_revision": int(state.memory.get("edit_revision", 0)),
         "verification_revision": state.memory.get("verification_revision"),

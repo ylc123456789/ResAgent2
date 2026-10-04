@@ -95,3 +95,43 @@ def test_context_has_no_pending_citation_action():
     }))
     assert "evidence_control_state" not in {section.name for section in sections}
     assert "read_artifact_or_remove_citation" not in str(sections)
+
+
+@pytest.mark.parametrize("fault", ["unknown", "foreign_run", "corrupt", "missing"])
+def test_work_inputs_are_rejected_without_emitting_control_or_observing(tmp_path, fault):
+    ref, reader = _source(tmp_path, run_id="run_other" if fault == "foreign_run" else "run_s")
+    artifact_id = "artifact_unknown" if fault == "unknown" else ref.id
+    path = Path(ref.uri.removeprefix("file://"))
+    if fault == "corrupt":
+        path.write_text("changed")
+    elif fault == "missing":
+        path.unlink()
+    state = _state()
+    observation = RequestWorkTool(reader=reader).execute(state, RequestWorkInput(
+        assessment={"statement": "Need a measurement"},
+        work_request={
+            "objective": "Measure", "expected_evidence": ["metric"],
+            "input_artifact_ids": [artifact_id],
+        },
+    ))
+    assert not observation.ok
+    assert "Invalid work input artifacts" in observation.summary
+    assert observation.request_work is None
+    assert not observation.memory_updates
+    assert not state.memory
+
+
+def test_work_inputs_verify_frozen_bytes_without_requiring_or_recording_a_read(tmp_path):
+    ref, reader = _source(tmp_path)
+    state = _state()
+    observation = RequestWorkTool(reader=reader).execute(state, RequestWorkInput(
+        assessment={"statement": "Need a measurement"},
+        work_request={
+            "objective": "Measure", "expected_evidence": ["metric"],
+            "input_artifact_ids": [ref.id],
+        },
+    ))
+    assert observation.ok
+    assert observation.request_work["work_request"]["input_artifact_ids"] == [ref.id]
+    assert "read_artifact_ids" not in observation.memory_updates
+    assert not state.memory

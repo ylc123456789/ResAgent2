@@ -259,7 +259,17 @@ def test_repeated_import_reuses_snapshot_and_replaced_pdf_creates_new_chain(tmp_
     assert repeated.artifacts[paper.id] == paper
     assert repeated.artifacts[pdf.id] == pdf
 
-    (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.7\nreplacement source")
+    renamed = (tmp_path / "paper.pdf").rename(tmp_path / "renamed.pdf")
+    entries = json.loads(manifest.read_text())
+    entries["papers"][0]["pdf_path"] = renamed.name
+    manifest.write_text(json.dumps(entries))
+    same_source = controller.import_literature(run.run_id, load_literature_manifest(manifest))
+    assert set(same_source.artifacts) == ids_before
+    assert same_source.artifacts[paper.id] == paper
+    assert same_source.artifacts[pdf.id] == pdf
+    assert same_source.research_index_ref == index_before
+
+    renamed.write_bytes(b"%PDF-1.7\nreplacement source")
     replaced = controller.import_literature(run.run_id, load_literature_manifest(manifest))
     papers = [ref for ref in replaced.artifacts.values() if ref.kind == "literature_paper"]
     pdfs = [ref for ref in replaced.artifacts.values() if ref.kind == "literature_pdf"]

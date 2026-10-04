@@ -2,6 +2,13 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-04：完整代码审查与开发基线
+
+对 refactor/literature-foundation@361e9fc / schema 22 完成分层代码审查、全量本地回归和临时目录边界复现。
+整体架构可继续复用；确认的七组冻结证据、验证记录、工作输入和 Git/身份边界问题已局部修复，并补行为回归；schema 仍为 22.0。
+详见[完整审查](reviews/CODE_REVIEW_BASELINE_2026-10-04.md)及[服务器 L3 交接](reviews/L3_SCHEMA22_HANDOFF_2026-10-04.md)。
+修复集成本地回归 1675 passed / 1 skipped、mock completed / 13 工件；当前文档已同步。本次没有执行真实模型或服务器 L3，不把旧验收结论推广到当前版本。
+
 <a id="literature-foundation-closeout"></a>
 
 ## 2026-10-03：文献基础与外部导入（schema 22 验收完成）
@@ -11,7 +18,7 @@ refactor/literature-foundation 的产品 ef5f836 + 61f4592720ca26985f0e598038611
 首轮 A/B 是合成 PDF 链路验收；后续 MobileNets 真实论文成功与真实模型解析失败补齐缺口。
 Guo 论文两次 120 秒解析超时的 paused 现场保留。详见
 [验收收尾与性能边界](reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
-本轮未合并、未推送；后续超时配置计划尚未实现。
+该分支已推送至 361e9fc，尚未合并；后续超时配置计划尚未实现。
 
 ## 2026-10-03：文献基础改造（原本地阶段记录）
 

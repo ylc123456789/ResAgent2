@@ -187,6 +187,90 @@ def test_materialize_binds_local_in_place(tmp_path) -> None:
     assert materialized.source == "local"
 
 
+@pytest.mark.parametrize("kind", [WorkspaceSourceKind.COPY, WorkspaceSourceKind.LOCAL])
+def test_materialize_rejects_repository_subdirectory_before_creating_workspace(tmp_path, kind):
+    source = tmp_path / "source"
+    _init_repo(source)
+    subdirectory = source / "package"
+    subdirectory.mkdir()
+    (subdirectory / "model.py").write_text("x = 1\n")
+    workspace = tmp_path / "work"
+
+    with pytest.raises(RepoMaterializerError, match="must be a Git repository root"):
+        RepoMaterializer().materialize(
+            workspace=workspace, source=_spec(kind, str(subdirectory)),
+        )
+
+    assert not workspace.exists()
+    assert not (workspace.parent / "workspace.json").exists()
+
+
+def test_copy_rejects_linked_worktree_without_touching_source_git_state(tmp_path):
+    source = tmp_path / "source"
+    commit = _init_repo(source)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(source), "worktree", "add", "-b", "linked", str(linked)],
+        check=True, capture_output=True,
+    )
+    git_pointer = (linked / ".git").read_bytes()
+    index = subprocess.run(
+        ["git", "-C", str(linked), "rev-parse", "--git-path", "index"],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
+    index_bytes = Path(index).read_bytes()
+    workspace = tmp_path / "work"
+
+    with pytest.raises(RepoMaterializerError, match="independent .git directory"):
+        RepoMaterializer().materialize(
+            workspace=workspace, source=_spec(WorkspaceSourceKind.COPY, str(linked)),
+        )
+
+    assert not workspace.exists()
+    assert not (workspace.parent / "workspace.json").exists()
+    assert (linked / ".git").read_bytes() == git_pointer
+    assert Path(index).read_bytes() == index_bytes
+    assert subprocess.run(
+        ["git", "-C", str(linked), "rev-parse", "HEAD"],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip() == commit
+    assert (linked / "tracked.txt").read_text() == "baseline\n"
+
+
+def test_local_can_bind_linked_worktree_root(tmp_path):
+    source = tmp_path / "source"
+    commit = _init_repo(source)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(source), "worktree", "add", "-b", "linked", str(linked)],
+        check=True, capture_output=True,
+    )
+
+    materialized = RepoMaterializer().materialize(
+        workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.LOCAL, str(linked)),
+    )
+
+    assert materialized.repo_path == linked.resolve()
+    assert materialized.commit == commit
+
+
+def test_copy_rejects_linked_git_metadata_directory(tmp_path):
+    source = tmp_path / "source"
+    _init_repo(source)
+    external_metadata = tmp_path / "external-git"
+    (source / ".git").rename(external_metadata)
+    (source / ".git").symlink_to(external_metadata, target_is_directory=True)
+
+    with pytest.raises(RepoMaterializerError, match="independent .git directory"):
+        RepoMaterializer().materialize(
+            workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.COPY, str(source)),
+        )
+
+    assert not (tmp_path / "work").exists()
+    assert (source / ".git").is_symlink()
+    assert external_metadata.is_dir()
+
+
 def test_materialize_generated_creates_empty_managed_workspace(tmp_path) -> None:
     materialized = RepoMaterializer().materialize(
         workspace=tmp_path / "work", source=_spec(WorkspaceSourceKind.GENERATED)

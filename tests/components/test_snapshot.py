@@ -11,6 +11,7 @@ from resagent2_components import (
     WorkspaceBoundary,
     GitBaseline,
 )
+from resagent2_components.git import GitWorkspace, GitWorkspaceError
 from resagent2_contracts import WorkspaceAccess, WorkspaceGrant, WorkspaceSourceKind
 
 
@@ -62,3 +63,79 @@ def test_git_baseline_round_trips_through_memory():
 def test_git_baseline_rejects_missing_or_non_git_snapshot(bad):
     with pytest.raises(ValueError):
         GitBaseline.from_memory(bad)
+
+
+@pytest.fixture
+def submodule_repo(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _init_repo(source)
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_repo(root)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "protocol.file.allow=always",
+         "submodule", "add", str(source), "vendor/model"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-qm", "submodule"],
+        check=True, capture_output=True,
+    )
+    return root
+
+
+@pytest.mark.parametrize("read_paths", [["."], ["vendor/model/tracked.txt"]])
+def test_snapshot_rejects_submodule_in_readable_scope(submodule_repo, read_paths):
+    grant = _grant(submodule_repo)
+    grant.access.read_paths = read_paths
+    grant.access.write_paths = read_paths
+    repository = GitWorkspace(WorkspaceBoundary(grant))
+
+    with pytest.raises(GitWorkspaceError, match="do not support submodule contents.*vendor/model"):
+        repository.snapshot()
+
+
+def test_submodule_mutation_cannot_be_reported_as_unchanged(submodule_repo):
+    repository = GitWorkspace(WorkspaceBoundary(_grant(submodule_repo)))
+    # A persisted baseline does not let later observations bypass the same check.
+    tree = subprocess.run(
+        ["git", "-C", str(submodule_repo), "rev-parse", "HEAD^{tree}"],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
+    baseline = GitBaseline(tree_hash=tree)
+    (submodule_repo / "vendor/model/tracked.txt").write_text("changed during verification\n")
+
+    with pytest.raises(GitWorkspaceError, match="do not support submodule contents"):
+        repository.changed_paths_since(baseline)
+    with pytest.raises(GitWorkspaceError, match="do not support submodule contents"):
+        repository.diff_since(baseline)
+
+
+@pytest.mark.parametrize("scope", ["denied", "unrelated"])
+def test_submodule_outside_readable_scope_does_not_block_snapshot(submodule_repo, scope):
+    grant = _grant(submodule_repo)
+    if scope == "denied":
+        grant.access.denied_paths = ["vendor/model"]
+    else:
+        grant.access.read_paths = ["tracked.txt"]
+        grant.access.write_paths = ["tracked.txt"]
+    repository = GitWorkspace(WorkspaceBoundary(grant))
+    baseline = repository.snapshot()
+    (submodule_repo / "vendor/model/tracked.txt").write_text("outside authorized snapshot\n")
+
+    assert repository.diff_since(baseline) == ""
+    (submodule_repo / "tracked.txt").write_text("visible change\n")
+    assert repository.changed_paths_since(baseline) == ["tracked.txt"]
+    assert "+visible change" in repository.diff_since(baseline)
+
+
+def test_uninitialized_submodule_remains_an_unsupported_readable_snapshot(submodule_repo):
+    subprocess.run(
+        ["git", "-C", str(submodule_repo), "submodule", "deinit", "--force", "--all"],
+        check=True, capture_output=True,
+    )
+    repository = GitWorkspace(WorkspaceBoundary(_grant(submodule_repo)))
+
+    with pytest.raises(GitWorkspaceError, match="do not support submodule contents"):
+        repository.snapshot()

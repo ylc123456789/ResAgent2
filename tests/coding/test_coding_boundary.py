@@ -13,6 +13,7 @@ ALLOWED_IMPORT_ROOTS = {
     "datetime",
     "hashlib",
     "json",
+    "shlex",
     "pathlib",
     "pydantic",
     "resagent2_capabilities",

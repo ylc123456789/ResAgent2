@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from resagent2_runtime.budget import DeadlineExceededError
 
 import hashlib
+import shlex
 from pathlib import Path
 from time import monotonic
 
@@ -47,6 +49,9 @@ class VerificationCommandPolicy:
     arbitrary project code, which remains a documented limitation.
     """
 
+    def __init__(self, *, bound_environment: bool = False) -> None:
+        self.bound_environment = bound_environment
+
     def check(self, commands: list[str]) -> CommandPermissionDecision:
         for command in commands:
             try:
@@ -58,10 +63,15 @@ class VerificationCommandPolicy:
                 return decision
         return CommandPermissionDecision(allowed=True)
 
-    @staticmethod
-    def _classify(argv: list[str]) -> CommandPermissionDecision:
+    def _classify(self, argv: list[str]) -> CommandPermissionDecision:
         executable = Path(argv[0]).name.lower()
         args = [argument.lower() for argument in argv[1:]]
+        if (self.bound_environment and executable in {"python", "python3", "pytest"}
+                and argv[0] != executable):
+            return CommandPermissionDecision(
+                allowed=False,
+                reason="Use bare python/python3 or pytest; verification uses the bound interpreter",
+            )
         if executable in _DENY_EXECUTABLES:
             return CommandPermissionDecision(
                 allowed=False,
@@ -129,7 +139,9 @@ class RunVerificationTool:
     model_guidance = (
         "Run bounded code-correctness checks in the bound environment. Supported "
         "commands include python -m pytest, unittest, py_compile or compileall; "
-        "pytest; cargo test/check; go test; and npm/pnpm/yarn test. For import or "
+        "pytest; cargo test/check; go test; and npm/pnpm/yarn test. Use bare "
+        "python/python3 or pytest: Python checks are resolved to the bound interpreter, "
+        "not a caller-selected executable path. For import or "
         "device checks, write a unittest with meaningful assertions when no suitable "
         "test exists. python -c and arbitrary scripts are not allowed verification "
         "commands. Do not wrap formal training, fitting or research evaluation in "
@@ -156,7 +168,9 @@ class RunVerificationTool:
         self.repository = repository
         self.log_root = log_root
         self.timeout_seconds = timeout_seconds
-        self.permission_policy = permission_policy or VerificationCommandPolicy()
+        self.permission_policy = permission_policy or VerificationCommandPolicy(
+            bound_environment=env_binding is not None,
+        )
         self.baseline = baseline
         self.env_binding = env_binding
         self.extra_env = dict(extra_env or {})
@@ -202,39 +216,51 @@ class RunVerificationTool:
         before_digest = _digest()
         deadline = monotonic() + self.timeout_seconds
         results: list[VerificationResult] = []
+        unrecorded_commands: list[str] = []
+        execution_error = None
         for index, command in enumerate(args.commands, start=1):
             remaining = deadline - monotonic()
             if remaining <= 0:
-                # A command that never ran must still produce a failure record,
-                # so a partial verification pass can never be mistaken for
-                # success (ADR-0011 §3).
-                results.append(
-                    VerificationResult(
-                        command=command,
-                        exit_code=1,
-                        timed_out=True,
-                        stdout_path=(
-                            f"{log_dir}/command_{index:02d}.stdout"
-                        ),
-                        stderr_path=(
-                            f"{log_dir}/command_{index:02d}.stderr"
-                        ),
-                        duration_seconds=0.0,
-                    )
-                )
-                continue
-            results.append(
-                self.runner.run(
-                    command,
+                unrecorded_commands = list(args.commands[index - 1:])
+                execution_error = "Verification batch exceeded its execution time"
+                break
+            executed_command = command
+            if self.env_binding is not None:
+                argv = parse_command(command)
+                executable = Path(argv[0]).name.lower()
+                if executable in {"python", "python3", "pytest"}:
+                    python = str(self.env_binding.current.prefix / "bin" / "python")
+                    argv = [python, *(
+                        ["-m", "pytest", *argv[1:]] if executable == "pytest" else argv[1:]
+                    )]
+                    executed_command = shlex.join(argv)
+            try:
+                result = self.runner.run(
+                    executed_command,
                     log_dir=log_dir,
                     index=index,
                     timeout_seconds=remaining,
                     argv_prefix=argv_prefix,
                     extra_env=self.extra_env,
                 )
-            )
-        after_digest = _digest()
-        workspace_unchanged = before_digest == after_digest
+            except (DeadlineExceededError, OSError) as error:
+                if not results:
+                    raise
+                # Earlier receipts remain factual. An interrupted runner does
+                # not establish whether its current command started.
+                unrecorded_commands = list(args.commands[index - 1:])
+                execution_error = f"{type(error).__name__}: {str(error)[:500]}"
+                break
+            results.append(result)
+        workspace_error = None
+        try:
+            after_digest = _digest()
+        except Exception as error:
+            # The commands already ran; optional freshness diagnostics must
+            # not erase their results or extend the shared execution deadline.
+            after_digest = None
+            workspace_error = f"{type(error).__name__}: {str(error)[:500]}"
+        workspace_unchanged = after_digest is not None and before_digest == after_digest
         payload = [result.model_dump(mode="json") for result in results]
         passed = (
             len(results) == len(args.commands)
@@ -261,12 +287,18 @@ class RunVerificationTool:
                 "passed": passed,
                 "workspace_unchanged": workspace_unchanged,
                 "results": observations,
+                "unrecorded_commands": unrecorded_commands,
+                "execution_error": execution_error,
+                "workspace_error": workspace_error,
                 **audit_updates,
             },
             memory_updates={
                 **audit_updates,
                 "verification_revision": revision,
                 "verification_results": payload,
+                "verification_unrecorded_commands": unrecorded_commands,
+                "verification_execution_error": execution_error,
+                "verification_workspace_error": workspace_error,
                 "verification_diff_sha256": after_digest,
                 "verification_workspace_unchanged": workspace_unchanged,
                 "verification_environment_generation": (

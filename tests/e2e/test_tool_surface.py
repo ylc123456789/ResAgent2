@@ -12,6 +12,7 @@ script text and updates the embedded public version. Text readers reject lossy d
 Schema 21 registers per-paper metadata/abstract sources, adds full-text acquisition,
 and treats reading records as diagnostics rather than completion gates.
 Schema 22 updates embedded contract versions and documents imported PDF reuse.
+Schema 23 only updates embedded versions for the unified artifact identity format.
 """
 
 import hashlib

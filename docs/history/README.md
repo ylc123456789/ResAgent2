@@ -2,6 +2,12 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-04：统一工件 ID（schema 23）
+
+所有登记入口统一 artifact_ 加完整 64 位 SHA256；保留 Task 槽位、导入复用、来源快照和最终报告原语义，移除超长命名特例。旧 schema22 Run 拒绝恢复，材料原样保留。
+本地全量 1686 passed / 1 skipped、mock completed / 13 工件；真实模型/L3尚未执行，分支未合并。
+详见 [ADR-0024](decisions/0024-unified-artifact-identifiers.md)和[当前 L3 交接](reviews/L3_SCHEMA23_HANDOFF_2026-10-04.md)。
+
 ## 2026-10-04：完整代码审查与开发基线
 
 对 refactor/literature-foundation@361e9fc / schema 22 完成分层代码审查、全量本地回归和临时目录边界复现。

@@ -47,6 +47,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _artifact_id(category: str, identity) -> ArtifactId:
+    """Encode each registration's stable identity in one bounded, opaque form."""
+    encoded = json.dumps(
+        [category, identity], sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")
+    return "artifact_" + hashlib.sha256(encoded).hexdigest()
+
+
 def _resolve_import_uri(uri: str) -> Path:
     """Resolve a caller-supplied import URI to a local file path."""
     parsed = urlparse(uri)
@@ -86,12 +94,8 @@ class ArtifactRegistry:
         existing_ids: set[str],
         output_dir: str | None = None,
     ) -> ArtifactRef:
-        suffix = f"{task_id.removeprefix('task_')}_{attempt_number}_{index}"
-        if len(suffix) > 128:
-            identity = f"{task_id}\0{attempt_number}\0{index}"
-            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
-            suffix = f"{suffix[:95]}_{digest}"
-        artifact_id = TypeAdapter(ArtifactId).validate_python(f"artifact_{suffix}")
+        task_id = TypeAdapter(TaskId).validate_python(task_id)
+        artifact_id = _artifact_id("task", [task_id, attempt_number, index])
         if artifact_id in existing_ids:
             raise ArtifactRegistrationError(f"artifact id already exists: {artifact_id}")
 
@@ -195,10 +199,7 @@ class ArtifactRegistry:
                 f"expected {spec.expected_sha256}, got {digest}"
             )
         import_metadata = {**spec.metadata, "source_type": "import"}
-        identity = hashlib.sha256(
-            f"{digest}:{spec.kind}:{json.dumps(import_metadata, sort_keys=True, ensure_ascii=False)}".encode()
-        ).hexdigest()
-        artifact_id = f"artifact_import_{identity[:24]}"
+        artifact_id = _artifact_id("import", [digest, spec.kind, import_metadata])
         destination_dir = self.root / run_id / artifact_id
         if destination_dir.exists():
             # Identity excludes caller filenames. Reuse the original frozen file
@@ -267,10 +268,7 @@ class ArtifactRegistry:
         # Provenance is part of identity too: identical PDF bytes attached to
         # another source must not silently replace an existing Ref's metadata.
         description = candidate.model_dump(mode="json", exclude={"content"})
-        identity = hashlib.sha256(
-            f"{session_id}:{digest}:{json.dumps(description, sort_keys=True)}".encode()
-        ).hexdigest()
-        artifact_id = f"artifact_sci_{identity[:24]}"
+        artifact_id = _artifact_id("scientific", [session_id, digest, description])
 
         destination_dir = self.root / run_id / artifact_id
         destination = destination_dir / Path(candidate.path).name
@@ -332,11 +330,8 @@ class ArtifactRegistry:
         )
         encoded = text.encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
-        scope = "|".join(
-            str(item) for item in (run_id, session_id or "", task_id or "", attempt_number or "")
-        )
-        scope_digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:8]
-        artifact_id = f"artifact_system_{candidate.kind}_{digest[:12]}_{scope_digest}"
+        scope = [run_id, session_id, task_id, attempt_number]
+        artifact_id = _artifact_id("system", [candidate.kind, scope, digest])
         destination_dir = self.root / run_id / artifact_id
         destination = destination_dir / Path(candidate.path).name
         if destination.exists():
@@ -394,7 +389,7 @@ class ArtifactRegistry:
         ):
             raise ArtifactRegistrationError("invalid final report candidate")
 
-        artifact_id = "artifact_final_report"
+        artifact_id = _artifact_id("final", [run_id])
         destination_dir = self.root / run_id / artifact_id
         destination = destination_dir / candidate.path
         encoded = content.encode("utf-8")

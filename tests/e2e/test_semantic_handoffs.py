@@ -38,7 +38,6 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
 
     answer = "The inspected constant is 42; ANALYSIS_HANDOFF_SENTINEL."
     uncertainty = "STATIC_ONLY_SENTINEL: runtime behavior was not tested."
-    report_id = "artifact_inspect_1_1"
     read_file = {"tool": "read_file", "arguments": {"path": "util.py"}}
 
     def finish(text):
@@ -55,10 +54,6 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
 
     clients = {
         "task_inspect": ScriptedLLMClient([read_file, finish(answer)]),
-        "task_followup": ScriptedLLMClient([
-            {"tool": "read_artifact", "arguments": {"artifact_id": report_id}},
-            read_file, finish("Follow-up inspected the shared analysis and source."),
-        ]),
         "task_independent": ScriptedLLMClient([read_file, finish("Independent inspection.")]),
     }
     requests = {}
@@ -68,6 +63,12 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     class CodingPort:
         def invoke(self, request):
             requests[request.task_id] = request
+            if request.task_id == "task_followup":
+                report = next(ref for ref in request.input_artifacts if ref.output_name == "analysis")
+                clients[request.task_id] = ScriptedLLMClient([
+                    {"tool": "read_artifact", "arguments": {"artifact_id": report.id}},
+                    read_file, finish("Follow-up inspected the shared analysis and source."),
+                ])
             return NativeCodingAgent(
                 clients[request.task_id], store=sessions, resource_layout=layout,
             ).invoke(request)
@@ -93,20 +94,39 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
                 ]],
             ))
 
-    scientific_client = ScriptedLLMClient([
-        {"tool": "request_work", "arguments": {
-            "assessment": {"statement": "Need code inspection, not a measured experiment"},
-            "work_request": {
-                "objective": "Inspect the code and provide the analysis to a follow-up",
-                "expected_evidence": ["Code analysis with its uncertainty"],
-            },
-        }},
-        {"tool": "read_artifact", "arguments": {"artifact_id": report_id}},
-        {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({
-                "verdict": "not_applicable", "statement": answer,
-                "limitations": [uncertainty], "evidence_artifact_ids": [report_id],
-            })}]}},
-    ])
+    class ScientificClient:
+        def __init__(self):
+            self.contexts = []
+
+        def next_action(self, context, action_type):
+            self.contexts.append(context)
+            if len(self.contexts) == 1:
+                return {"tool": "request_work", "arguments": {
+                    "assessment": {"statement": "Need code inspection, not a measured experiment"},
+                    "work_request": {
+                        "objective": "Inspect the code and provide the analysis to a follow-up",
+                        "expected_evidence": ["Code analysis with its uncertainty"],
+                    },
+                }}
+            current = scheduler.store.load("run_handoffs")
+            report_id = next(
+                ref.id for ref in current.artifacts.values()
+                if ref.task_id == "task_inspect" and ref.output_name == "analysis"
+            )
+            if len(self.contexts) == 2:
+                return {"tool": "read_artifact", "arguments": {"artifact_id": report_id}}
+            return {"tool": "finish", "arguments": {
+                "report": "Scientific conclusion", "artifacts": [{
+                    "kind": "scientific_opinion", "path": "opinion.json",
+                    "media_type": "application/json", "summary": "Scientific conclusion",
+                    "content": json.dumps({
+                        "verdict": "not_applicable", "statement": answer,
+                        "limitations": [uncertainty], "evidence_artifact_ids": [report_id],
+                    }),
+                }],
+            }}
+
+    scientific_client = ScientificClient()
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=CodingPort())}, store=JsonRunStore(tmp_path / 'runs'), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
@@ -123,6 +143,10 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     run = controller.create_run('run_handoffs', ResearchRequest(goal='Explain the code, with the analysis available to subsequent work', budget=RunBudget(max_llm_calls=30, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=1)))
 
     assert run.status == RunStatus.COMPLETED, run.model_dump(mode="json")
+    report_id = next(
+        ref.id for ref in run.artifacts.values()
+        if ref.task_id == "task_inspect" and ref.output_name == "analysis"
+    )
     assert all(task.status == "completed" for task in run.workflow.tasks)
     assert not any(a.kind == "module_report" for a in requests["task_inspect"].input_artifacts)
     assert not any(a.kind == "module_report" for a in requests["task_independent"].input_artifacts)

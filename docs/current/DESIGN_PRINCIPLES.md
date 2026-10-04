@@ -179,3 +179,5 @@ Capabilities 是模型工具入口，Components 是普通操作与共享呈现�
 
 - [ADR-0021：共享 Linux Shell 与逐次批准](../history/decisions/0021-shared-approved-linux-shell.md)：Components 提供全系统执行部件，Capabilities 提供 LLM 工具；复用原审批、环境和执行事实记录。
 - [ADR-0022：论文粒度资料与访问事实记录](../history/decisions/0022-paper-materials-and-access-records.md)：按论文登记元信息，按需获取全文；访问历史用于追溯，不代替 Scientific 的判断或形成控制门槛。
+
+- [ADR-0024](../history/decisions/0024-unified-artifact-identifiers.md)：登记工件统一稳定 hash ID，来源关系保存在已有字段，不从编号解析；旧 Run 按版本边界保留。

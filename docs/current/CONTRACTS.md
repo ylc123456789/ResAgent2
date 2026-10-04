@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 22.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 23.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -147,7 +147,19 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 
 ## 3. 工件、来源与可信边界
 
-ArtifactCandidate 含 `kind`、相对 `path`、`media_type`、`summary`、可选 `output_name`、`metadata` 和 UTF-8 `content`。有 content 时 path 是存储文件名；无 content 时须在授权工作区或本次 output_dir 解析唯一实际文件，同一路径在两个根目录都存在时拒绝。绝对路径、`..` 和越界软链拒绝。Registry 在写入前验证最终 ArtifactId；常规任务保持既有命名，可能超长的 Task/Attempt/Index 身份用有界前缀与完整身份 hash 生成 ID。随后冻结内容、计算 sha256 并记录来源后生成 ArtifactRef。用于路径验收的 source_path 由实际源文件解析，忽略候选 metadata 中的自报值。
+ArtifactCandidate 含 `kind`、相对 `path`、`media_type`、`summary`、可选 `output_name`、`metadata` 和 UTF-8 `content`。有 content 时 path 是存储文件名；无 content 时须在授权工作区或本次 output_dir 解析唯一实际文件，同一路径在两个根目录都存在时拒绝。绝对路径、`..` 和越界软链拒绝。任务工件的 TaskId 在写入前校验；所有登记入口通过同一个函数生成 artifact_ 加完整 64 位 SHA256 的 ID。随后冻结内容、计算文件 sha256 并记录来源后生成 ArtifactRef。用于路径验收的 source_path 由实际源文件解析，忽略候选 metadata 中的自报值。
+
+登记的工件 ID 统一为 `artifact_<64位小写十六进制SHA256>`，只要求在同一 Run 内唯一、稳定。生成函数对规范 JSON `[登记类别, 稳定身份]` 计算 hash；类别仅参与内部计算，不出现在 ID 外观中。Task/Attempt/来源关系由已有 Ref 字段保存，文件名和 output_name 不由 ID 推断。
+
+| 登记入口 | 沿用的稳定身份 |
+|---|---|
+| Task 产物 | task_id、attempt_number、产物序号 |
+| 导入材料 | 文件内容 hash、kind、来源 metadata；不含调用者文件名 |
+| Scientific 材料 | session_id、内容 hash、候选描述 |
+| 系统材料 | kind、Run/Session/Task/Attempt 作用域、内容 hash |
+| 最终报告 | 同 Run 的固定最终报告槽位 |
+
+统一编码不改变原有复用语义：Task/最终报告槽位中的内容变化仍拒绝覆盖；导入改名复用原件；材料快照保留内容与来源差异。存储绝对路径不参与身份计算。ID 中的 hash 编码登记身份，Ref.sha256 校验文件字节，两者用途不同。决定与恢复边界见 [ADR-0024](../history/decisions/0024-unified-artifact-identifiers.md)。
 
 ArtifactRef 含 id、kind、producer、run_id、Task/Attempt 或 Session 归属、uri、sha256、media_type、summary、可选 output_name 和 metadata。Ref 不是自证：返回已有 Ref 时必须与可信登记记录完全一致，hash 正确且属于当前 Attempt 或 Scientific Session。输入材料及其他调用的产物不能冒充本次新输出。
 
@@ -528,7 +540,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 22.0；本版补充外部论文导入，沿用按篇材料、全文来源和访问日志边界。旧 schema 21 及更早的 Run/Session 不支持恢复，原记录保留不迁移。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 23.0；本版统一登记工件的 ID 格式，保留外部论文导入、按篇材料、全文来源和访问日志边界。旧 schema 22 及更早的 Run 不支持恢复，原记录保留不迁移。编号生成算法变化可能影响重复登记与中断恢复，因此使用现有不兼容版本隔离，不新增旧 ID 生成分支。Session 的独立解析边界见下文。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
 schema 19 已用 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。不保留旧反馈格式的兼容读取分支。
 

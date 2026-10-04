@@ -37,7 +37,7 @@ ResAgent2 的顶层控制模块。
 
 Scientific、Coding、Experiment 都以 `invoke(AgentRequest) -> AgentResult` 注入 ModulePort；orchestrator 不 import 具体 Agent。三个模块各有一种业务模式，返回 report 和 artifacts，控制动作只引用结果工件。JSON Store 适合本地单进程恢复，不宣称支持并发写入或分布式事务。
 
-Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 22.0，旧 Run 保留但不迁移或恢复。
+Port 与原生 finalizer 属于可信进程内实现；LLM 不能自行提交执行、验证或观察记录。Controller/Scheduler 验证公开结果、身份、hash、归属及工件内容，不通过读取下游私有 Session 取证。当前 schema 为 23.0，旧 Run 保留但不迁移或恢复。
 
 Controller 创建 Run 时将 `ResearchRequest.required_artifacts` 冻结到 `conclusion_requirements`。最终缺失诊断为 `required_artifact_missing`，message 为 `required artifact was not produced`，subject 为要求的名称；不能完成 Run，保留已有证据。此要求不额外要求观察或引用，原有 `required_evidence_kinds` 单独检查。
 
@@ -61,3 +61,5 @@ run = controller.create_run("run_demo", request)  # 唯一 production 入口
 ```
 
 `ResearchController.create_run` 是唯一 production 入口：调用 Scientific Agent，接收 WorkRequest，由 WorkflowCompiler 产生 Proposal/Patch，再由 Scheduler 执行 Coding/Experiment 图。Scheduler 自身只执行确定性的 ready Task（`run_until_stable`），不再提供 `create_run`，也不决定 Run 完成（ADR-0011 §1）。
+
+工件登记统一生成 `artifact_<64位SHA256>`，在同一 Run 内唯一、稳定；任务槽位、导入去重、材料快照及最终报告的身份规则保持原职责。由同一个私有函数编码已有身份，不新增编号服务；ID 不依赖磁盘绝对路径。schema 23 拒绝恢复旧 Run，原记录保留。详见 [ID 契约](../../docs/current/CONTRACTS.md#artifacts)。

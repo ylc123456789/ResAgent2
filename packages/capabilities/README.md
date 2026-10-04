@@ -32,7 +32,7 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 通用材料读取与作用域校验在 Components；Scientific 的 WorkFeedback 事实框和报告呈现在 `agents/scientific/context.py`。选择与预算仍由 Runtime 统一管理，详见 [CONTEXT](../../docs/current/CONTEXT.md#budgets)，这里不再维护另一份额度表。
 
-测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 22.0，旧权限和确认字段不保留兼容解释。
+测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 23.0，旧权限和确认字段不保留兼容解释。
 
 `run_shell` 是 Coding/Experiment 共用的 Linux Bash 工具，取代 Experiment 的 `run_command`。
 执行能力与日志/超时在 Components，Tool 负责模型参数和回执；不新增运行循环。

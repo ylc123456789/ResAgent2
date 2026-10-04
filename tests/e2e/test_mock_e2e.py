@@ -12,5 +12,5 @@ def test_mock_e2e_runs_the_golden_loop_to_completion(tmp_path) -> None:
         WorkflowAgentKind.EXPERIMENT,
     ]
     assert run.final_opinion is not None
-    assert run.final_report_artifact_id == "artifact_final_report"
+    assert run.artifacts[run.final_report_artifact_id].kind == "final_report"
     assert all(task.attempts for task in run.workflow.tasks)

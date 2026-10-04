@@ -1,20 +1,18 @@
-# schema 22 自然科研 L3 测试交接（2026-10-04）
-
-本页保留 schema22 修复阶段的历史交接。后续统一编号已升级到 schema23；新一轮测试使用 [schema23 交接](L3_SCHEMA23_HANDOFF_2026-10-04.md)，不要混用版本。
+# schema 23 自然科研 L3 测试交接（2026-10-04）
 
 请先读现行[置信度校准 L3 规程](../../guides/L3_RESEARCH_TEST.md)。
 本文件是本轮差异与启动检查，不代替完整规程，也不要交给 Scientific 当科研输入。
 
 ## 先确认本次测试的产品版本
 
-审查基线是 `361e9fc180acaa1146d69911f038440268f6831d`，已经由后续修复取代。[代码审查](CODE_REVIEW_BASELINE_2026-10-04.md)文末记录七组问题的修复与回归；schema 仍为 22.0，分支仍是 `refactor/literature-foundation`，尚未合并。
+本轮 `refactor/literature-foundation` 已修复审查确认的七组问题，并统一所有登记入口为 artifact_ 加完整 SHA256。公共 schema 为 23.0；分支未合并。[审查与修复](CODE_REVIEW_BASELINE_2026-10-04.md)保留原阶段事实，[ADR-0024](../decisions/0024-unified-artifact-identifiers.md)记录编号决定及本轮验证。
 
-本轮修复与文档一起提交。测试前同步该分支，核对用户交接的最终提交 SHA，再把确切 SHA 写进 protocol/MANIFEST；不要继续用旧的 361e9fc 作为修复验收版本。测试 AI 不擅自修改产品、prompt、测试断言或预算。正式 Run 一旦启动，不中途切换 SHA。
+同步本轮最终交接 SHA，核对 HEAD 后把它写进 protocol/MANIFEST；不要使用旧 361e9fc 或 0997b51 作为本轮验收版本。旧 schema22 Run 不支持用新版本恢复，旧材料保留，新测试使用新 Run。测试 AI 不擅自修改产品、prompt、测试断言或预算；正式 Run 启动后不切换版本。
 
 服务器使用已有授权目标：`ssh -p 26089 root@connect.cqa1.seetacloud.com`。
 私钥通过现有安全配置使用，不写到仓库、测试报告或日志。
 产品仓库统一为 `/root/autodl-tmp/projects/ResAgent2`。
-每轮新 Run、新证据目录，例如 `/root/autodl-tmp/resagent2/runs/l3-schema22-20261004/`，不要覆盖历史材料。
+每轮新 Run、新证据目录，例如 `/root/autodl-tmp/resagent2/runs/l3-schema23-20261004/`，不要覆盖历史材料。
 
 ## 预检
 
@@ -30,7 +28,7 @@ python -m pytest tests apps/cli/tests -q
 python -m e2e.mock_e2e
 ~~~
 
-修复后的 WSL 全量基线为 **1675 passed / 1 skipped**，mock **completed / 13 工件**（原审查为 1641 passed）。服务器必须独立执行并保存实际日志，不能复制本地数字；出现数量差异先核对版本、测试收集和安装指针。
+统一编号后的 WSL 全量基线为 **1686 passed / 1 skipped**，mock **completed / 13 工件**（原审查为 1641 passed）。服务器必须独立执行并保存实际日志，不能复制本地数字；出现数量差异先核对版本、测试收集和安装指针。
 
 WSL 本地有额外 pdfminer-six 缺 cryptography，且 editable 安装元数据未刷新；服务器独立核对当前安装，不照搬本地环境。
 同步产品后，若依赖声明发生变化，按 environment.yml 同步项目环境，不能只保证 import 指针却跳过安装元数据/依赖检查。
@@ -54,6 +52,8 @@ arXiv/OpenAlex 分开预检和记录；一个来源可用即可继续。两源�
 本轮新增确定性回归验证重复导入的 URI/旧证据保留、长 TaskId 登记、绑定解释器、后置诊断与部分批次回执保留、工作输入 ID 同 Session 纠错，以及 Git 来源/submodule 边界。
 不需要向自然 L3 故意注入这些错误来刷覆盖；服务器先跑全量回归即可复验它们。
 常规 L3 使用普通 Git 仓库根；COPY linked worktree 和可读范围内 submodule 当前明确不支持。
+
+全量回归已覆盖统一格式、重建 Registry 后稳定引用、改名导入、来源区分、最长 TaskId 和旧版本拒绝。L3 对实际发生的工件核对统一格式、登记表/索引/引用一致；按 kind、summary、归属和来源字段识别材料，不按 hash 猜含义，不要求重新制造编号边界错误。
 
 L3 重点仍是自然科研的职责分配、真实 GPU、环境决策、材料依据、预算、交付与独立复算。
 PDF 解析 120 秒、在线来源可用性、工作区大文件读取限制及无 OS 沙箱没有在本轮改变；它们是已记录边界，不冒充已修或已由新 L3 验证。

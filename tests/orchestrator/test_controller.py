@@ -317,8 +317,9 @@ def test_direct_conclusion_without_work() -> None:
     assert run.status == RunStatus.COMPLETED, run.terminal_error
     assert run.final_opinion is not None
     assert run.work_requests == []
-    assert run.final_report_artifact_id == "artifact_final_report"
+    assert run.final_report_artifact_id in run.artifacts
     report = run.artifacts[run.final_report_artifact_id]
+    assert report.kind == "final_report"
     assert report.producer == AgentOwner.ORCHESTRATOR
     assert report.metadata == {"source_type": "final_report"}
 

@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import re
 import subprocess
 from collections import Counter
 
@@ -242,6 +243,11 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert cli(["answer", run_id, "--field", "metric=accuracy", "--data-root", str(data)]) == EXIT_COMPLETED
     final = store.load(run_id)
     assert final.status == "completed", final.terminal_error
+    # Every registry-generated source uses one opaque ID form across layers;
+    # navigation, citations and attempt records must resolve under those IDs.
+    assert all(re.fullmatch(r"artifact_[0-9a-f]{64}", ref.id)
+               for ref in final.artifacts.values())
+    assert all(ref.id == artifact_id for artifact_id, ref in final.artifacts.items())
     assert final.pending_question is None
     assert final.scientific_session.id == scientific_session
     assert final.workflow.tasks[1].attempts[0].session.id == experiment_session

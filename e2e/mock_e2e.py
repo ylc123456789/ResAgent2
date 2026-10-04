@@ -48,11 +48,11 @@ def request_work_action():
             "work_request": {"objective": "Produce evidence for the method", "expected_evidence": ["accuracy"]}}}
 
 
-def finish_action():
+def finish_action(artifact_id):
     return {"tool": "finish", "arguments": {"report": "done", "artifacts": [{
         "kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json",
         "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "done",
-        "evidence_artifact_ids": ["artifact_experiment_1_1"], "limitations": ["Deterministic fixture only"]}),
+        "evidence_artifact_ids": [artifact_id], "limitations": ["Deterministic fixture only"]}),
     }]}}
 
 
@@ -62,10 +62,20 @@ def run_mock_e2e(*, workdir: Path | None = None):
         bindings={kind: ModuleBinding(owner=AgentOwner(kind.value), port=ScriptedModulePort([completed_result(kind)])) for kind in WorkflowAgentKind},
         store=JsonRunStore(workdir / "state"), artifact_root=workdir / "artifacts", data_root=workdir,
     )
-    scientific = ScientificAgent(ScriptedLLMClient([
-        request_work_action(),
-        {"tool": "read_artifact", "arguments": {"artifact_id": "artifact_experiment_1_1"}},
-        finish_action(),
+    class GoldenClient(ScriptedLLMClient):
+        def next_action(self, context, action_type):
+            action = super().next_action(context, action_type)
+            if action["tool"] == "request_work":
+                return action
+            run = scheduler.store.load(RUN_ID)
+            evidence = next(ref for ref in run.artifacts.values() if ref.kind == "metrics")
+            assert evidence.id in context.text
+            if action["tool"] == "read_artifact":
+                return {"tool": "read_artifact", "arguments": {"artifact_id": evidence.id}}
+            return finish_action(evidence.id)
+
+    scientific = ScientificAgent(GoldenClient([
+        request_work_action(), {"tool": "read_artifact"}, {"tool": "finish"},
     ]), store=InMemorySessionStore())
     controller = ResearchController(interpreter=DeterministicWorkInterpreter(), scientific_port=scientific, compiler=DeterministicWorkflowCompiler(proposal()),
                                     scheduler=scheduler, registry=registry())

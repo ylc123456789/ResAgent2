@@ -49,7 +49,7 @@ git diff --check
 - A/B/D三个Run均completed/supports，LLM调用5/11/3共19次，逐call_id:retry与trace对账一致；本轮不是GPU训练或科研L3。
 - 三Run登记工件20/43/8，共71项冻结SHA256全部一致。public清单实际120项、private4项，全部hash匹配；服务器报告仍写119public，属于统计陈旧。另有check_editable.py未列入清单，不影响产品工件。
 - A三次检索实际0+5+5，共10篇论文；141/759是来源报告的总命中数。读两份同源论文的完整摘要并区分书目一致和独立科学证据，未读取全文。
-- B四次搜索生成27篇论文，7次全文获取中4次成功、3次下载超时；成功正文以实际读取片段为限，不能写成27篇全读或4篇正文全部读完。另一个OpenAlex版本同文献的下载失败被重试一次，之后使用可用来源，失败记录保留。
+- B四次搜索生成27篇论文，7次全文获取中4次成功、3次下载超时；成功正文以实际读取片段为限，不能写成27篇全读或4篇正文全部读完。Ovadia等1906.02530v2的PDF下载超时两次（含一次重试），2210.16315v3下载超时一次；随后使用其他可用论文，失败记录保留。
 - D没有literature_search或request_work，只读取导入论文和目录，在摘要层面交付。
 - OpenAlex独立分页探针原回执为第1/2页各5篇、来源/条件固定、下一页2/3，10篇冻结hash一致且页间不重叠。另一探针在auto切到OpenAlex后人为指定arxiv页2，因冷却失败；它没有执行返回的OpenAlex next_request，不能据此否定分页链。
 - 原始Session还显示A的首次opinion含不支持字段，B/D首次verdict分别为supported / supported_at_abstract_level，均收到completion_check后在原Session纠正。这些恢复及B的3次下载超时未写入初版服务器报告，应补录；最终completed不等于全程没有失败。

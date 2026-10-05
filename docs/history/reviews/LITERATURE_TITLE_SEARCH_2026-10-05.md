@@ -63,7 +63,7 @@ WSL Ubuntu-D /home/cyl/ResAgent2：全量1765 passed / 1 skipped（56.23秒）�
 
 若要判断搜索增量整体是否优于main，再对main64de57f与候选做相同用户目标的成对测试：固定上述目标及一个分布漂移校准目标，使用相同模型、预算、认证、材料和可达来源；记录日期及服务差异。main没有source/scope/page参数，因此比较用户交付目标，不强行要求它调用不存在的参数。人工评价目标论文、相关材料、关键文献覆盖、误召回、证据支持和失败恢复；工具调用数、总命中数和completed只能作为辅助事实。已知论文不能丢失，主题任务不能明显退化，改善须有实际材料依据。
 
-交接时，候选提示词尚未在真实模型上复测；以下后续验收现已完成两个真实目标。相对main的完整Agent质量对照仍未执行，此前1faab0f的真实通过不冒充本次候选通过。
+交接时，候选提示词尚未在真实模型上复测；以下后续验收现已完成两个真实目标。当时相对main的完整Agent质量对照尚未执行；后续对照现已完成，见[交付对照](LITERATURE_MAIN_COMPARISON_2026-10-05.md)。此前1faab0f的真实通过不冒充本次候选通过。
 
 
 ## 5ff44f1服务器验收与独立复核（2026-10-05）
@@ -83,6 +83,6 @@ WSL Ubuntu-D /home/cyl/ResAgent2：全量1765 passed / 1 skipped（56.23秒）�
 
 ### 本轮结论与后续
 
-标题修复的真实API效果与真实Scientific工具调用均通过，本轮未发现需要继续修改生产代码的问题。功能验收可收尾；该结果支持准备合并搜索分支，整体主题质量相对main的对照保留为独立评估，不把它写成已证明的提升。目前只同步验收文档并推送，搜索分支尚未合入main。
+标题入口的真实API效果与真实Scientific工具调用通过。仅凭本节功能通过不足以判断是否采用整个搜索分支；后续已完成[相对main的交付对照](LITERATURE_MAIN_COMPARISON_2026-10-05.md)，记录可验证收益、混合排序与科学表述局限，并据此建议采用。目前只同步验收文档并推送，搜索分支尚未合入main。
 
 证据根：/root/autodl-tmp/resagent2/runs/lit-title-5ff44f1-20261005/，原报告protocol/LITERATURE_TITLE_SEARCH_acceptance_report.md，原始状态/Session在a-title-locate/和b-topic-task/，trace在traces/llm_traces.jsonl。报告、回归日志、API排名脚本/输出和清单的WSL副本位于/home/cyl/ResAgent2/.resagent2/audits/lit-title-5ff44f1-20261005/。私有trace和Session没有加入Git或复制到公共文档。

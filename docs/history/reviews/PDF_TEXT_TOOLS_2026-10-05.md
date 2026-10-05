@@ -55,6 +55,12 @@ git diff --check
 
 ## 2026-10-05：测试方补测汇报
 
-测试方随后报告 `e03a151` 的服务器全量1727 passed / 1 skipped、mock13工件、pip check干净，PDF与文本两场景通过。Guo论文14页实测139.6秒，超过旧120秒且在新300秒内，Scientific范围读取1–620行；约2.6 MiB单行JSON字符分页、128000返回限制、Unicode/CRLF替换、超过10 MiB/非文本搜索跳过均通过。
+测试方随后报告 `e03a151` 的服务器全量1727 passed / 1 skipped、mock13工件、pip check干净，PDF与文本两场景通过。测试方报告Guo论文14页实测139.6秒，超过旧120秒且在新300秒内，Scientific范围读取1–620行；约2.6 MiB单行JSON字符分页、128000返回限制、Unicode/CRLF替换、超过10 MiB/非文本搜索跳过均通过。
 
-证据根 `/root/autodl-tmp/resagent2/runs/pdf-text-tools-20261005/`，报告 `protocol/PDF_TEXT_TOOLS_acceptance_report.md`，MANIFEST为66 public + 5 private。本段记录用户提供的测试结论，本轮开发未另外SSH复核；不改写上面的原本地状态，也不据此证明联网搜索效果。服务失败/非法配置/短截止/进程清理未在该真实模型场景触发，仍由确定性测试覆盖。
+证据根 `/root/autodl-tmp/resagent2/runs/pdf-text-tools-20261005/`，报告 `protocol/PDF_TEXT_TOOLS_acceptance_report.md`，MANIFEST为66 public + 5 private。本段记录当时用户提供的测试结论，当时开发尚未另外SSH复核；后续独立核对见下一节；不改写上面的原本地状态，也不据此证明联网搜索效果。服务失败/非法配置/短截止/进程清理未在该真实模型场景触发，仍由确定性测试覆盖。
+
+## 后续验收与基础合并（2026-10-05）
+
+上述“未执行”是实施时的状态。测试方随后在e03a151完成服务器回归和真实PDF/文本场景，主开发只读独立核对1727 passed / 1 skipped、mock13、pip/diff clean、public66/private5清单及39个工件hash、14页提取与范围阅读、文本7项，确认通过。
+
+测试方报告parse耗时139.6秒；未保存该计时脚本stdout，不能写成主开发独立复算的耗时。详见[基础合并收尾](LITERATURE_BASELINE_ACCEPTANCE_2026-10-05.md)。当前300秒配置已实现并完成上述补测，原120秒失败和原阶段记录保留。

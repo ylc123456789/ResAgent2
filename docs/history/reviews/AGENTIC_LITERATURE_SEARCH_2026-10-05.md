@@ -41,3 +41,30 @@ git diff --check
 冻结报告、Run状态、论文/回执/PDF/全文、trace和独立 hash 复算。报告区分元信息、摘要预览、完整摘要与实际已读正文，不因下载/访问日志就声称读完整篇。
 
 上述是功能和行动选择验收，不证明达到商业搜索平台的检索质量。若要比较改动前后效果，应固定目标集合、模型、预算及服务条件，对照相关性、关键论文覆盖、查询数量、故障恢复和实际交付；一次 Run 的调用减少不能单独归因于提示词改进。外部来源可用性和索引覆盖仍是限制。
+
+## 服务器验收与独立复核（2026-10-05）
+
+产品实测提交1faab0f97e2885e9203cf51420b6198265dbc9e9。测试方报告服务器1751 passed / 1 skipped、mock completed / 13工件、pip check干净，已知论文定位、目标驱动主题检索、错误/空结果及材料足够四场景通过。只读独立复核原始state、Session、trace和清单，确认：
+
+- A/B/D三个Run均completed/supports，LLM调用5/11/3共19次，逐call_id:retry与trace对账一致；本轮不是GPU训练或科研L3。
+- 三Run登记工件20/43/8，共71项冻结SHA256全部一致。public清单实际120项、private4项，全部hash匹配；服务器报告仍写119public，属于统计陈旧。另有check_editable.py未列入清单，不影响产品工件。
+- A三次检索实际0+5+5，共10篇论文；141/759是来源报告的总命中数。读两份同源论文的完整摘要并区分书目一致和独立科学证据，未读取全文。
+- B四次搜索生成27篇论文，7次全文获取中4次成功、3次下载超时；成功正文以实际读取片段为限，不能写成27篇全读或4篇正文全部读完。另一个OpenAlex版本同文献的下载失败被重试一次，之后使用可用来源，失败记录保留。
+- D没有literature_search或request_work，只读取导入论文和目录，在摘要层面交付。
+- OpenAlex独立分页探针原回执为第1/2页各5篇、来源/条件固定、下一页2/3，10篇冻结hash一致且页间不重叠。另一探针在auto切到OpenAlex后人为指定arxiv页2，因冷却失败；它没有执行返回的OpenAlex next_request，不能据此否定分页链。
+- 原始Session还显示A的首次opinion含不支持字段，B/D首次verdict分别为supported / supported_at_abstract_level，均收到completion_check后在原Session纠正。这些恢复及B的3次下载超时未写入初版服务器报告，应补录；最终completed不等于全程没有失败。
+
+证据根：/root/autodl-tmp/resagent2/runs/lit-search-20261005/；服务器报告为protocol/AGENTIC_LITERATURE_SEARCH_acceptance_report.md。以上复核不修改服务器记录或重跑真实模型。
+
+### 标题查询的召回问题
+
+A首次裸标题query=On Calibration of Modern Neural Networks、scope=title被翻译为每个词分别ti字段并AND，包括On/of，得到total_results=0。模型改用topic后恢复，证明行动反馈链有效，但“title不保证唯一精确匹配”不能解释成完整标题零召回没有问题。
+
+独立在同一服务器对同一标题做3次有间隔、无重试的公开arXiv API请求：
+- 原逐词title AND：0条。
+- 整个标题的双引号短语：2条，包含1706.04599v2目标论文。
+- 去掉On/of的标题词AND：4条，包含目标论文。
+
+本次对照证明查询表述影响召回；未单独隔离每个停用词或确认提供方内部分析器实现。短语查询也返回相似标题，不能保证唯一或严格等值。
+
+后续建议在title定位中让完整标题作为一个短语，topic仍保留关键词检索；不要新增停用词词表、自动查询扩写或多源批量扫描。需要对这个行为取舍做小范围修改和几篇已知标题的定向复测，不需要重跑训练L3。本次只同步验收事实和发现，不修改产品查询逻辑；现有机制通过与此召回质量问题分别记录。

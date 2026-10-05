@@ -4,7 +4,7 @@
 
 ## 2026-10-05：目标驱动的文献检索
 
-在同一分支完善 literature_search 的小批结果、范围、来源、分页和错误反馈，保留完整来源摘要；Scientific 按用户目标与材料缺口选择行动，不规定检索阶段或论文配额。schema仍为23.0；本地1751 passed / 1 skipped、mock completed / 13工件。本地验证与服务器测试步骤见[实施及交接](reviews/AGENTIC_LITERATURE_SEARCH_2026-10-05.md)，真实检索/模型补测待执行；不把此前离线PDF和文本工具通过当成联网检索质量证明。
+在同一分支完善 literature_search 的小批结果、范围、来源、分页和错误反馈，保留完整来源摘要；Scientific 按用户目标与材料缺口选择行动，不规定检索阶段或论文配额。schema仍为23.0；本地1751 passed / 1 skipped、mock completed / 13工件。本地验证与服务器测试步骤见[实施及交接](reviews/AGENTIC_LITERATURE_SEARCH_2026-10-05.md)，服务器1faab0f的真实小测与分页探针已完成，工件/调用对账通过；独立复核发现title逐词AND对完整标题的召回问题及服务器报告遗漏的恢复过程，见同一记录的验收章节。不把功能通过等同商业搜索质量。
 
 ## 2026-10-05：PDF 超时与工作区文本工具
 

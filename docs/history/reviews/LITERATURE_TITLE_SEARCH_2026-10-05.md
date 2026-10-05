@@ -83,6 +83,6 @@ WSL Ubuntu-D /home/cyl/ResAgent2：全量1765 passed / 1 skipped（56.23秒）�
 
 ### 本轮结论与后续
 
-标题入口的真实API效果与真实Scientific工具调用通过。仅凭本节功能通过不足以判断是否采用整个搜索分支；后续已完成[相对main的交付对照](LITERATURE_MAIN_COMPARISON_2026-10-05.md)，记录可验证收益、混合排序与科学表述局限，并据此建议采用。目前只同步验收文档并推送，搜索分支尚未合入main。
+标题入口的真实API效果与真实Scientific工具调用通过。仅凭本节功能通过不足以判断是否采用整个搜索分支；后续已完成[相对main的交付对照](LITERATURE_MAIN_COMPARISON_2026-10-05.md)，记录可验证收益、混合排序与科学表述局限，并据此建议采用。评估阶段仅推送；用户确认后搜索分支已以ac240e3合入main，合并检查见同一对照记录的收尾章节。
 
 证据根：/root/autodl-tmp/resagent2/runs/lit-title-5ff44f1-20261005/，原报告protocol/LITERATURE_TITLE_SEARCH_acceptance_report.md，原始状态/Session在a-title-locate/和b-topic-task/，trace在traces/llm_traces.jsonl。报告、回归日志、API排名脚本/输出和清单的WSL副本位于/home/cyl/ResAgent2/.resagent2/audits/lit-title-5ff44f1-20261005/。私有trace和Session没有加入Git或复制到公共文档。

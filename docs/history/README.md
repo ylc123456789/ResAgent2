@@ -2,13 +2,17 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-05：文献搜索合并收尾
+
+用户确认采用后，fix/literature-search@1735d40以合并提交ac240e3进入main；保留开发分支、原阶段记录和服务器失败现场，schema仍为23.0。生产代码与已验收5ff44f1一致；Ubuntu-D九包源码指针、合并代码一致性、mock completed/13工件及文档检查通过。current的接口/上下文/架构与代码一致，当前联网范围为arXiv/OpenAlex检索及PDF获取，未实现通用网页搜索。相对main的收益、混合排序和模型表述边界见[对照与收尾](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。
+
 ## 2026-10-05：文献搜索相对main的完整Agent对照
 
-main64de57f与candidate72447ee（代码5ff44f1）以相同模型/预算完成三目标各一轮、共六Run；main交付1/3、候选3/3，274工件与45请求已对账。已知论文打平，候选在局限任务取得新增已读依据；漂移选文各有优势，候选更早阅读并完成。固定查询排序混合，完整摘要保存避免实际反例丢失；科学条件表述仍有过强及错标，不能当作科研全正确。建议采用搜索增量，尚未合并；协议、取舍和证据见[相对main的交付对照](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。
+main64de57f与candidate72447ee（代码5ff44f1）以相同模型/预算完成三目标各一轮、共六Run；main交付1/3、候选3/3，274工件与45请求已对账。已知论文打平，候选在局限任务取得新增已读依据；漂移选文各有优势，候选更早阅读并完成。固定查询排序混合，完整摘要保存避免实际反例丢失；科学条件表述仍有过强及错标，不能当作科研全正确。该评估支持采用，后续已按用户授权合并；协议、取舍和证据见[相对main的交付对照](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。
 
 ## 2026-10-05：文献搜索独立分支与标题修复
 
-基础已以64de57f合入并推送main；搜索留在fix/literature-search。title完整短语修复的五标题对照为arXiv hit@5 0/5→5/5、OpenAlex保持5/5；5ff44f1服务器1765 passed / 1 skipped、mock13、真实Scientific两目标及64public/3private清单、42件工件已独立复核。记录修正OpenAlex未印证、9份摘要、正文仅前235行及两次完成纠错；功能验收通过；后续相对main的对照已完成，见上一节。本阶段标题验收见[修复与验收](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
+本阶段基础已以64de57f合入并推送main，搜索在fix/literature-search独立验收；后续合并状态见本页收尾。title完整短语修复的五标题对照为arXiv hit@5 0/5→5/5、OpenAlex保持5/5；5ff44f1服务器1765 passed / 1 skipped、mock13、真实Scientific两目标及64public/3private清单、42件工件已独立复核。记录修正OpenAlex未印证、9份摘要、正文仅前235行及两次完成纠错；功能验收通过；后续相对main的对照已完成，见上一节。本阶段标题验收见[修复与验收](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
 
 ## 2026-10-05：目标驱动的文献检索
 

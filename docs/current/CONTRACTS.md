@@ -243,7 +243,7 @@ Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifact
 
 PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可通过正整数环境变量 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 覆盖，由组合根绑定解析器并注入 Scientific；Components 不自行读取部署环境变量，程序化调用可显式传入解析器或超时。该值不是 LLM 可修改的 Tool 参数，也不随 Run 总超时自动扩大。300 秒是针对原 120 秒超时的初始工程值，不保证所有论文足够；原计时事实见[验收记录](../history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。失败继续终止受控解析进程并保留 PDF 原件，不生成伪造全文。
 
-`literature_search(query, source='auto', scope='topic', page=1, max_results=5, start_year=None, end_year=None)` 支持普通关键词和双引号短语；scope=topic 查询标题/摘要，scope=title 只查标题，不保证精确唯一匹配。max_results 范围1–20，年份范围1900–2100且起年不得晚于止年。auto 只用于第一页，按最近成功来源选择且仅在不可用时切源；合法空结果不继续扫源，显式来源不回退。后续页须指定来源；next_request 保留原查询、范围、年份和数量并绑定实际来源。回执和工具反馈包含实际 source、executed_query、page、total_results、source_attempts、next_request、error_type 和 retry_after，并区分 results / empty / failed。total_results 缺失不证明结果耗尽；OpenAlex 页号分页最多覆盖前10000条，触及边界也不等于穷尽结果。
+`literature_search(query, source='auto', scope='topic', page=1, max_results=5, start_year=None, end_year=None)` 支持普通关键词和双引号短语，字面双引号和反斜杠须转义；scope=topic 查询标题/摘要的关键词或短语；scope=title 将完整查询规范化为一个标题短语，外层双引号可省略，不保证精确唯一匹配，仍需核对返回题录。max_results 范围1–20，年份范围1900–2100且起年不得晚于止年。auto 只用于第一页，按最近成功来源选择且仅在不可用时切源；合法空结果不继续扫源，显式来源不回退。后续页须指定来源；next_request 保留原查询、范围、年份和数量并绑定实际来源。回执和工具反馈包含实际 source、executed_query、page、total_results、source_attempts、next_request、error_type 和 retry_after，并区分 results / empty / failed。total_results 缺失不证明结果耗尽；OpenAlex 页号分页最多覆盖前10000条，触及边界也不等于穷尽结果。
 
 `literature_search` 保存一次检索的查询与论文引用，是搜索回执；每篇论文独立登记为 `literature_paper`，保存来源元信息和来源提供的完整摘要，`metadata.paper` 保留规范化记录；工具只预览前500字符并标明 abstract_truncated，reused 表示复用相同快照，完整摘要可用 read_artifact 读取。按明确的规范化论文 key 识别论文，保留 arXiv 版本；同 Run 中仅在规范化元信息快照相同时复用条目，同 key 的元信息发生变化则登记新不可变快照。不按相同标题或摘要猜测同一论文。
 

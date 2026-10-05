@@ -18,10 +18,16 @@ from resagent2_components.literature import LiteratureSearchBackend, LiteratureS
 class LiteratureSearchToolInput(RuntimeModel):
     query: NonEmptyStr = Field(description=(
         "Plain keywords or double-quoted phrases; do not use provider-specific "
-        "field prefixes or Boolean operators."
+        "field prefixes or Boolean operators. Escape literal double quotes and backslashes."
     ))
     source: Literal["auto", "arxiv", "openalex"] = "auto"
-    scope: Literal["topic", "title"] = "topic"
+    scope: Literal["topic", "title"] = Field(
+        default="topic",
+        description=("topic searches title/abstract keywords or phrases; title treats "
+                     "the complete query as one title phrase, with or without outer "
+                     "double quotes. Check returned titles, authors and identifiers; "
+                     "matching is not guaranteed exact or unique."),
+    )
     page: int = Field(default=1, ge=1)
     max_results: int = Field(default=5, ge=1, le=20)
     start_year: int | None = Field(default=None, ge=1900, le=2100)
@@ -50,8 +56,12 @@ class LiteratureSearchTool:
     name = "literature_search"
     input_model = LiteratureSearchToolInput
     model_guidance = (
-        "Use short keywords or quoted phrases. scope='topic' searches paper topics; "
-        "scope='title' looks for a named paper. Start with a small max_results (default 5). "
+        "Use short keywords or quoted phrases for scope='topic'. For a named paper, "
+        "scope='title' searches the complete query as one title phrase; outer double "
+        "quotes are optional. Verify returned titles, authors and identifiers. "
+        "An empty result does not prove the paper is absent; decide whether to revise "
+        "the query or source based on the goal and receipt. "
+        "Start with a small max_results (default 5). "
         "source='auto' chooses an available source on page 1; select arxiv or openalex "
         "explicitly to switch sources or paginate. The receipt gives the executed query, "
         "source attempts, and next_request with the same source and filters. "

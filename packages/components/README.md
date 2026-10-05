@@ -48,7 +48,7 @@ text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；r
 
 CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表。source=auto 只用于第一页，初次按配置顺序尝试（目前 arXiv 在前）；成功后继续用该源，不可用时依次试其他源，每次最多遍历一轮。显式 source 只查指定源，不静默回退。只保存实例内索引；没有探活、健康表、持久选择记录，也不同时查询/合并两个源。
 
-统一 query 接收普通关键词和双引号短语，不承诺提供方字段或 Boolean 语法；未闭合引号或空短语在请求前明确报错。scope=topic 查询标题/摘要，scope=title 只查标题。arXiv 将各词句转换为 ti/abs 字段并用 AND 连接，再加年份条件；OpenAlex 使用官方 search.title_and_abstract / search.title 参数，其词干/停用词处理与 arXiv 不等价。title 范围不保证整条标题严格相等或唯一命中。
+统一 query 接收普通关键词和双引号短语，不承诺提供方字段或 Boolean 语法；字面双引号和反斜杠须按查询语法转义；未闭合引号或空短语在请求前明确报错。scope=topic 查询标题/摘要：arXiv 将各词句转换为 ti/abs 字段并用 AND 连接，再加年份条件；OpenAlex 使用官方 search.title_and_abstract。scope=title 将整个查询规范化为一个标题短语，外层双引号可省略；arXiv 使用一个 ti 短语，OpenAlex 将短语传给 search.title。两源词干/停用词处理不等价，title 不保证严格相等或唯一命中，调用方仍需核对返回的标题、作者及标识。
 
 search 返回 LiteratureSearchResult，而非裸论文列表：papers、source、executed_query、page、next_page、source_attempts 和可选 total_results。page 从1开始，max_results 决定页宽；续页须固定实际来源和其余查询参数。使用提供方计数确定下一页；缺少总数时，满原始页仅提示可试下一页，不以去重后的条数判断结束。OpenAlex basic pagination 最多前10000条，超出边界不生成无效续页；next_page 为空不能一概宣称结果穷尽。
 

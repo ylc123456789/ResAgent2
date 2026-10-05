@@ -70,6 +70,13 @@ def _keywords(query):
     return keywords
 
 
+def _title_phrase(query: str) -> str:
+    """Treat parsed title words as one phrase instead of separate AND terms."""
+    title = " ".join(" ".join(_keywords(query)).split())
+    escaped = title.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped + '"'
+
+
 def _attempt(source, error=None):
     attempt = dict(source=source, status='failed' if error else 'success',
                    error_type=error.error_type if error else None,
@@ -165,8 +172,8 @@ class ArxivLiteratureBackend:
         """Translate plain keywords and double-quoted phrases to arXiv syntax."""
         keywords = _keywords(query)
         escaped = [word.replace("\\", "\\\\").replace('"', '\\"') for word in keywords]
-        terms = [('ti:"' + word + '"') if scope == 'title' else
-                 ('(ti:"' + word + '" OR abs:"' + word + '")') for word in escaped]
+        terms = (['ti:' + _title_phrase(query)] if scope == 'title' else
+                 ['(ti:"' + word + '" OR abs:"' + word + '")' for word in escaped])
         if start_year is not None and end_year is not None:
             terms.append(
                 f"submittedDate:[{start_year}01010000 TO {end_year}12312359]"
@@ -331,14 +338,14 @@ class OpenAlexLiteratureBackend:
         params = {'per_page': max_results, 'page': page,
                   'select': 'id,doi,display_name,publication_date,authorships,abstract_inverted_index,best_oa_location'}
         filters = []
-        params['search.title' if scope == 'title' else 'search.title_and_abstract'] = query
+        executed_query = _title_phrase(query) if scope == 'title' else query
+        params['search.title' if scope == 'title' else 'search.title_and_abstract'] = executed_query
         if start_year is not None:
             filters.append(f'from_publication_date:{start_year}-01-01')
         if end_year is not None:
             filters.append(f'to_publication_date:{end_year}-12-31')
         if filters:
             params['filter'] = ','.join(filters)
-        executed_query = query
         try:
             body = _OPENALEX_HTTP.fetch(lambda: self._request(f"{self._endpoint}?{urlencode(params)}"),
                                       max_attempts=self.max_retries, quota_cooldown=self._quota_cooldown)

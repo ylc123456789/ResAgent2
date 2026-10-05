@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-05：文献搜索独立分支与标题修复
+
+基础已以64de57f合入并推送main；搜索留在fix/literature-search。title完整短语修复在同服务器五标题对照中arXiv目标hit@5从0/5到5/5，OpenAlex保持5/5；全量1765 passed / 1 skipped、mock13。此结果只证明标题入口修复，候选真实Scientific与整体主题质量仍需定向/成对验收，见[修复与交接](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
+
 ## 2026-10-05：目标驱动的文献检索
 
 在同一分支完善 literature_search 的小批结果、范围、来源、分页和错误反馈，保留完整来源摘要；Scientific 按用户目标与材料缺口选择行动，不规定检索阶段或论文配额。schema仍为23.0；本地1751 passed / 1 skipped、mock completed / 13工件。本地验证与服务器测试步骤见[实施及交接](reviews/AGENTIC_LITERATURE_SEARCH_2026-10-05.md)，服务器1faab0f的真实小测与分页探针已完成，工件/调用对账通过；独立复核发现title逐词AND对完整标题的召回问题及服务器报告遗漏的恢复过程，见同一记录的验收章节。不把功能通过等同商业搜索质量。

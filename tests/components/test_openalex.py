@@ -272,7 +272,7 @@ def test_scope_page_and_count(monkeypatch, scope, key):
     requests = fake_response(monkeypatch, json.dumps({'meta': {'count': 12}, 'results': [work()]}).encode())
     result = OpenAlexLiteratureBackend().search('precise title', max_results=5, source='openalex', scope=scope, page=2)
     params = parse_qs(urlsplit(str(requests[0][0].url)).query)
-    assert params[key] == ['precise title']
+    assert params[key] == ['"precise title"' if scope == 'title' else 'precise title']
     assert params['page'] == ['2']
     assert 'search' not in params
     assert result.total_results == 12
@@ -300,7 +300,7 @@ def test_arxiv_topic_title_paging(monkeypatch):
     assert params['search_query'] == ['(ti:"precise" OR abs:"precise") AND (ti:"title" OR abs:"title")']
     assert result.executed_query == params['search_query'][0]
     backend.search('precise title', max_results=3, scope='title')
-    assert parse_qs(urlsplit(captured[-1]).query)['search_query'] == ['ti:"precise" AND ti:"title"']
+    assert parse_qs(urlsplit(captured[-1]).query)['search_query'] == ['ti:"precise title"']
 
 
 
@@ -326,3 +326,60 @@ def test_openalex_unbalanced_phrase_rejected_before_request(monkeypatch):
         OpenAlexLiteratureBackend().search('"broken', max_results=5)
     assert caught.value.error_type == 'invalid_query'
     assert requests == []
+
+
+KNOWN_TITLES = [
+    'On Calibration of Modern Neural Networks',
+    'Attention Is All You Need',
+    'BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding',
+    'Language Models are Few-Shot Learners',
+    'A Simple Framework for Contrastive Learning of Visual Representations',
+]
+
+
+@pytest.mark.parametrize('title', KNOWN_TITLES)
+@pytest.mark.parametrize('quoted', [False, True])
+def test_complete_title_phrase_for_both_sources(monkeypatch, title, quoted):
+    from resagent2_components import ArxivLiteratureBackend
+    # Request translation only; remote retrieval quality is measured separately.
+    query = '"' + title + '"' if quoted else title
+    expected = '"' + title + '"'
+    assert ArxivLiteratureBackend._search_query(query, 2015, 2025, 'title') == (
+        'ti:' + expected + ' AND submittedDate:[201501010000 TO 202512312359]')
+    requests = fake_response(monkeypatch, b'{"results": []}')
+    result = OpenAlexLiteratureBackend().search(query, max_results=5, scope='title')
+    params = parse_qs(urlsplit(str(requests[0][0].url)).query)
+    assert params['search.title'] == [expected]
+    assert result.executed_query == expected
+    assert 'search.title_and_abstract' not in params
+
+
+def test_title_phrase_normalizes_spacing_and_preserves_escaped_punctuation(monkeypatch):
+    from resagent2_components import ArxivLiteratureBackend
+    query = r'"On   \"Quoted\" Titles: A Few-Shot Study"'
+    expected = r'"On \"Quoted\" Titles: A Few-Shot Study"'
+    assert ArxivLiteratureBackend._search_query(query, None, None, 'title') == 'ti:' + expected
+    requests = fake_response(monkeypatch, b'{"results": []}')
+    result = OpenAlexLiteratureBackend().search(query, max_results=3, scope='title')
+    assert parse_qs(urlsplit(str(requests[0][0].url)).query)['search.title'] == [expected]
+    assert result.executed_query == expected
+
+
+def test_topic_keeps_keyword_and_phrase_query_unchanged():
+    from resagent2_components import ArxivLiteratureBackend
+    assert ArxivLiteratureBackend._search_query('calibration "temperature scaling"', None, None) == (
+        '(ti:"calibration" OR abs:"calibration") AND '
+        '(ti:"temperature scaling" OR abs:"temperature scaling")')
+
+
+@pytest.mark.parametrize('quoted', [False, True])
+def test_title_phrase_preserves_apostrophe_and_escaped_backslash(monkeypatch, quoted):
+    from resagent2_components import ArxivLiteratureBackend
+    title = r"A Researcher's Guide to C:\\Models"
+    query = '"' + title + '"' if quoted else title
+    expected = r'''"A Researcher's Guide to C:\\Models"'''
+    assert ArxivLiteratureBackend._search_query(query, None, None, 'title') == 'ti:' + expected
+    requests = fake_response(monkeypatch, b'{"results": []}')
+    result = OpenAlexLiteratureBackend().search(query, max_results=3, scope='title')
+    assert parse_qs(urlsplit(str(requests[0][0].url)).query)['search.title'] == [expected]
+    assert result.executed_query == expected

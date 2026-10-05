@@ -63,4 +63,26 @@ WSL Ubuntu-D /home/cyl/ResAgent2：全量1765 passed / 1 skipped（56.23秒）�
 
 若要判断搜索增量整体是否优于main，再对main64de57f与候选做相同用户目标的成对测试：固定上述目标及一个分布漂移校准目标，使用相同模型、预算、认证、材料和可达来源；记录日期及服务差异。main没有source/scope/page参数，因此比较用户交付目标，不强行要求它调用不存在的参数。人工评价目标论文、相关材料、关键文献覆盖、误召回、证据支持和失败恢复；工具调用数、总命中数和completed只能作为辅助事实。已知论文不能丢失，主题任务不能明显退化，改善须有实际材料依据。
 
-完整Agent的候选提示词尚未在真实模型上复测。完成上述定向验收和必要质量对照，再决定合并搜索分支；此前1faab0f的真实通过不冒充本次候选的Agent通过。
+交接时，候选提示词尚未在真实模型上复测；以下后续验收现已完成两个真实目标。相对main的完整Agent质量对照仍未执行，此前1faab0f的真实通过不冒充本次候选通过。
+
+
+## 5ff44f1服务器验收与独立复核（2026-10-05）
+
+上述测试步骤是交接时要求。本轮真实模型定向验收现已完成；独立只读核对原始Run、Session、trace、冻结材料及清单，未改服务器证据、未重跑模型或联网检索。
+
+- regression.log固定5ff44f16e983662966cb7c16e5b0bc04dbff1cbd，9个editable包指向服务器仓库src。服务器1765 passed / 1 skipped（90.98秒）、mock completed / 13工件、pip check和diff check干净，与本地交接相符。
+- A completed / not_applicable、B completed / supports；4及8次调用与Run.usage、Session、trace的call ID/retry集合一致。两Run无最终completion violation或terminal error。
+- public清单64/64、private清单3/3的字节数/hash匹配。A16+B26共42件工件冻结SHA全部一致，统一ID、作用域和嵌入引用一致；B论文→PDF→正文来源链正确。check_editable.py未列清单，其核验结果已保存在regression.log；不把清单称为目录全部文件清单。
+- 测试方API排名表复现五标题：arXiv旧0/5→新5/5，OpenAlex保持5/5，候选首位命中。该脚本保留排名stdout而非逐请求原响应，OpenAlex只按规范化标题判断，没有核验作者，也没有单独保存HTTP状态；这次审查不能独立重建它每次HTTP状态。前节主开发的20份真实原响应、状态和作者核验仍保留，可支撑原标题修复对照。标题包含常见功能词只是本样本特征，不能据此断言已隔离提供方停用词机制。
+- A实际title表达式ti:"On Calibration of Modern Neural Networks"，返回2条。目标身份正确，完整摘要889字符；read_artifact返回全部1284字符题录、truncated=False，未获取或读取正文。随后OpenAlex的topic查询返回5条无关材料；最终Agent明确未成功印证目标，身份确认依据是arXiv，不能写成多源成功确认。
+- B确有5次topic查询，逐词标题/摘要AND保留，结果数163、2、1、1、0，分页信息正确。最后一次empty后没有新增查询，而是阅读已有材料；不是“空结果后继续改词搜索”。
+- B实际读取9份完整题录/摘要，模型最终自述8份须按原始回执更正。唯一成功正文共27页/885行，实际读取1–140及140–235，即前235行、第1至第7页部分。最终6类结论明确第1类有已读正文片段依据、其余基于摘要，且说明理论假设、KL与ECE的区别及来源偏差；不把正文获取成功写成通读27页。
+- A一次completion_check拒绝额外字段及非法verdict completed，随后改为合法结构及not_applicable；B一次拒绝supported_with_caveats，随后改为supports。没有搜索/获取/读取工具失败，但不能写成全程没有中间错误。
+
+服务器原验收报告中OpenAlex交叉核对、empty后继续搜索、摘要数量/正文范围及两次完成纠错，应以上述原始事实为准。报告中的“topic无退化”收窄为查询表达式保留且本场景正常交付；没有进行相对main64de57f的同目标完整Agent对照。
+
+### 本轮结论与后续
+
+标题修复的真实API效果与真实Scientific工具调用均通过，本轮未发现需要继续修改生产代码的问题。功能验收可收尾；该结果支持准备合并搜索分支，整体主题质量相对main的对照保留为独立评估，不把它写成已证明的提升。目前只同步验收文档并推送，搜索分支尚未合入main。
+
+证据根：/root/autodl-tmp/resagent2/runs/lit-title-5ff44f1-20261005/，原报告protocol/LITERATURE_TITLE_SEARCH_acceptance_report.md，原始状态/Session在a-title-locate/和b-topic-task/，trace在traces/llm_traces.jsonl。报告、回归日志、API排名脚本/输出和清单的WSL副本位于/home/cyl/ResAgent2/.resagent2/audits/lit-title-5ff44f1-20261005/。私有trace和Session没有加入Git或复制到公共文档。

@@ -4,7 +4,7 @@
 
 ## 2026-10-05：文献搜索独立分支与标题修复
 
-基础已以64de57f合入并推送main；搜索留在fix/literature-search。title完整短语修复在同服务器五标题对照中arXiv目标hit@5从0/5到5/5，OpenAlex保持5/5；全量1765 passed / 1 skipped、mock13。此结果只证明标题入口修复，候选真实Scientific与整体主题质量仍需定向/成对验收，见[修复与交接](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
+基础已以64de57f合入并推送main；搜索留在fix/literature-search。title完整短语修复的五标题对照为arXiv hit@5 0/5→5/5、OpenAlex保持5/5；5ff44f1服务器1765 passed / 1 skipped、mock13、真实Scientific两目标及64public/3private清单、42件工件已独立复核。记录修正OpenAlex未印证、9份摘要、正文仅前235行及两次完成纠错；功能验收通过，整体相对main的主题质量对照尚未执行，见[修复与验收](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
 
 ## 2026-10-05：目标驱动的文献检索
 

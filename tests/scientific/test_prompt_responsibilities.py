@@ -12,7 +12,7 @@ SCIENTIFIC_GUIDANCE = " ".join(SCIENTIFIC_PROMPT.split())
 def test_scientific_prompt_keeps_own_tool_failures_out_of_request_work() -> None:
     assert "not a substitute for your own tools" in SCIENTIFIC_GUIDANCE
     assert "not a reason to delegate literature work" in SCIENTIFIC_GUIDANCE
-    assert "tool's own retries are exhausted" in SCIENTIFIC_GUIDANCE
+    assert "When all available sources fail or necessary evidence remains blocked" in SCIENTIFIC_GUIDANCE
     assert "ask_user: explain the actual error" in SCIENTIFIC_GUIDANCE
     assert "explicit decision on proceeding with limited evidence" in SCIENTIFIC_GUIDANCE
 

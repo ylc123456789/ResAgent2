@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import json
+import re
 
 from resagent2_orchestrator import ArtifactRegistry
 import pytest
@@ -71,18 +72,22 @@ def state(*, memory: dict | None = None) -> AgentState:
 class _FakeBackend:
     """Returns fixed papers, recording the last query arguments."""
 
-    def __init__(self, papers: list[LiteraturePaper]) -> None:
+    def __init__(self, papers: list[LiteraturePaper], name="peer") -> None:
+        self.name = name
         self._papers = papers
         self.last_kwargs: dict | None = None
 
-    def search(self, query, *, max_results, start_year=None, end_year=None):
+    def search(self, query, *, max_results, start_year=None, end_year=None, source="auto", scope="topic", page=1):
         self.last_kwargs = {
             "query": query,
             "max_results": max_results,
             "start_year": start_year,
-            "end_year": end_year,
+            "end_year": end_year, "source": source, "scope": scope, "page": page,
         }
-        return self._papers
+        result = _search_result(self._papers)
+        result.source = self.name
+        result.source_attempts[0]["source"] = self.name
+        return result
 
 
 class _FakeRegister:
@@ -149,6 +154,7 @@ def test_tool_reuses_papers_and_tracks_outputs_not_read_status(tmp_path) -> None
     original = state(memory=observation.memory_updates)
     second = tool.execute(original, LiteratureSearchToolInput(query="y", max_results=1))
     assert second.value["papers"][0]["artifact_id"] == first_paper
+    assert second.value["papers"][0]["reused"] is True
     assert len([ref for ref in register.refs.values() if ref.kind == "literature_paper"]) == 1
     assert len(second.memory_updates["literature_output_artifact_ids"]) == 3
 
@@ -163,7 +169,7 @@ def test_tool_keeps_preview_separate_from_frozen_abstract(tmp_path) -> None:
         original, LiteratureSearchToolInput(query="evidence"),
     )
     brief = observation.value["papers"][0]
-    assert brief["abstract"] == full_abstract[:200]
+    assert brief["abstract"] == full_abstract[:500]
     assert brief["abstract_truncated"] is True
     ref = register.refs[brief["artifact_id"]]
     assert ref.metadata["paper"]["abstract"] == full_abstract
@@ -177,7 +183,7 @@ def test_empty_or_failed_search_is_a_receipt_not_a_paper(tmp_path, failure):
         def search(self, *args, **kwargs):
             if failure:
                 raise LiteratureSearchError("provider unavailable")
-            return []
+            return _search_result([])
     register = _FakeRegister(tmp_path)
     result = LiteratureSearchTool(Backend(), register).execute(
         state(), LiteratureSearchToolInput(query="missing"),
@@ -196,7 +202,7 @@ def test_tool_forwards_query_and_bounds(tmp_path) -> None:
         ),
     )
     assert backend.last_kwargs == {
-        "query": "graph neural networks", "max_results": 7, "start_year": 2020, "end_year": 2024,
+        "query": "graph neural networks", "max_results": 7, "start_year": 2020, "end_year": 2024, "source": "auto", "scope": "topic", "page": 1,
     }
 
 
@@ -243,7 +249,7 @@ class _FakeArxivBackend(ArxivLiteratureBackend):
 
 def test_arxiv_backend_parses_deduplicates_and_normalizes() -> None:
     backend = _FakeArxivBackend(ARXIV_ATOM.encode("utf-8"))
-    papers = backend.search("electron", max_results=10)
+    papers = backend.search("electron", max_results=10).papers
 
     assert [p.paper_id for p in papers] == ["2301.00001v2", "2301.00002v1"]
     first = papers[0]
@@ -255,16 +261,15 @@ def test_arxiv_backend_parses_deduplicates_and_normalizes() -> None:
     assert first.pdf_url == "https://arxiv.org/pdf/2301.00001v2"
 
 
-def test_arxiv_backend_truncates_abstract() -> None:
+def test_arxiv_backend_preserves_complete_abstract() -> None:
     long_abstract = "x" * 5000
     atom = ARXIV_ATOM.replace(
         "short", long_abstract
     )
     backend = _FakeArxivBackend(atom.encode("utf-8"))
-    backend.max_abstract_chars = 100
-    papers = backend.search("electron", max_results=10)
+    papers = backend.search("electron", max_results=10).papers
 
-    assert len(papers[-1].abstract) == 100
+    assert papers[-1].abstract == long_abstract
 
 
 def test_arxiv_backend_builds_year_bounded_query() -> None:
@@ -288,6 +293,7 @@ def test_arxiv_translates_keywords_and_phrases_without_query_operators(query, ex
     backend = _FakeArxivBackend(ARXIV_ATOM.encode())
     backend.search(query, max_results=3, start_year=2020, end_year=2024)
     params = parse_qs(urlsplit(backend.last_url).query)
+    expected = re.sub(r'all:("(?:\\.|[^"\\])*")', lambda m: f"(ti:{m[1]} OR abs:{m[1]})", expected)
     assert params["search_query"] == [
         expected + " AND submittedDate:[202001010000 TO 202412312359]"
     ]
@@ -297,7 +303,7 @@ def test_arxiv_translates_keywords_and_phrases_without_query_operators(query, ex
 @pytest.mark.parametrize("query", ['"unclosed', '""', " \t ", 'keyword ""'])
 def test_arxiv_rejects_malformed_keyword_input_before_http(query):
     backend = _FakeArxivBackend(ARXIV_ATOM.encode())
-    with pytest.raises(LiteratureSearchError, match="keywords"):
+    with pytest.raises(LiteratureSearchError):
         backend.search(query, max_results=3)
     assert not hasattr(backend, "last_url")
 
@@ -349,6 +355,70 @@ def test_arxiv_request_identifies_application(monkeypatch):
 def test_arxiv_backend_live_smoke() -> None:
     """Opt-in real network test; must not fake success on rate limit/timeout."""
     backend = ArxivLiteratureBackend(timeout_seconds=10, max_retries=2)
-    papers = backend.search("graph neural network", max_results=3)
+    papers = backend.search("graph neural network", max_results=3).papers
     assert len(papers) >= 1
     assert all(p.title and p.source_url for p in papers)
+
+
+def _search_result(papers):
+    from resagent2_components import LiteratureSearchResult
+    return LiteratureSearchResult(papers=papers, source="arxiv", executed_query="test query",
+                                  page=1, next_page=None, source_attempts=[{
+                                      "source": "arxiv", "status": "success",
+                                      "error_type": None, "error": None,
+                                  }])
+
+
+@pytest.mark.parametrize("arguments", [
+    {"source": "auto", "page": 2}, {"page": 0},
+    {"start_year": 2025, "end_year": 2020}, {"max_results": 21},
+    {"source": "unknown"}, {"scope": "abstract"},
+])
+def test_search_input_rejects_invalid_request(arguments):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        LiteratureSearchToolInput(query="topic", **arguments)
+
+
+def test_search_receipt_exposes_real_source_and_pinned_next_request(tmp_path):
+    from resagent2_components import LiteratureSearchResult
+    attempts = [
+        {"source": "arxiv", "status": "failed", "error_type": "unavailable", "error": "HTTP 429"},
+        {"source": "openalex", "status": "success", "error_type": None, "error": None},
+    ]
+    class Backend:
+        def search(self, *args, **kwargs):
+            return LiteratureSearchResult([paper("1")], "openalex", "executed topic", 1, 2, attempts)
+    register = _FakeRegister(tmp_path)
+    observation = LiteratureSearchTool(Backend(), register).execute(
+        state(), LiteratureSearchToolInput(query="topic", scope="title", start_year=2020),
+    )
+    value = observation.value
+    assert value["source"] == "openalex"
+    assert value["executed_query"] == "executed topic"
+    assert value["source_attempts"] == attempts
+    assert value["total_results"] is None
+    assert value["papers"][0]["reused"] is False
+    assert value["next_request"] == {
+        "query": "topic", "source": "openalex", "scope": "title", "page": 2,
+        "max_results": 5, "start_year": 2020, "end_year": None,
+    }
+    receipt = json.loads(register.last_candidate.content)
+    assert receipt["requested_source"] == "auto"
+    assert receipt["next_request"] == value["next_request"]
+
+
+def test_search_failure_preserves_source_errors(tmp_path):
+    attempts = [{"source": "arxiv", "status": "failed", "error_type": "unavailable", "error": "HTTP 429"}]
+    class Backend:
+        def search(self, *args, **kwargs):
+            raise LiteratureSearchError("HTTP 429", error_type="unavailable", source_attempts=attempts, retry_after=30)
+    register = _FakeRegister(tmp_path)
+    value = LiteratureSearchTool(Backend(), register).execute(
+        state(), LiteratureSearchToolInput(query="topic", source="arxiv"),
+    ).value
+    assert value["status"] == "failed"
+    assert value["source_attempts"] == attempts
+    assert value["error_type"] == "unavailable"
+    assert value["retry_after"] == 30
+    assert value["next_request"] is None

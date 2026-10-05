@@ -44,7 +44,7 @@ def test_arxiv_instances_share_spacing(clock, monkeypatch):
         return http_response(b'<feed xmlns="http://www.w3.org/2005/Atom"/>')
     monkeypatch.setattr(literature.ArxivLiteratureBackend, "_request", request)
     for _ in range(3):
-        assert literature.ArxivLiteratureBackend().search("x", max_results=1) == []
+        assert literature.ArxivLiteratureBackend().search("x", max_results=1).papers == []
     assert times == [0, 3, 6]
 
 
@@ -95,21 +95,25 @@ def test_503_with_retry_after_defers_instead_of_waiting(clock):
     policy = http.LiteratureHTTP("test", interval_seconds=3)
     def request():
         raise http_error(503, "3600")
-    with pytest.raises(http.LiteratureUnavailableError, match="Retry-After"):
+    with pytest.raises(http.LiteratureUnavailableError, match="Retry-After") as caught:
         policy.fetch(request, max_attempts=3)
+    assert caught.value.error_type == "service_error"
+    assert caught.value.retry_after == 3600
     assert clock[0] == 0
     assert policy._cooldown_until == 3600
 
 
-@pytest.mark.parametrize("failure", [TimeoutError(), httpx.ConnectError("offline"), ConnectionResetError(), http_error(503)])
-def test_transient_failures_have_finite_spaced_attempts(clock, failure):
+@pytest.mark.parametrize("failure,error_type", [(TimeoutError(), "timeout"), (httpx.ConnectError("offline"), "network_error"), (ConnectionResetError(), "network_error"), (http_error(503), "service_error"), (http_error(408), "timeout")])
+def test_transient_failures_have_finite_spaced_attempts(clock, failure, error_type):
     policy = http.LiteratureHTTP("test", interval_seconds=3)
     times = []
     def request():
         times.append(clock[0])
         raise failure
-    with pytest.raises(http.LiteratureUnavailableError, match="after 3 attempts"):
+    with pytest.raises(http.LiteratureUnavailableError, match="after 3 attempts") as caught:
         policy.fetch(request, max_attempts=3)
+    assert caught.value.error_type == error_type
+    assert caught.value.retry_after == 60
     assert times == [0, 3, 9]
 
 

@@ -9,7 +9,7 @@ from urllib.request import url2pathname
 
 import pytest
 
-from resagent2_components import ArtifactReadError, LiteraturePaper, RegisteredArtifactReader
+from resagent2_components import ArtifactReadError, LiteraturePaper, LiteratureSearchResult, RegisteredArtifactReader
 from resagent2_components.literature.fulltext import PdfText
 from resagent2_contracts import (
     AgentOwner, ArtifactCandidate, ArtifactRef, ResearchRequest, RunBudget, RunPermissions,
@@ -64,7 +64,13 @@ def _finish(evidence, statement):
 def _controller(tmp_path, client, papers):
     class Backend:
         def search(self, query, **kwargs):
-            return papers
+            limit, page = kwargs["max_results"], kwargs["page"]
+            return LiteratureSearchResult(
+                papers=papers[(page - 1) * limit:page * limit], source="arxiv",
+                executed_query=query, page=page,
+                next_page=page + 1 if page * limit < len(papers) else None,
+                total_results=len(papers),
+            )
 
     scheduler = WorkflowScheduler(
         bindings={}, artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
@@ -83,6 +89,49 @@ def _registered(client, kind):
     return [ref for ref in client.registration.list_artifacts(run_id=RUN_ID) if ref.kind == kind]
 
 
+def test_search_continuation_reaches_scientific_with_complete_abstract(tmp_path):
+    class Client:
+        step = 0
+
+        def next_action(self, context, action_type):
+            self.step += 1
+            if self.step == 1:
+                return {"tool": "literature_search", "arguments": {"query": "comparison"}}
+            receipts = _registered(self, "literature_search")
+            receipt = json.loads(_path(receipts[-1]).read_text())
+            if self.step == 2:
+                assert len(_registered(self, "literature_paper")) == 5
+                assert receipt["requested_source"] == "auto"
+                assert receipt["source"] == "arxiv"
+                assert receipt["next_request"]["max_results"] == 5
+                assert receipt["next_request"]["page"] == 2
+                assert receipt["next_request"]["source"] == "arxiv"
+                return {"tool": "literature_search", "arguments": receipt["next_request"]}
+            assert len(_registered(self, "literature_paper")) == 6
+            ref = next(ref for ref in _registered(self, "literature_paper")
+                       if ref.metadata["paper"]["paper_id"] == "2401.00005")
+            if self.step == 3:
+                assert receipt["page"] == 2
+                assert receipt["next_request"] is None
+                assert receipt["total_results"] == 6
+                assert TAIL_EVIDENCE not in context.text
+                return {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}}
+            assert self.step == 4
+            assert TAIL_EVIDENCE in context.text
+            return _finish(ref.id, TAIL_EVIDENCE)
+
+    controller, _ = _controller(tmp_path, Client(), _papers())
+    run = controller.create_run(RUN_ID, ResearchRequest(
+        goal="Locate and read the last comparison's evidence",
+        required_evidence_kinds=["literature_paper"],
+        budget=RunBudget(max_llm_calls=6, timeout_seconds=30),
+        permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+    ))
+    assert run.status == "completed", run.terminal_error
+    assert run.completion_violations == []
+    assert len([ref for ref in run.artifacts.values() if ref.kind == "literature_paper"]) == 6
+
+
 def test_literature_tail_reaches_actual_scientific_context(tmp_path):
     class Client:
         step = 0
@@ -91,7 +140,7 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
         def next_action(self, context, action_type):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "comparison"}}
+                return {"tool": "literature_search", "arguments": {"query": "comparison", "max_results": 6}}
             papers = _registered(self, "literature_paper")
             assert len(papers) == 6
             ref = next(ref for ref in papers if ref.metadata["paper"]["paper_id"] == "2401.00005")

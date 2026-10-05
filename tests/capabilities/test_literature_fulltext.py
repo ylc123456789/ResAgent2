@@ -48,11 +48,11 @@ def setup(tmp_path):
     register = Registration(tmp_path)
     class Backend:
         def search(self, *args, **kwargs):
-            return [LiteraturePaper(
+            return _search_result([LiteraturePaper(
                 paper_id="arxiv:2401.12345v1", title="A paper", abstract="An abstract",
                 source_url="https://arxiv.org/abs/2401.12345v1",
                 pdf_url="https://arxiv.org/pdf/2401.12345v1",
-            )]
+            )])
     result = LiteratureSearchTool(Backend(), register).execute(
         state, LiteratureSearchToolInput(query="a paper"),
     )
@@ -173,7 +173,7 @@ def test_updated_pdf_location_is_a_new_snapshot_not_an_overwrite(tmp_path):
         current = LiteraturePaper(paper_id="openalex:W1", title="Paper",
                                   abstract="Abstract", source_url="https://openalex.org/W1")
         def search(self, *args, **kwargs):
-            return [self.current]
+            return _search_result([self.current])
     backend = Backend()
     tool = LiteratureSearchTool(backend, register)
     args = LiteratureSearchToolInput(query="paper")
@@ -267,7 +267,7 @@ def test_changed_paper_snapshot_preserves_old_fulltext_cache(setup):
     class UpdatedBackend:
         def search(self, *args, **kwargs):
             paper = LiteraturePaper.model_validate(old_refs[first_paper].metadata["paper"])
-            return [paper.model_copy(update={"abstract": "Updated source abstract"})]
+            return _search_result([paper.model_copy(update={"abstract": "Updated source abstract"})])
     searched = LiteratureSearchTool(UpdatedBackend(), register).execute(
         state, LiteratureSearchToolInput(query="a paper"),
     )
@@ -339,3 +339,12 @@ def test_imported_inputs_from_other_run_or_mismatched_pdf_are_rejected(setup):
         FetchLiteratureFulltextTool(
             register, input_artifacts=[paper, bad_pdf], download=unexpected, parse=unexpected,
         ).execute(state, FetchLiteratureFulltextInput(paper_artifact_id=paper_id))
+
+
+def _search_result(papers):
+    from resagent2_components import LiteratureSearchResult
+    return LiteratureSearchResult(papers=papers, source="arxiv", executed_query="test query",
+                                  page=1, next_page=None, source_attempts=[{
+                                      "source": "arxiv", "status": "success",
+                                      "error_type": None, "error": None,
+                                  }])

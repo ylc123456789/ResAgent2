@@ -46,9 +46,13 @@ text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；r
 
 [literature/](src/resagent2_components/literature/) 提供规范化论文记录、LiteratureSearchBackend、arXiv/OpenAlex 平级来源、论文呈现，以及全文获取和 PDF 提取。[backends.py](src/resagent2_components/literature/backends.py) 处理检索来源，[_http.py](src/resagent2_components/literature/_http.py) 提供共享 HTTP 规则。[imports.py](src/resagent2_components/literature/imports.py) 提供 load_literature_manifest，返回规范化论文与可选本地 PDF 的 PreparedLiteratureImport 列表。清单拒绝未知字段，PDF 路径相对清单目录解析并校验普通文件及 %PDF 签名；不从文件名或正文猜作者/摘要，不联网。Tool 在 Capabilities，不在这个目录。
 
-CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表，互为备份。初次按配置顺序尝试（目前 arXiv 在前）；成功后继续用该源，不可用时依次试其他源，每次最多遍历一轮。只保存实例内索引；没有探活、健康表、持久选择记录，也不同时查询/合并两个源。
+CLI/E2E 将 arXiv、OpenAlex 作为平级来源装入列表。source=auto 只用于第一页，初次按配置顺序尝试（目前 arXiv 在前）；成功后继续用该源，不可用时依次试其他源，每次最多遍历一轮。显式 source 只查指定源，不静默回退。只保存实例内索引；没有探活、健康表、持久选择记录，也不同时查询/合并两个源。
 
-统一 query 接收普通关键词和双引号短语，不承诺提供方字段或 Boolean 语法。arXiv 将各词句显式转换为 all 字段并用 AND 连接，再加年份条件；未闭合引号或空短语明确报错。OpenAlex 使用官方 search 参数。
+统一 query 接收普通关键词和双引号短语，不承诺提供方字段或 Boolean 语法；未闭合引号或空短语在请求前明确报错。scope=topic 查询标题/摘要，scope=title 只查标题。arXiv 将各词句转换为 ti/abs 字段并用 AND 连接，再加年份条件；OpenAlex 使用官方 search.title_and_abstract / search.title 参数，其词干/停用词处理与 arXiv 不等价。title 范围不保证整条标题严格相等或唯一命中。
+
+search 返回 LiteratureSearchResult，而非裸论文列表：papers、source、executed_query、page、next_page、source_attempts 和可选 total_results。page 从1开始，max_results 决定页宽；续页须固定实际来源和其余查询参数。使用提供方计数确定下一页；缺少总数时，满原始页仅提示可试下一页，不以去重后的条数判断结束。OpenAlex basic pagination 最多前10000条，超出边界不生成无效续页；next_page 为空不能一概宣称结果穷尽。
+
+LiteratureSearchError 保留 error_type、source_attempts 和可选 retry_after；查询/响应错误、请求拒绝、限流、冷却、超时/网络/服务错误可被 Tool 如实呈现。Components 提供事实，不自动改词、扩写查询或评判相关性。
 
 仅 `LiteratureUnavailableError` 触发换源；合法空结果算成功。HTTP 406 表示当前来源无法提供该请求的结果，不在同源重试，直接尝试下一来源；不保证该故障是暂时的。HTTP 其余 4xx（除 408/429）、损坏 XML/JSON 和编程异常不静默换源。全部不可用汇总原因报错，不登记空工件伪装成功。保留各来源真实 ID/URL，不按同名合并论文。
 
@@ -58,13 +62,13 @@ HTTP 响应诊断沿用应用日志：失败为 WARNING，成功为 INFO。记�
 
 HTTP 复用 Runtime 的 httpx 总超时传输；节奏等待、退避和请求都沿用 Run 剩余时间。Run 截止不作为普通来源不可用继续切换，耗尽后停止发新请求。论文 HTTP 不消耗模型请求次数，但消耗 Run 时间。
 
-OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送，不进 URL、工件或模型上下文；匿名额度由服务端决定。摘要缺失就留空；检索记录明确区分元信息、摘要和可用全文入口，不新增 LLM 摘要。每篇论文独立登记，搜索回执只连接本次查询与论文引用；规范化 key 用于识别论文并保留 arXiv 版本；同 Run 仅复用相同元信息快照，同 key 内容变化则登记新不可变快照，不按标题猜测合并。
+OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送，不进 URL、工件或模型上下文；匿名额度由服务端决定。来源提供的摘要完整保留，摘要缺失就留空；检索记录明确区分元信息、摘要和可用全文入口，不新增 LLM 摘要。每篇论文独立登记，搜索回执只连接本次查询与论文引用；规范化 key 用于识别论文并保留 arXiv 版本；同 Run 仅复用相同元信息快照，同 key 内容变化则登记新不可变快照，不按标题猜测合并。
 
 全文获取使用已登记论文的来源，按需下载公开可获取的 PDF；PyMuPDF4LLM 解析文本，显式关闭 OCR。原始 PDF 与解析文本分别冻结，直接来源链为论文→PDF→文本；解析失败仍保留已登记原件，重试可复用。无法获取或提取时返回明确结果，不把检索摘要冒充全文，不绕过访问限制。外部论文清单的格式和本地来源规范化也在此目录；Components 不修改 Run，不更新索引，导入冻结和归属由 Controller/Registry 完成。read_artifact 继续只读取严格 UTF-8，PDF 提取不塞进通用文件读取器。
 
 节奏/冷却只协调同进程，重启不保留；多进程及同出口其他程序由部署方协调。不轮换 IP，不新增跨 Run 下载缓存、队列或多源融合框架；同 Run 复用来自已登记且通过 hash 校验的材料，不维护第二份论文库。
 
-既有来源规范：[arXiv 使用约定](https://info.arxiv.org/help/api/tou.html)、[OpenAlex 鉴权](https://help.openalex.org/api/authentication/)、[Work 字段](https://github.com/ourresearch/openalex-docs/blob/main/api-entities/works/work-object/README.md)。
+既有来源规范：[arXiv 使用约定](https://info.arxiv.org/help/api/tou.html)、[OpenAlex 鉴权](https://help.openalex.org/api/authentication/)、[Work 字段](https://github.com/ourresearch/openalex-docs/blob/main/api-entities/works/work-object/README.md)、[OpenAlex 搜索](https://docs.openalex.org/api-entities/works/search-works)。
 
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。
 

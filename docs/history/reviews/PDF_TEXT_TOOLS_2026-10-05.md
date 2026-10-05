@@ -52,3 +52,9 @@ git diff --check
 ## 验收边界
 
 当前没有已证明的通用PDF性能保证；300秒仍需真实论文补测。文本处理不是任意大小日志的流式搜索，也不是ZIP/图片解析；需要其他格式或更大文件时继续使用现有已审批Shell或专用工具。历史120秒超时及旧L3阅读覆盖保持原事实，不把本轮默认值套回旧结果。
+
+## 2026-10-05：测试方补测汇报
+
+测试方随后报告 `e03a151` 的服务器全量1727 passed / 1 skipped、mock13工件、pip check干净，PDF与文本两场景通过。Guo论文14页实测139.6秒，超过旧120秒且在新300秒内，Scientific范围读取1–620行；约2.6 MiB单行JSON字符分页、128000返回限制、Unicode/CRLF替换、超过10 MiB/非文本搜索跳过均通过。
+
+证据根 `/root/autodl-tmp/resagent2/runs/pdf-text-tools-20261005/`，报告 `protocol/PDF_TEXT_TOOLS_acceptance_report.md`，MANIFEST为66 public + 5 private。本段记录用户提供的测试结论，本轮开发未另外SSH复核；不改写上面的原本地状态，也不据此证明联网搜索效果。服务失败/非法配置/短截止/进程清理未在该真实模型场景触发，仍由确定性测试覆盖。

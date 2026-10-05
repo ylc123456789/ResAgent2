@@ -2,9 +2,13 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-05：目标驱动的文献检索
+
+在同一分支完善 literature_search 的小批结果、范围、来源、分页和错误反馈，保留完整来源摘要；Scientific 按用户目标与材料缺口选择行动，不规定检索阶段或论文配额。schema仍为23.0；本地1751 passed / 1 skipped、mock completed / 13工件。本地验证与服务器测试步骤见[实施及交接](reviews/AGENTIC_LITERATURE_SEARCH_2026-10-05.md)，真实检索/模型补测待执行；不把此前离线PDF和文本工具通过当成联网检索质量证明。
+
 ## 2026-10-05：PDF 超时与工作区文本工具
 
-PDF 默认解析上限调为300秒并支持CLI配置；工作区读、搜、创建和替换共享10 MiB处理规则，读取支持字符窗口、保留原换行，搜索报告不完整覆盖。公共schema仍为23.0；本地1727 passed / 1 skipped、mock completed / 13工件，真实模型补测尚未执行，本地pip check仍有已知缺依赖项。实施、取舍与服务器补测见[本轮交接](reviews/PDF_TEXT_TOOLS_2026-10-05.md)；旧120秒超时和L3记录保持原事实。
+PDF 默认解析上限调为300秒并支持CLI配置；工作区读、搜、创建和替换共享10 MiB处理规则，读取支持字符窗口、保留原换行，搜索报告不完整覆盖。公共schema仍为23.0；本地1727 passed / 1 skipped、mock completed / 13工件，真实模型补测尚未执行，本地pip check仍有已知缺依赖项。后续测试方报告服务器回归和PDF/文本两场景通过，原阶段状态与补测事实分开保留。实施、取舍与服务器补测见[本轮交接](reviews/PDF_TEXT_TOOLS_2026-10-05.md)；旧120秒超时和L3记录保持原事实。
 
 ## 2026-10-04：统一工件 ID（schema 23）
 

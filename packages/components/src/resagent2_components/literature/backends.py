@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import shlex
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
@@ -26,18 +27,82 @@ _ARXIV_HTTP = LiteratureHTTP("arXiv", interval_seconds=3.0)
 _OPENALEX_HTTP = LiteratureHTTP("OpenAlex", interval_seconds=1.0)
 
 
+@dataclass
+class LiteratureSearchResult:
+    """One provider page; an absent total does not prove exhaustion."""
+
+    papers: list[LiteraturePaper]
+    source: str
+    executed_query: str
+    page: int
+    next_page: int | None
+    source_attempts: list[dict] = field(default_factory=list)
+    total_results: int | None = None
+
+
+def _validate_search(query, max_results, source, scope, page, name=None, start_year=None, end_year=None):
+    if (not isinstance(query, str) or not query.strip() or
+            type(max_results) is not int or max_results < 1 or
+            type(page) is not int or page < 1 or scope not in ('topic', 'title') or
+            (source == 'auto' and page != 1) or
+            (name is not None and source not in ('auto', name)) or
+            any(value is not None and (type(value) is not int or not 1 <= value <= 9999)
+                for value in (start_year, end_year)) or
+            (start_year is not None and end_year is not None and start_year > end_year)):
+        raise LiteratureSearchError('Invalid literature search query, scope, source or page',
+                                    error_type='invalid_query')
+    _keywords(query)
+
+
+def _keywords(query):
+    lexer = shlex.shlex(query, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    lexer.quotes = '"'
+    try:
+        keywords = list(lexer)
+    except ValueError:
+        raise LiteratureSearchError(
+            "Use keywords and balanced double-quoted phrases for literature search", error_type="invalid_query"
+        ) from None
+    if not keywords or any(not word.strip() for word in keywords):
+        raise LiteratureSearchError("Literature query must contain non-empty keywords", error_type="invalid_query")
+    return keywords
+
+
+def _attempt(source, error=None):
+    attempt = dict(source=source, status='failed' if error else 'success',
+                   error_type=error.error_type if error else None,
+                   error=str(error) if error else None)
+    if error is not None and error.retry_after is not None:
+        attempt['retry_after'] = error.retry_after
+    return attempt
+
+
+def _result(papers, source, executed_query, page, max_results, total, raw_count):
+    next_page = (page + 1 if (total is not None and page * max_results < total)
+                 or (total is None and raw_count >= max_results) else None)
+    return LiteratureSearchResult(papers, source, executed_query, page, next_page,
+                                  [_attempt(source)], total)
+
+
 class LiteratureSearchBackend(Protocol):
     """Provider-neutral literature search returning normalized papers."""
+
+    name: str
 
     def search(
         self,
         query: str,
         *,
         max_results: int,
+        source: str = 'auto',
+        scope: str = 'topic',
+        page: int = 1,
         start_year: int | None = None,
         end_year: int | None = None,
-    ) -> list[LiteraturePaper]:
-        """Return normalized, deduplicated, truncated papers for one query."""
+    ) -> LiteratureSearchResult:
+        """Return one normalized provider page and execution facts."""
 
 
 class ArxivLiteratureBackend:
@@ -48,6 +113,7 @@ class ArxivLiteratureBackend:
     retries. Failures never become empty search results.
     """
 
+    name = "arxiv"
     _endpoint = "https://export.arxiv.org/api/query"
 
     def __init__(
@@ -55,50 +121,52 @@ class ArxivLiteratureBackend:
         *,
         timeout_seconds: int = 30,
         max_retries: int = 3,
-        max_abstract_chars: int = 2_000,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries  # Historical name: total HTTP attempts.
-        self.max_abstract_chars = max_abstract_chars
 
     def search(
         self,
         query: str,
         *,
         max_results: int,
+        source: str = 'auto',
+        scope: str = 'topic',
+        page: int = 1,
         start_year: int | None = None,
         end_year: int | None = None,
-    ) -> list[LiteraturePaper]:
-        params = {
-            "search_query": self._search_query(query, start_year, end_year),
-            "start": 0,
-            "max_results": max_results,
-        }
-        url = f"{self._endpoint}?{urlencode(params)}"
-        body = self._fetch(url)
-        return self._parse(body)
+    ) -> LiteratureSearchResult:
+        _validate_search(query, max_results, source, scope, page, self.name, start_year, end_year)
+        executed_query = self._search_query(query, start_year, end_year, scope)
+        params = {'search_query': executed_query, 'start': (page - 1) * max_results,
+                  'max_results': max_results, 'sortBy': 'relevance', 'sortOrder': 'descending'}
+        try:
+            body = self._fetch(f"{self._endpoint}?{urlencode(params)}")
+            papers = self._parse(body)
+            root = ElementTree.fromstring(body)
+            raw_total = root.findtext('{http://a9.com/-/spec/opensearch/1.1/}totalResults')
+            total = int(raw_total) if raw_total is not None else None
+            if total is not None and total < 0:
+                raise ValueError('negative total')
+            return _result(papers, self.name, executed_query, page, max_results, total,
+                           len(root.findall(f"{_ATOM}entry")))
+        except LiteratureSearchError as error:
+            error.source_attempts = [_attempt(self.name, error)]
+            raise
+        except ValueError as error:
+            failure = LiteratureSearchError('arXiv returned an invalid result count')
+            failure.source_attempts = [_attempt(self.name, failure)]
+            raise failure from error
 
     @staticmethod
     def _search_query(
-        query: str, start_year: int | None, end_year: int | None
+        query: str, start_year: int | None, end_year: int | None, scope: str = 'topic'
     ) -> str:
         """Translate plain keywords and double-quoted phrases to arXiv syntax."""
-        lexer = shlex.shlex(query, posix=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        lexer.quotes = '"'
-        try:
-            keywords = list(lexer)
-        except ValueError:
-            raise LiteratureSearchError(
-                "Use keywords and balanced double-quoted phrases for literature search"
-            ) from None
-        if not keywords or any(not word.strip() for word in keywords):
-            raise LiteratureSearchError("Literature query must contain non-empty keywords")
-        terms = [
-            'all:"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
-            for word in keywords
-        ]
+        keywords = _keywords(query)
+        escaped = [word.replace("\\", "\\\\").replace('"', '\\"') for word in keywords]
+        terms = [('ti:"' + word + '"') if scope == 'title' else
+                 ('(ti:"' + word + '" OR abs:"' + word + '")') for word in escaped]
         if start_year is not None and end_year is not None:
             terms.append(
                 f"submittedDate:[{start_year}01010000 TO {end_year}12312359]"
@@ -147,8 +215,6 @@ class ArxivLiteratureBackend:
         paper_id = self._paper_id(id_url)
         abstract = self._text(entry, "summary")
         abstract = " ".join(abstract.split())
-        if len(abstract) > self.max_abstract_chars:
-            abstract = abstract[: self.max_abstract_chars]
         authors = [
             name.text.strip()
             for author in entry.findall(f"{_ATOM}author")
@@ -185,52 +251,56 @@ class ArxivLiteratureBackend:
 
 
 class MultiSourceLiteratureBackend:
-    """Peer sources: keep the last successful one, switch on unavailability.
+    """Peer providers with sticky bounded failover only for auto first pages."""
 
-    Each search traverses the configured sources at most once. The initial
-    order is a composition choice, not a primary/backup role. Only an index
-    is remembered in this instance; cooldown remains in the HTTP backends.
-    """
+    name = "auto"
 
     def __init__(self, *backends: LiteratureSearchBackend) -> None:
         if not backends:
-            raise ValueError("at least one literature backend is required")
+            raise ValueError('at least one literature backend is required')
         self.backends = backends
+        self._sources = {backend.name: backend for backend in backends}
+        if len(self._sources) != len(backends) or 'auto' in self._sources:
+            raise ValueError('literature backend names must be unique and not auto')
         self._current_index = 0
 
-    def search(
-        self,
-        query: str,
-        *,
-        max_results: int,
-        start_year: int | None = None,
-        end_year: int | None = None,
-    ) -> list[LiteraturePaper]:
-        bounds = dict(max_results=max_results, start_year=start_year, end_year=end_year)
-        errors: list[str] = []
-        start = self._current_index
-        for offset in range(len(self.backends)):
-            index = (start + offset) % len(self.backends)
+    def search(self, query: str, *, max_results: int, source: str = 'auto',
+               scope: str = 'topic', page: int = 1, start_year: int | None = None,
+               end_year: int | None = None) -> LiteratureSearchResult:
+        _validate_search(query, max_results, source, scope, page, start_year=start_year, end_year=end_year)
+        if source != 'auto' and source not in self._sources:
+            raise LiteratureSearchError('Unknown literature source', error_type='invalid_query')
+        bounds = dict(max_results=max_results, scope=scope, page=page,
+                      start_year=start_year, end_year=end_year)
+        attempts = []
+        indices = ([list(self._sources).index(source)] if source != 'auto' else
+                   [(self._current_index + offset) % len(self.backends)
+                    for offset in range(len(self.backends))])
+        for index in indices:
             backend = self.backends[index]
             try:
-                papers = backend.search(query, **bounds)
-            except LiteratureUnavailableError as error:
-                detail = f"{type(backend).__name__}: {error}"
-                errors.append(detail)
-                logging.getLogger(__name__).warning(
-                    "Literature source unavailable (%s)", detail
-                )
+                result = backend.search(query, source=backend.name, **bounds)
+            except LiteratureSearchError as error:
+                attempts.extend(error.source_attempts or [_attempt(backend.name, error)])
+                error.source_attempts = list(attempts)
+                if source != 'auto' or not isinstance(error, LiteratureUnavailableError):
+                    raise
+                logging.getLogger(__name__).warning('Literature source unavailable (%s): %s', backend.name, error)
                 continue
-            self._current_index = index
-            return papers
+            attempts.extend(result.source_attempts or [_attempt(backend.name)])
+            result.source_attempts = attempts
+            if source == 'auto':
+                self._current_index = index
+            return result
         raise LiteratureUnavailableError(
-            "All literature sources unavailable: " + "; ".join(errors)
-        )
+            'All literature sources unavailable: ' + '; '.join(item['error'] for item in attempts),
+            source_attempts=attempts)
 
 
 class OpenAlexLiteratureBackend:
     """Normalize indexed records/abstracts, without fetching or inventing full text."""
 
+    name = "openalex"
     _endpoint = "https://api.openalex.org/works"
 
     def __init__(
@@ -239,39 +309,56 @@ class OpenAlexLiteratureBackend:
         api_key: str | None = None,
         timeout_seconds: int = 30,
         max_retries: int = 3,
-        max_abstract_chars: int = 2_000,
     ) -> None:
         self._api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries  # Total HTTP attempts, as in arXiv backend.
-        self.max_abstract_chars = max_abstract_chars
 
     def search(
         self,
         query: str,
         *,
         max_results: int,
+        source: str = 'auto',
+        scope: str = 'topic',
+        page: int = 1,
         start_year: int | None = None,
         end_year: int | None = None,
-    ) -> list[LiteraturePaper]:
-        params = {
-            "search": query,
-            "per_page": max_results,
-            "select": "id,doi,display_name,publication_date,authorships,abstract_inverted_index,best_oa_location",
-        }
+    ) -> LiteratureSearchResult:
+        _validate_search(query, max_results, source, scope, page, self.name, start_year, end_year)
+        if max_results > 200 or page * max_results > 10_000:
+            raise LiteratureSearchError('OpenAlex supports at most 200 records per page and 10000 records by page', error_type='invalid_query')
+        params = {'per_page': max_results, 'page': page,
+                  'select': 'id,doi,display_name,publication_date,authorships,abstract_inverted_index,best_oa_location'}
         filters = []
+        params['search.title' if scope == 'title' else 'search.title_and_abstract'] = query
         if start_year is not None:
-            filters.append(f"from_publication_date:{start_year}-01-01")
+            filters.append(f'from_publication_date:{start_year}-01-01')
         if end_year is not None:
-            filters.append(f"to_publication_date:{end_year}-12-31")
+            filters.append(f'to_publication_date:{end_year}-12-31')
         if filters:
-            params["filter"] = ",".join(filters)
-        url = f"{self._endpoint}?{urlencode(params)}"
-        body = _OPENALEX_HTTP.fetch(
-            lambda: self._request(url), max_attempts=self.max_retries,
-            quota_cooldown=self._quota_cooldown,
-        )
-        return self._parse(body)
+            params['filter'] = ','.join(filters)
+        executed_query = query
+        try:
+            body = _OPENALEX_HTTP.fetch(lambda: self._request(f"{self._endpoint}?{urlencode(params)}"),
+                                      max_attempts=self.max_retries, quota_cooldown=self._quota_cooldown)
+            papers = self._parse(body)
+            response = json.loads(body)
+            total = response.get('meta', {}).get('count')
+            if total is not None and (type(total) is not int or total < 0):
+                raise LiteratureSearchError('OpenAlex returned an invalid result count')
+            result = _result(papers, self.name, executed_query, page, max_results, total,
+                             len(response['results']))
+            if result.next_page is not None and result.next_page * max_results > 10_000:
+                result.next_page = None
+            return result
+        except LiteratureSearchError as error:
+            error.source_attempts = [_attempt(self.name, error)]
+            raise
+        except (AttributeError, TypeError) as error:
+            failure = LiteratureSearchError('OpenAlex returned invalid result metadata')
+            failure.source_attempts = [_attempt(self.name, failure)]
+            raise failure from error
 
     def _request(self, url: str) -> httpx.Response:
         headers = {"User-Agent": USER_AGENT}
@@ -348,4 +435,4 @@ class OpenAlexLiteratureBackend:
                     raise ValueError("invalid abstract position")
                 words[position] = word
         abstract = " ".join(words[position] for position in sorted(words))
-        return abstract[:self.max_abstract_chars]
+        return abstract

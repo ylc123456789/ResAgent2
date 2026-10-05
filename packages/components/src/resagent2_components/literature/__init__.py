@@ -10,6 +10,7 @@ from .backends import (
     MultiSourceLiteratureBackend,
     LiteraturePaper,
     LiteratureSearchBackend,
+    LiteratureSearchResult,
 )
 
 from .records import render_paper

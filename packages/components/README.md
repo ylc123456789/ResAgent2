@@ -65,4 +65,4 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。
 
-文献 PDF 当前解析上限为 120 秒，并受 Run 剩余时间约束。较长或复杂的真实论文可能超时；增加 Run 总超时不会自动扩大解析上限。真实验收、保留的失败与尚未实现的性能计划见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。普通调用方可传 `parse_pdf(timeout_seconds=...)`；CLI 使用正整数配置 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 绑定解析器，经 Scientific 注入全文工具。Components 不自行读取该环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

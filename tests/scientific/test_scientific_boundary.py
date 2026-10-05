@@ -6,7 +6,7 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).parents[2] / "packages/agents/scientific/src"
 ALLOWED_IMPORT_ROOTS = {
-    "__future__", "collections", "json", "typing", "pydantic",
+    "__future__", "collections", "json", "pathlib", "typing", "pydantic",
     "resagent2_contracts", "resagent2_runtime", "resagent2_components",
     "resagent2_capabilities",
 }

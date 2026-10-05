@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 from pydantic import ValidationError
 
 from resagent2_contracts import (
@@ -13,6 +16,7 @@ from resagent2_components import (
     ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader,
     ResourceLayout, read_artifact_json, read_request_material, request_dataset_refs, resolve_dataset_refs,
 )
+from resagent2_components.literature.fulltext import PdfText
 from resagent2_capabilities import FetchLiteratureFulltextTool, LiteratureSearchTool, ReadArtifactTool
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, AgentState,
@@ -31,6 +35,7 @@ class ScientificAgent:
     def __init__(
         self, llm_client: LLMClient, *,
         literature_backend: LiteratureSearchBackend | None = None,
+        literature_parser: Callable[[Path], PdfText] | None = None,
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
         max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
@@ -40,6 +45,7 @@ class ScientificAgent:
             raise ValueError("max_context_tokens must be positive")
         self.llm_client = llm_client
         self.literature_backend = literature_backend
+        self.literature_parser = literature_parser
         self.registration_port = registration_port
         self.store = store or InMemorySessionStore()
         self.max_context_tokens = max_context_tokens
@@ -111,6 +117,7 @@ class ScientificAgent:
         if self.registration_port is not None:
             tools.append(FetchLiteratureFulltextTool(
                 self.registration_port, input_artifacts=request.input_artifacts,
+                parse=self.literature_parser,
             ))
         definition = AgentDefinition(
             name="scientific", owner=AgentOwner.SCIENTIFIC,

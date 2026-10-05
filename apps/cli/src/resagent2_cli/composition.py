@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from resagent2_components import (
@@ -21,6 +22,7 @@ from resagent2_components import (
     DatasetCatalog,
     ResourceLayout,
 )
+from resagent2_components.literature.fulltext import DEFAULT_PDF_PARSE_TIMEOUT_SECONDS, parse_pdf
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentOwner,
@@ -137,6 +139,9 @@ def build_application(
 ) -> CliApplication:
     """Create the existing system behind the CLI boundary."""
 
+    pdf_parse_timeout_seconds = _positive_int_env(
+        "RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS", DEFAULT_PDF_PARSE_TIMEOUT_SECONDS,
+    )
     root = Path(data_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     registry = _registry()
@@ -187,6 +192,7 @@ def build_application(
             ArxivLiteratureBackend(),
             OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
         ),
+        literature_parser=partial(parse_pdf, timeout_seconds=pdf_parse_timeout_seconds),
         registration_port=registration,
         store=scientific_store,
         max_context_tokens=scientific_context_tokens,

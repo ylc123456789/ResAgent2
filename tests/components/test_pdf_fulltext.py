@@ -185,6 +185,7 @@ def test_parser_preserves_child_io_failure(tmp_path):
 
 
 def test_parser_invokes_only_fixed_module_with_current_python(monkeypatch, tmp_path):
+    monkeypatch.setenv("RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS", "900")
     path = tmp_path / "source.pdf"
     calls = []
     parsed = fulltext.PdfText("## Page 1\ntext", 1, [], "test")
@@ -200,7 +201,7 @@ def test_parser_invokes_only_fixed_module_with_current_python(monkeypatch, tmp_p
     assert fulltext.parse_pdf(path) == parsed
     assert calls == [([
         sys.executable, "-m", "resagent2_components.literature.fulltext", str(path.resolve()),
-    ], {"timeout": 120.0})]
+    ], {"timeout": 300})]
 
 
 def test_parser_child_stdout_contains_only_json():

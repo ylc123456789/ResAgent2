@@ -18,6 +18,9 @@ from ..process import run_process
 from ._http import USER_AGENT
 
 
+DEFAULT_PDF_PARSE_TIMEOUT_SECONDS = 300
+
+
 class PdfFetchError(RuntimeError):
     """A literature PDF could not be obtained within the download limits."""
 
@@ -84,7 +87,9 @@ def fetch_pdf(
     return output
 
 
-def parse_pdf(path: Path, *, timeout_seconds: float = 120.0) -> PdfText:
+def parse_pdf(
+    path: Path, *, timeout_seconds: float = DEFAULT_PDF_PARSE_TIMEOUT_SECONDS,
+) -> PdfText:
     """Parse with a bounded fixed subprocess; the parent retains the original."""
     command = [sys.executable, "-m", "resagent2_components.literature.fulltext", str(Path(path).resolve())]
     try:

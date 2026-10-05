@@ -360,4 +360,4 @@ arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒�
 - 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。
 
-文献 PDF 当前解析上限为 120 秒，并受 Run 剩余时间约束。较长或复杂的真实论文可能超时；增加 Run 总超时不会自动扩大解析上限。真实验收、保留的失败与尚未实现的性能计划见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；程序化调用和独立 E2E 不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

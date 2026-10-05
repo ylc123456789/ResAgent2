@@ -26,6 +26,8 @@ fetch_literature_fulltext，得到 literature_pdf 与 literature_fulltext 的引
 检索预览、元信息、摘要、解析正文和原始 PDF 不互相冒称；同 Run 已登记材料可复用。
 外部导入论文也经既有授权 input_artifacts 与科研目录交接，来源标为用户导入；
 全文工具优先复用导入 PDF，按需解析，不要求为了使用本地材料重新联网检索。
+组合根可用 `literature_parser` 注入解析函数；未提供时沿用 Components 的默认解析器。
+Scientific 不读取 CLI 环境变量，模型工具不接收超时覆盖参数。
 observation_trace 从真实工具访问确定性生成，模型不能自行填报，也不代表读完全文。
 
 回答与工作反馈按 resume_artifact_ids 从正式快照投影到必需上下文。Scientific

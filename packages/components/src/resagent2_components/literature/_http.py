@@ -26,9 +26,21 @@ _LOGGER = logging.getLogger(__name__)
 class LiteratureSearchError(RuntimeError):
     """A search did not produce a valid, normalized result."""
 
+    def __init__(self, message, *, error_type='invalid_response', source_attempts=None,
+                 retry_after=None):
+        super().__init__(message)
+        self.error_type = error_type
+        self.source_attempts = list(source_attempts or [])
+        self.retry_after = retry_after
+
 
 class LiteratureUnavailableError(LiteratureSearchError):
     """This source cannot serve the request; another source may be tried."""
+
+    def __init__(self, message, *, error_type='unavailable', source_attempts=None,
+                 retry_after=None):
+        super().__init__(message, error_type=error_type, source_attempts=source_attempts,
+                         retry_after=retry_after)
 
 
 def _retry_after(value: str | None) -> float:
@@ -111,9 +123,11 @@ class LiteratureHTTP:
             remaining = self._cooldown_until - time.monotonic()
             if remaining > 0:
                 raise LiteratureUnavailableError(
-                    f"{self.source} cooling down; retry in {remaining:.0f}s"
+                    f"{self.source} cooling down; retry in {remaining:.0f}s",
+                    error_type="cooldown", retry_after=remaining
                 )
             reason = ""
+            error_type = "unavailable"
             for attempt in range(max_attempts):
                 wait = self._next_request_at - time.monotonic()
                 if wait > 0:
@@ -137,6 +151,7 @@ class LiteratureHTTP:
                     )
                     cooldown_seconds = 0.0
                     transient = status == 408 or 500 <= status <= 599
+                    error_type = "timeout" if status == 408 else "service_error"
                     if status == 429 or (transient and retry_after > 0):
                         cooldown_seconds = max(COOLDOWN_SECONDS, retry_after)
                     elif transient and attempt == max_attempts - 1:
@@ -156,28 +171,34 @@ class LiteratureHTTP:
                         # Do not repeat a rejected request against this source;
                         # a peer source may still serve the same query.
                         raise LiteratureUnavailableError(
-                            f"{self.source} HTTP 406; source cannot serve this request"
+                            f"{self.source} HTTP 406; source cannot serve this request",
+                            error_type="request_rejected"
                         ) from None
                     if status == 429:
                         self._cooldown_until = time.monotonic() + cooldown_seconds
                         raise LiteratureUnavailableError(
-                            f"{self.source} HTTP 429; rate limited, cooldown active"
+                            f"{self.source} HTTP 429; rate limited, cooldown active",
+                            error_type="rate_limited", retry_after=cooldown_seconds
                         ) from None
                     if status != 408 and not 500 <= status <= 599:
                         raise LiteratureSearchError(
-                            f"{self.source} HTTP {status}; request rejected"
+                            f"{self.source} HTTP {status}; request rejected",
+                            error_type="request_rejected"
                         ) from None
                     if retry_after > 0:
                         self._cooldown_until = time.monotonic() + max(
                             COOLDOWN_SECONDS, retry_after
                         )
                         raise LiteratureUnavailableError(
-                            f"{self.source} {reason}; Retry-After cooldown active"
+                            f"{self.source} {reason}; Retry-After cooldown active",
+                            error_type=error_type, retry_after=max(COOLDOWN_SECONDS, retry_after)
                         ) from None
                 except DeadlineExceededError:
                     raise
                 except (httpx.TransportError, TimeoutError, ConnectionError) as error:
                     reason = type(error).__name__
+                    error_type = ("timeout" if isinstance(error, (httpx.TimeoutException, TimeoutError))
+                                  else "network_error")
                 finally:
                     self._next_request_at = time.monotonic() + self.interval_seconds
                 if attempt < max_attempts - 1:
@@ -186,7 +207,8 @@ class LiteratureHTTP:
                     )
             self._cooldown_until = time.monotonic() + COOLDOWN_SECONDS
             raise LiteratureUnavailableError(
-                f"{self.source} request failed after {max_attempts} attempts: {reason}"
+                f"{self.source} request failed after {max_attempts} attempts: {reason}",
+                error_type=error_type, retry_after=COOLDOWN_SECONDS
             )
         finally:
             self._lock.release()

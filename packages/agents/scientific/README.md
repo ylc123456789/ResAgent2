@@ -2,6 +2,9 @@
 
 `ScientificAgent.invoke(AgentRequest) -> AgentResult` 与执行 Agent 使用相同协议。
 Scientific 保留一套提示词与动作 schema，Session 归属 Run，不伪造 Task。
+以用户目标与明确约束判断材料缺口，选择自己的工具或执行工作，再综合交付。
+文献检索不是必经第一步；小批结果供判断阅读、改词、换源、分页或停止，
+不规定搜索轮数或论文配额。来源操作细节由 literature_search 的能力说明维护。
 
 工具包括 read_artifact、可注入的 literature_search / fetch_literature_fulltext、
 request_work、ask_user 和共享 finish。request_work 需要系统明确授权，

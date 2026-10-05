@@ -243,7 +243,9 @@ Controller 在 Run 创建时将 `required_evidence_kinds` 与 `required_artifact
 
 PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可通过正整数环境变量 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 覆盖，由组合根绑定解析器并注入 Scientific；Components 不自行读取部署环境变量，程序化调用可显式传入解析器或超时。该值不是 LLM 可修改的 Tool 参数，也不随 Run 总超时自动扩大。300 秒是针对原 120 秒超时的初始工程值，不保证所有论文足够；原计时事实见[验收记录](../history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。失败继续终止受控解析进程并保留 PDF 原件，不生成伪造全文。
 
-`literature_search` 保存一次检索的查询与论文引用，是搜索回执；每篇论文独立登记为 `literature_paper`，保存来源元信息和检索所得摘要，`metadata.paper` 保留规范化记录。按明确的规范化论文 key 识别论文，保留 arXiv 版本；同 Run 中仅在规范化元信息快照相同时复用条目，同 key 的元信息发生变化则登记新不可变快照。不按相同标题或摘要猜测同一论文。
+`literature_search(query, source='auto', scope='topic', page=1, max_results=5, start_year=None, end_year=None)` 支持普通关键词和双引号短语，字面双引号和反斜杠须转义；scope=topic 查询标题/摘要的关键词或短语；scope=title 将完整查询规范化为一个标题短语，外层双引号可省略，不保证精确唯一匹配，仍需核对返回题录。max_results 范围1–20，年份范围1900–2100且起年不得晚于止年。auto 只用于第一页，按最近成功来源选择且仅在不可用时切源；合法空结果不继续扫源，显式来源不回退。后续页须指定来源；next_request 保留原查询、范围、年份和数量并绑定实际来源。回执和工具反馈包含实际 source、executed_query、page、total_results、source_attempts、next_request、error_type 和 retry_after，并区分 results / empty / failed。total_results 缺失不证明结果耗尽；OpenAlex 页号分页最多覆盖前10000条，触及边界也不等于穷尽结果。
+
+`literature_search` 保存一次检索的查询与论文引用，是搜索回执；每篇论文独立登记为 `literature_paper`，保存来源元信息和来源提供的完整摘要，`metadata.paper` 保留规范化记录；工具只预览前500字符并标明 abstract_truncated，reused 表示复用相同快照，完整摘要可用 read_artifact 读取。按明确的规范化论文 key 识别论文，保留 arXiv 版本；同 Run 中仅在规范化元信息快照相同时复用条目，同 key 的元信息发生变化则登记新不可变快照。不按相同标题或摘要猜测同一论文。
 
 `fetch_literature_fulltext(paper_artifact_id)` 接收本 Run 授权的论文工件 ID，按登记来源获取可用 PDF，并生成 `literature_pdf` 与解析文本 `literature_fulltext`。衍生工件的 `metadata.paper_artifact_id` 标明所属论文；`metadata.source_artifact_id` 表示直接来源，PDF 指向 paper，解析文本指向 PDF。目录投影该直接关系，不复制文件、权限或完整来源图。
 
@@ -350,7 +352,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | [DatasetCatalog / resolve_dataset_refs](../../packages/components/src/resagent2_components/dataset.py) | 部署目录 / Run 引用 → 登记引用 / DatasetAvailability | 不下载、不猜准备状态；资源缺失怎样询问仍由 Agent 决定 |
 | [ResourceLayout](../../packages/components/src/resagent2_components/resources.py) | 部署配置 → 数据集与环境根目录 | 不管理 pip/conda 下载缓存，不成为 ResearchRequest 字段 |
 | [RegisteredArtifactReader / build_module_report](../../packages/components/src/resagent2_components/artifacts.py) | 授权 ID + 行范围 → 正文；模块说明 → ArtifactCandidate | 读取先校验 Run 与整份 hash；报告生成纯函数，不自行登记或生成科学证据 |
-| [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、数量和年份 → 规范化论文列表 | 两源保持平级切换；服务不可用与合法空结果区分，不伪造全文 |
+| [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、来源、范围、页号、数量和年份 → LiteratureSearchResult（论文页与来源/分页事实） | auto 首页面向平级来源有界切换；显式来源不回退；失败保留类型与来源尝试，不伪造全文 |
 | [load_literature_manifest](../../packages/components/src/resagent2_components/literature/imports.py) | 本地 JSON 清单 → PreparedLiteratureImport 列表 | 验证元信息及可选 PDF，路径相对清单目录；不联网、不登记或恢复 Run |
 | [workspace_context](../../packages/components/src/resagent2_components/context.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
 | [文本读写与窗口](../../packages/components/src/resagent2_components/text.py) | 工作区路径 / 文本 → 有界严格读入 / 写入前编码验证；文本 + 行字符范围 → 窗口 | 工作区默认10 MiB，返回默认128000字符；保留原换行，不决定授权或模型预算，工件仍由 reader 验证 |

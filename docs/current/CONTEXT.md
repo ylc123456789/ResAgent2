@@ -122,6 +122,8 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 | `material_<feedback_id>` | 原请求、任务状态与问题、跨轮未解决项、原件入口及已记录报告 | 仅本轮交付时呈现；事实框必需，报告按共享额度伸缩；完整目录单独展示 |
 | `artifact_reads` | 本 Session 的工件读取片段和已读来源提示 | 有读取/来源提示才出现；导航框必需，正文弹性分配 |
 
+Scientific 以用户目标和明确约束为主线，先判断已有材料是否足够，再选择自己的工具或提出执行工作需求，最后综合结果完成交付。文献检索用于补足所需材料，不是每次 Run 的必经第一步，也不规定查询轮数或论文数量。
+
 Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search` 与 `fetch_literature_fulltext` 由组合根注入相应来源组件和 registration port 后装配。
 
 finish 与另外两个 Agent 共用 status/report/artifacts；Scientific 的完成意见仅接受 status=completed，产物必须包含 scientific_opinion JSON。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
@@ -292,9 +294,9 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 
 ## 5. 文献的完整工作流及边界
 
-1. **Scientific 发起检索。** CLI/E2E 将 arXiv、OpenAlex 作为平级来源装配，沿用最近成功来源和有界切换规则。搜索返回来源元信息、摘要和可用的全文入口；摘要缺失留空，不补写 LLM 摘要。搜索成功与全文可获取是两件事。
+1. **Scientific 按材料缺口检索。** CLI/E2E 仍装配 arXiv、OpenAlex 两个来源；默认小批5篇，支持 topic（标题/摘要）与 title（标题）范围。auto 首页沿用最近成功来源和仅不可用时的有界切换；显式来源不回退，后续页须绑定来源。查询只接受普通关键词或双引号短语，字面双引号和反斜杠须转义；topic 保留关键词/短语检索，arXiv 按 AND 连接。title 将完整查询作为一个标题短语，外层双引号可省略；两源索引和词法处理不同，不保证结果等价或标题精确唯一命中，仍需核对返回题录身份。摘要缺失留空，不补写 LLM 摘要；搜索成功与全文可获取是两件事。
 2. **按论文登记材料。** 每篇结果独立登记为 `literature_paper`，正文明确是元信息与摘要，`metadata.paper` 保留规范化记录。`literature_search` 只保存本次查询及论文引用，作为搜索回执。重复搜索按明确的规范化论文 key 识别论文，保留 arXiv 版本；规范化元信息快照相同才复用同 Run 条目，同 key 内容变化登记新快照。不按标题猜测合并，也不重写旧冻结工件。
-3. **浏览和按需深入。** 工具返回论文引用和有限预览，科研目录展示论文及直接来源关系。Scientific 可用 `read_artifact` 阅读单篇条目；需要方法、实验设置、表格或原文依据时，再调用 `fetch_literature_fulltext(paper_artifact_id)`。元信息、摘要、原始 PDF 与解析文本的区别始终保留。
+3. **浏览和按需深入。** 工具返回论文引用、500字符摘要预览及是否裁剪/复用，同时提供实际来源、执行查询、来源尝试、错误类型和完整 next_request。单篇工件保留来源的完整摘要。Scientific 看过本批结果后，按目标选择阅读、改词、换源、翻页或停止；不自动扩写查询、凑论文数或下载所有正文。total_results 未知或触及来源分页边界时，缺少 next_request 不证明结果已耗尽。科研目录展示论文及直接来源关系。Scientific 可用 `read_artifact` 阅读单篇条目；需要方法、实验设置、表格或原文依据时，再调用 `fetch_literature_fulltext(paper_artifact_id)`。元信息、摘要、原始 PDF 与解析文本的区别始终保留。
 4. **取得全文并复用。** 全文工具只接收已授权论文 ID；优先复用本 Run 导入或检索后冻结的 PDF，没有原件时再按登记来源获取可用 PDF；Registry 分别冻结 `literature_pdf` 与 `literature_fulltext`。`metadata.paper_artifact_id` 指向论文，`metadata.source_artifact_id` 标明直接来源（PDF→论文，文本→PDF），目录只投影这条关系。工具按 paper_artifact_id 复用本 Run 已冻结材料，解析失败重试可复用 PDF，不因重复请求重新下载成功的原件。
 5. **阅读和判断。** PDF 由 PyMuPDF4LLM 提取为可供现有 `read_artifact` 按范围读取的文本，关闭 OCR，不新增 LLM 阅读笔记。摘要预览或下载成功都不代表读取了全文；空文本、解析错误和材料局限应如实处理。Scientific 根据问题判断哪些正文足够以及是否还需工作，不要求逐篇读完整篇。
 6. **记录与检查。** 访问历史保留为诊断事实，不再作为 ask_user、request_work、引用或 finish 的前置门槛。引用仍须指向本 Run 授权登记的完整工件；`required_evidence_kinds` 检查已引用的 `literature_paper` 或 `literature_fulltext`，搜索回执不能代替论文。`required_artifacts` 继续按精确 output_name 与冻结 hash 检查交付，不评价内容含义。

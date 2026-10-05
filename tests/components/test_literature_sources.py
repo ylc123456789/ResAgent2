@@ -6,6 +6,7 @@ from tests.components.test_literature_http import http_response
 
 from resagent2_components import (
     LiteratureSearchError,
+    LiteratureSearchResult,
     LiteratureUnavailableError,
     MultiSourceLiteratureBackend,
 )
@@ -23,7 +24,7 @@ class ScriptedSource:
         reply = next(self.replies)
         if isinstance(reply, Exception):
             raise reply
-        return reply
+        return LiteratureSearchResult(reply, self.name, query, bounds.get("page", 1), None)
 
 
 @pytest.mark.parametrize("names", [("arxiv", "openalex"), ("openalex", "arxiv")])
@@ -39,16 +40,16 @@ def test_peers_can_switch_both_ways_and_reuse_success(names):
     backend = MultiSourceLiteratureBackend(first, second)
     bounds = dict(max_results=4, start_year=2020, end_year=2024)
 
-    assert backend.search("first", **bounds) == second_result
-    assert backend.search("next", **bounds) == second_result
+    assert backend.search("first", **bounds).papers == second_result
+    assert backend.search("next", **bounds).papers == second_result
     # The previous source can recover and be used when the current one fails.
-    assert backend.search("return", **bounds) == first_result
+    assert backend.search("return", **bounds).papers == first_result
     assert [(name, query) for name, query, _ in calls] == [
         (names[0], "first"), (names[1], "first"),
         (names[1], "next"),
         (names[1], "return"), (names[0], "return"),
     ]
-    assert all(received == bounds for _, _, received in calls)
+    assert all(received == dict(bounds, source=name, scope="topic", page=1) for name, _, received in calls)
 
 
 def test_all_unavailable_visits_each_source_once_and_keeps_all_errors():
@@ -69,8 +70,8 @@ def test_initial_order_is_configurable_and_success_does_not_query_other_sources(
     selected = ScriptedSource("selected", [expected, expected], calls)
     untouched = ScriptedSource("untouched", [], calls)
     backend = MultiSourceLiteratureBackend(selected, untouched)
-    assert backend.search("x", max_results=1) == expected
-    assert backend.search("y", max_results=1) == expected
+    assert backend.search("x", max_results=1).papers == expected
+    assert backend.search("y", max_results=1).papers == expected
     assert [name for name, _, _ in calls] == ["selected", "selected"]
 
 
@@ -79,8 +80,8 @@ def test_valid_empty_result_after_switch_is_success_not_another_failure():
     first = ScriptedSource("first", [LiteratureUnavailableError("offline")], calls)
     second = ScriptedSource("second", [[], []], calls)
     backend = MultiSourceLiteratureBackend(first, second)
-    assert backend.search("x", max_results=1) == []
-    assert backend.search("y", max_results=1) == []
+    assert backend.search("x", max_results=1).papers == []
+    assert backend.search("y", max_results=1).papers == []
     assert [name for name, _, _ in calls] == ["first", "second", "second"]
 
 
@@ -142,14 +143,14 @@ def test_peer_switching_respects_each_real_backends_http_cooldown(monkeypatch):
     backend = MultiSourceLiteratureBackend(
         literature.ArxivLiteratureBackend(), openalex.OpenAlexLiteratureBackend(),
     )
-    assert backend.search("x", max_results=3)[0].paper_id == "openalex:W123"
+    assert backend.search("x", max_results=3).papers[0].paper_id == "openalex:W123"
     clock[0] = 10
     with pytest.raises(LiteratureUnavailableError, match="All literature sources"):
         backend.search("x", max_results=3)
     # arXiv remains in cooldown: do not make another HTTP request to it yet.
     assert calls == [("arxiv", 0), ("openalex", 0), ("openalex", 10)]
     clock[0] = 61
-    assert backend.search("x", max_results=3)[0].paper_id == "2301.00001v2"
+    assert backend.search("x", max_results=3).papers[0].paper_id == "2301.00001v2"
     # OpenAlex remains in cooldown until t=70; arXiv has recovered.
     assert calls[-1] == ("arxiv", 61)
     assert len(calls) == 4
@@ -185,9 +186,9 @@ def test_406_tries_real_peer_backend_and_keeps_successful_source(real_backends, 
     )
 
     first = backend.search("calibration", max_results=3)
-    assert first[0].paper_id == "openalex:W123"
-    assert first[0].source_url == "https://openalex.org/W123"
-    assert backend.search("next query", max_results=3) == first
+    assert first.papers[0].paper_id == "openalex:W123"
+    assert first.papers[0].source_url == "https://openalex.org/W123"
+    assert backend.search("next query", max_results=3).papers == first.papers
     assert calls == ["arxiv", "openalex", "openalex"]
 
 
@@ -245,3 +246,41 @@ def test_other_backend_failures_do_not_switch_sources(real_backends, monkeypatch
         backend.search("calibration", max_results=3)
     assert not isinstance(caught.value, LiteratureUnavailableError)
     assert calls == ["arxiv"]
+
+
+@pytest.mark.parametrize('source,page,scope', [('auto', 2, 'topic'), ('missing', 1, 'topic'), ('arxiv', 0, 'topic'), ('arxiv', 1, 'fulltext')])
+def test_invalid_selection_has_no_provider_calls(source, page, scope):
+    calls = []
+    backend = MultiSourceLiteratureBackend(ScriptedSource('arxiv', [], calls))
+    with pytest.raises(LiteratureSearchError) as caught:
+        backend.search('query', max_results=2, source=source, page=page, scope=scope)
+    assert caught.value.error_type == 'invalid_query'
+    assert calls == []
+
+
+def test_explicit_source_failure_never_switches():
+    calls = []
+    backend = MultiSourceLiteratureBackend(
+        ScriptedSource('arxiv', [LiteratureUnavailableError('offline')], calls),
+        ScriptedSource('openalex', [], calls))
+    with pytest.raises(LiteratureUnavailableError) as caught:
+        backend.search('q', max_results=2, source='arxiv', page=2)
+    assert [call[0] for call in calls] == ['arxiv']
+    assert caught.value.source_attempts[0]['source'] == 'arxiv'
+
+
+def test_duplicate_source_names_rejected():
+    with pytest.raises(ValueError, match='unique'):
+        MultiSourceLiteratureBackend(ScriptedSource('arxiv', [], []), ScriptedSource('arxiv', [], []))
+
+
+def test_fallback_keeps_rate_limit_cooldown_in_attempt():
+    calls = []
+    backend = MultiSourceLiteratureBackend(
+        ScriptedSource('arxiv', [LiteratureUnavailableError('limited', error_type='rate_limited', retry_after=120)], calls),
+        ScriptedSource('openalex', [[]], calls))
+    result = backend.search('q', max_results=2)
+    assert backend.name == 'auto'
+    assert result.source_attempts[0]['retry_after'] == 120
+    assert result.source_attempts[0]['error_type'] == 'rate_limited'
+    assert result.source_attempts[1]['status'] == 'success'

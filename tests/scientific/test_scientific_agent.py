@@ -168,9 +168,9 @@ def test_literature_search_ref_is_returned_without_duplicate_registration(tmp_pa
     from resagent2_components import LiteraturePaper
 
     class Backend:
-        def search(self, query, *, max_results, start_year=None, end_year=None):
-            return [LiteraturePaper(paper_id="123", title="Paper", authors=["Author"],
-                                    abstract="Result", source_url="https://example.com/paper")]
+        def search(self, query, *, max_results, start_year=None, end_year=None, source="auto", scope="topic", page=1):
+            return _search_result([LiteraturePaper(paper_id="123", title="Paper", authors=["Author"],
+                                    abstract="Result", source_url="https://example.com/paper")])
 
     class Register:
         def __init__(self):
@@ -330,3 +330,12 @@ def test_obsolete_opinion_fields_are_rejected():
         finish(acknowledged_task_ids=["task_unknown"]),
     ])).invoke(request())
     assert result.status == "failed"
+
+
+def _search_result(papers):
+    from resagent2_components import LiteratureSearchResult
+    return LiteratureSearchResult(papers=papers, source="arxiv", executed_query="test query",
+                                  page=1, next_page=None, source_attempts=[{
+                                      "source": "arxiv", "status": "success",
+                                      "error_type": None, "error": None,
+                                  }])

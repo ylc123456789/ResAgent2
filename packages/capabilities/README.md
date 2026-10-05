@@ -32,7 +32,7 @@ search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b`
 
 delete_path 接受准确的相对 path 和 recursive=False；已授权文件、链接或空目录可直接删除，非空目录须明确 recursive=True 并通过目标快照确认。执行前重验路径集合、类型和版本，变化不能复用旧批准。链接只删除自身；根目录、受保护元数据和越界目标拒绝。删除与部分完成都沿用 edit_revision、读取过期标记和验证失效机制，不提供原子回滚。首版只装配到 Coding；删除文件内容仍使用 replace_text(new_text="")。
 
-文献 Tool 接收注入的来源组件与 ArtifactRegistrationPort，将真实材料交给 Registry 冻结，不自行生成 ArtifactId/hash。literature_search 为每篇结果登记 literature_paper，并保存查询与论文引用的搜索回执；fetch_literature_fulltext(paper_artifact_id) 按需登记原始 PDF 和解析文本，同 Run 复用已冻结材料，包括授权输入中的外部导入论文和 PDF；原件已存在时无需联网。工具不接受任意路径或 URL 代替论文工件 ID，也不自行增加 LLM 摘要。来源选择与 HTTP 规则在 [文献组件](../components/README.md#literature)，环境和数据集实现也在 Components。
+文献 Tool 接收注入的来源组件与 ArtifactRegistrationPort，将真实材料交给 Registry 冻结，不自行生成 ArtifactId/hash。literature_search 默认返回5篇，支持 source / scope / page 和原有年份筛选；title 将完整查询作为一个标题短语（外层双引号可省略），topic 仍接受关键词/短语，模型需核对返回的题录身份；auto 只用于首页，续页请求固定实际来源及过滤条件。回执与反馈保留来源、执行查询、页号、来源尝试和明确错误，区分成功空结果与失败。每篇结果登记 literature_paper 保留完整来源摘要，工具预览前500字符并标明裁剪和复用；fetch_literature_fulltext(paper_artifact_id) 按需登记原始 PDF 和解析文本，同 Run 复用已冻结材料，包括授权输入中的外部导入论文和 PDF；原件已存在时无需联网。工具不接受任意路径或 URL 代替论文工件 ID，也不自行增加 LLM 摘要。来源选择与 HTTP 规则在 [文献组件](../components/README.md#literature)，环境和数据集实现也在 Components。
 
 通用材料读取与作用域校验在 Components；Scientific 的 WorkFeedback 事实框和报告呈现在 `agents/scientific/context.py`。选择与预算仍由 Runtime 统一管理，详见 [CONTEXT](../../docs/current/CONTEXT.md#budgets)，这里不再维护另一份额度表。
 

@@ -15,6 +15,9 @@ Schema 22 updates embedded contract versions and documents imported PDF reuse.
 Schema 23 only updates embedded versions for the unified artifact identity format.
 Later schema 23 tool updates add workspace character windows, search coverage,
 and shared text size/encoding/newline rules; public Run fields remain unchanged.
+Later literature_search updates add source/scope/page, small-batch defaults,
+500-character previews and honest pagination/error guidance without changing Run fields.
+Title lookup treats the complete query as one phrase and describes identity checks.
 """
 
 import hashlib

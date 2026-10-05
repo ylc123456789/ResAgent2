@@ -2,13 +2,25 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-05：文献搜索相对main的完整Agent对照
+
+main64de57f与candidate72447ee（代码5ff44f1）以相同模型/预算完成三目标各一轮、共六Run；main交付1/3、候选3/3，274工件与45请求已对账。已知论文打平，候选在局限任务取得新增已读依据；漂移选文各有优势，候选更早阅读并完成。固定查询排序混合，完整摘要保存避免实际反例丢失；科学条件表述仍有过强及错标，不能当作科研全正确。建议采用搜索增量，尚未合并；协议、取舍和证据见[相对main的交付对照](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。
+
+## 2026-10-05：文献搜索独立分支与标题修复
+
+基础已以64de57f合入并推送main；搜索留在fix/literature-search。title完整短语修复的五标题对照为arXiv hit@5 0/5→5/5、OpenAlex保持5/5；5ff44f1服务器1765 passed / 1 skipped、mock13、真实Scientific两目标及64public/3private清单、42件工件已独立复核。记录修正OpenAlex未印证、9份摘要、正文仅前235行及两次完成纠错；功能验收通过；后续相对main的对照已完成，见上一节。本阶段标题验收见[修复与验收](reviews/LITERATURE_TITLE_SEARCH_2026-10-05.md)。
+
+## 2026-10-05：目标驱动的文献检索
+
+在同一分支完善 literature_search 的小批结果、范围、来源、分页和错误反馈，保留完整来源摘要；Scientific 按用户目标与材料缺口选择行动，不规定检索阶段或论文配额。schema仍为23.0；本地1751 passed / 1 skipped、mock completed / 13工件。本地验证与服务器测试步骤见[实施及交接](reviews/AGENTIC_LITERATURE_SEARCH_2026-10-05.md)，服务器1faab0f的真实小测与分页探针已完成，工件/调用对账通过；独立复核发现title逐词AND对完整标题的召回问题及服务器报告遗漏的恢复过程，见同一记录的验收章节。不把功能通过等同商业搜索质量。
+
 ## 2026-10-05：文献基础与通用工具合并收尾
 
 已验收基础以e03a151为代码切点合入main，涵盖单篇文献、外部导入、证据/验证边界、统一工件ID、PDF300秒配置及文本窗口；搜索增量从1faab0f独立继续验收。服务器e03全量1727/1skip、mock13、PDF/文本原件与清单已只读复核。各阶段L3、资料覆盖和139.6秒计时证据边界见[基础收尾](reviews/LITERATURE_BASELINE_ACCEPTANCE_2026-10-05.md)。
 
 ## 2026-10-05：PDF 超时与工作区文本工具
 
-PDF 默认解析上限调为300秒并支持CLI配置；工作区读、搜、创建和替换共享10 MiB处理规则，读取支持字符窗口、保留原换行，搜索报告不完整覆盖。公共schema仍为23.0；本地1727 passed / 1 skipped、mock completed / 13工件，真实模型补测尚未执行，本地pip check仍有已知缺依赖项。实施、取舍与服务器补测见[本轮交接](reviews/PDF_TEXT_TOOLS_2026-10-05.md)；旧120秒超时和L3记录保持原事实。
+PDF 默认解析上限调为300秒并支持CLI配置；工作区读、搜、创建和替换共享10 MiB处理规则，读取支持字符窗口、保留原换行，搜索报告不完整覆盖。公共schema仍为23.0；本地1727 passed / 1 skipped、mock completed / 13工件，真实模型补测尚未执行，本地pip check仍有已知缺依赖项。后续测试方报告服务器回归和PDF/文本两场景通过，原阶段状态与补测事实分开保留。实施、取舍与服务器补测见[本轮交接](reviews/PDF_TEXT_TOOLS_2026-10-05.md)；旧120秒超时和L3记录保持原事实。
 
 ## 2026-10-04：统一工件 ID（schema 23）
 

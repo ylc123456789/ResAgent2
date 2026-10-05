@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 from resagent2_components import (
     ArtifactReadError,
     LiteraturePaper,
+    LiteratureSearchResult,
     RegisteredArtifactReader,
     ResourceLayout,
 )
@@ -243,7 +244,10 @@ def _paper_ref(registration):
 def test_scientific_reads_new_literature_in_the_same_turn(registration):
     class Backend:
         def search(self, query, **kwargs):
-            return [_paper()]
+            return LiteratureSearchResult(
+                papers=[_paper()], source="arxiv", executed_query=query,
+                page=kwargs["page"], next_page=None, total_results=1,
+            )
 
     class Client:
         step = 0
@@ -282,7 +286,10 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
 def test_resumed_scientific_does_not_return_historical_input_refs(registration):
     class Backend:
         def search(self, query, **kwargs):
-            return [_paper()]
+            return LiteratureSearchResult(
+                papers=[_paper()], source="arxiv", executed_query=query,
+                page=kwargs["page"], next_page=None, total_results=1,
+            )
 
     class Client:
         step = 0

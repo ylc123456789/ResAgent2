@@ -295,7 +295,7 @@ def test_text_reads_preserve_valid_utf8_regardless_of_file_label(tmp_path, body)
     ref = _artifact(path).model_copy(update={"media_type": "application/octet-stream"})
     file_tool = ReadFileTool(_boundary(tmp_path))
     artifact_tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
-    assert file_tool.execute(_state(), file_tool.input_model(path=path.name)).value["content"] == body.replace("\r\n", "\n").replace("\r", "\n")
+    assert file_tool.execute(_state(), file_tool.input_model(path=path.name)).value["content"] == body
     result = artifact_tool.execute(_state(), artifact_tool.input_model(artifact_id=ref.id))
     assert result.value["content"] == body
     assert result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if body else [])
@@ -358,3 +358,33 @@ def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, regi
     state = store.load("session_reader")
     assert state.memory[memory_key] == expected
     assert state.runtime_feedback is None
+
+
+@pytest.mark.parametrize("start_line,end_line,start_char,end_char", [
+    (None, None, 2, 7),
+    (2, 2, 1, 5),
+    (2, 3, 0, 100),
+    (None, None, 100, None),
+])
+def test_workspace_and_artifact_share_character_windows_and_newlines(
+    tmp_path, start_line, end_line, start_char, end_char,
+):
+    body = "header\r\n\u4e2d\u6587\U0001f600abc\r\ntail\r"
+    path = tmp_path / "text.txt"
+    path.write_bytes(body.encode("utf-8"))
+    ref = _artifact(path)
+    file_tool = ReadFileTool(_boundary(tmp_path), max_chars=5)
+    artifact_tool = ReadArtifactTool(
+        RegisteredArtifactReader([ref], run_id=ref.run_id),
+    )
+    options = {
+        "start_line": start_line, "end_line": end_line,
+        "start_char": start_char, "end_char": end_char,
+    }
+    file_value = file_tool.execute(
+        _state(), file_tool.input_model(path=path.name, **options),
+    ).value
+    artifact_value = artifact_tool.reader.read_text(ref.id, max_chars=5, **options)
+    for key in ("start_line", "end_line", "start_char", "end_char", "content", "truncated"):
+        assert file_value[key] == artifact_value[key]
+    assert path.read_bytes() == body.encode("utf-8")

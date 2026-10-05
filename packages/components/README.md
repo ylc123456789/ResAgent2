@@ -13,7 +13,8 @@
 | [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
-| [context.py](src/resagent2_components/context.py)、[text.py](src/resagent2_components/text.py) | 环境事实、读取/诊断投影；文本窗口与长行呈现 |
+| [context.py](src/resagent2_components/context.py) | 环境事实、读取/诊断投影 |
+| [text.py](src/resagent2_components/text.py) | 共享工作区文本大小与编码规则、有界读入、写入前验证、行字符窗口与长行呈现 |
 | [materials.py](src/resagent2_components/materials.py) | 通用工件读取、作用域与冻结 hash 校验；Scientific 专用反馈呈现在 Scientific 上下文 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、本地导入清单、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
 
@@ -36,6 +37,8 @@ DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录�
 workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环境状态；材料按 Runtime 的统一权重/优先级分配，旧读取保留时序和后续内置修改标记。规则与预算只在 [CONTEXT](../../docs/current/CONTEXT.md) 维护；调用语义见 [CONTRACTS](../../docs/current/CONTRACTS.md#components)。
 
 `missing_required_artifacts` 共用 `RegisteredArtifactReader` 的 Run 授权与冻结 hash 检查，精确比较已登记 Ref 的 `output_name`；存在检查通过 `verify` 分块计算文件 hash，不解码文本或全量载入二进制产物；不扫描工作区、不按文件名猜测，也不把存在检查写成 Scientific 的观察记录。Scientific 和 Registry 复用此事实规则，登记权威仍在 Orchestrator。
+
+text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；read_text_file 预检大小后最多读取上限加1字节，encode_text 在写盘前核对编码及最终字节数。slice_text_lines 先选物理行，再选字符窗口，最后限制返回字符数，保留原换行；它不是流式读取。read_file 与 read_artifact 共用窗口规则，后者仍校验整份冻结 hash，不受工作区10 MiB限制。授权继续由原调用边界负责。
 
 <a id="literature"></a>
 

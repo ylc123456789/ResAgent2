@@ -223,13 +223,15 @@ Interpreter 不再读取执行日志来生成解释，没有 Session、工具循
 
 ### 4.1 读取工具先限制一次返回
 
-`read_file` 与 `read_artifact` 仅读取 UTF-8 文本，共用严格解码：含 NUL 或无效 UTF-8 的文件返回可恢复错误，不替换乱码、不自动解析二进制，也不新增成功读取记录。检查整份内容后才选择窗口，缩小范围不能绕过文本检查；工作区读取保持原有换行规范化，工件保留原换行及字符偏移。工件仍先校验授权和整份 hash；二进制工件仍可登记及验证存在，不能把存在校验当作返回过其正文。
+`read_file` 与 `read_artifact` 仅读取 UTF-8 文本，共用严格解码：含 NUL 或无效 UTF-8 的文件返回可恢复错误，不替换乱码、不自动解析二进制，也不新增成功读取记录。检查整份内容后才选择窗口，缩小范围不能绕过文本检查；两入口均保留原换行及字符偏移，工作区不再把 CRLF 规范化成 LF。旧 Session 回执保留当时返回的正文；需要精确替换当前文件时应重新读取原文。工件仍先校验授权和整份 hash；二进制工件仍可登记及验证存在，不能把存在校验当作返回过其正文。
 
-两入口共用 `slice_text_lines`：先取从 1 开始、两端包含的行范围，再保留最多128000字符的前缀（共享 `MAX_READ_CHARS`）。这是原始工具返回的IO边界，不是128K tokens；实际送入模型的部分还要按模块有效额度选择。范围超过文件末尾可得到短结果或空串，不自动寻找另一个范围。 read_artifact 可先按 start_char/end_char 选择所选行内的字符窗口（零基、末端不含），再应用同一 IO 上限；用于超长 JSON 字符串，文件内容与物理行号不变。
+两入口共用 `slice_text_lines`：先取从 1 开始、两端包含的物理行范围，再按 start_char/end_char 选择所选行内的字符窗口（零基、末端不含），最后保留最多128000字符的前缀（共享 `MAX_READ_CHARS`）。字符偏移按 Unicode 字符计，不按 UTF-8 字节计。这是原始工具返回的 IO 边界，不是128K tokens；实际送入模型的部分还要按模块有效额度选择。范围超过文件末尾可得到短结果或空串，不自动寻找另一个范围。字符窗口支持超长 JSON 字符串分段续读，不改变文件内容与物理行号；它控制返回片段，不是流式读取，也不能绕过整份文本检查。
 
 start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默认 0，其余可为 null）；不是裁剪后实际可见正文的精确范围，context_truncated 时不能用首尾片段长度推算后续偏移。`truncated=False` 仅表示所选范围未被字符上限裁掉，不表示已读完整个文件。
 
-文件读取还受授权和默认 1,000,000 字节文件大小限制；工件读取先查授权、来源和整份冻结 hash，再切片。后者不因只取几行而跳过完整性校验。`search_text` 是大小写不敏感的字面子串搜索，不是正则；结果给出行号，但当前没有独立的长期搜索正文段。
+工作区 read_file / search_text / create_file / replace_text 共用默认 10 MiB（10 × 1024 × 1024 字节）文本处理上限；读取先检查大小，再最多读取上限加 1 字节并核对实际长度。创建和替换在写入前验证严格 UTF-8、NUL 及最终编码字节数；被拒绝的内容不写入、不增加编辑版本。工件不受这项工作区大小上限约束，仍先查授权、来源和整份冻结 hash，再严格解码及切片，不因只取几行而跳过完整性校验。
+
+`search_text` 是大小写不敏感的字面子串搜索，不是正则；结果给出行号，但当前没有独立的长期搜索正文段。它报告已授权枚举候选中实际遇到的 skipped_count 和 skipped_files（最多50条 path/reason，超出则 skipped_files_truncated=True），原因包括 too_large、not_utf8_text、read_error；不暴露未授权路径。incomplete 表示发生跳过或结果数上限使搜索提前停止；truncated 仍表示触及匹配结果上限。未访问的后续文件不计入跳过数，incomplete=True 时零匹配不能证明不存在。
 
 **源码与测试**：[workspace read_file](../../packages/capabilities/src/resagent2_capabilities/workspace/read_file.py)、[工件读取](../../packages/components/src/resagent2_components/artifacts.py)、[切片函数](../../packages/components/src/resagent2_components/text.py)、[行窗口测试](../../tests/capabilities/test_text_windows.py)。
 
@@ -237,7 +239,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 
 `workspace_context` 调用 `recent_tool_snippets`，文件和工件各自选择：
 
-1. 从新到旧寻找不同片段，直到内容额度用完，不再固定最多6个；身份为工具名 + 来源 + 请求行范围，工件另含 start_char/end_char，同一来源的不同范围可以共存。
+1. 从新到旧寻找不同片段，直到内容额度用完，不再固定最多6个；身份为工具名 + 来源 + 请求行范围 + start_char/end_char，同一来源的不同范围可以共存。
 2. 文件和工件以相同起始权重进入 Composer；每次从实际剩余空间计算，而非各自占死25%。Scientific 不提供文件材料，所以工件可使用其空余。先装最新片段；装箱的最后一个片段放不下时保留头尾并标记，其后的旧片段不再选入。
 3. 选中后按原始事件顺序从旧到新呈现，不修改原始 Session 事件或工件。
 
@@ -316,7 +318,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 | 材料软水位 | 固定正文与最小导航框先入场；可伸缩材料扩展到整包80%，与压缩触发阈值同源 | ContextComposer + CONTEXT_TARGET_SHARE |
 | 材料起始份额 | 反馈/文件/工件/诊断/目录的相对权重16/16/16/4/1，只分配给已选入项；空余按反馈100、诊断96、读取80、目录62优先级借用 | ContextMaterial + ContextComposer |
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
-| 一次工具读取 | 默认所选行范围最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
+| 一次工具读取 | 默认所选行与字符窗口最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
 | 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
 | 调用次数/时间 | RunBudget 仅含 max_llm_calls 和 timeout_seconds；发送前持久占用，内部共享余额和截止时间 | Controller / Scheduler / Runtime 的共享 execution_budget 与 RunUsage |
 | 流程上限 | ExecutionLimits 的 max_tasks、max_attempts_per_task；step 仅记录动作时序 | Compiler / Scheduler，不另立消费预算 |

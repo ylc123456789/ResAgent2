@@ -14,7 +14,7 @@ from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId
 
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 
-from .text import MAX_READ_CHARS, decode_text, slice_text_lines, wrap_text_lines
+from .text import MAX_READ_CHARS, decode_text, slice_text_lines, validate_text_window, wrap_text_lines
 
 
 def research_artifacts(artifacts: list[ArtifactRef]) -> list[ArtifactRef]:
@@ -152,8 +152,10 @@ class RegisteredArtifactReader:
         end_char: int | None = None,
     ) -> dict:
         """Verify frozen bytes, select physical lines, then a character window."""
-        if start_char < 0 or (end_char is not None and end_char <= start_char):
-            raise ValueError("character range must satisfy 0 <= start_char < end_char")
+        validate_text_window(
+            start_line=start_line, end_line=end_line,
+            start_char=start_char, end_char=end_char,
+        )
         artifact, path = self._resolve_file(artifact_id)
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
@@ -164,12 +166,8 @@ class RegisteredArtifactReader:
         except ValueError as error:
             raise ArtifactReadError(str(error)) from error
         window = slice_text_lines(
-            text, start_line=start_line, end_line=end_line, max_chars=len(text),
-        )
-        selected = window["content"][start_char:end_char]
-        window.update(
-            start_char=start_char, end_char=end_char,
-            content=selected[:max_chars], truncated=len(selected) > max_chars,
+            text, start_line=start_line, end_line=end_line,
+            start_char=start_char, end_char=end_char, max_chars=max_chars,
         )
         return {
             "artifact_id": artifact.id,

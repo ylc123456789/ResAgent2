@@ -11,7 +11,13 @@ from pydantic import BaseModel, field_validator
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
+from resagent2_components.text import (
+    MAX_WORKSPACE_TEXT_BYTES,
+    encode_text,
+    read_text_file,
+)
 from resagent2_components.workspace import WorkspaceBoundary
+
 
 class ReplaceTextInput(RuntimeModel):
     """Replace one exact text occurrence in an existing file."""
@@ -43,35 +49,40 @@ class ReplaceTextTool:
         "old_text must match exactly once in the current file per call; whitespace "
         "is significant. Read current content before editing. Multiple calls are "
         "allowed; each successful edit changes the content used by subsequent "
-        "matches. Review the resulting diff."
+        "matches. Review the resulting diff. UTF-8 text must have no NUL bytes; "
+        "both the original file and replacement result are limited to 10 MiB "
+        "encoded bytes. Source newline characters are preserved."
     )
 
-    def __init__(self, boundary: WorkspaceBoundary, *, max_bytes: int = 1_000_000) -> None:
+    def __init__(
+        self, boundary: WorkspaceBoundary, *,
+        max_bytes: int = MAX_WORKSPACE_TEXT_BYTES,
+    ) -> None:
         self.boundary = boundary
         self.max_bytes = max_bytes
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(ReplaceTextInput, arguments)
         path = self.boundary.resolve_write_file(args.path)
-        if path.stat().st_size > self.max_bytes:
-            raise ValueError(f"file is too large to edit: {path.stat().st_size} bytes")
-        text = path.read_text(encoding="utf-8")
+        encode_text(args.old_text, max_bytes=self.max_bytes)
+        encode_text(args.new_text, max_bytes=self.max_bytes)
+        text = read_text_file(path, max_bytes=self.max_bytes)
         count = text.count(args.old_text)
         if count != 1:
             raise ValueError(f"old_text must match exactly once; found {count}")
         updated = text.replace(args.old_text, args.new_text, 1)
         if updated == text:
             raise ValueError("replacement does not change the file")
+        content = encode_text(updated, max_bytes=self.max_bytes)
         mode = path.stat().st_mode
         temporary: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
+                mode="wb",
                 dir=path.parent,
                 delete=False,
             ) as handle:
-                handle.write(updated)
+                handle.write(content)
                 temporary = Path(handle.name)
             os.chmod(temporary, mode)
             if self.boundary.resolve_write_file(args.path) != path:

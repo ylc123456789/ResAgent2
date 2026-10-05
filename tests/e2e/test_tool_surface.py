@@ -13,6 +13,8 @@ Schema 21 registers per-paper metadata/abstract sources, adds full-text acquisit
 and treats reading records as diagnostics rather than completion gates.
 Schema 22 updates embedded contract versions and documents imported PDF reuse.
 Schema 23 only updates embedded versions for the unified artifact identity format.
+Later schema 23 tool updates add workspace character windows, search coverage,
+and shared text size/encoding/newline rules; public Run fields remain unchanged.
 """
 
 import hashlib

@@ -330,7 +330,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 
 下一轮原生请求由系统指令、已配对的历史 assistant/tool 消息和最新一次重建的业务 Context 组成；不保存或重发此前每轮完整业务 prompt。输入压力下使用可选 summarize_history 生成旧完整交互摘要；history_checkpoint 同时保存摘要与绝对历史边界，近期完整回合继续原样发送。原始历史不删，摘要不替代当前领域状态、回答、证据或完成门禁；失败不推进边界。具体比例和失败边界见[上下文](CONTEXT.md#compaction)。`reasoning_content` 仅用于同一 Session 的供应商协议续传，不进入业务 memory、ToolObservation 或完成证据。
 
-读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用严格 UTF-8 解码与行切片；含 NUL 或无效 UTF-8 时返回可恢复错误，不新增成功读取记录；失败仍保留反馈。Artifact 先核对整份 hash，纯存在/完整性验证不要求其为文本。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配。
+读取通常可重复；写入和外部命令不承诺 exactly-once。read_file/read_artifact 共用严格 UTF-8 解码、行后字符窗口和128000字符返回上限，保留原换行；start_char/end_char 为所选物理行中的零基、末端不含字符范围。含 NUL 或无效 UTF-8 时返回可恢复错误，不新增成功读取记录；失败仍保留反馈。工作区读、搜、创建和替换共用10 MiB文本处理上限；读取同时核对文件大小及实际读入长度，写入前验证编码和最终字节数。字符窗口不是流式读取，不能绕过整份检查；冻结工件不受工作区大小上限约束，仍先核对整份 hash，纯存在/完整性验证不要求其为文本。search_text 是大小写不敏感字面子串，非正则，a|b 按原文匹配；skipped_count、skipped_files（最多50条）和 skipped_files_truncated 报告已授权候选中实际跳过的文件及原因，incomplete 表示跳过或触及结果上限，不能据此把零匹配当成完整无匹配。
 
 **容量**：ModelProfile 声明窗口、输出预留、安全余量，模块声明输入上限；有效额度取模块与剩余模型容量之小值。正文 JSON 路径计量渲染后的 Context，Action schema 另在有Profile时从模型容量预留，不计入Context的estimated_tokens；原生路径计量 `messages + tools` 完整 JSON 序列化，包括历史、schema 与转义开销。均使用字符/4近似；三个Agent及Compiler默认均为256000。不另加隐藏调用额度；压缩、动作和重试共用 Run 剩余 calls，step 仅记录时序。required 保持顺序，optional 按优先级稳定选入；大可选段放不下不阻挡后续小段。不查询或按模型名猜容量，不新增长期记忆系统；只对旧协议历史做共享的有损检查点。
 
@@ -352,7 +352,8 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | [RegisteredArtifactReader / build_module_report](../../packages/components/src/resagent2_components/artifacts.py) | 授权 ID + 行范围 → 正文；模块说明 → ArtifactCandidate | 读取先校验 Run 与整份 hash；报告生成纯函数，不自行登记或生成科学证据 |
 | [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、数量和年份 → 规范化论文列表 | 两源保持平级切换；服务不可用与合法空结果区分，不伪造全文 |
 | [load_literature_manifest](../../packages/components/src/resagent2_components/literature/imports.py) | 本地 JSON 清单 → PreparedLiteratureImport 列表 | 验证元信息及可选 PDF，路径相对清单目录；不联网、不登记或恢复 Run |
-| [workspace_context](../../packages/components/src/resagent2_components/context.py)、[文本切片](../../packages/components/src/resagent2_components/text.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 / 文本窗口 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
+| [workspace_context](../../packages/components/src/resagent2_components/context.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
+| [文本读写与窗口](../../packages/components/src/resagent2_components/text.py) | 工作区路径 / 文本 → 有界严格读入 / 写入前编码验证；文本 + 行字符范围 → 窗口 | 工作区默认10 MiB，返回默认128000字符；保留原换行，不决定授权或模型预算，工件仍由 reader 验证 |
 
 文献 Tool 通过工件组件中的 `ArtifactRegistrationPort` 接受组合根注入的登记/解析对象；实现仍是 Orchestrator 的 ScientificArtifactRegistration，Components 不反向 import Orchestrator。错误如何转为 ToolObservation、反馈、ModuleError 仍由已有 Tool/Loop/Agent 边界处理，组件不另建恢复机制。
 

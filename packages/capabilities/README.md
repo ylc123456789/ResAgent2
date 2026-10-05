@@ -24,7 +24,11 @@
 
 ## 工具行为
 
-read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者都支持行范围；工件先校验授权与整份 hash 再切片。read_artifact 还可在选定物理行范围内使用零基 `start_char` / `end_char` 读取字符窗口（不含 end_char），用于继续读取超长行；原正文和物理行号保持不变。search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。
+read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者先选物理行，再在选中范围内使用零基 `start_char` / `end_char` 字符窗口（不含 end_char），最后应用128000字符返回上限；原换行和物理行号保持不变。字符分页控制返回片段，整份文本仍需检查，不是流式读取；工件先校验授权与整份 hash，不受工作区大小上限约束。
+
+工作区 read_file / search_text / create_file / replace_text 共用默认10 MiB文本处理上限，写入前校验严格编码、NUL和最终字节数；拒绝时不写入或增加编辑版本。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。工作区现在保留CRLF等原换行，精确替换时使用当前原文；旧 Session 回执不改写。
+
+search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。skipped_count 和 skipped_files 报告已授权候选中实际跳过的文件及 too_large / not_utf8_text / read_error 原因；详细条目最多50条，超出用 skipped_files_truncated 标明。incomplete 表示发生跳过或结果上限导致提前停止，truncated 仍表示触及匹配上限；不报告尚未访问或未授权文件，零匹配不自动代表完整搜索。
 
 delete_path 接受准确的相对 path 和 recursive=False；已授权文件、链接或空目录可直接删除，非空目录须明确 recursive=True 并通过目标快照确认。执行前重验路径集合、类型和版本，变化不能复用旧批准。链接只删除自身；根目录、受保护元数据和越界目标拒绝。删除与部分完成都沿用 edit_revision、读取过期标记和验证失效机制，不提供原子回滚。首版只装配到 Coding；删除文件内容仍使用 replace_text(new_text="")。
 

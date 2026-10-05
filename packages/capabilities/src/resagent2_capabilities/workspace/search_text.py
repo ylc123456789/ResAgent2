@@ -8,7 +8,16 @@ from pydantic import BaseModel, Field
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
-from resagent2_components.workspace import WorkspaceBoundary
+from resagent2_components.text import (
+    MAX_WORKSPACE_TEXT_BYTES,
+    TextFileTooLargeError,
+    read_text_file,
+)
+from resagent2_components.workspace import WorkspaceBoundary, WorkspacePermissionError
+
+
+_MAX_SKIPPED_FILES = 50
+
 
 class SearchTextInput(RuntimeModel):
     """Case-insensitive bounded literal substring search, not a regex search."""
@@ -29,16 +38,29 @@ class SearchTextTool:
         "Search is a case-insensitive literal substring match, not regex. "
         "a|b matches the literal text a|b; search alternatives separately. "
         "path may identify a workspace file or directory. max_results must be "
-        "between 1 and 50. Use returned line numbers for a bounded read_file range."
+        "between 1 and 50. Use returned line numbers for a bounded read_file range. "
+        "Workspace text files are limited to 10 MiB and must be UTF-8 without NUL "
+        "bytes. skipped_count and skipped_files report files skipped because "
+        "they are too large, not UTF-8 text, or could not be read; details are "
+        "limited to 50 files. incomplete means files were skipped or the result "
+        "limit stopped the search; zero matches then does not prove absence."
     )
 
-    def __init__(self, boundary: WorkspaceBoundary) -> None:
+    def __init__(
+        self, boundary: WorkspaceBoundary, *,
+        max_bytes: int = MAX_WORKSPACE_TEXT_BYTES,
+    ) -> None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
         self.boundary = boundary
+        self.max_bytes = max_bytes
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(SearchTextInput, arguments)
         matches: list[dict] = []
         observed: list[str] = []
+        skipped_count = 0
+        skipped_files: list[dict[str, str]] = []
         try:
             files = self.boundary.iter_files(args.path)
         except NotADirectoryError:
@@ -47,12 +69,22 @@ class SearchTextTool:
             path = self.boundary.resolve_read_file(args.path)
             files = [self.boundary.relative(path)]
         for relative in files:
-            path = self.boundary.resolve_read_file(relative)
-            if path.stat().st_size > 1_000_000:
-                continue
+            reason = None
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
+                path = self.boundary.resolve_read_file(relative)
+                lines = read_text_file(path, max_bytes=self.max_bytes).splitlines()
+            except WorkspacePermissionError:
+                raise
+            except TextFileTooLargeError:
+                reason = "too_large"
+            except ValueError:
+                reason = "not_utf8_text"
+            except OSError:
+                reason = "read_error"
+            if reason is not None:
+                skipped_count += 1
+                if len(skipped_files) < _MAX_SKIPPED_FILES:
+                    skipped_files.append({"path": relative, "reason": reason})
                 continue
             file_matched = False
             for number, line in enumerate(lines, start=1):
@@ -70,8 +102,18 @@ class SearchTextTool:
         for relative in observed:
             if relative not in read_paths:
                 read_paths.append(relative)
+        truncated = len(matches) >= args.max_results
+        incomplete = bool(skipped_count) or truncated
         return ToolObservation(
-            summary=f"Found {len(matches)} matches for {args.query!r}",
-            value={"matches": matches, "truncated": len(matches) >= args.max_results},
+            summary=(
+                f"Found {len(matches)} matches for {args.query!r}"
+                + ("; search incomplete" if incomplete else "")
+            ),
+            value={
+                "matches": matches, "truncated": truncated,
+                "skipped_count": skipped_count, "skipped_files": skipped_files,
+                "skipped_files_truncated": skipped_count > len(skipped_files),
+                "incomplete": incomplete,
+            },
             memory_updates={"read_paths": read_paths},
         )

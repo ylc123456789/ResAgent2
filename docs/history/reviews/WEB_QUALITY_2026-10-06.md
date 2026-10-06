@@ -30,6 +30,16 @@ Scientific仍按用户目标判断相关性、资料种类、阅读和停止；�
 
 这证明已修复本地信息丢失，不证明提供方排序、提示改动或 Scientific选择来源的总体质量提高。
 
+## 实施与本地验证
+
+- 搜索信息保留与副请求职责：`c6d95b6`。
+- 网页链接保留：`fb5b4ec`；后续只同步本记录，不改产品源码。
+- Ubuntu-D `/home/cyl/ResAgent2`、Conda `ResAgent2`：完整回归 **1950 passed / 1 skipped**（52.11秒）、mock `run_golden completed / 13 artifacts`、`git diff --check`通过。
+- 确定性覆盖：多批原生响应完整登记、前5条预览/19条省略、冻结hash及授权读取、Scientific继续读取并抓取预览外来源、Tavily实际超额响应、空/失败回执、隔离搜索输入及共享模型预算；网页覆盖绝对/相对/重定向地址、嵌套内联/块标签、无效目标、未闭合/嵌套锚点与冻结后读取。
+- 模型工具指纹只变更 `scientific/web_search` 和 `scientific/web_fetch`；独立只读复核未发现新的正确性或分层问题。没有新增依赖、模型调用层、Run字段或状态。
+- 本地 `pip check`仍报告既有 `pdfminer-six 20260107 requires cryptography, which is not installed`；未安装或修改环境，不能写成本地依赖全绿。上轮服务器环境clean是另一个事实，本轮服务器须重新核对。
+- 真实搜索质量对照尚未执行；本轮只读复放使用旧响应，不发送新付费请求。提示改动的相关性、成本收益以及真实Scientific使用效果待下面的服务器复测。
+
 ## 服务器复测
 
 先冻结待测提交、工作区和9个editable源码指针；回归运行 `python -m pytest tests apps/cli/tests -q`、`python -m e2e.mock_e2e`、`python -m pip check`、`git diff --check`。原始 trace 和 Session仅私有留存，报告记录配置存在与否和必要事实。

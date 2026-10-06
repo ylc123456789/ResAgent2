@@ -17,6 +17,8 @@ from resagent2_components import (
     ArxivLiteratureBackend,
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
+    TavilyWebSearchBackend,
+    WebPageFetcher,
 )
 from resagent2_components import (
     DatasetCatalog,
@@ -142,6 +144,12 @@ def build_application(
     pdf_parse_timeout_seconds = _positive_int_env(
         "RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS", DEFAULT_PDF_PARSE_TIMEOUT_SECONDS,
     )
+    web_timeout_seconds = _positive_int_env(
+        "RESAGENT2_WEB_TIMEOUT_SECONDS", 30,
+    )
+    web_max_response_bytes = _positive_int_env(
+        "RESAGENT2_WEB_MAX_RESPONSE_BYTES", 4 * 1024 * 1024,
+    )
     root = Path(data_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     registry = _registry()
@@ -186,6 +194,14 @@ def build_application(
         scheduler.artifact_registry,
         run_store,
     )
+    web_search_backend = (
+        TavilyWebSearchBackend(
+            os.environ["TAVILY_API_KEY"],
+            timeout_seconds=web_timeout_seconds,
+            max_response_bytes=web_max_response_bytes,
+        )
+        if os.environ.get("TAVILY_API_KEY") else None
+    )
     scientific = ScientificAgent(
         _client(),
         literature_backend=MultiSourceLiteratureBackend(
@@ -193,6 +209,11 @@ def build_application(
             OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
         ),
         literature_parser=partial(parse_pdf, timeout_seconds=pdf_parse_timeout_seconds),
+        web_search_backend=web_search_backend,
+        web_page_fetcher=WebPageFetcher(
+            timeout_seconds=web_timeout_seconds,
+            max_response_bytes=web_max_response_bytes,
+        ),
         registration_port=registration,
         store=scientific_store,
         max_context_tokens=scientific_context_tokens,

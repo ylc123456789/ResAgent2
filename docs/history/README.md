@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-06：通用网页工具
+
+`feat/web-search-hardening` 从 `main@0e5bb96` 增加可选 Tavily `web_search` 与独立 `web_fetch`，沿现有 Components/Capabilities/Scientific 分层、Registry和research index交接。Scientific仍按用户目标选择材料入口，没有固定“网页→论文”顺序；schema保持23.0。本地1842 passed / 1 skipped、mock13工件、公网HTTPS抓取和工具面检查通过；本地pip check保留pdfminer-six缺cryptography的环境差异，真实provider/模型服务器补测待执行，分支尚未推送/合并。范围与测试步骤见[实施及交接](reviews/WEB_TOOLS_2026-10-06.md)，取舍见[ADR-0025](decisions/0025-general-web-capability.md)。
+
 ## 2026-10-05：文献搜索合并收尾
 
 用户确认采用后，fix/literature-search@1735d40以合并提交ac240e3进入main；保留开发分支、原阶段记录和服务器失败现场，schema仍为23.0。生产代码与已验收5ff44f1一致；Ubuntu-D九包源码指针、合并代码一致性、mock completed/13工件及文档检查通过。current的接口/上下文/架构与代码一致，当前联网范围为arXiv/OpenAlex检索及PDF获取，未实现通用网页搜索。相对main的收益、混合排序和模型表述边界见[对照与收尾](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。

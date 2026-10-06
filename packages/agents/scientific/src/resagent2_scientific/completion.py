@@ -112,6 +112,7 @@ class ScientificCompletionCheck:
                 *sorted(self._input_artifact_ids),
                 *[item.id for item in registered if item.run_id == state.run_id],
                 *state.memory.get("literature_output_artifact_ids", []),
+                *state.memory.get("web_output_artifact_ids", []),
                 *opinion.evidence_artifact_ids,
                 *[item.id for item in candidate.artifacts if isinstance(item, ArtifactRef)],
             ]

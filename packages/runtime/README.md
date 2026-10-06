@@ -82,6 +82,8 @@ AgentLoop 统一返回 `AgentResult`。提问和工作请求被转换成 JSON ar
 
 HTTP 取消后不等待默认 executor 的 DNS 线程。系统解析可能在后台结束，但不会恢复已取消的 HTTP 请求；本地取消不保证供应商停止计算或计费。
 
+普通 HTTP 调用保持原行为。可选 `send_request(public_only=True)` 在同一超时范围内异步解析并检查全部目标地址，只连接已验证的公网 IP，保留原域名的 Host/TLS SNI 和逻辑响应 URL；重定向逐次检查，拒绝 localhost、非公网和混合公私地址。该路径关闭环境代理和连接复用，避免代理重新解析域名或不同 TLS 域名共用按 IP 建立的连接。Components 的网页抓取使用这一传输约束；Runtime 不识别网页/论文业务、不登记工件或评价来源。
+
 共用 [compaction.py](src/resagent2_runtime/compaction.py)：完整原生输入超过有效上限 80%，或必需上下文实际装不下时，尝试总结较早完整 turn；保留至少最新完整 turn，近期历史以 20% 额度为目标。仅支持压缩的客户端调用 summarize_history，OpenAICompatibleClient 复用原 HTTP/trace/计量实现；没有单独摘要 Agent。
 
 摘要生成目标由输入额度的 5% 派生，目标最多按 4096 估算 tokens 换算；这是写短的提示，不是第二个硬预算，**不缩小 Provider 的总输出额度**。原 Composer 检查完整摘要、近期回合、当前领域上下文及工具 schema；略超目标但整包能装下即可完整接受，不截断摘要。摘要与边界 history_checkpoint 验证后一起保存，并留下 compaction 审计事件；空摘要、截断响应或整包真正超限时不推进边界。当前请求和领域状态仍由原 builder 构造，摘要不是证据，精确代码必须重读。

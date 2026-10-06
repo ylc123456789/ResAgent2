@@ -64,6 +64,17 @@ from .literature import (
     LiteratureUnavailableError,
 )
 
+from .web import (
+    TavilyWebSearchBackend,
+    WebFetchError,
+    WebPage,
+    WebPageFetcher,
+    WebSearchBackend,
+    WebSearchError,
+    WebSearchItem,
+    WebSearchResult,
+)
+
 __all__ = [
     'read_artifact_json',
     'read_request_material',
@@ -81,6 +92,14 @@ __all__ = [
     'load_literature_manifest',
     'LiteratureSearchError',
     'LiteratureUnavailableError',
+    'TavilyWebSearchBackend',
+    'WebFetchError',
+    'WebPage',
+    'WebPageFetcher',
+    'WebSearchBackend',
+    'WebSearchError',
+    'WebSearchItem',
+    'WebSearchResult',
     'ArtifactRegistrationPort',
     'SetupCommandPolicy',
     'ArtifactReadError',

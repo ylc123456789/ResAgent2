@@ -17,6 +17,7 @@
 | [text.py](src/resagent2_components/text.py) | 共享工作区文本大小与编码规则、有界读入、写入前验证、行字符窗口与长行呈现 |
 | [materials.py](src/resagent2_components/materials.py) | 通用工件读取、作用域与冻结 hash 校验；Scientific 专用反馈呈现在 Scientific 上下文 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、本地导入清单、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
+| [web.py](src/resagent2_components/web.py) | provider-neutral 网页搜索适配、单页 HTML/text 抓取、严格编码与响应边界 |
 
 `process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Shell 是 Capabilities 的共享模型入口，Experiment 从实际执行回执生成实验记录。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
 
@@ -73,3 +74,13 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。
 
 文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。普通调用方可传 `parse_pdf(timeout_seconds=...)`；CLI 使用正整数配置 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 绑定解析器，经 Scientific 注入全文工具。Components 不自行读取该环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+
+<a id="web"></a>
+
+## 通用网页组件
+
+`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回 provider-neutral 的有界结果批次，`WebPageFetcher.fetch(url)` 获取并解析一个网页。当前组合根可注入 `TavilyWebSearchBackend`，只发一次请求，不提供分页；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
+
+`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。组件只返回页面事实，不登记工件、不更新 Run、不调用 LLM；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
+
+网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。

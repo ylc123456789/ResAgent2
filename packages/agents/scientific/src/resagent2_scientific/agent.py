@@ -13,11 +13,11 @@ from resagent2_contracts import (
     scientific_session_id,
 )
 from resagent2_components import (
-    ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader,
+    ArtifactRegistrationPort, LiteratureSearchBackend, RegisteredArtifactReader, WebPageFetcher, WebSearchBackend,
     ResourceLayout, read_artifact_json, read_request_material, request_dataset_refs, resolve_dataset_refs,
 )
 from resagent2_components.literature.fulltext import PdfText
-from resagent2_capabilities import FetchLiteratureFulltextTool, LiteratureSearchTool, ReadArtifactTool
+from resagent2_capabilities import (FetchLiteratureFulltextTool, LiteratureSearchTool, ReadArtifactTool, WebFetchTool, WebSearchTool)
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, AgentState,
     AllowListPermissionPolicy, InMemorySessionStore, LLMClient, SessionStore,
@@ -36,6 +36,8 @@ class ScientificAgent:
         self, llm_client: LLMClient, *,
         literature_backend: LiteratureSearchBackend | None = None,
         literature_parser: Callable[[Path], PdfText] | None = None,
+        web_search_backend: WebSearchBackend | None = None,
+        web_page_fetcher: WebPageFetcher | None = None,
         registration_port: ArtifactRegistrationPort | None = None,
         store: SessionStore | None = None,
         max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
@@ -46,6 +48,8 @@ class ScientificAgent:
         self.llm_client = llm_client
         self.literature_backend = literature_backend
         self.literature_parser = literature_parser
+        self.web_search_backend = web_search_backend
+        self.web_page_fetcher = web_page_fetcher
         self.registration_port = registration_port
         self.store = store or InMemorySessionStore()
         self.max_context_tokens = max_context_tokens
@@ -112,6 +116,10 @@ class ScientificAgent:
         tools = [ReadArtifactTool(reader),
                  RequestWorkTool(allowed=request.permissions.request_work, reader=reader),
                  AskUserTool(reader), FinishTool()]
+        if self.web_search_backend is not None and self.registration_port is not None:
+            tools.append(WebSearchTool(self.web_search_backend, self.registration_port))
+        if self.web_page_fetcher is not None and self.registration_port is not None:
+            tools.append(WebFetchTool(self.web_page_fetcher, self.registration_port))
         if self.literature_backend is not None and self.registration_port is not None:
             tools.append(LiteratureSearchTool(self.literature_backend, self.registration_port))
         if self.registration_port is not None:
@@ -150,7 +158,7 @@ class ScientificAgent:
                 ))
             delivered = {item.id for item in artifacts if hasattr(item, "id")}
             delivered.update(item.id for item in request.input_artifacts)
-            for artifact_id in owned.memory.get("literature_output_artifact_ids", []):
+            for artifact_id in [*owned.memory.get("literature_output_artifact_ids", []), *owned.memory.get("web_output_artifact_ids", [])]:
                 ref = reader.resolve_ref(artifact_id)
                 if ref is not None and ref.id not in delivered:
                     artifacts.append(ref)

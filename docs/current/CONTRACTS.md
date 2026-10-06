@@ -179,7 +179,7 @@ ArtifactRef 含 id、kind、producer、run_id、Task/Attempt 或 Session 归属�
 
 以上来源由 Orchestrator 登记；Agent 不得把普通候选工件伪装成系统材料。question/work_request 的候选由控制工具产生，接收端按对应控制语义登记。系统材料的 producer、归属形状和 source_type 在契约层与 Registry 使用同一规则。
 
-Scientific 的普通产物归属 Session，包括 literature_search、literature_paper、literature_pdf、literature_fulltext、scientific_opinion、scientific_assessment、observation_trace 和 module_report；Coding/Experiment 产物归属 Task+Attempt。导入材料和最终报告归属 Run，由 Orchestrator 记录 import/final_report 来源。
+Scientific 的普通产物归属 Session，包括 literature_search、literature_paper、literature_pdf、literature_fulltext、web_search、web_page、scientific_opinion、scientific_assessment、observation_trace 和 module_report；Coding/Experiment 产物归属 Task+Attempt。导入材料和最终报告归属 Run，由 Orchestrator 记录 import/final_report 来源。
 
 ### 执行记录的信任范围
 
@@ -250,6 +250,16 @@ PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可�
 `fetch_literature_fulltext(paper_artifact_id)` 接收本 Run 授权的论文工件 ID，按登记来源获取可用 PDF，并生成 `literature_pdf` 与解析文本 `literature_fulltext`。衍生工件的 `metadata.paper_artifact_id` 标明所属论文；`metadata.source_artifact_id` 表示直接来源，PDF 指向 paper，解析文本指向 PDF。目录投影该直接关系，不复制文件、权限或完整来源图。
 
 同 Run 按 paper_artifact_id 复用已冻结 PDF/解析文本；解析失败后的重试可复用 PDF。所有材料经原 Registry 登记和 hash 校验；搜索摘要、原始 PDF 与解析文本不可互相冒称。全文工具不改变 read_artifact 的 UTF-8 文本边界；不自动 OCR。外部导入的元信息与本地 PDF 通过同一授权输入和科研目录进入 Scientific，不伪装为在线搜索回执。原件已登记时优先复用并解析，不需要联网。
+
+### 通用网页工具
+
+`web_search(query, max_results=5)` 是可选的 provider-backed 线索搜索。只有组合根配置搜索 provider（当前为 Tavily）时才向 Scientific 注册；没有 provider 时不暴露该工具。`max_results` 限制为 1–10，每次只返回一个有界批次，不提供分页或穷尽结果的保证；工具不会自行改写查询、合并来源或把搜索结果判定为相关证据。
+
+成功搜索会登记一个 `web_search` 工件，保存 provider、实际查询和结果标题/URL/snippet；snippet 最多2000字符，不冒充页面正文。`status` 区分 `results` 与合法的 `empty`。请求失败仍登记带 `status=failed` 的搜索回执，保留 `error_type` 和可选 `retry_after`，便于 Scientific 判断是否换词、稍后重试或停止；失败回执说明请求失败，不登记论文或页面正文。
+
+`web_fetch(url)` 抓取一个网页并登记一个 `web_page` 工件。URL 只接受无凭据的 `http`/`https`；成功工件保存 source/final URL、title、提取文本、content type、parser 和 fetched_at，Scientific 可用 `read_artifact` 分段读取。失败不生成页面工件，直接返回 `error_type`/`retry_after`。Fetcher 只接受 HTML/XHTML/text，严格按 UTF-8 解码并拒绝 NUL、PDF 和其他二进制；最多5次重定向，每次连接只使用已核对的公网地址，DNS解析、HTTP和响应读入受共享 Run 截止时间约束。不执行 JavaScript，也不提供浏览器会话。
+
+网页搜索结果只是线索和查询回执，网页正文是带来源的通用材料；二者都不会自动转换成 `literature_paper`。Scientific 根据用户目标自主决定调用 `web_search`、`web_fetch` 或 `literature_search`，没有固定的“先网页后论文”流程。成功的网页工件和搜索回执进入同一 Run 的 research index，但论文证据规则仍按工件 kind 精确判断。
 
 <a id="compiler"></a>
 
@@ -353,6 +363,7 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | [ResourceLayout](../../packages/components/src/resagent2_components/resources.py) | 部署配置 → 数据集与环境根目录 | 不管理 pip/conda 下载缓存，不成为 ResearchRequest 字段 |
 | [RegisteredArtifactReader / build_module_report](../../packages/components/src/resagent2_components/artifacts.py) | 授权 ID + 行范围 → 正文；模块说明 → ArtifactCandidate | 读取先校验 Run 与整份 hash；报告生成纯函数，不自行登记或生成科学证据 |
 | [LiteratureSearchBackend](../../packages/components/src/resagent2_components/literature/backends.py) | 查询、来源、范围、页号、数量和年份 → LiteratureSearchResult（论文页与来源/分页事实） | auto 首页面向平级来源有界切换；显式来源不回退；失败保留类型与来源尝试，不伪造全文 |
+| [WebSearchBackend / WebPageFetcher](../../packages/components/src/resagent2_components/web.py) | provider 搜索回执或单页 HTML/text → 规范化网页结果 | 搜索 provider 可选；响应有界、严格 UTF-8、无 JavaScript/PDF/二进制解析；不决定科学相关性 |
 | [load_literature_manifest](../../packages/components/src/resagent2_components/literature/imports.py) | 本地 JSON 清单 → PreparedLiteratureImport 列表 | 验证元信息及可选 PDF，路径相对清单目录；不联网、不登记或恢复 Run |
 | [workspace_context](../../packages/components/src/resagent2_components/context.py) | 现有事件、绑定、授权及材料额度 → 段 / 材料 | 不启动 LLM、不写第二份状态；预算分配仍归 Runtime，详见 [CONTEXT](CONTEXT.md#budgets) |
 | [文本读写与窗口](../../packages/components/src/resagent2_components/text.py) | 工作区路径 / 文本 → 有界严格读入 / 写入前编码验证；文本 + 行字符范围 → 窗口 | 工作区默认10 MiB，返回默认128000字符；保留原换行，不决定授权或模型预算，工件仍由 reader 验证 |

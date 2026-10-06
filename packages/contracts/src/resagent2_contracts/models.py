@@ -251,11 +251,13 @@ SYSTEM_ARTIFACT_PROVENANCE = {
 SYSTEM_ARTIFACT_KINDS = frozenset(SYSTEM_ARTIFACT_PROVENANCE)
 SCIENTIFIC_ARTIFACT_KINDS = frozenset({
     "literature_search", "literature_paper", "literature_pdf", "literature_fulltext",
+    "web_search", "web_page",
     "scientific_opinion", "scientific_assessment",
     "observation_trace", "module_report",
 })
 SYSTEM_GENERATED_ARTIFACT_KINDS = SYSTEM_ARTIFACT_KINDS | frozenset({
     "code_patch", "verification_result", "execution_record", "observation_trace",
+    "web_search", "web_page",
     "literature_search", "literature_paper", "literature_pdf", "literature_fulltext", "final_report",
 })
 

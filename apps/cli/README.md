@@ -344,6 +344,16 @@ arXiv 和 OpenAlex 仍是平级来源。literature_search 的 source=auto 只用
 
 arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因及来源尝试可查看工具回执和 stdout/stderr 日志，实际来源也保存在回执以及论文工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与完整来源摘要按论文保存为 literature_paper，工具仅预览500字符并标明裁剪/复用；literature_search 是查询回执，不代表全文。没有 next_request 不必然代表搜尽：来源总数可能未知，OpenAlex 页号分页也只覆盖前10000条。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告。用户提供的离线资料可经 [外部论文导入](#literature-import) 进入同一 Run；这不算在线检索成功，也不改变服务限流规则。
 
+### 通用联网搜索和网页获取
+
+CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 网页并通过 `read_artifact` 阅读冻结正文。提供 `TAVILY_API_KEY` 后另外装配 `web_search`，无需更换 DeepSeek 或其他兼容模型；未配置搜索密钥时只提供网页获取。搜索服务的密钥与模型密钥独立，由部署方通过环境变量加载，不进入工件、目标文本或模型上下文。
+
+`web_search` 默认5条、最多10条，每次一批，不支持分页；标题、URL 和 snippet 是线索，不代表已读网页或已核对论文。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源和抓取时间，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
+
+部署配置 `RESAGENT2_WEB_TIMEOUT_SECONDS` 默认为30秒，`RESAGENT2_WEB_MAX_RESPONSE_BYTES` 默认为4 MiB；均须正整数，适用于搜索响应与网页抓取。DNS解析和请求共享 Run 剩余时间，超大响应拒绝而不是默默截断。搜索只发一次请求，限流回执保留 `retry_after`，没有自动重试或隐式换源。
+
+网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿原登记表与 research index 交接，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
+
 ### 退出码
 
 | 退出码 | 含义 |

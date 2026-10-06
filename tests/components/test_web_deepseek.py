@@ -53,22 +53,29 @@ def test_search_uses_isolated_query_and_url_matched_citations():
     assert result.results[0].published_at == "2026-10-01"
     assert result.results[1].snippet == ""
     body, = client.requests
-    assert body["messages"] == [{"role": "user", "content": [
-        {"type": "text", "text": "Perform a web search for the query: a query"},
-    ]}]
+    assert len(body["messages"]) == 1
+    message = body["messages"][0]
+    assert message["role"] == "user" and len(message["content"]) == 1
+    text = message["content"][0]["text"]
+    assert "only for source discovery" in text
+    assert "do not answer the underlying question" in text
+    assert text.endswith("Query:\na query")
     assert body["model"] == "deepseek-flash"
     assert body["max_tokens"] == 4096
     assert body["tools"] == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
 
 
-def test_result_bound_preserves_order_and_title_can_use_url():
-    client = Client([result_block(
-        source("https://example.test/a", title=""),
-        source("https://example.test/b"),
-    )])
+def test_preview_limit_does_not_discard_later_native_results():
+    client = Client([
+        result_block(source("https://example.test/a", title="")),
+        result_block(source("https://example.test/a"), source("https://example.test/b")),
+    ])
     result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
-    assert len(result.results) == 1
-    assert result.results[0].title == result.results[0].url == "https://example.test/a"
+    assert [item.url for item in result.results] == [
+        "https://example.test/a", "https://example.test/b",
+    ]
+    assert result.results[0].title == result.results[0].url
+    assert len(client.requests) == 1
 
 
 def test_explicit_native_empty_result_is_successful_empty():

@@ -65,7 +65,7 @@ class WebSearchBackend(Protocol):
     name: str
 
     def search(self, query: str, *, max_results: int) -> WebSearchResult:
-        """Return one bounded batch of search results."""
+        """Return received results within response limits; max_results is a provider hint."""
 
 
 MAX_WEB_SNIPPET_CHARS = 2000
@@ -138,7 +138,7 @@ class TavilyWebSearchBackend:
             if not isinstance(raw_results, list):
                 raise ValueError("results is not a list")
             results = []
-            for item in raw_results[:max_results]:
+            for item in raw_results:
                 if not isinstance(item, dict) or not item.get("url") or not item.get("title"):
                     continue
                 results.append(WebSearchItem(

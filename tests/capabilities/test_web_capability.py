@@ -84,6 +84,8 @@ def test_web_search_freezes_bounded_receipt(tmp_path):
     receipt = json.loads(path.read_text())
     assert receipt["results"][0]["url"] == "https://example.test/a"
     assert receipt["provider_query"] == "q"
+    assert observation.value["result_count"] == 1
+    assert observation.value["omitted_count"] == 0 and not observation.value["truncated"]
     assert "executed_query" not in receipt
     assert observation.memory_updates["web_output_artifact_ids"] == [ref.id]
 
@@ -97,6 +99,8 @@ def test_web_search_failure_freezes_negative_receipt(tmp_path):
 
     assert not observation.ok
     assert observation.value["error_type"] == "rate_limited"
+    assert observation.value["result_count"] == observation.value["omitted_count"] == 0
+    assert observation.value["truncated"] is False
     ref = next(iter(register.refs.values()))
     assert ref.kind == "web_search"
     receipt = json.loads((register.registry.root / "run_example" / ref.id / "web_search.json").read_text())
@@ -149,3 +153,55 @@ def test_web_fetch_failure_does_not_freeze_page(tmp_path):
     assert not observation.ok
     assert observation.value["error_type"] == "parse_failed"
     assert register.refs == {}
+
+
+def test_later_deepseek_batches_remain_readable_after_preview(tmp_path):
+    from resagent2_components import DeepSeekWebSearchBackend
+
+    class HostedClient:
+        def __init__(self):
+            self.calls = []
+
+        def set_trace_context(self, **kwargs):
+            self.trace_context = kwargs
+
+        def request(self, body):
+            self.calls.append(body)
+            return {"stop_reason": "end_turn", "content": [
+                {"type": "web_search_tool_result", "content": [
+                    {"type": "web_search_result", "title": f"Source {i}",
+                     "url": f"https://example.test/{i}", "encrypted_content": "opaque"}
+                    for i in range(start, start + 8)
+                ]} for start in (0, 8, 16)
+            ]}
+
+    register, client = _Register(tmp_path), HostedClient()
+    observation = WebSearchTool(DeepSeekWebSearchBackend(client), register).execute(
+        _state(), WebSearchInput(query="find sources", max_results=5),
+    )
+    assert observation.ok and len(client.calls) == 1
+    assert len(observation.value["results"]) == 5
+    assert observation.value["result_count"] == 24
+    assert observation.value["omitted_count"] == 19
+    assert observation.value["truncated"] is True
+    assert "19 more available with read_artifact" in observation.summary
+    ref = next(iter(register.refs.values()))
+    content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
+    receipt = json.loads(content)
+    assert [item["url"] for item in receipt["results"]] == [
+        f"https://example.test/{i}" for i in range(24)
+    ]
+    assert all(item["snippet"] == "" for item in receipt["results"])
+    assert "opaque" not in content
+    assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
+
+
+def test_successful_empty_search_has_no_omitted_results(tmp_path):
+    backend = _Backend()
+    backend.search = lambda query, **kwargs: WebSearchResult(provider="fake", query=query)
+    register = _Register(tmp_path)
+    observation = WebSearchTool(backend, register).execute(_state(), WebSearchInput(query="q"))
+    assert observation.ok and observation.value["status"] == "empty"
+    assert observation.value["results"] == []
+    assert observation.value["result_count"] == observation.value["omitted_count"] == 0
+    assert observation.value["truncated"] is False

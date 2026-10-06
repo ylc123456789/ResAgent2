@@ -46,8 +46,8 @@ class Registration:
 class SearchBackend:
     name = "test-search"
 
-    def __init__(self, *, error=None, empty=False):
-        self.error, self.empty = error, empty
+    def __init__(self, *, error=None, empty=False, results=None):
+        self.error, self.empty, self.results = error, empty, results
         self.calls = []
 
     def search(self, query, *, max_results):
@@ -56,7 +56,9 @@ class SearchBackend:
             raise self.error
         return WebSearchResult(
             provider=self.name, query=query,
-            results=[] if self.empty else [WebSearchItem("Source", URL, "A lead")],
+            results=[] if self.empty else (
+                self.results if self.results is not None else [WebSearchItem("Source", URL, "A lead")]
+            ),
         )
 
 
@@ -297,12 +299,41 @@ def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, m
         assert trace["usage"] == {"input_tokens": 12, "output_tokens": 3}
         assert trace["model"] == "deepseek-flash"
         assert "test-only-secret" not in json.dumps(trace)
-        assert json.loads(trace["request_text"])["messages"] == [{"role": "user", "content": [
-            {"type": "text", "text": "Perform a web search for the query: find source"},
-        ]}]
+        messages = json.loads(trace["request_text"])["messages"]
+        assert len(messages) == 1 and messages[0]["role"] == "user"
+        assert messages[0]["content"][0]["text"].endswith("Query:\nfind source")
         receipt = json.loads(RegisteredArtifactReader(
             list(register.refs.values()), run_id=RUN_ID,
         ).read_text(register.of_kind("web_search").id)["content"])
         assert receipt["provider"] == "deepseek"
         assert receipt["results"][0]["url"] == URL
     assert (result.status == "completed") == (budget == 3)
+
+
+def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp_path):
+    register, fetcher = Registration(tmp_path), PageFetcher()
+    backend = SearchBackend(results=[
+        WebSearchItem("First lead", "https://example.test/first", ""),
+        WebSearchItem("Later source", URL, ""),
+    ])
+    client = NativePlanClient([
+        {"tool": "web_search", "arguments": {"query": "sources", "max_results": 1}},
+        lambda: read(register.of_kind("web_search")),
+        {"tool": "web_fetch", "arguments": {"url": URL}},
+        lambda: read(register.of_kind("web_page")),
+        lambda: finish(register.of_kind("web_search"), register.of_kind("web_page")),
+    ])
+    result = ScientificAgent(
+        client, web_search_backend=backend, web_page_fetcher=fetcher,
+        registration_port=register, literature_backend=UnusedLiteratureBackend(),
+    ).invoke(request())
+    assert result.status == "completed", result.report
+    first = json.loads(client.turns[1][0].tool_results["call_1"])["value"]
+    assert first["result_count"] == 2 and first["omitted_count"] == 1
+    assert first["truncated"] is True
+    assert [item["url"] for item in first["results"]] == ["https://example.test/first"]
+    assert URL in json.dumps(client.turns[2], default=lambda x: x.model_dump())
+    assert backend.calls == [("sources", 1)] and fetcher.calls == [URL]
+    refs = [ref for ref in result.artifacts if isinstance(ref, ArtifactRef)]
+    index = build_research_index(run_id=RUN_ID, artifacts=refs, work_requests=[])
+    assert {item.kind for group in index.groups for item in group.artifacts} == {"web_search", "web_page"}

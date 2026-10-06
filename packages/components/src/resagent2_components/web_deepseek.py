@@ -48,7 +48,12 @@ class DeepSeekWebSearchBackend:
                 "max_tokens": self.max_tokens,
                 "messages": [{
                     "role": "user",
-                    "content": [{"type": "text", "text": f"Perform a web search for the query: {query}"}],
+                    "content": [{"type": "text", "text": (
+                        "Use native web search to find sources relevant to the query below. "
+                        "This request is only for source discovery; do not answer the "
+                        "underlying question or write a research summary. Finish with "
+                        "a brief list of relevant source URLs.\n\nQuery:\n" + query
+                    )}],
                 }],
                 "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": self.max_uses}],
             })
@@ -62,11 +67,11 @@ class DeepSeekWebSearchBackend:
             raise WebSearchError(str(error), error_type=error.error_type) from None
         return WebSearchResult(
             provider=self.name, query=query,
-            results=_search_items(payload, max_results=max_results),
+            results=_search_items(payload),
         )
 
 
-def _search_items(payload: dict, *, max_results: int) -> list[WebSearchItem]:
+def _search_items(payload: dict) -> list[WebSearchItem]:
     """Use native sources and URL-matched citations, never generated prose."""
     blocks = payload.get("content")
     if not isinstance(blocks, list) or any(not isinstance(block, dict) for block in blocks):
@@ -129,4 +134,4 @@ def _search_items(payload: dict, *, max_results: int) -> list[WebSearchItem]:
                 snippet=snippets.get(url, ""),
                 published_at=age if isinstance(age, str) else None,
             ))
-    return results[:max_results]
+    return results

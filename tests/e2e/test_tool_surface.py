@@ -19,7 +19,8 @@ Later literature_search updates add source/scope/page, small-batch defaults,
 500-character previews and honest pagination/error guidance without changing Run fields.
 Title lookup treats the complete query as one phrase and describes identity checks.
 Optional web_search/web_fetch add bounded web leads and page artifacts; existing
-tool schemas remain unchanged.
+tool schemas remain unchanged. Later web_search guidance describes bounded previews
+with full received results retained in its artifact and no hosted-cost guarantee.
 """
 
 import hashlib

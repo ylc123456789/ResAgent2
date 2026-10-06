@@ -68,6 +68,24 @@ def test_tavily_normalizes_results_and_bounds_snippet(monkeypatch):
     assert payload["include_raw_content"] is False
 
 
+def test_tavily_keeps_received_results_even_if_provider_exceeds_hint(monkeypatch):
+    requests = []
+
+    def send(request, **kwargs):
+        requests.append(json.loads(request.content))
+        return _response(json.dumps({"results": [
+            {"title": "A", "url": "https://example.test/a"},
+            {"title": "B", "url": "https://example.test/b"},
+        ]}).encode())
+
+    monkeypatch.setattr("resagent2_components.web.send_request", send)
+    result = TavilyWebSearchBackend("secret").search("q", max_results=1)
+    assert requests[0]["max_results"] == 1
+    assert [item.url for item in result.results] == [
+        "https://example.test/a", "https://example.test/b",
+    ]
+
+
 @pytest.mark.parametrize("content", [b"[]", b"null", b'{"results": {}}', b"{bad"])
 def test_tavily_invalid_json_is_structured_error(monkeypatch, content):
     monkeypatch.setattr(

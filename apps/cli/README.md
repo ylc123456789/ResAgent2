@@ -362,7 +362,7 @@ DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/message
 
 每次 DeepSeek 搜索会额外占用一次共享 Run `max_llm_calls`，与 Scientific、其他 Agent、Compiler、压缩和重试共用总账；托管搜索的 `max_uses` 不是新的模型请求钱包。搜索不创建另一套 Agent/Session，不自动续传、重试或换源。Tavily 搜索与网页抓取不占模型请求次数，所有请求仍受 Run 剩余时间约束，超大响应拒绝而不是默默截断。失败回执保留实际错误和可用的 `retry_after`。
 
-搜索请求沿用 `RESAGENT2_LLM_TRACE_LEVEL` / `RESAGENT2_LLM_TRACE_DIR`：`full` 保存请求与响应正文，`metadata` 只保存内容 hash，并关联当前 Run、Session 和工具步骤；认证 header 不写入 trace。托管搜索也可能消费模型 tokens 或供应商搜索费用；没有核实额外搜索费率时不能称其免费。官方接口、账号额度和大陆服务器出口仍须按[本轮验收步骤](../../docs/history/reviews/WEB_TOOLS_2026-10-06.md)实测，不能由确定性测试推断。
+搜索请求沿用 `RESAGENT2_LLM_TRACE_LEVEL` / `RESAGENT2_LLM_TRACE_DIR`：`full` 保存请求与响应正文，`metadata` 只保存内容 hash，并关联当前 Run、Session 和工具步骤；认证 header 不写入 trace。托管搜索也可能消费模型 tokens 或供应商搜索费用；没有核实额外搜索费率时不能称其免费。本轮大陆服务器已完成真实验收及独立复核，见[验收记录](../../docs/history/reviews/WEB_TOOLS_2026-10-06.md)；其他账号和网络出口仍须独立检查，不能由确定性测试或单节点结果推断。
 
 联网搜索会产生额外模型 token 费用，见[DeepSeek 官方 Web Search 说明](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code/#使用-claude-code-的-web-search-功能)和[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。公开文档未单列按次搜索费率；具体以实际usage和账单为准。
 

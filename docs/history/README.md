@@ -4,7 +4,7 @@
 
 ## 2026-10-06：通用网页工具
 
-`feat/web-search-hardening` 从 `main@0e5bb96` 增加可选 Tavily `web_search` 与独立 `web_fetch`，沿现有 Components/Capabilities/Scientific 分层、Registry和research index交接。Scientific仍按用户目标选择材料入口，没有固定“网页→论文”顺序；schema保持23.0。本地1842 passed / 1 skipped、mock13工件、公网HTTPS抓取和工具面检查通过；本地pip check保留pdfminer-six缺cryptography的环境差异，真实provider/模型服务器补测待执行，分支尚未推送/合并。范围与测试步骤见[实施及交接](reviews/WEB_TOOLS_2026-10-06.md)，取舍见[ADR-0025](decisions/0025-general-web-capability.md)。
+`feat/web-search-hardening` 从 `main@0e5bb96` 增加通用 `web_search` 与独立 `web_fetch`：默认复用DeepSeek key使用托管搜索，也可显式选择Tavily。沿现有Components/Capabilities/Scientific分层、Registry和research index交接；额外搜索模型请求共用Runtime预算/截止时间/trace，Scientific仍按用户目标选择材料，没有固定“网页→论文”顺序；schema保持23.0。本地及服务器最终回归均1926 passed / 1 skipped、mock13工件；服务器pip check clean，本地pdfminer-six缺cryptography的环境差异如实保留。`f69df60` 已通过大陆服务器探针与两个真实任务验收，并独立核对32/32冻结hash、60 public + 5 private清单及共享用量。实测搜索snippet全空、结果含噪声，记录为质量限制，不将任务完成等同检索精度优秀。本轮已收尾，保留独立分支、未合并main。完整结果及后续部署检查见[实施及交接](reviews/WEB_TOOLS_2026-10-06.md)，取舍见[ADR-0025](decisions/0025-general-web-capability.md)。
 
 ## 2026-10-05：文献搜索合并收尾
 

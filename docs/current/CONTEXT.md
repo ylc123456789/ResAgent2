@@ -322,7 +322,7 @@ start_line/end_line 及 start_char/end_char 记录请求边界（start_char 默�
 | 阅读、诊断、目录的选择 | 阅读保留来源时序；命令先失败后成功；目录最多2000条完整路径 | workspace_context + 既有选择器 |
 | 一次工具读取 | 默认所选行与字符窗口最多返回128000字符；不是输入tokens上限 | read_file / read_artifact 的共享IO常量 |
 | 原生工具历史 | 近期完整配对回合 + 可用摘要检查点；原始全史留在 Session，不做400字符裁剪 | AgentLoop + SessionStore |
-| 调用次数/时间 | RunBudget 仅含 max_llm_calls 和 timeout_seconds；发送前持久占用，内部共享余额和截止时间 | Controller / Scheduler / Runtime 的共享 execution_budget 与 RunUsage |
+| 调用次数/时间 | RunBudget 仅含 max_llm_calls 和 timeout_seconds；发送前持久占用，Agent、Compiler、压缩、重试和 DeepSeek 托管搜索共享余额/截止时间；网页抓取及 Tavily 只占时间 | Controller / Scheduler / Runtime 的共享 execution_budget 与 RunUsage |
 | 流程上限 | ExecutionLimits 的 max_tasks、max_attempts_per_task；step 仅记录动作时序 | Compiler / Scheduler，不另立消费预算 |
 
 执行预算与模型可见信息是两个边界：当前三个 Agent 的 builder 及共同运行段都不自动输出 TaskBudget 数值、Run 用量或实时剩余时间。Coding/Experiment 的 task 段展示明确权限、工作区范围和确认开关；Scientific 的 research 段只有 instruction。上述控制仍在代码中执行，不依赖模型自行记账。Compiler 的 compiler_request 展示剩余任务槽位，但不接收一份可分配的模型调用钱包。

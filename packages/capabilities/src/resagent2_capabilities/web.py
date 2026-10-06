@@ -61,6 +61,13 @@ class WebSearchTool:
         failure = None
         error_type = retry_after = None
         result = None
+        tracer = getattr(self.backend, "set_trace_context", None)
+        if tracer is not None:
+            tracer(
+                run_id=state.run_id, session_id=state.session_id,
+                agent_name=state.agent_name, task_id=state.task_id, step=state.step,
+                tool=self.name, operation="web_search",
+            )
         try:
             result = self.backend.search(
                 args.query, max_results=args.max_results,
@@ -73,7 +80,7 @@ class WebSearchTool:
         receipt = {
             **args.model_dump(mode="json"),
             "provider": result.provider if result else getattr(self.backend, "name", None),
-            "executed_query": result.query if result else None,
+            "provider_query": result.query if result else None,
             "results": [asdict(item) for item in result.results] if result else [],
             "error_type": error_type,
             "retry_after": retry_after,

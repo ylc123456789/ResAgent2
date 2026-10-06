@@ -37,10 +37,10 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 网页工具是通用材料入口，不是文献工具的别名：
 
-- `web_search(query, max_results=5)` 仅在配置搜索 provider 时装配。它登记一个 `web_search` 查询回执，结果是标题、URL 和 snippet 线索，每次只提供一个有界批次、不支持分页；成功空结果与失败分别保留 `status=empty` / `status=failed`，失败回执带 `error_type` 和可选 `retry_after`，不登记论文。
+- `web_search(query, max_results=5)` 仅在配置搜索 provider 时装配；DeepSeek 托管搜索和显式 Tavily 共用这个工具及输入 schema。它登记一个 `web_search` 查询回执，结果是标题、URL 和 snippet 线索，每次只提供一个有界批次、不支持分页；成功空结果与失败分别保留 `status=empty` / `status=failed`，失败回执带 `error_type` 和可选 `retry_after`，不登记论文。
 - `web_fetch(url)` 可独立装配，抓取一个无凭据的 http(s) HTML/XHTML/text URL，登记一个 `web_page` 工件。返回页面的 source/final URL、title 和提取文本，Scientific 用 `read_artifact` 分段读取；私有/非公网地址、重定向到非公网地址、PDF、二进制、NUL、无效 UTF-8、超时和超大响应返回结构化失败且不生成页面工件。网页正文和摘要是外部不可信材料，不得当作指令执行。
 
-两个工具都由 Scientific 按用户目标自主选择；没有固定的调用顺序，网页材料不自动转换为 `literature_paper`。搜索回执和网页正文进入 research index，但不替代论文 kind 要求或来源核对。Provider 适配、URL/响应边界和错误归一化在 [联网组件](../components/README.md#web)，Tool 只负责 schema、登记和模型可见回执。
+两个工具都由 Scientific 按用户目标自主选择；没有固定的调用顺序，网页材料不自动转换为 `literature_paper`。搜索回执和网页正文进入 research index，但不替代论文 kind 要求或来源核对。Provider 适配、URL/响应边界和错误归一化在 [联网组件](../components/README.md#web)，Tool 只负责 schema、登记和模型可见回执。DeepSeek 后端的额外模型请求由注入的 Runtime 客户端占用共享 Run 预算；Tool 通过可选 trace hook 传递当前 Run/Session/步骤，不创建另一个 Agent 或 Session。
 
 通用材料读取与作用域校验在 Components；Scientific 的 WorkFeedback 事实框和报告呈现在 `agents/scientific/context.py`。选择与预算仍由 Runtime 统一管理，详见 [CONTEXT](../../docs/current/CONTEXT.md#budgets)，这里不再维护另一份额度表。
 

@@ -83,6 +83,8 @@ def test_web_search_freezes_bounded_receipt(tmp_path):
     path = register.registry.root / "run_example" / ref.id / "web_search.json"
     receipt = json.loads(path.read_text())
     assert receipt["results"][0]["url"] == "https://example.test/a"
+    assert receipt["provider_query"] == "q"
+    assert "executed_query" not in receipt
     assert observation.memory_updates["web_output_artifact_ids"] == [ref.id]
 
 

@@ -253,9 +253,9 @@ PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可�
 
 ### 通用网页工具
 
-`web_search(query, max_results=5)` 是可选的 provider-backed 线索搜索。只有组合根配置搜索 provider（当前为 Tavily）时才向 Scientific 注册；没有 provider 时不暴露该工具。`max_results` 限制为 1–10，每次只返回一个有界批次，不提供分页或穷尽结果的保证；工具不会自行改写查询、合并来源或把搜索结果判定为相关证据。
+`web_search(query, max_results=5)` 是可选的 provider-backed 线索搜索。只有组合根配置搜索 provider 时才向 Scientific 注册；CLI 默认在已有 DeepSeek key 时使用托管搜索，显式支持 Tavily 或关闭搜索；没有 provider 时不暴露该工具。`max_results` 限制为 1–10，每次只返回一个有界批次，不提供分页或穷尽结果的保证；工具不会自行改写查询、合并来源或把搜索结果判定为相关证据。
 
-成功搜索会登记一个 `web_search` 工件，保存 provider、实际查询和结果标题/URL/snippet；snippet 最多2000字符，不冒充页面正文。`status` 区分 `results` 与合法的 `empty`。请求失败仍登记带 `status=failed` 的搜索回执，保留 `error_type` 和可选 `retry_after`，便于 Scientific 判断是否换词、稍后重试或停止；失败回执说明请求失败，不登记论文或页面正文。
+成功搜索会登记一个 `web_search` 工件，保存 provider、提交的查询和结果标题/URL/snippet；snippet 最多2000字符，不冒充页面正文。`query`保留工具输入，`provider_query`表示实际提交给供应商的查询，不保证等于托管搜索在服务端改写后的搜索词；原生响应中的服务端查询可在私有full trace核对。`status` 区分 `results` 与合法的 `empty`。请求失败仍登记带 `status=failed` 的搜索回执，保留 `error_type` 和可选 `retry_after`，便于 Scientific 判断是否换词、稍后重试或停止；失败回执说明请求失败，不登记论文或页面正文。DeepSeek 后端只从原生 `web_search_result` 取得链接/标题，snippet只取匹配URL的citation `cited_text`，缺少时留空；生成正文不作为证据。缺少原生结果块、供应商错误或未完成响应不能伪装为空结果，明确空的原生结果列表才是成功空结果。
 
 `web_fetch(url)` 抓取一个网页并登记一个 `web_page` 工件。URL 只接受无凭据的 `http`/`https`；成功工件保存 source/final URL、title、提取文本、content type、parser 和 fetched_at，Scientific 可用 `read_artifact` 分段读取。失败不生成页面工件，直接返回 `error_type`/`retry_after`。Fetcher 只接受 HTML/XHTML/text，严格按 UTF-8 解码并拒绝 NUL、PDF 和其他二进制；最多5次重定向，每次连接只使用已核对的公网地址，DNS解析、HTTP和响应读入受共享 Run 截止时间约束。不执行 JavaScript，也不提供浏览器会话。
 
@@ -310,6 +310,7 @@ OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `To
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
 | PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
+| ModelRequestClient.request(body) | 注入的单次模型 JSON 请求；共享用量/截止时间/trace，无重试、Tool 执行或 Agent/Session；供应商语义由调用组件解析 |
 | PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Capabilities，组合 Components 提供的基础边界；不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
 
@@ -374,11 +375,13 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 
 ### LLM 计量与 trace
 
-最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
+最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；Tavily 和网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
 
 OpenAICompatibleClient 的 trace 按 call_id 关联逻辑调用和后续校验记录。attempts 保留各次 finish_reason/usage/错误，顶层响应对应最后一次；retry_number+1 是 HTTP 尝试数，不能再加 attempts 长度。request_max_tokens 是实际输出上限，null 表示未指定。
 
 收到格式反馈后的请求是新逻辑调用、新 call_id，不是上一调用内的 HTTP retry。正文/原生参数解析和调用数量错误写在主记录/attempts 的 validation_error；schema_validation_error 补充行记录已解析候选的外层 schema 错误，以及原生调用身份/回执校验拒绝。主记录按带 model 的行识别，不把补充行计成另一次调用。统计解析失败、候选校验、HTTP retry、Task Attempt retry 时分开计数。
+
+托管搜索的单次请求关联当前 Run、Session、工具和步骤，复用同一 trace 档位：full 保存请求及可取得的JSON响应；HTTP失败只保留状态和Retry-After，不保留错误正文。metadata 保存相应 hash，不记录认证 header，不因 trace 增加另一份科学证据。此传输的`response_valid`和`succeeded`表示有效JSON对象，检索结果是否可用以搜索回执及Session观察为准。
 
 off 不记录；metadata 不保存请求/响应/源码正文，对这些内容只保留相应 hash（原生 tool calls 为 `tool_calls_sha256`）；full 保存原始 request/response，并在 provider 提供时保存 `raw_tool_calls` 与 `raw_reasoning_text`，包括可取得的失败响应。trace 与 Session 是独立边界：metadata 对内容只留 hash 不表示 Session 不保存 `tool_turns`；其中 reasoning 只用于同 Session 协议续传，不是业务证据。Session 与 trace 目录/文件都按 `0700/0600` 管理，Session 私有权限不依赖 trace 档位；full 仍可能含源码和用户输入，不是可公开上传的日志。
 

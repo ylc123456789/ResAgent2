@@ -64,6 +64,8 @@ from .literature import (
     LiteratureUnavailableError,
 )
 
+from .web_deepseek import DeepSeekWebSearchBackend
+
 from .web import (
     TavilyWebSearchBackend,
     WebFetchError,
@@ -92,6 +94,7 @@ __all__ = [
     'load_literature_manifest',
     'LiteratureSearchError',
     'LiteratureUnavailableError',
+    'DeepSeekWebSearchBackend',
     'TavilyWebSearchBackend',
     'WebFetchError',
     'WebPage',

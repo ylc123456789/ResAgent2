@@ -33,6 +33,8 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 
 非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 使用它；Interpreter 用固定代码组织材料，不调用模型。runtime 不认识编译或解释业务。
 
+`ModelRequestClient.request(body)`供托管搜索等组件发送一次独立的模型JSON请求。调用方构造和解释供应商格式；Runtime只负责HTTP上限、发送前共享用量登记、总截止时间和私有trace，不增加Agent、Session或重试。full保留请求及可取得的JSON响应，metadata保留内容hash；HTTP失败只保留状态和Retry-After，认证header不进trace，当前key即使被回显也会遮蔽。`response_valid`只说明返回了JSON对象，业务成功由调用组件校验。
+
 文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略
 均不属于 runtime。
 

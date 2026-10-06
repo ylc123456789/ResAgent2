@@ -346,11 +346,25 @@ arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒�
 
 ### 通用联网搜索和网页获取
 
-CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 网页并通过 `read_artifact` 阅读冻结正文。提供 `TAVILY_API_KEY` 后另外装配 `web_search`，无需更换 DeepSeek 或其他兼容模型；未配置搜索密钥时只提供网页获取。搜索服务的密钥与模型密钥独立，由部署方通过环境变量加载，不进入工件、目标文本或模型上下文。
+CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 网页并通过 `read_artifact` 阅读冻结正文。默认搜索 provider 为 DeepSeek：已有 `DEEPSEEK_API_KEY` 时同时装配 `web_search`，复用该 key，无需申请另一家搜索服务；没有该 key 时搜索不可用，网页获取仍可独立使用。不会因为存在 `TAVILY_API_KEY` 就自动换源。
 
-`web_search` 默认5条、最多10条，每次一批，不支持分页；标题、URL 和 snippet 是线索，不代表已读网页或已核对论文。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源和抓取时间，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
+| 部署变量 | 默认值与规则 |
+|---|---|
+| `RESAGENT2_WEB_SEARCH_PROVIDER` | 未设置时默认 `deepseek`；可显式设 `deepseek`、`tavily` 或 `off`。显式选择前两者须分别有 `DEEPSEEK_API_KEY` / `TAVILY_API_KEY`，否则在创建客户端和目录前报配置错误；`off` 只关闭搜索 |
+| `RESAGENT2_WEB_SEARCH_MODEL` | `deepseek-flash`；用于 DeepSeek 搜索请求，独立于三个 Agent/Compiler 的 `RESAGENT2_MODEL` |
+| `RESAGENT2_WEB_SEARCH_TIMEOUT_SECONDS` | 60秒；DeepSeek 搜索请求上限，须正整数 |
+| `RESAGENT2_WEB_TIMEOUT_SECONDS` | 30秒；网页抓取和显式 Tavily 搜索上限，须正整数 |
+| `RESAGENT2_WEB_MAX_RESPONSE_BYTES` | 4 MiB；两种搜索响应及网页抓取的字节上限，须正整数 |
 
-部署配置 `RESAGENT2_WEB_TIMEOUT_SECONDS` 默认为30秒，`RESAGENT2_WEB_MAX_RESPONSE_BYTES` 默认为4 MiB；均须正整数，适用于搜索响应与网页抓取。DNS解析和请求共享 Run 剩余时间，超大响应拒绝而不是默默截断。搜索只发一次请求，限流回执保留 `retry_after`，没有自动重试或隐式换源。
+DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/messages`，发送 `anthropic-version: 2023-06-01`、`x-api-key` 和 `Authorization: Bearer`。它不读取 `RESAGENT2_API_BASE`，当前不提供另一个搜索 base URL 配置；主 Agent 使用兼容服务时也可单独使用官方 DeepSeek 搜索。密钥通过现有安全配置加载，不进入工件、目标文本或模型上下文。显式 Tavily 仍使用其独立 key；无需新增 SDK。
+
+`web_search` 默认5条、最多10条，每次一批，不支持分页。DeepSeek 后端通过供应商托管的 `web_search` 工具获得来源，单次请求输出上限4096 tokens、托管搜索最多5次；链接及标题只取原生 `web_search_result`，snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，不把生成正文当网页证据。标题、URL和snippet仍是线索，不代表已读网页或已核对论文。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源和抓取时间，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
+
+每次 DeepSeek 搜索会额外占用一次共享 Run `max_llm_calls`，与 Scientific、其他 Agent、Compiler、压缩和重试共用总账；托管搜索的 `max_uses` 不是新的模型请求钱包。搜索不创建另一套 Agent/Session，不自动续传、重试或换源。Tavily 搜索与网页抓取不占模型请求次数，所有请求仍受 Run 剩余时间约束，超大响应拒绝而不是默默截断。失败回执保留实际错误和可用的 `retry_after`。
+
+搜索请求沿用 `RESAGENT2_LLM_TRACE_LEVEL` / `RESAGENT2_LLM_TRACE_DIR`：`full` 保存请求与响应正文，`metadata` 只保存内容 hash，并关联当前 Run、Session 和工具步骤；认证 header 不写入 trace。托管搜索也可能消费模型 tokens 或供应商搜索费用；没有核实额外搜索费率时不能称其免费。官方接口、账号额度和大陆服务器出口仍须按[本轮验收步骤](../../docs/history/reviews/WEB_TOOLS_2026-10-06.md)实测，不能由确定性测试推断。
+
+联网搜索会产生额外模型 token 费用，见[DeepSeek 官方 Web Search 说明](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code/#使用-claude-code-的-web-search-功能)和[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。公开文档未单列按次搜索费率；具体以实际usage和账单为准。
 
 网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿原登记表与 research index 交接，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
 

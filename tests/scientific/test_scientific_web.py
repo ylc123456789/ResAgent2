@@ -250,3 +250,59 @@ def test_failed_page_fetch_does_not_create_page_or_observation_record(tmp_path):
     trace = next(item for item in result.artifacts if item.kind == "observation_trace")
     assert json.loads(trace.content)["observed_artifact_ids"] == []
     assert "unsupported_content_type" in json.dumps(client.turns[-1], default=lambda x: x.model_dump())
+
+
+@pytest.mark.parametrize("budget", [1, 2, 3])
+def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, monkeypatch, budget):
+    import httpx
+    from resagent2_components import DeepSeekWebSearchBackend
+    from resagent2_runtime import ModelRequestClient
+
+    monkeypatch.setenv("TEST_SEARCH_KEY", "test-only-secret")
+    calls = []
+
+    def send(wire_request, **kwargs):
+        calls.append(wire_request)
+        return httpx.Response(200, request=wire_request, json={
+            "content": [{"type": "web_search_tool_result", "content": [
+                {"type": "web_search_result", "title": "Source", "url": URL},
+            ]}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        })
+
+    monkeypatch.setattr("resagent2_runtime.model_request.send_request", send)
+    register = Registration(tmp_path / "artifacts")
+    hosted = ModelRequestClient(
+        endpoint="https://api.test/messages", api_key_env="TEST_SEARCH_KEY",
+        trace_dir=tmp_path / "trace", trace_level="full",
+    )
+    client = NativePlanClient([
+        {"tool": "web_search", "arguments": {"query": "find source"}},
+        lambda: finish(register.of_kind("web_search")),
+    ])
+    result = ScientificAgent(
+        client, web_search_backend=DeepSeekWebSearchBackend(hosted), registration_port=register,
+    ).invoke(request(budget=budget))
+
+    assert result.llm_calls == budget
+    if budget == 1:
+        assert calls == [] and register.refs == {}
+    else:
+        assert len(calls) == 1
+        trace, = [json.loads(line) for line in (tmp_path / "trace" / "llm_traces.jsonl").read_text().splitlines()]
+        assert trace["run_id"] == RUN_ID
+        assert trace["session_id"] == result.session.id
+        assert trace["tool"] == "web_search"
+        assert trace["usage"] == {"input_tokens": 12, "output_tokens": 3}
+        assert trace["model"] == "deepseek-flash"
+        assert "test-only-secret" not in json.dumps(trace)
+        assert json.loads(trace["request_text"])["messages"] == [{"role": "user", "content": [
+            {"type": "text", "text": "Perform a web search for the query: find source"},
+        ]}]
+        receipt = json.loads(RegisteredArtifactReader(
+            list(register.refs.values()), run_id=RUN_ID,
+        ).read_text(register.of_kind("web_search").id)["content"])
+        assert receipt["provider"] == "deepseek"
+        assert receipt["results"][0]["url"] == URL
+    assert (result.status == "completed") == (budget == 3)

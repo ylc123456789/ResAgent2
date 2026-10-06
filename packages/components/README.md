@@ -23,7 +23,7 @@
 
 ## 依赖与状态
 
-公开导入入口为 `resagent2_components`；实现内部小函数跟随相关文件，不为单个辅助函数建文件。基础操作只使用实际需要的依赖；共享上下文投影和现有论文模型可使用 Runtime 的类型/选择函数。不得 import Capabilities、具体 Agent 或 Orchestrator，不启动 AgentLoop 或直接调用 LLM。
+公开导入入口为 `resagent2_components`；实现内部小函数跟随相关文件，不为单个辅助函数建文件。基础操作只使用实际需要的依赖；共享上下文投影和现有论文模型可使用 Runtime 的类型/选择函数。不得 import Capabilities、具体 Agent 或 Orchestrator，不启动 AgentLoop 或创建 Agent/Session。供应商托管搜索的模型请求经组合根注入的 Runtime `ModelRequestClient` 执行；组件只构造供应商请求和归一化结果，不自行管理模型传输、Run 预算或研究决策。
 
 不要求所有组件纯函数：环境绑定、资源 IO 和文献来源索引保持既有状态；但不新建一份 Run/Session，不替代 Controller/Scheduler 的状态归属。ArtifactRegistrationPort 由组合根注入，登记实现仍在 Orchestrator；Components 不反向依赖它。
 
@@ -79,8 +79,10 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 
 ## 通用网页组件
 
-`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回 provider-neutral 的有界结果批次，`WebPageFetcher.fetch(url)` 获取并解析一个网页。当前组合根可注入 `TavilyWebSearchBackend`，只发一次请求，不提供分页；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
+`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回 provider-neutral 的有界结果批次，`WebPageFetcher.fetch(url)` 获取并解析一个网页。组合根可注入 `DeepSeekWebSearchBackend` 或 `TavilyWebSearchBackend`，每次只发一次请求，不提供分页、自动重试或隐式换源；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
 
-`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。组件只返回页面事实，不登记工件、不更新 Run、不调用 LLM；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
+`DeepSeekWebSearchBackend(client, model="deepseek-flash", max_tokens=4096, max_uses=5)` 构造 Anthropic-compatible 托管 `web_search` 请求，并将原生 `web_search_result` 的URL/title/page_age归一化为普通网页线索；snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，生成正文不充当证据。缺少原生结果块为 `search_not_executed`，明确空列表才是成功空结果；托管工具错误保留 `provider_error` / `rate_limited`，`max_tokens` / `pause_turn` 等未完成响应为 `incomplete_response`，不自动续传。注入的 Runtime `ModelRequestClient` 负责认证、响应字节/时间上限、一次共享模型用量占用和 trace，组件不启动模型循环、不创建 Session。CLI 默认复用已有 DeepSeek key，显式 Tavily 仍走普通 HTTP；部署选择和费用限制见 [CLI 配置](../../apps/cli/README.md#通用联网搜索和网页获取)。
+
+`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
 
 网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。

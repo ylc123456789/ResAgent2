@@ -255,7 +255,7 @@ PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可�
 
 `web_search(query, max_results=5)` 是可选的 provider-backed 线索搜索。只有组合根配置搜索 provider 时才向 Scientific 注册；CLI 默认在已有 DeepSeek key 时使用托管搜索，显式支持 Tavily 或关闭搜索；没有 provider 时不暴露该工具。`max_results` 限制为 1–10，每次只返回一个有界批次，不提供分页或穷尽结果的保证；工具不会自行改写查询、合并来源或把搜索结果判定为相关证据。
 
-成功搜索会登记一个 `web_search` 工件，保存 provider、提交的查询和结果标题/URL/snippet；snippet 最多2000字符，不冒充页面正文。`query`保留工具输入，`provider_query`表示实际提交给供应商的查询，不保证等于托管搜索在服务端改写后的搜索词；原生响应中的服务端查询可在私有full trace核对。`status` 区分 `results` 与合法的 `empty`。请求失败仍登记带 `status=failed` 的搜索回执，保留 `error_type` 和可选 `retry_after`，便于 Scientific 判断是否换词、稍后重试或停止；失败回执说明请求失败，不登记论文或页面正文。DeepSeek 后端只从原生 `web_search_result` 取得链接/标题，snippet只取匹配URL的citation `cited_text`，缺少时留空；生成正文不作为证据。缺少原生结果块、供应商错误或未完成响应不能伪装为空结果，明确空的原生结果列表才是成功空结果。
+成功搜索会登记一个 `web_search` 工件，保存 provider、提交的查询和结果标题/URL/snippet；snippet 最多2000字符，不冒充页面正文。`query`保留工具输入，`provider_query`表示实际提交给供应商的查询，不保证等于托管搜索在服务端改写后的搜索词；原生响应中的服务端查询可在私有full trace核对。`status` 区分 `results` 与合法的 `empty`。请求失败仍登记带 `status=failed` 的搜索回执，保留 `error_type` 和可选 `retry_after`，便于 Scientific 判断是否换词、稍后重试或停止；失败回执说明请求失败，不登记论文或页面正文。DeepSeek 后端只从原生 `web_search_result` 取得链接/标题，snippet只取匹配URL的citation `cited_text`，缺少时留空；生成正文不作为证据。实际供应商响应可能只有标题/URL和不透明的`encrypted_content`，本后端不将其解释为可读摘要；本轮大陆节点验收的所有snippet为空，详见[实测记录](../history/reviews/WEB_TOOLS_2026-10-06.md)。缺少原生结果块、供应商错误或未完成响应不能伪装为空结果，明确空的原生结果列表才是成功空结果。
 
 `web_fetch(url)` 抓取一个网页并登记一个 `web_page` 工件。URL 只接受无凭据的 `http`/`https`；成功工件保存 source/final URL、title、提取文本、content type、parser 和 fetched_at，Scientific 可用 `read_artifact` 分段读取。失败不生成页面工件，直接返回 `error_type`/`retry_after`。Fetcher 只接受 HTML/XHTML/text，严格按 UTF-8 解码并拒绝 NUL、PDF 和其他二进制；最多5次重定向，每次连接只使用已核对的公网地址，DNS解析、HTTP和响应读入受共享 Run 截止时间约束。不执行 JavaScript，也不提供浏览器会话。
 

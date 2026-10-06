@@ -205,3 +205,29 @@ def test_successful_empty_search_has_no_omitted_results(tmp_path):
     assert observation.value["results"] == []
     assert observation.value["result_count"] == observation.value["omitted_count"] == 0
     assert observation.value["truncated"] is False
+
+
+def test_web_page_links_survive_freezing_and_authorized_read(tmp_path, monkeypatch):
+    import httpx
+    from resagent2_components import WebPageFetcher
+
+    final_url = "https://example.test/papers/index.html"
+    response = httpx.Response(
+        200, headers={"content-type": "text/html"},
+        content=b"<title>Paper page</title><p>Source: <a href='paper.pdf'>Download <b>PDF</b></a></p>",
+        request=httpx.Request("GET", final_url),
+    )
+    fetcher = WebPageFetcher()
+    monkeypatch.setattr(fetcher, "_request", lambda url: response)
+    register = _Register(tmp_path)
+    observation = WebFetchTool(fetcher, register).execute(
+        _state(), WebFetchInput(url="https://example.test/original"),
+    )
+    ref = next(iter(register.refs.values()))
+    content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
+    assert observation.ok and observation.value["url"] == final_url
+    assert "Download PDF (https://example.test/papers/paper.pdf)" in content
+    assert ref.metadata["parser"] == "html.parser"
+    assert ref.metadata["source_url"] == "https://example.test/original"
+    assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
+    assert len(register.refs) == 1

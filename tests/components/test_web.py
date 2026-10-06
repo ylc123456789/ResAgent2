@@ -154,6 +154,95 @@ def test_web_page_fetcher_extracts_html_and_ignores_noncontent(monkeypatch):
     assert page.final_url == "https://example.test/page"
 
 
+def test_web_page_fetcher_preserves_links_and_nested_visible_labels(monkeypatch):
+    calls = []
+    html = b"""<title>Link page</title><p>Before</p>
+    <a href="https://other.test/paper?q=1&amp;lang=en">Original <b>paper</b> &amp; <i>code</i>.</a>
+    <a href="../download/file.pdf">Download <span>P</span>DF</a><p>After</p>"""
+
+    def send(request, **kwargs):
+        calls.append(str(request.url))
+        return _response(html, content_type="text/html", url=str(request.url))
+
+    monkeypatch.setattr("resagent2_components.web.send_request", send)
+    page = WebPageFetcher().fetch("https://example.test/articles/index")
+
+    assert page.text == (
+        "Before\nOriginal paper & code. (https://other.test/paper?q=1&lang=en)\n"
+        "Download PDF (https://example.test/download/file.pdf)\nAfter"
+    )
+    assert calls == ["https://example.test/articles/index"]
+    assert page.title == "Link page"
+    assert page.source_url == page.final_url == calls[0]
+    assert page.content_type == "text/html"
+    assert page.parser == "html.parser"
+    assert datetime.fromisoformat(page.fetched_at).tzinfo is not None
+
+
+def test_web_page_fetcher_resolves_links_against_redirected_page(monkeypatch):
+    calls = []
+
+    def send(request, **kwargs):
+        calls.append(str(request.url))
+        if len(calls) == 1:
+            response = httpx.Response(
+                302, headers={"location": "https://other.test/docs/page"}, request=request,
+            )
+            response.raise_for_status()
+        return httpx.Response(
+            200, text='<a href="next">Next page</a>',
+            headers={"content-type": "text/html"}, request=request,
+        )
+
+    monkeypatch.setattr("resagent2_components.web.send_request", send)
+    page = WebPageFetcher().fetch("https://example.test/start")
+
+    assert page.text == "Next page (https://other.test/docs/next)"
+    assert page.source_url == "https://example.test/start"
+    assert page.final_url == "https://other.test/docs/page"
+    assert calls == [page.source_url, page.final_url]
+
+
+@pytest.mark.parametrize("href", [
+    "", "   ", "mailto:author@example.test", "javascript:alert(1)",
+    "data:text/plain,content", "file:///tmp/secret", "ftp://example.test/file",
+    "https://user:pass@example.test/private", "//user@example.test/private",
+    "http://[", "https://", "//", "https://example.test:bad/page",
+    "https://example.test/has space", "https://example.test/line&#10;break",
+])
+def test_web_page_fetcher_keeps_labels_without_invalid_link_targets(monkeypatch, href):
+    html = f'<p>Before</p><a href="{href}">Visible <b>label</b></a><p>After</p>'
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+
+    assert page.text == "Before\nVisible\nlabel\nAfter"
+
+
+def test_web_page_fetcher_ignores_hidden_links_and_empty_labels(monkeypatch):
+    html = b"""<title>Visible title</title><body>
+    <script><a href="https://hidden.test/script">Script link</a></script>
+    <style><a href="https://hidden.test/style">Style link</a></style>
+    <noscript><a href="https://hidden.test/noscript">Noscript link</a></noscript>
+    <template><a href="https://hidden.test/template">Template link</a></template>
+    <a href="https://empty.test/"><img src="cover.png"></a>
+    <a>Plain label</a><a href="//other.test/page">Open <b>link</b>"""
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+
+    assert page.title == "Visible title"
+    assert page.text == "Plain label\nOpen link (https://other.test/page)"
+
+
 def test_web_page_fetcher_supports_plain_text(monkeypatch):
     monkeypatch.setattr(
         "resagent2_components.web.send_request",
@@ -317,3 +406,19 @@ def test_web_page_fetcher_rejects_unsupported_or_nontext(monkeypatch, content_ty
     with pytest.raises(WebFetchError) as raised:
         WebPageFetcher().fetch("https://example.test/file")
     assert raised.value.error_type == error_type
+
+
+def test_web_page_link_card_blocks_and_nested_anchors_keep_separate_labels(monkeypatch):
+    html = b"""<a href='/paper'><div>Paper title</div><div>Download PDF</div></a>
+        <a href='/first'>First<a href='/second'>Second</a>After"""
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(html, content_type="text/html", url="https://example.test/page"),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.text.splitlines() == [
+        "Paper title Download PDF (https://example.test/paper)",
+        "First (https://example.test/first)",
+        "Second (https://example.test/second)",
+        "After",
+    ]

@@ -49,8 +49,8 @@ Compiler、Interpreter 和 Scheduler 位于 orchestrator 包内，不是额外 A
 | `agents/coding` | 理解代码；或修改后验证，交付真实变更 | 不承担正式训练对比和科学结论 | [agent.py](../../packages/agents/coding/src/resagent2_coding/agent.py) / [ModulePort](CONTRACTS.md#module) |
 | `agents/experiment` | 分析已有结果、准备环境、运行实验并交付证据 | 不修改产品代码，不用 LLM 自报值代替指标 | [agent.py](../../packages/agents/experiment/src/resagent2_experiment/agent.py) / [ModulePort](CONTRACTS.md#module) |
 | `runtime` | AgentLoop、LLM、上下文、Tool 协议、反馈、Session、权限与完成检查的调用机制 | 不理解科研目标，不调度 Workflow，不实现具体文件/环境能力 | [包入口](../../packages/runtime/src/resagent2_runtime/) / [工具与运行](CONTRACTS.md#tools) |
-| `components` | 工作区、Git、进程、环境、数据集、工件、文献后端与共享内容投影，供普通 Python 调用 | 不提供 Tool 入口，不启动 Loop，不决定领域流程 | [组件目录](../../packages/components/README.md) / [调用约定](CONTRACTS.md#components) |
-| `capabilities` | 模型可调用的工作区、工件、环境、执行、文献 Tool，以及输入 schema 和局部工具逻辑 | 不作为普通组件的转发入口，不存放 Agent 工作流策略 | [工具目录](../../packages/capabilities/README.md) / [工具协议](CONTRACTS.md#tools) |
+| `components` | 工作区、Git、进程、环境、数据集、工件、文献/网页后端与共享内容投影，供普通 Python 调用 | 不提供 Tool 入口，不启动 Loop，不决定领域流程 | [组件目录](../../packages/components/README.md) / [调用约定](CONTRACTS.md#components) |
+| `capabilities` | 模型可调用的工作区、工件、环境、执行、文献/网页 Tool，以及输入 schema 和局部工具逻辑 | 不作为普通组件的转发入口，不存放 Agent 工作流策略 | [工具目录](../../packages/capabilities/README.md) / [工具协议](CONTRACTS.md#tools) |
 | `contracts` | 跨模块数据类型、字段和纯组合判据 | 不执行 LLM、IO 或状态迁移 | [models.py](../../packages/contracts/src/resagent2_contracts/models.py) / [字段参考](CONTRACTS.md) |
 
 ### 依赖倒置与组合根
@@ -85,7 +85,7 @@ Orchestrator 通过同一个 ModulePort 调用三个 Agent 的注入实现，不
 
 Runtime 不 import Components 或 Capabilities；Components 不 import Capabilities、Agent 或 Orchestrator；Capabilities 不 import Agent 或 Orchestrator。组件与 Tool **没有一一对应关系**，不建立注册器、适配器基类或自动映射。
 
-Capabilities 的五个目录是 `workspace/`、`artifacts/`、`environment/`、`execution/`、`literature/`，每个 Tool 使用独立实现文件，`__init__.py` 显式导出。Components 按实际复杂度组织：多数操作一个文件；文献后端及其共用 HTTP 实现在 `literature/`；小函数跟随使用它们的实现。目录示例不是“每类都必须拆文件”的规则。
+Capabilities 的五个目录是 `workspace/`、`artifacts/`、`environment/`、`execution/`、`literature/`，另有小型通用网页工具文件 `web.py`；目录中的每个 Tool 使用独立实现文件，`__init__.py` 显式导出。Components 按实际复杂度组织：多数操作一个文件；文献后端及其共用 HTTP 实现在 `literature/`；小函数跟随使用它们的实现。目录示例不是“每类都必须拆文件”的规则。
 
 `run_verification` 的命令规则、编辑 revision 和验证记录属于 Coding，放在 [verification.py](../../packages/agents/coding/src/resagent2_coding/verification.py)，共享 Capabilities 的 `run_shell` 由 Coding/Experiment 装配，替代旧 Experiment `run_command`；验证、安装和 Shell 共用 Components 的 ProcessRunner。Runtime 自有 finish/ask_user 和 Scientific 的控制工具仍留在原模块，不为统一目录搬走领域控制。
 

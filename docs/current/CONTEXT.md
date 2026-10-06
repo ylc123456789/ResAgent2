@@ -124,7 +124,7 @@ Loop 先保存整批 assistant/tool calls，每个工具派发前记录 executin
 
 Scientific 以用户目标和明确约束为主线，先判断已有材料是否足够，再选择自己的工具或提出执行工作需求，最后综合结果完成交付。文献检索用于补足所需材料，不是每次 Run 的必经第一步，也不规定查询轮数或论文数量。
 
-Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search`、`fetch_literature_fulltext` 以及可选的 `web_search`、`web_fetch` 均由组合根注入来源组件和 registration port 后装配；没有 provider 配置时不伪造 `web_search` 工具。网页搜索观察展示前 `max_results` 条来源和 `result_count` / `omitted_count` / `truncated`，完整的本次规范化结果保存于同一搜索工件；Scientific 按需用 `read_artifact` 获取省略来源，模型历史不自动展开全部结果。
+Scientific 不注入 execution environment，不提供代码编辑/实验执行工具。它的 builder 不输出 workspace_access、permissions 或剩余调用数/时间；request_work 是否允许仍由工具读取结构化权限执行硬校验。`literature_search`、`fetch_literature_fulltext` 以及可选的 `web_search`、`web_fetch` 均由组合根注入来源组件和 registration port 后装配；没有 provider 配置时不伪造 `web_search` 工具。网页搜索观察展示前 `max_results` 条来源和 `result_count` / `omitted_count` / `truncated`，完整的本次规范化结果保存于同一搜索工件；Scientific 按需用 `read_artifact` 获取省略来源，模型历史不自动展开全部结果。`web_fetch`保存的HTML提取文本同时保留可见链接文字和合法http(s)地址，链接目标未自动获取；Scientific按当前材料缺口选择是否继续访问。
 
 finish 与另外两个 Agent 共用 status/report/artifacts；Scientific 的完成意见仅接受 status=completed，产物必须包含 scientific_opinion JSON。代码从真实工具观察另生成 observation_trace，模型不能提交该记录。ask_user 的 text 包含用户回答所需背景，复用共享问题字段约束并额外附带 assessment；request_work 则提交 assessment 和语义工作需求。公共结果的控制信号只引用相应 question/work_request 工件，见 [提问契约](CONTRACTS.md#questions)。
 

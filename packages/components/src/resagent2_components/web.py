@@ -95,11 +95,11 @@ class TavilyWebSearchBackend:
         request = httpx.Request(
             "POST", self.endpoint,
             headers={
+                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json", "Accept": "application/json",
                 "User-Agent": USER_AGENT,
             },
             content=json.dumps({
-                "api_key": self.api_key,
                 "query": query.strip(),
                 "max_results": max_results,
                 "search_depth": "basic",

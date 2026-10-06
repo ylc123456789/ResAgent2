@@ -62,7 +62,8 @@ def test_tavily_normalizes_results_and_bounds_snippet(monkeypatch):
     assert observed["kwargs"]["timeout"] == 7
     assert observed["request"].headers["User-Agent"].startswith("ResAgent2/")
     payload = json.loads(observed["request"].content)
-    assert payload["api_key"] == "secret"
+    assert observed["request"].headers["Authorization"] == "Bearer secret"
+    assert "api_key" not in payload
     assert payload["query"] == "query"
     assert payload["include_raw_content"] is False
 

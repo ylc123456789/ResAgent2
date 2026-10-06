@@ -73,12 +73,13 @@ Scientific仍按用户目标判断相关性、资料种类、阅读和停止；�
 | 成对请求合计 | 基线（12次） | 强化提示（12次） |
 |---|---:|---:|
 | 服务端内部搜索计量 | 12 | 42 |
-| input tokens（含cache） | 116357 | 346174 |
-| 非缓存input tokens | 103429 | 202174 |
+| 原生input_tokens（非缓存） | 116357 | 346174 |
+| cache_read_input_tokens | 12928 | 144000 |
+| 三项输入合计（cache_creation均0） | 129285 | 490174 |
 | output tokens | 9655 | 11080 |
 | 延迟中位数（ms） | 5097 | 6325.5 |
 
-强化提示在部分查询中取得更多来源，但没有足够证据支持排序或效率收益；不能把总input约3倍直接写成费用3倍，计费应区分缓存与非缓存。自动相关性评分漏掉raw.githubusercontent.com、docs.pytorch.org及ACM的 `/doi/abs/`，其top-5汇总不作为质量依据。真实Scientific两任务未调用read_artifact展开搜索工件尾部；它们实际依靠官方网页和论文材料完成。尾部可读与模型继续使用的能力由确定性测试覆盖，不能倒写为真实任务已覆盖。
+强化提示在部分查询中取得更多来源，但没有足够证据支持排序或效率收益；输入规模不能直接写成费用倍数，计费应区分缓存与非缓存。055db16复核时发现本记录曾误把原生input_tokens视为含缓存总输入，并减去缓存得出103429/202174；这两项计算撤销，上表按Anthropic响应的分列口径更正。总输入是input_tokens + cache_read_input_tokens + cache_creation_input_tokens，见[官方token拆分说明](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#tracking-cache-performance)。Runtime该传输保留原生usage，本处不套用OpenAI prompt_tokens的口径。自动相关性评分漏掉raw.githubusercontent.com、docs.pytorch.org及ACM的 `/doi/abs/`，其top-5汇总不作为质量依据。真实Scientific两任务未调用read_artifact展开搜索工件尾部；它们实际依靠官方网页和论文材料完成。尾部可读与模型继续使用的能力由确定性测试覆盖，不能倒写为真实任务已覆盖。
 
 ## 第二阶段修复：恢复短提示与保留已知限制下的来源
 
@@ -100,9 +101,40 @@ Ubuntu-D /home/cyl/ResAgent2、Conda ResAgent2：86项受影响测试通过；�
 
 ## 第二阶段服务器补测
 
-1. 冻结修复提交，核对9个editable包仍指向源码；运行完整pytest、mock_e2e、pip check与diff检查，保留原失败现场。
+1. 服务器Git仓库为 `/root/autodl-tmp/projects/ResAgent2`；`/root/autodl-tmp/resagent2/runs/` 是证据目录，两者不要混用。冻结修复提交，核对9个editable包仍指向源码；运行完整pytest、mock_e2e、pip check与diff检查，保留原失败现场。
 2. 复放上述三份原始响应，使用生产DeepSeekWebSearchBackend.search与WebSearchTool，不沿用直接调用旧私有_search_items的脚本；将记录响应注入客户端，不发送付费请求。核对partial/reason、45/43/48来源、预览/省略、独立冻结hash和授权read_artifact。另核对无来源限制、其他错误和未完成响应仍失败，不能一律跳过未知条目。
 3. 用本页固定六查询各做一次真实短提示请求，配置与旧对照相同，保留所有结果和失败；对照已有基线的内部搜索、缓存/非缓存input、output、延迟和目标来源。只评价此次样本，不将来源条数等同相关性或宣称成本必然降低。
 4. 做一个短Scientific资料任务，不指定工具顺序，核对实际消费及引用。线上未出现partial时注明未触发；其读取/继续处理由原响应复放和确定性Scientific测试补充，不为了触发限制增加付费调用。无需重跑完整科研L3。
 
 完成以上补测再评估合并；当前继续推送开发分支，不合并main。
+
+## 055db16 服务器补测与独立复核
+
+产品冻结于055db167d348bdc5725c130a790241a9b7c9d2ad，证据根为 `/root/autodl-tmp/resagent2/runs/web-partial-055db16-20261006/`，报告为 `protocol/WEB_PARTIAL_acceptance_report.md`。服务器Git仓库实际为 `/root/autodl-tmp/projects/ResAgent2`；验收快照与证据目录分别核对。
+
+- 回归日志：1982 passed / 1 skipped（95.58秒）、mock completed/13工件、pip check clean、diff检查通过；九包源码指针及schema23.0的预检10/10。测试方另报网页专项134 passed。
+- 独立重新比较三份原始失败响应与保存回执：有序URL去重列表45/43/48条逐项一致，partial/reason正确；复放脚本确实通过生产Backend/Tool/Registry，每份只调用一次模拟客户端。预览外可读由授权RegisteredArtifactReader验证；这不是本轮真实模型调用read_artifact消费partial的实例。
+- 独立重算真实Run的10/10冻结hash；40 public / 21 private清单的全部hash及字节数一致。服务器报告正文仍写39 public，最终清单已为40，以实核清单为准。复核时远端为detached HEAD@055db16，只有既有未跟踪.ipynb_checkpoints/，未发现产品跟踪文件改动；不据此改写原测试快照。
+- Scientific真实任务completed/supports，12个模型请求与Run账本吻合；实际使用2次web_fetch和分段read_artifact读取两份Python官方页面，无web_search。已读范围覆盖报告引用的关键文档语句，报告保留版本、未实测和未读范围等限制。该任务证明网页读取与交付正常；没有自然触发partial，也没有本轮真实Run中的搜索共享计量实例，这些范围仍由复放/确定性测试及前轮计量证据分别覆盖。
+
+六次真实短提示请求均只发一次，HTTP200/end_turn/retry0，4096输出tokens/max_uses5及提示逐字一致；均正常results，没有自然partial。每次服务端内部搜索计量为1，保存列表与原生URL有序去重逐项一致，合计48条，snippet均空。
+
+| 消耗口径 | 旧短提示e286977（12次） | 强化提示5b71d1b（12次） | 恢复短提示055db16（6次） |
+|---|---:|---:|---:|
+| 原生input_tokens合计 | 116357 | 346174 | 59493 |
+| cache_read_input_tokens合计 | 12928 | 144000 | 5888 |
+| cache_creation_input_tokens合计 | 0 | 0 | 0 |
+| 三项输入合计 | 129285 | 490174 | 65381 |
+| 每请求平均三项输入合计 | 10773.8 | 40847.8 | 10896.8 |
+| output_tokens合计 | 9655 | 11080 | 4481 |
+| 每请求内部搜索平均计量 | 1 | 3.5 | 1 |
+| 每请求平均延迟（ms） | 5065.9 | 6559.2 | 4928.5 |
+
+独立复核修正两个解读：
+
+1. 本轮报告的“总输入59493”实际只是原生input_tokens字段，缓存5888应另列，完整输入合计65381。q5为365非缓存+3712缓存=4077，与旧短基线4077/4076基本一致，不能解释成整次输入仅365。按每请求平均，本轮输入规模基本回到旧短提示水平（约+1.1%），低于上一轮强化提示约73.3%；这些是不同时间的小样本观察，不直接代表账单费用或普遍效果。
+2. q2首位是官方CPython 3.12文档源码 `raw.githubusercontent.com/python/cpython/3.12/Doc/library/asyncio-task.rst`，应算一手文档，和docs.python.org的HTML入口分列。q3首位是官方C++ autograd modes文档，不能算Python两个API的canonical页；q1的CPython issue属于讨论资料，不等于正式文档。q4实际命中论文DOI `10.5555/3305381.3305518`（另有ICML官方poster/808），q6为 `10.5555/3295222.3295349`，报告省略后缀会误指会议录。旧自动评分同样漏报q2/q3/q4，不能据其字符串匹配汇总宣称统一的目标命中率。
+
+q6论文条目位于零基pos5（第6条），保留预览外结果的收益仍成立；q5未找到原始论文，其他目标的正式HTML/API/arXiv/PMLR入口也并非全部命中。此次验收支持修复正确、信息完整交付以及消耗回到短提示基线；不宣称通用检索质量、召回率或自然partial生产成功率已经提高。
+
+本轮没有发现需要继续修改产品代码的合并阻塞项，后续质量优化须以实际材料缺口和准确的来源身份评估为依据；不新增固定检索流程、域名打分器或另一层LLM。保持原分支，按用户要求不合并。服务器原报告、trace与Session保留原样，此处记录勘误，不上传私有证据。

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import hashlib
 import json
 
+import pytest
+
 from resagent2_contracts import AgentOwner, ArtifactRef, ArtifactCandidate, SessionStatus
 from resagent2_orchestrator import ArtifactRegistry
 from resagent2_components import (
@@ -231,3 +233,97 @@ def test_web_page_links_survive_freezing_and_authorized_read(tmp_path, monkeypat
     assert ref.metadata["source_url"] == "https://example.test/original"
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
     assert len(register.refs) == 1
+
+
+
+class _LimitHostedClient:
+    def __init__(self, shape, *, with_sources=True):
+        self.shape = shape
+        self.with_sources = with_sources
+        self.calls = []
+
+    def set_trace_context(self, **kwargs):
+        self.trace_context = kwargs
+
+    def request(self, body):
+        self.calls.append(body)
+        error = {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}
+        content = [{
+            "type": "web_search_tool_result",
+            "content": error if self.shape == "dict" else [error],
+        }]
+        if self.with_sources:
+            content.insert(0, {"type": "web_search_tool_result", "content": [
+                {"type": "web_search_result", "title": f"Source {i}",
+                 "url": f"https://example.test/{i}", "encrypted_content": "opaque"}
+                for i in (0, 1, 0)
+            ]})
+            content.append({"type": "web_search_tool_result", "content": [
+                {"type": "web_search_result", "title": "Source 2",
+                 "url": "https://example.test/2"},
+            ]})
+        else:
+            content.insert(0, {"type": "web_search_tool_result", "content": []})
+        return {"stop_reason": "end_turn", "content": content}
+
+
+@pytest.mark.parametrize("shape", ["dict", "list"])
+def test_partial_search_freezes_all_sources_and_explains_limit(tmp_path, shape):
+    from resagent2_components import DeepSeekWebSearchBackend
+
+    register, client = _Register(tmp_path), _LimitHostedClient(shape)
+    observation = WebSearchTool(DeepSeekWebSearchBackend(client), register).execute(
+        _state(), WebSearchInput(query="find sources", max_results=1),
+    )
+
+    assert observation.ok and len(client.calls) == 1
+    assert observation.value["status"] == "partial"
+    assert observation.value["incomplete_reason"] == "max_uses_exceeded"
+    assert observation.value["error"] is None
+    assert observation.value["error_type"] is None
+    assert [item["url"] for item in observation.value["results"]] == ["https://example.test/0"]
+    assert observation.value["result_count"] == 3
+    assert observation.value["omitted_count"] == 2
+    assert observation.value["truncated"] is True
+    assert "partial" in observation.summary.lower()
+    assert "limit" in observation.summary.lower()
+    assert "2 more available with read_artifact" in observation.summary
+
+    ref, = register.refs.values()
+    assert ref.kind == "web_search"
+    content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
+    receipt = json.loads(content)
+    assert receipt["status"] == "partial"
+    assert receipt["incomplete_reason"] == "max_uses_exceeded"
+    assert receipt["provider"] == "deepseek" and receipt["provider_query"] == "find sources"
+    assert [item["url"] for item in receipt["results"]] == [
+        f"https://example.test/{i}" for i in range(3)
+    ]
+    assert all(item["snippet"] == "" for item in receipt["results"])
+    assert "opaque" not in content
+    assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
+    assert observation.memory_updates["web_output_artifact_ids"] == [ref.id]
+
+
+@pytest.mark.parametrize("shape", ["dict", "list"])
+def test_search_limit_without_sources_freezes_failed_receipt(tmp_path, shape):
+    from resagent2_components import DeepSeekWebSearchBackend
+
+    register, client = _Register(tmp_path), _LimitHostedClient(shape, with_sources=False)
+    observation = WebSearchTool(DeepSeekWebSearchBackend(client), register).execute(
+        _state(), WebSearchInput(query="find sources", max_results=1),
+    )
+
+    assert not observation.ok and len(client.calls) == 1
+    assert observation.value["status"] == "failed"
+    assert observation.value["error_type"] == "search_limit_exceeded"
+    assert observation.value["results"] == []
+    assert observation.value["result_count"] == observation.value["omitted_count"] == 0
+    assert observation.value["truncated"] is False
+    ref, = register.refs.values()
+    content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
+    receipt = json.loads(content)
+    assert receipt["status"] == "failed"
+    assert receipt["error_type"] == "search_limit_exceeded"
+    assert receipt["results"] == []
+    assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256

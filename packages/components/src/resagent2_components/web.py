@@ -57,6 +57,7 @@ class WebSearchResult:
     provider: str
     query: str
     results: list[WebSearchItem] = field(default_factory=list)
+    incomplete_reason: str | None = None
 
 
 class WebSearchBackend(Protocol):

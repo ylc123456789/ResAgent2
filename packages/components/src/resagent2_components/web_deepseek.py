@@ -48,12 +48,7 @@ class DeepSeekWebSearchBackend:
                 "max_tokens": self.max_tokens,
                 "messages": [{
                     "role": "user",
-                    "content": [{"type": "text", "text": (
-                        "Use native web search to find sources relevant to the query below. "
-                        "This request is only for source discovery; do not answer the "
-                        "underlying question or write a research summary. Finish with "
-                        "a brief list of relevant source URLs.\n\nQuery:\n" + query
-                    )}],
+                    "content": [{"type": "text", "text": f"Perform a web search for the query: {query}"}],
                 }],
                 "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": self.max_uses}],
             })
@@ -65,13 +60,14 @@ class DeepSeekWebSearchBackend:
             ) from None
         except ModelRequestError as error:
             raise WebSearchError(str(error), error_type=error.error_type) from None
+        results, incomplete_reason = _search_items(payload)
         return WebSearchResult(
             provider=self.name, query=query,
-            results=_search_items(payload),
+            results=results, incomplete_reason=incomplete_reason,
         )
 
 
-def _search_items(payload: dict) -> list[WebSearchItem]:
+def _search_items(payload: dict) -> tuple[list[WebSearchItem], str | None]:
     """Use native sources and URL-matched citations, never generated prose."""
     blocks = payload.get("content")
     if not isinstance(blocks, list) or any(not isinstance(block, dict) for block in blocks):
@@ -98,19 +94,25 @@ def _search_items(payload: dict) -> list[WebSearchItem]:
 
     seen: set[str] = set()
     results = []
+    incomplete_reason = None
     for block in result_blocks:
         content = block.get("content")
         if isinstance(content, dict) and content.get("type") == "web_search_tool_result_error":
-            limited = content.get("error_code") == "too_many_requests"
-            raise WebSearchError(
-                "DeepSeek native web search failed",
-                error_type="rate_limited" if limited else "provider_error",
-            )
+            content = [content]
         if not isinstance(content, list):
             raise WebSearchError("DeepSeek returned invalid search results", error_type="invalid_response")
         for item in content:
             if not isinstance(item, dict):
                 raise WebSearchError("DeepSeek returned an invalid search item", error_type="invalid_response")
+            if item.get("type") == "web_search_tool_result_error":
+                code = item.get("error_code")
+                if code == "max_uses_exceeded":
+                    incomplete_reason = code
+                    continue
+                raise WebSearchError(
+                    "DeepSeek native web search failed",
+                    error_type="rate_limited" if code == "too_many_requests" else "provider_error",
+                )
             if item.get("type") != "web_search_result":
                 raise WebSearchError("DeepSeek returned an invalid search item type", error_type="invalid_response")
             url = item.get("url")
@@ -134,4 +136,9 @@ def _search_items(payload: dict) -> list[WebSearchItem]:
                 snippet=snippets.get(url, ""),
                 published_at=age if isinstance(age, str) else None,
             ))
-    return results
+    if incomplete_reason and not results:
+        raise WebSearchError(
+            "DeepSeek native search reached its use limit without returning sources",
+            error_type="search_limit_exceeded",
+        )
+    return results, incomplete_reason

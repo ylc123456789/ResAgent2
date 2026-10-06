@@ -46,8 +46,9 @@ class Registration:
 class SearchBackend:
     name = "test-search"
 
-    def __init__(self, *, error=None, empty=False, results=None):
+    def __init__(self, *, error=None, empty=False, results=None, incomplete_reason=None):
         self.error, self.empty, self.results = error, empty, results
+        self.incomplete_reason = incomplete_reason
         self.calls = []
 
     def search(self, query, *, max_results):
@@ -58,7 +59,7 @@ class SearchBackend:
             provider=self.name, query=query,
             results=[] if self.empty else (
                 self.results if self.results is not None else [WebSearchItem("Source", URL, "A lead")]
-            ),
+            ), incomplete_reason=self.incomplete_reason,
         )
 
 
@@ -301,7 +302,7 @@ def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, m
         assert "test-only-secret" not in json.dumps(trace)
         messages = json.loads(trace["request_text"])["messages"]
         assert len(messages) == 1 and messages[0]["role"] == "user"
-        assert messages[0]["content"][0]["text"].endswith("Query:\nfind source")
+        assert messages[0]["content"][0]["text"] == "Perform a web search for the query: find source"
         receipt = json.loads(RegisteredArtifactReader(
             list(register.refs.values()), run_id=RUN_ID,
         ).read_text(register.of_kind("web_search").id)["content"])
@@ -310,12 +311,13 @@ def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, m
     assert (result.status == "completed") == (budget == 3)
 
 
-def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp_path):
+@pytest.mark.parametrize("incomplete_reason", [None, "max_uses_exceeded"])
+def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp_path, incomplete_reason):
     register, fetcher = Registration(tmp_path), PageFetcher()
     backend = SearchBackend(results=[
         WebSearchItem("First lead", "https://example.test/first", ""),
         WebSearchItem("Later source", URL, ""),
-    ])
+    ], incomplete_reason=incomplete_reason)
     client = NativePlanClient([
         {"tool": "web_search", "arguments": {"query": "sources", "max_results": 1}},
         lambda: read(register.of_kind("web_search")),
@@ -331,6 +333,8 @@ def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp
     first = json.loads(client.turns[1][0].tool_results["call_1"])["value"]
     assert first["result_count"] == 2 and first["omitted_count"] == 1
     assert first["truncated"] is True
+    assert first["incomplete_reason"] == incomplete_reason
+    assert first["status"] == ("partial" if incomplete_reason else "results")
     assert [item["url"] for item in first["results"]] == ["https://example.test/first"]
     assert URL in json.dumps(client.turns[2], default=lambda x: x.model_dump())
     assert backend.calls == [("sources", 1)] and fetcher.calls == [URL]

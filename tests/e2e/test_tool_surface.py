@@ -21,6 +21,7 @@ Title lookup treats the complete query as one phrase and describes identity chec
 Optional web_search/web_fetch add bounded web leads and page artifacts; existing
 tool schemas remain unchanged. Later web_search guidance describes bounded previews
 with full received results retained in its artifact and no hosted-cost guarantee.
+Known search-use limits retain valid partial results with an explicit incomplete reason.
 """
 
 import hashlib

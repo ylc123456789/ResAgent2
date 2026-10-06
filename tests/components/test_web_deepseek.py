@@ -49,6 +49,7 @@ def test_search_uses_isolated_query_and_url_matched_citations():
 
     assert result.provider == "deepseek" and result.query == "a query"
     assert len(result.results) == 2
+    assert result.incomplete_reason is None
     assert result.results[0].snippet == "x" * 2000
     assert result.results[0].published_at == "2026-10-01"
     assert result.results[1].snippet == ""
@@ -57,9 +58,7 @@ def test_search_uses_isolated_query_and_url_matched_citations():
     message = body["messages"][0]
     assert message["role"] == "user" and len(message["content"]) == 1
     text = message["content"][0]["text"]
-    assert "only for source discovery" in text
-    assert "do not answer the underlying question" in text
-    assert text.endswith("Query:\na query")
+    assert text == "Perform a web search for the query: a query"
     assert body["model"] == "deepseek-flash"
     assert body["max_tokens"] == 4096
     assert body["tools"] == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
@@ -145,3 +144,90 @@ def test_invalid_query_does_not_dispatch(query, count):
     with pytest.raises(WebSearchError):
         DeepSeekWebSearchBackend(client).search(query, max_results=count)
     assert client.requests == []
+
+
+
+def tool_error(code="max_uses_exceeded"):
+    return {"type": "web_search_tool_result_error", "error_code": code}
+
+
+def error_block(shape, code="max_uses_exceeded"):
+    error = tool_error(code)
+    return {"type": "web_search_tool_result", "content": error if shape == "dict" else [error]}
+
+
+@pytest.mark.parametrize("shape", ["dict", "list"])
+@pytest.mark.parametrize("error_first", [False, True])
+def test_search_limit_keeps_all_unique_sources_across_batches(shape, error_first):
+    batches = [
+        result_block(source(), source()),
+        result_block(source("https://example.test/later")),
+    ]
+    limit = error_block(shape)
+    content = [limit, *batches] if error_first else [*batches, limit]
+    content.append({"type": "text", "text": "Generated prose", "citations": [
+        {"url": URL, "cited_text": "A native source excerpt"},
+    ]})
+    client = Client(content)
+    result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
+
+    assert result.incomplete_reason == "max_uses_exceeded"
+    assert [item.url for item in result.results] == [URL, "https://example.test/later"]
+    assert result.results[0].snippet == "A native source excerpt"
+    assert result.results[1].snippet == ""
+    assert len(client.requests) == 1
+
+
+def test_search_limit_inside_source_list_keeps_later_sources():
+    client = Client([result_block(
+        source(), tool_error(), source(), source("https://example.test/after"),
+    )])
+    result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
+    assert result.incomplete_reason == "max_uses_exceeded"
+    assert [item.url for item in result.results] == [URL, "https://example.test/after"]
+
+
+@pytest.mark.parametrize("shape", ["dict", "list"])
+@pytest.mark.parametrize("with_empty_batch", [False, True])
+def test_search_limit_without_sources_is_failure(shape, with_empty_batch):
+    content = [error_block(shape)]
+    if with_empty_batch:
+        content.insert(0, result_block())
+    with pytest.raises(WebSearchError) as raised:
+        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+    assert raised.value.error_type == "search_limit_exceeded"
+
+
+@pytest.mark.parametrize("shape", ["dict", "list"])
+@pytest.mark.parametrize("code,expected", [
+    ("too_many_requests", "rate_limited"),
+    ("unavailable", "provider_error"),
+    ("unknown_provider_code", "provider_error"),
+])
+def test_other_provider_errors_still_fail_after_valid_partial_results(shape, code, expected):
+    content = [result_block(source()), error_block("dict"), error_block(shape, code)]
+    with pytest.raises(WebSearchError) as raised:
+        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+    assert raised.value.error_type == expected
+
+
+@pytest.mark.parametrize("bad_item", [
+    None, {}, {"type": "unknown_source", "url": URL},
+    source(url="javascript:alert(1)"),
+    source(url="https://user:pass@example.test/private"),
+    source(url=None),
+])
+def test_malformed_sources_still_fail_after_valid_partial_results(bad_item):
+    content = [result_block(source()), error_block("dict"), result_block(bad_item)]
+    with pytest.raises(WebSearchError) as raised:
+        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+    assert raised.value.error_type == "invalid_response"
+
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "pause_turn", None])
+@pytest.mark.parametrize("shape", ["dict", "list"])
+def test_limit_does_not_relax_completed_response_requirement(stop_reason, shape):
+    content = [result_block(source()), error_block(shape)]
+    with pytest.raises(WebSearchError) as raised:
+        DeepSeekWebSearchBackend(Client(content, stop_reason=stop_reason)).search("q", max_results=1)
+    assert raised.value.error_type == "incomplete_response"

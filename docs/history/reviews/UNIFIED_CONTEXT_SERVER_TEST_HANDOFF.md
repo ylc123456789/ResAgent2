@@ -7,8 +7,8 @@
 - 开发仓库：WSL Ubuntu-D 的 `/home/cyl/ResAgent2`。
 - 分支：`feat/unified-context`。
 - 基线：`8f9d7256137f5059cb3b642ac63dc395deece493`，即联网搜索完成版。
-- 当前实现是该基线上的未提交工作树，未推送、未合并。只同步基线 bundle 会漏掉本轮修改。
-- 冻结基线加完整补丁，并包含 `git ls-files --others --exclude-standard` 列出的新增文件；记录版本、补丁 SHA256、文件清单及同步后差异。不要覆盖服务器已有实验或未提交修改。
+ 当前实现已提交为 `8d313d9`，当前分支未推送、未合并。服务器应同步该提交及其父历史，不要只同步联网搜索基线。
+ 推送后可直接在服务器检出 `origin/feat/unified-context`；若使用 bundle，必须包含 `8d313d9`，并核对提交 SHA、文件清单及同步后差异。不要覆盖服务器已有实验或未提交修改。
 - 服务器仓库路径以实际 Git 根目录为准；此前使用 `/root/autodl-tmp/projects/ResAgent2`，证据目录与 Git 仓库分开。
 - schema **24.0**：使用全新 Run/Session。23.0、缺版本或其他版本的旧记录应明确拒绝恢复，不迁移、不兼容；旧证据只读保留。
 - 保持原模型、工具、预算和环境配置；启用 `RESAGENT2_LLM_TRACE_LEVEL=full` 核对实际 messages/tools。不打印认证信息。

@@ -158,10 +158,11 @@ class ScientificAgent:
                 ))
             delivered = {item.id for item in artifacts if hasattr(item, "id")}
             delivered.update(item.id for item in request.input_artifacts)
-            for artifact_id in [*owned.memory.get("literature_output_artifact_ids", []), *owned.memory.get("web_output_artifact_ids", [])]:
-                ref = reader.resolve_ref(artifact_id)
+            for entry in owned.memory.get("artifact_index", []):
+                ref = reader.resolve_ref(entry["artifact_id"])
                 if ref is not None and ref.id not in delivered:
                     artifacts.append(ref)
+                    delivered.add(ref.id)
             artifacts.append(ArtifactCandidate(
                 kind="observation_trace", path="observation_trace.json",
                 media_type="application/json", summary="Historical Scientific artifact-access log; not evidence qualification",

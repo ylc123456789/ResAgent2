@@ -6,7 +6,9 @@ import json
 
 import pytest
 
-from resagent2_contracts import AgentOwner, ArtifactRef, ArtifactCandidate, SessionStatus
+from resagent2_contracts import (
+    AgentOwner, ArtifactRef, ArtifactCandidate, ResearchArtifactEntry, SessionStatus,
+)
 from resagent2_orchestrator import ArtifactRegistry
 from resagent2_components import (
     WebPage, WebSearchError, WebSearchItem, WebSearchResult,
@@ -89,7 +91,7 @@ def test_web_search_freezes_bounded_receipt(tmp_path):
     assert observation.value["result_count"] == 1
     assert observation.value["omitted_count"] == 0 and not observation.value["truncated"]
     assert "executed_query" not in receipt
-    assert observation.memory_updates["web_output_artifact_ids"] == [ref.id]
+    assert [entry["artifact_id"] for entry in observation.memory_updates["artifact_index"]] == [ref.id]
 
 
 def test_web_search_failure_freezes_negative_receipt(tmp_path):
@@ -108,6 +110,27 @@ def test_web_search_failure_freezes_negative_receipt(tmp_path):
     receipt = json.loads((register.registry.root / "run_example" / ref.id / "web_search.json").read_text())
     assert receipt["status"] == "failed"
     assert receipt["retry_after"] == 4
+    assert [entry["artifact_id"] for entry in observation.memory_updates["artifact_index"]] == [ref.id]
+
+
+def test_web_outputs_preserve_existing_materials_without_duplicate_entries(tmp_path):
+    from resagent2_capabilities.web import web_outputs
+
+    register = _Register(tmp_path)
+    state = _state()
+    paper = register.register_scientific(
+        ArtifactCandidate(kind="literature_paper", path="paper.json", media_type="application/json",
+                          summary="Existing paper", content="{}"),
+        run_id=state.run_id, session_id=state.session_id,
+    )
+    state.memory["artifact_index"] = [ResearchArtifactEntry.from_ref(paper).model_dump(mode="json")]
+    observation = WebSearchTool(_Backend(), register).execute(state, WebSearchInput(query="q"))
+    state.memory.update(observation.memory_updates)
+    receipt = next(ref for ref in register.refs.values() if ref.kind == "web_search")
+    merged = web_outputs(state, [receipt])["artifact_index"]
+    assert [entry["artifact_id"] for entry in merged] == [paper.id, receipt.id]
+    assert all("uri" not in entry and "sha256" not in entry and "content" not in entry for entry in merged)
+    assert "read_artifact_ids" not in observation.memory_updates
 
 
 class _Fetcher:
@@ -143,6 +166,7 @@ def test_web_fetch_freezes_readable_page_and_hash(tmp_path):
     content = reader.read_text(ref.id)["content"]
     assert "Title" in content and "Body" in content
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
+    assert [entry["artifact_id"] for entry in observation.memory_updates["artifact_index"]] == [ref.id]
 
 
 def test_web_fetch_failure_does_not_freeze_page(tmp_path):
@@ -155,6 +179,7 @@ def test_web_fetch_failure_does_not_freeze_page(tmp_path):
     assert not observation.ok
     assert observation.value["error_type"] == "parse_failed"
     assert register.refs == {}
+    assert observation.memory_updates == {}
 
 
 def test_later_deepseek_batches_remain_readable_after_preview(tmp_path):
@@ -302,7 +327,7 @@ def test_partial_search_freezes_all_sources_and_explains_limit(tmp_path, shape):
     assert all(item["snippet"] == "" for item in receipt["results"])
     assert "opaque" not in content
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
-    assert observation.memory_updates["web_output_artifact_ids"] == [ref.id]
+    assert [entry["artifact_id"] for entry in observation.memory_updates["artifact_index"]] == [ref.id]
 
 
 @pytest.mark.parametrize("shape", ["dict", "list"])

@@ -90,6 +90,10 @@ def test_fetch_freezes_original_text_and_index_source_chain(setup):
     entries = {entry.artifact_id: entry for group in index.groups for entry in group.artifacts}
     assert entries[pdf_id].source_artifact_id == paper_id
     assert entries[text_id].source_artifact_id == pdf_id
+    indexed = {entry["artifact_id"]: entry for entry in result.memory_updates["artifact_index"]}
+    assert set(indexed) == set(register.refs)
+    assert indexed[pdf_id]["source_artifact_id"] == paper_id
+    assert indexed[text_id]["source_artifact_id"] == pdf_id
     assert "read_artifact_ids" not in result.memory_updates
 
 
@@ -97,12 +101,14 @@ def test_repeated_fetch_uses_registered_bytes_after_tool_reconstruction(setup):
     state, register, paper_id = setup
     args = FetchLiteratureFulltextInput(paper_artifact_id=paper_id)
     first = FetchLiteratureFulltextTool(register, download=download, parse=parse).execute(state, args)
+    state.memory.update(first.memory_updates)
     def unexpected(*args):
         raise AssertionError("cached fulltext must not download or parse again")
     second = FetchLiteratureFulltextTool(register, download=unexpected, parse=unexpected).execute(state, args)
     assert second.value["cached"] is True
     assert second.value["fulltext_artifact_id"] == first.value["fulltext_artifact_id"]
     assert len(register.refs) == 4
+    assert second.memory_updates["artifact_index"] == first.memory_updates["artifact_index"]
 
 
 def test_parse_failure_retains_original_and_retry_reuses_it(setup):
@@ -115,7 +121,7 @@ def test_parse_failure_retains_original_and_retry_reuses_it(setup):
     pdf_id = result.value["pdf_artifact_id"]
     reader = RegisteredArtifactReader(list(register.refs.values()), run_id=state.run_id)
     assert reader.verified_path(pdf_id).read_bytes() == b"%PDF-1.7\ncontrolled bytes"
-    assert pdf_id in result.memory_updates["literature_output_artifact_ids"]
+    assert pdf_id in [entry["artifact_id"] for entry in result.memory_updates["artifact_index"]]
     assert result.value["fulltext_artifact_id"] is None
     def unexpected(*args):
         raise AssertionError("retry must reuse the frozen original")
@@ -134,6 +140,7 @@ def test_download_failure_does_not_claim_original_or_fulltext(setup):
     assert result.value["pdf_artifact_id"] is None
     assert result.value["fulltext_artifact_id"] is None
     assert len(register.refs) == 2
+    assert result.memory_updates["artifact_index"] == state.memory["artifact_index"]
 
 
 def test_unknown_or_wrong_kind_source_cannot_start_download(setup):

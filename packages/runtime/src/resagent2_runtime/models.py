@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 from resagent2_contracts import (
+    SCHEMA_VERSION,
     AgentOwner,
     ActionSnapshot,
     ArtifactOutput,
@@ -187,6 +188,7 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
+    schema_version: Literal["24.0"] = SCHEMA_VERSION
     session_id: SessionId
     agent_name: NonEmptyStr
     owner: AgentOwner

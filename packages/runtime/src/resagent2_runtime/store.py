@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
 from typing import Protocol
 
-from resagent2_contracts import SessionId
+from resagent2_contracts import SCHEMA_VERSION, SessionId
 
 from .models import AgentState
 
@@ -83,9 +84,10 @@ class JsonSessionStore:
                 temporary.unlink()
 
     def load(self, session_id: SessionId) -> AgentState:
-        return AgentState.model_validate_json(
-            self._path(session_id).read_text(encoding="utf-8")
-        )
+        value = json.loads(self._path(session_id).read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(f"Session schema_version must be {SCHEMA_VERSION}; old sessions cannot be resumed")
+        return AgentState.model_validate(value)
 
     def exists(self, session_id: SessionId) -> bool:
         return self._path(session_id).is_file()

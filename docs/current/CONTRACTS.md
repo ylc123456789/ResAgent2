@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 23.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 24.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -115,6 +115,17 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。当前 Controller 只给 Scientific `request_work=True`，不授予命令执行、环境准备或源工作区；Scheduler 给 Coding/Experiment 继承 Run 的两项操作授权和确认开关，并从已保存的工作区记录派生文件授权。任务图不携带自行扩权字段。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
 
 resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_session_id；仅允许 answer 或 work_feedback，同次不能混用。接收端另外校验工件内容中的 Run、Task/Attempt、Session 与当前调用一致。
+
+### 模型输入的四部分边界
+
+Runtime 发送给模型的输入由四部分组成：
+
+1. **固定契约**：职责 prompt、工具协议和完整工具 schema，由系统每次重建。
+2. **任务需求**：`instruction` 与当前作用域的 `ask_user` 问答。Components 的 `request_task_context(request)` 校验 answer 的 Run、Task/Attempt、Session 归属后，将原题和 `values` 投影到任务正文。
+3. **原生 assistant/tool 配对历史**：Session 中已配对的 assistant/tool 回合及 receipt；`request_work` 没有单独的历史类别，就是普通控制工具调用。输入压力下只对较早完整回合生成 `history_checkpoint`，原始 `tool_turns` 不删除、不切开调用与回执。
+4. **当前任务上下文 + 唯一完整 `artifact_index`**：本次调用已授权的输入和 Session 工具输出的 compact 元信息。`artifact_index_context(request, state)` 按 artifact ID 合并并去重，目录不复制正文、URI、hash 或权限，不授予访问权；正文需通过已有读取工具显式获取。required 内容装不下时返回 `ContextBudgetExceeded`。
+
+`request_materials_context(request)` 跳过 `answer`，避免把回答同时放进任务正文和 `material_<artifact_id>`。其余恢复材料、验收要求和工作反馈仍按原校验与预算规则进入材料段。Scientific 可用 `ResearchIndex` 对当前输入执行 run、条目身份和冻结内容的一致性验证；它是代码侧派生导航，模型收到的完整目录仍只有 `artifact_index`，groups 只引用 `artifact_ids`。`Run.artifacts`/Registry 是唯一权威登记表。上述约定描述输入边界，不声称上下文质量或模型结论已经改善。
 
 <a id="module-result"></a>
 
@@ -398,7 +409,7 @@ off 不记录；metadata 不保存请求/响应/源码正文，对这些内容�
 `ToolObservation.ok` 是机器可读的成功标志：成功读取/命令为 True，失败命令（非零退出）、参数拒绝、路径缺失等可恢复失败为 False。下游不得靠解析 `summary` 文本判断失败。AgentLoop 的反馈语义：
 
 - Loop 生成的动作拒绝、工具异常或完成检查拒绝可形成持久 `runtime_feedback`（`ok=False`），存在时插在其他领域段之前，作为 required 上下文注入。普通 Tool 返回的 `ok=False` 观察不自动全部转成此反馈；`tool_error` 来源的旧反馈在工具正常返回 observation 后清除，完成检查来源的反馈按完成检查流程更新/清除。不能据此假定所有失败命令的完整诊断都常驻；
-- 已配对的 RecordedAnswer 冻结为 answer 工件；调用方用 resume_artifact_ids 交付本次恢复材料。三个 Agent 共用 request_materials_context，原题 question_text 与回答 values 一起进入必需材料段，仍由 ContextComposer 计量，装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
+- 已配对的 RecordedAnswer 冻结为 answer 工件；调用方用 resume_artifact_ids 指明本次恢复材料。三个 Agent 共用 request_task_context，当前作用域内累计回答的原题 question_text 与 values 一起进入必需任务需求段；request_materials_context 不重复展开回答。ContextComposer 计量完整任务段，装不下时沿用 ContextBudgetExceeded。`ask_user` 的成功观测只代表已发问，不代表已收到答案或前提已经满足；历史工具结果也可能早于当前回答与资源刷新；
 - 正文 JSON 客户端使用 `recent_observations` 有界最近历史（默认 6 条），以原始事件编号从旧到新呈现；value 是约 400 字符的短预览，用 head+tail 截断序列化值，不保证所有字段完整。原生客户端改为重放 `tool_turns` 中检查点之后已配对的 assistant/tool 消息，并在末尾加入最新业务 Context；两者都不把历史 prompt 当第二套记忆；
 - Agent 需要保留文件正文等领域观察时，统一使用 runtime 的 `recent_tool_snippets`（以来源及请求行范围为片段身份，工件另含 start_char/end_char、最新片段优先完整装入，仅截断装箱的最后一段；选入后按原始事件顺序从旧到新呈现），分别进入 `file_reads` / `artifact_reads` 材料。导航框required，正文弹性分配；各含snippets、previously_read及content_omitted。`recent_tool_listing` 保留最近有界目录清单，不截断单个路径；directory可选（priority=62）。这只是本轮模型输入，旧workspace_reads trace及Session原事件不改写；
 - 片段 `observed_at` 复用 AgentEvent.sequence；`truncated` 表示呈现正文是否不完整，`context_truncated=true` 另标记工作集预算截断。components 对有后续同路径内置写入或已完成删除的文件片段附 `modified_after_read_at`；部分删除只标记确实删除的条目，不把未执行项当修改。不清空旧片段、不标记冻结 Artifact；无标记不保证文件仍是磁盘当前版本。这些是上下文投影字段，不修改 ToolObservation、跨模块契约或 Session 原记录；
@@ -557,13 +568,13 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。公共模型当前仅接受 23.0；本版统一登记工件的 ID 格式，保留外部论文导入、按篇材料、全文来源和访问日志边界。旧 schema 22 及更早的 Run 不支持恢复，原记录保留不迁移。编号生成算法变化可能影响重复登记与中断恢复，因此使用现有不兼容版本隔离，不新增旧 ID 生成分支。Session 的独立解析边界见下文。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
+Python 包版本与 wire schema 独立演进。公共模型当前仅接受 24.0；本版统一三个 Agent 的任务问答与 artifact_index 投影，删除旧文献/网页输出目录字段，并为 Session 明确保存版本。旧 schema 23 及更早的 Run/Session 不支持恢复，原记录保留不迁移。工件 ID、外部论文导入、按篇材料、全文来源和访问日志边界保持不变。字段删除、含义或必填性变化需要不兼容版本，并覆盖 round-trip、非法组合和恢复边界测试。metadata 不长期承担本应成为正式字段的机器状态。
 
 schema 19 已用 WorkFeedback.report 替换 brief，删除 WorkBrief/CitedStatement。统一 AgentRequest/AgentResult、明确 required_artifacts、预算、权限和单次批准机制沿用现有边界；Scientific 仍接收完整科研目录，成对问答按原作用域阅读和恢复。不保留旧反馈格式的兼容读取分支。
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 
-AgentState 继承不带公共版本字段的 RuntimeModel；某些旧 Session 仍能单独解析，不代表支持恢复旧 Run。若嵌套公共模型含旧 schema，会在相应校验处拒绝；原生 Session 还必须匹配创建时的协议、endpoint 和 model 身份。memory/events.data 的 JSON 可解析性不构成业务兼容承诺。
+AgentState 顶层保存 schema_version=24.0。JsonSessionStore.load 在模型解析前检查原始 JSON 的版本；缺版本、23.0 和其他版本明确拒绝，不能用默认值接受旧记录。原生 Session 还必须匹配创建时的协议、endpoint 和 model 身份。不读取旧 memory 目录字段，也不提供迁移或兼容回退。
 
 <a id="exports"></a>
 

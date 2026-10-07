@@ -86,7 +86,7 @@ def test_scientific_finish_rejects_a_second_model_written_summary() -> None:
 
 def test_search_history_cannot_self_certify_an_unregistered_artifact() -> None:
     check = ScientificCompletionCheck([], ["literature_paper"])
-    state = _state({"literature_output_artifact_ids": ["artifact_lit_1"]})
+    state = _state({"artifact_index": [{"artifact_id": "artifact_lit_1", "kind": "literature_paper", "summary": "Imported evidence"}]})
     decision = check.evaluate(state, _finish(["artifact_lit_1"]))
     assert not decision.complete
     assert "authorized artifact" in decision.report
@@ -97,7 +97,7 @@ def test_required_kind_comes_from_registry_not_search_memory(tmp_path) -> None:
     check = ScientificCompletionCheck(
         [], ["literature_paper"], reader=RegisteredArtifactReader([artifact], run_id="run_r"),
     )
-    state = _state({"literature_output_artifact_ids": [artifact.id]})
+    state = _state({"artifact_index": [{"artifact_id": artifact.id, "kind": artifact.kind, "summary": artifact.summary}]})
     assert not check.evaluate(state, _finish([artifact.id])).complete
 
 
@@ -157,7 +157,7 @@ def test_required_output_does_not_require_observation_or_citation(tmp_path, avai
     reader = RegisteredArtifactReader(
         [ref] if available_as == "input" else [], run_id="run_r", resolve=lambda _: ref,
     )
-    state = _state({"literature_output_artifact_ids": [ref.id]} if available_as == "tool_output" else {})
+    state = _state({"artifact_index": [{"artifact_id": ref.id, "kind": ref.kind, "summary": ref.summary}]} if available_as == "tool_output" else {})
     before = state.model_dump(mode="json")
     check = ScientificCompletionCheck(
         [], required_artifacts=["metrics"], resolve_artifact=reader.resolve_ref, reader=reader,

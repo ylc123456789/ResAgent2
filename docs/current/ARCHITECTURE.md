@@ -2,7 +2,7 @@
 
 这份文档回答：**系统由哪些部分组成，各管什么，谁可以调用谁。** 方法、字段和失败约定集中在 [模块接口与契约](CONTRACTS.md)；字段怎样进入模型输入见 [上下文说明](CONTEXT.md)；修改时必须保持的职责、依赖和流程见 [设计原则与架构约束](DESIGN_PRINCIPLES.md)。第一次了解项目可先读 [理解一次研究任务](../guides/UNDERSTANDING.md)。
 
-只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **23.0**；旧记录的解析与恢复边界见 [版本规则](CONTRACTS.md#schema)。
+只描述当前实现，不把历史计划或未来设想画成已有模块。当前公共数据 schema 为 **24.0**；旧 Run/Session 不迁移、不兼容恢复，边界见 [版本规则](CONTRACTS.md#schema)。
 
 <a id="overview"></a>
 
@@ -187,6 +187,10 @@ inconclusive 可以是合法完成的科学意见；completed_with_warnings 必�
 ## 6. 共享能力与上下文
 
 各 Agent、Compiler 与 Interpreter 的逐段构成、刷新时机、必需/可选选择及多层预算，统一查 [模型上下文](CONTEXT.md#modules)。本节只说明架构归属，不重复维护完整段表。
+
+模型输入遵循四部分约定：固定契约（职责 prompt、工具协议和完整 schema）；任务需求（`instruction` 与当前作用域 `ask_user` 问答）；原生 assistant/tool 配对历史（`request_work` 也是普通工具调用记录，较早完整回合可摘要但原始历史不删除）；当前任务上下文与唯一完整 `artifact_index`（本次已授权输入及 Session 工具输出的 compact 元信息）。`request_task_context` 负责任务需求投影，`artifact_index_context` 负责目录投影，`request_materials_context` 不再重复渲染 `answer`。必需输入装不下时明确失败。
+
+`Run.artifacts`/Registry 是工件的唯一权威来源。`artifact_index` 是当前调用的完整模型目录：按 ID 合并请求输入与 Session 索引，保留必要的 kind、summary、归属、output_name 和执行状态等导航字段，不复制正文、URI、hash 或权限，也不授予访问权。Scientific 的 `ResearchIndex` 仍由代码校验 run、条目身份和冻结内容；groups 在模型输入中只引用 `artifact_ids`，不另建第二份工件目录。
 
 资源需求不必在启动时声明。ResearchRequest 不含数据集/缓存配置；部署 catalog → Controller 的 Run 引用与冻结 dataset_catalog 工件 → Agent 的实际可用性检查。缺所需资源复用 ask_user。Controller/Scheduler 共用 Run 剩余时间计算，只扣除显式人工等待，不重置调用预算。
 

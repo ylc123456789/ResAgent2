@@ -97,7 +97,15 @@ def _probe(root, kind, phase):
         if phase:
             assert f"reply_phase_{phase}" in context.text
             assert f"reply_phase_{phase - 1}" not in context.text
-            assert sum(name.startswith("material_") for name in context.included_sections) == 1
+            section_name = "research" if scientific else "task"
+            task_text = context.text.split(f"## {section_name}\n", 1)[1].split("\n\n## ", 1)[0]
+            answers = json.loads(task_text)["user_answers"]
+            assert answers == [{
+                "artifact_id": ref.id, "question_id": answer.question_id,
+                "question": answer.question_text, "values": answer.values,
+                "answered_at": answer.model_dump(mode="json")["answered_at"],
+            }]
+            assert not any(name.startswith("material_") for name in context.included_sections)
     after = sessions.load(session_id)
     assert after.attempt_number == (None if scientific else 1)
     if before:

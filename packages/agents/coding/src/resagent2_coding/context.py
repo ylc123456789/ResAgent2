@@ -6,7 +6,7 @@ import json
 
 from resagent2_components import (
     DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
-    request_materials_context,
+    request_materials_context, request_task_context, artifact_index_context,
 )
 from resagent2_capabilities.environment.guidance import ENVIRONMENT_DECISION_GUIDANCE
 from resagent2_contracts import AgentRequest
@@ -80,15 +80,16 @@ def build_context(
     sections = [
         ContextSection(
             name="task",
+            content=json.dumps(request_task_context(request), ensure_ascii=False),
+            priority=100, required=True,
+        ),
+        ContextSection(
+            name="execution_context",
             content=json.dumps({
-                "instruction": request.instruction,
                 "workspace_access": request.workspace.access.model_dump(mode="json") if request.workspace else None,
+                "output_dir": request.output_dir,
                 "confirm_commands": request.confirm_commands,
                 "permissions": request.permissions.model_dump(mode="json"),
-                "input_artifacts": [
-                    {"id": item.id, "kind": item.kind, "summary": item.summary}
-                    for item in request.input_artifacts
-                ],
             }, ensure_ascii=False),
             priority=100, required=True,
         ),
@@ -97,6 +98,7 @@ def build_context(
             content=json.dumps(dataset_context(datasets or DatasetAvailability())),
             priority=90, required=True,
         ),
+        artifact_index_context(request, state),
         *request_materials_context(request),
     ]
     if control_state is not None:

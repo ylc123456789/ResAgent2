@@ -13,6 +13,7 @@ from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_cli.shell import Shell
 from resagent2_cli.composition import build_application
 from resagent2_components import RegisteredArtifactReader
+from resagent2_contracts import ResearchArtifactEntry
 from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import JsonRunStore
@@ -111,18 +112,33 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
             if role == "scientific":
                 current_context = body["messages"][-1]["content"]
                 payloads = [json.loads(line) for line in current_context.splitlines() if line.startswith("{")]
-                materials = next(value for value in payloads if "index_artifact_id" in value and "index" in value)
+                materials = next(value for value in payloads if "index_artifact_id" in value and "artifacts" in value)
                 current_request = scientific_requests[-1]
                 reader = RegisteredArtifactReader(current_request.input_artifacts, run_id=run_id)
-                entries = [entry for group in materials["index"]["groups"] for entry in group["artifacts"]]
+                entries = materials["artifacts"]
                 indexed_ids = {entry["artifact_id"] for entry in entries}
+                assert len(indexed_ids) == len(entries)
+                assert indexed_ids == {ref.id for ref in current_request.input_artifacts}
+                for entry in entries:
+                    ref = reader.resolve_ref(entry["artifact_id"])
+                    assert entry == ResearchArtifactEntry.from_ref(
+                        ref, execution_status=entry.get("execution_status"),
+                    ).model_dump(mode="json", exclude_none=True)
+                    assert ref.uri not in current_context
+                    assert ref.sha256 not in current_context
+                frozen_index = json.loads(reader.read_text(materials["index_artifact_id"])["content"])
+                assert frozen_index["run_id"] == run_id
+                assert materials["groups"] == [
+                    {"key": group["key"], "title": group["title"],
+                     "artifact_ids": [entry["artifact_id"] for entry in group["artifacts"]]}
+                    for group in frozen_index["groups"]
+                ]
                 # Verify every rendered directory entry against precisely the
                 # references delivered to this real Scientific invocation.
                 for artifact_id in indexed_ids:
                     assert reader.read_text(artifact_id)["artifact_id"] == artifact_id
                 if index in (2, 3):
-                    handoff_indexes[index - 1] = materials["index"]
-                    assert materials["index"] == json.loads(reader.read_text(materials["index_artifact_id"])["content"])
+                    handoff_indexes[index - 1] = frozen_index
                     round_number = index - 1
                     expected_answer = answer_ref("approve" if round_number == 1 else "metric")
                     round_answer_ids[round_number] = expected_answer.id
@@ -147,7 +163,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                                     for entry in group["artifacts"]}
                     assert previous_ids <= indexed_ids
                     assert set(round_answer_ids.values()) <= indexed_ids
-                    assert {"work_1", "work_2"} <= {group["key"] for group in materials["index"]["groups"]}
+                    assert {"work_1", "work_2"} <= {group["key"] for group in materials["groups"]}
                     # Delivered reports do not fabricate a tool access event.
                     assert evidence_id() not in scientific_read_ids()
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}

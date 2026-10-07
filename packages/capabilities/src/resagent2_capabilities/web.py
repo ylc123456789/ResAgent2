@@ -14,6 +14,7 @@ from resagent2_components import (
     WebPageFetcher,
     WebSearchBackend,
     WebSearchError,
+    merge_artifact_index,
 )
 from resagent2_contracts import ArtifactCandidate
 from resagent2_runtime import AgentState, ToolObservation
@@ -22,10 +23,7 @@ from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 
 def web_outputs(state: AgentState, refs) -> dict:
     """Return web artifacts for Scientific handoff without changing read status."""
-    return {"web_output_artifact_ids": list(dict.fromkeys([
-        *state.memory.get("web_output_artifact_ids", []),
-        *[ref.id for ref in refs],
-    ]))}
+    return {"artifact_index": merge_artifact_index(state.memory.get("artifact_index", []), refs)}
 
 
 class WebSearchInput(RuntimeModel):

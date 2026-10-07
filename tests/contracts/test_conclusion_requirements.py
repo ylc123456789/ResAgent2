@@ -29,7 +29,7 @@ def test_required_artifacts_round_trip_as_exact_logical_output_names(model):
     value = model(required_artifacts=names)
     restored = type(value).model_validate_json(value.model_dump_json())
     assert restored.required_artifacts == names
-    assert restored.schema_version == "23.0"
+    assert restored.schema_version == "24.0"
 
 
 @pytest.mark.parametrize("name", [
@@ -49,7 +49,7 @@ def test_required_artifacts_do_not_become_task_or_work_request_fields():
 
 
 @pytest.mark.parametrize("model", [research_request, ConclusionRequirements])
-@pytest.mark.parametrize("schema_version", ["16.0", "17.0"])
+@pytest.mark.parametrize("schema_version", ["16.0", "17.0", "23.0"])
 def test_required_artifacts_reject_previous_schema(model, schema_version):
     with pytest.raises(ValidationError, match="schema_version"):
         model(schema_version=schema_version)

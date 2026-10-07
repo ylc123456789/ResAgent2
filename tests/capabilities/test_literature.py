@@ -156,7 +156,7 @@ def test_tool_reuses_papers_and_tracks_outputs_not_read_status(tmp_path) -> None
     assert second.value["papers"][0]["artifact_id"] == first_paper
     assert second.value["papers"][0]["reused"] is True
     assert len([ref for ref in register.refs.values() if ref.kind == "literature_paper"]) == 1
-    assert len(second.memory_updates["literature_output_artifact_ids"]) == 3
+    assert len(second.memory_updates["artifact_index"]) == 3
 
 
 def test_tool_keeps_preview_separate_from_frozen_abstract(tmp_path) -> None:
@@ -173,7 +173,7 @@ def test_tool_keeps_preview_separate_from_frozen_abstract(tmp_path) -> None:
     assert brief["abstract_truncated"] is True
     ref = register.refs[brief["artifact_id"]]
     assert ref.metadata["paper"]["abstract"] == full_abstract
-    assert len(observation.memory_updates["literature_output_artifact_ids"]) == 2
+    assert len(observation.memory_updates["artifact_index"]) == 2
     assert original == before
 
 

@@ -3,6 +3,7 @@
 from .materials import (
     read_artifact_json, read_request_material, read_work_feedback_source,
     request_materials_context, request_dataset_refs,
+    request_task_context, merge_artifact_index, artifact_index_context,
 )
 from .artifacts import (
     ArtifactRegistrationPort,
@@ -83,6 +84,9 @@ __all__ = [
     'read_work_feedback_source',
     'request_materials_context',
     'request_dataset_refs',
+    'request_task_context',
+    'merge_artifact_index',
+    'artifact_index_context',
     'ArxivLiteratureBackend',
     'OpenAlexLiteratureBackend',
     'MultiSourceLiteratureBackend',

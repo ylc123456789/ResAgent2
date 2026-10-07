@@ -7,10 +7,10 @@
 - 开发仓库：WSL Ubuntu-D 的 `/home/cyl/ResAgent2`。
 - 分支：`feat/unified-context`。
 - 基线：`8f9d7256137f5059cb3b642ac63dc395deece493`，即联网搜索完成版。
- 当前实现已提交为 `8d313d9`，当前分支未推送、未合并。服务器应同步该提交及其父历史，不要只同步联网搜索基线。
- 推送后可直接在服务器检出 `origin/feat/unified-context`；若使用 bundle，必须包含 `8d313d9`，并核对提交 SHA、文件清单及同步后差异。不要覆盖服务器已有实验或未提交修改。
+- 实现提交为 `8d313d9`，初版交接文档提交为 `8c91222`；当前分支已推送、未合并。验收版本为 `origin/feat/unified-context` 最新 HEAD（含本交接文档修订），开始测试时记录完整 SHA，不要只同步联网搜索基线。
+- 服务器可直接检出 `origin/feat/unified-context`；若使用 bundle，必须包含本分支最新 HEAD 及其父历史，并核对提交 SHA、文件清单及同步后差异。不要覆盖服务器已有实验或未提交修改。
 - 服务器仓库路径以实际 Git 根目录为准；此前使用 `/root/autodl-tmp/projects/ResAgent2`，证据目录与 Git 仓库分开。
-- schema **24.0**：使用全新 Run/Session。23.0、缺版本或其他版本的旧记录应明确拒绝恢复，不迁移、不兼容；旧证据只读保留。
+- schema **24.0**：使用全新 Run/Session。23.0 或其他版本的旧 Session 应明确拒绝恢复，不迁移、不兼容；缺少 schema 的 Session 也应拒绝。旧 Run/证据只读保留；Run 的缺失版本行为以生产校验和专项测试结果为准，不在本交接中作笼统断言。
 - 保持原模型、工具、预算和环境配置；启用 `RESAGENT2_LLM_TRACE_LEVEL=full` 核对实际 messages/tools。不打印认证信息。
 
 正式说明见 [CONTEXT](../../current/CONTEXT.md)、[CONTRACTS](../../current/CONTRACTS.md)。
@@ -74,8 +74,8 @@ python -m pytest -q \
 
 1. 文献/网页工具仍按原契约登记和冻结产物。Registry 是权威；`memory_updates["artifact_index"]` 只维护模型目录，不是另一个登记系统。
 2. 唯一 `artifact_index` 的条目集合等于该调用授权的 `input_artifacts` 与 Session 中已登记工具输出目录的并集，按 ID 去重；保留旧条目与新增条目。它不等于整个 Run 的无条件公开列表。
-3. Scientific 仍校验冻结 ResearchIndex，groups 只列 `artifact_ids`；不再发送另一份含同样条目的完整目录。目录含 compact 类型、摘要、归属、执行状态及直接来源关系，不携带 URI、hash、权限或全文。
-4. `fetch` 新增独立正文/PDF工件并维护原来源链；`read_artifact` 只返回读取片段和范围，不创建正文副本。搜索预览、摘要、全文和实际读取范围保持可区分。
+3. Scientific 仍校验冻结 ResearchIndex，groups 只列 `artifact_ids`；不再发送另一份含同样条目的完整目录。目录条目含 `artifact_id`、`kind`、`summary`、`output_name`、`attempt_number`、`execution_status` 和 `source_artifact_id` 等 compact 元数据，不携带 URI、hash、权限或全文，也不声称包含 task/session 所有权字段。
+4. `fetch` 新增独立正文/PDF工件并维护原来源链；文献 PDF/全文通过 `source_artifact_id` 关联，网页抓取保留请求 URL 与最终 URL 元数据。`read_artifact` 只返回读取片段和范围，不创建正文副本。搜索预览、摘要、全文和实际读取范围保持可区分。
 5. 近期读取内容进入配对工具历史及当前读取投影；上下文缩减明确标注范围/省略。没有读取的部分不能成为“已读全文”的依据。
 6. 非工件的工作区文件仍由已有文件工具和工作区投影处理，不因读取而自动登记。
 7. 独立重算冻结工件 SHA256；最终引用和交付仍指向本 Run 的真实登记工件。

@@ -379,3 +379,56 @@ def test_metadata_trace_handles_non_string_content(monkeypatch, tmp_path) -> Non
     assert "raw_response_text" not in record
     assert record["response_sha256"]
     assert record["action_valid"] is False
+
+
+@pytest.mark.parametrize("failure", [None, "http400", "json"])
+def test_trace_storage_failure_preserves_model_outcome(
+    monkeypatch, tmp_path, caplog, failure,
+):
+    from resagent2_runtime.budget import MemoryUsage, execution_budget
+
+    client = _client(monkeypatch)
+    client.trace_level = "full"
+    client.trace_dir = tmp_path / "PRIVATE_TRACE_PATH"
+    client.trace_dir.mkdir()
+    # A directory at the JSONL path exercises a real storage failure.
+    (client.trace_dir / "llm_traces.jsonl").mkdir()
+    content = "PRIVATE_INVALID_JSON" if failure == "json" else json.dumps({"tool": "finish"})
+    response = _FakeResponse({"choices": [{"message": {"content": content}}]})
+    if failure == "http400":
+        response = HTTPStatusError(
+            "original provider error", request=Request("POST", "https://example.com"),
+            response=Response(400, content=b"original rejection"),
+        )
+    usage = MemoryUsage()
+    with (
+        execution_budget(max_llm_calls=3, timeout_seconds=30, usage=usage),
+        mock.patch("resagent2_runtime.llm.send_request", side_effect=[response]) as provider,
+    ):
+        if failure == "http400":
+            with pytest.raises(RuntimeError, match="LLM HTTP 400: original rejection"):
+                client.next_action(_context(), AgentAction)
+        elif failure == "json":
+            with pytest.raises(json.JSONDecodeError):
+                client.next_action(_context(), AgentAction)
+        else:
+            assert client.next_action(_context(), AgentAction) == {"tool": "finish"}
+
+    assert provider.call_count == client.last_attempts == usage.used == 1
+    assert list(usage.requests.values()) == ["succeeded" if failure is None else "failed"]
+    assert "Could not write optional LLM trace (IsADirectoryError)." in caplog.text
+    assert "PRIVATE_" not in caplog.text
+    assert str(client.trace_dir) not in caplog.text
+
+
+def test_trace_serialization_failure_preserves_model_response(monkeypatch, tmp_path, caplog):
+    client = _client(monkeypatch)
+    client.trace_level = "metadata"
+    client.trace_dir = tmp_path / "traces"
+    circular = {}
+    circular["private"] = circular
+    client.set_trace_context(diagnostic=circular)
+    response = _FakeResponse({"choices": [{"message": {"content": json.dumps({"tool": "finish"})}}]})
+    with mock.patch("resagent2_runtime.llm.send_request", return_value=response):
+        assert client.next_action(_context(), AgentAction) == {"tool": "finish"}
+    assert "Could not write optional LLM trace (ValueError)." in caplog.text

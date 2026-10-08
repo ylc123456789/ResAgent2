@@ -186,6 +186,8 @@ class _HTMLTextParser(HTMLParser):
         self._in_title = False
         self._link_url = ""
         self._link_label_parts: list[str] = []
+        self._pre_depth = 0
+        self._pre_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = tag.lower()
@@ -195,8 +197,13 @@ class _HTMLTextParser(HTMLParser):
             return
         if tag == "title":
             self._in_title = True
+        if tag == "pre":
+            self._pre_depth += 1
+        if tag == "br" and self._pre_depth:
+            if not self._link_url:
+                self._pre_parts.append("\n")
         if self._link_url and tag in self._blocks:
-            self._link_label_parts.append(" ")
+            self._link_label_parts.append("\n" if tag == "br" and self._pre_depth else " ")
         if tag == "a" and not self._in_title:
             self._finish_link()
             self._link_url = self._link_target(dict(attrs).get("href"))
@@ -210,16 +217,23 @@ class _HTMLTextParser(HTMLParser):
             return
         if tag == "title":
             self._in_title = False
-        if self._link_url and tag in self._blocks:
+        if self._link_url and tag in self._blocks and not (tag == "br" and self._pre_depth):
             self._link_label_parts.append(" ")
         if tag == "a" and not self._in_title:
             self._finish_link()
+        if tag == "pre" and self._pre_depth:
+            self._pre_depth -= 1
+            if not self._pre_depth:
+                self._finish_pre()
 
     def handle_data(self, data: str) -> None:
         if self._ignored_depth:
             return
         if self._link_url and not self._in_title:
             self._link_label_parts.append(data)
+            return
+        if self._pre_depth and not self._in_title:
+            self._pre_parts.append(data)
             return
         if not data.strip():
             return
@@ -232,6 +246,12 @@ class _HTMLTextParser(HTMLParser):
     def close(self) -> None:
         super().close()
         self._finish_link()
+        self._finish_pre()
+
+    def _finish_pre(self) -> None:
+        if self._pre_parts:
+            self.text_parts.append("".join(self._pre_parts))
+            self._pre_parts.clear()
 
     def _link_target(self, href: str | None) -> str:
         if not href or not href.strip():
@@ -253,9 +273,14 @@ class _HTMLTextParser(HTMLParser):
         return target
 
     def _finish_link(self) -> None:
-        label = " ".join("".join(self._link_label_parts).split())
-        if label:
-            self.text_parts.append(f"{label} ({self._link_url})")
+        label = "".join(self._link_label_parts)
+        if not self._pre_depth:
+            label = " ".join(label.split())
+        if label.strip():
+            parts = self._pre_parts if self._pre_depth else self.text_parts
+            parts.append(f"{label} ({self._link_url})")
+        elif self._pre_depth and label:
+            self._pre_parts.append(label)
         self._link_url = ""
         self._link_label_parts.clear()
 
@@ -328,7 +353,7 @@ class WebPageFetcher:
             except Exception as error:
                 raise WebFetchError("webpage HTML could not be parsed", error_type="parse_failed") from error
             title = " ".join(parser_obj.title_parts).strip()
-            text = "\n".join(parser_obj.text_parts).strip()
+            text = "\n".join(parser_obj.text_parts)
             parser = "html.parser"
         if not text.strip():
             raise WebFetchError(

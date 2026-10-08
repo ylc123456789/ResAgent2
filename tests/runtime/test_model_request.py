@@ -293,3 +293,50 @@ def test_valid_http_date_retry_after_remains_available(client, monkeypatch):
     with pytest.raises(ModelRequestHTTPError) as raised:
         client.request({})
     assert raised.value.retry_after == date
+
+
+@pytest.mark.parametrize("http_error", [False, True])
+def test_trace_storage_failure_preserves_result_or_provider_error(
+    client, monkeypatch, caplog, http_error,
+):
+    from unittest import mock
+
+    transport(monkeypatch, lambda request: httpx.Response(
+        429 if http_error else 200,
+        json=PAYLOAD, headers={"Retry-After": "17"},
+    ))
+    usage = MemoryUsage()
+    with (
+        execution_budget(max_llm_calls=2, timeout_seconds=30, usage=usage),
+        mock.patch(
+            "resagent2_runtime._trace.os.open",
+            side_effect=OSError(f"PRIVATE_TRACE_PATH {KEY}"),
+        ),
+    ):
+        if http_error:
+            with pytest.raises(ModelRequestHTTPError) as raised:
+                client.request(BODY)
+            assert raised.value.status_code == 429
+            assert raised.value.retry_after == "17"
+        else:
+            assert client.request(BODY) == PAYLOAD
+    assert usage.used == client.last_attempts == 1
+    assert list(usage.requests.values()) == ["failed" if http_error else "succeeded"]
+    assert "Could not write optional LLM trace (OSError)." in caplog.text
+    assert KEY not in caplog.text
+    assert "PRIVATE_" not in caplog.text
+
+
+def test_trace_isolation_does_not_hide_authoritative_usage_failure(client, monkeypatch):
+    class UnavailableUsage(MemoryUsage):
+        def complete(self, call_id, retry_index, outcome):
+            raise OSError("cannot persist model outcome")
+
+    transport(monkeypatch, lambda request: httpx.Response(200, json=PAYLOAD))
+    client.trace_dir.mkdir()
+    (client.trace_dir / "llm_traces.jsonl").mkdir()
+    with execution_budget(max_llm_calls=1, timeout_seconds=30, usage=UnavailableUsage()) as budget:
+        with pytest.raises(OSError, match="cannot persist model outcome"):
+            client.request(BODY)
+    assert budget.usage.used == 1
+    assert list(budget.usage.requests.values()) == ["unknown"]

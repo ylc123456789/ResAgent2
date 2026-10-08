@@ -321,10 +321,6 @@ class ArtifactRegistry:
             raise ArtifactRegistrationError(
                 f"unsupported system artifact kind: {candidate.kind}"
             )
-        if candidate.kind == "literature_search":
-            raise ArtifactRegistrationError(
-                "literature_search must use the Scientific session registration path"
-            )
         text = candidate.content if candidate.content is not None else json.dumps(
             candidate.metadata, sort_keys=True, ensure_ascii=False, indent=2
         )

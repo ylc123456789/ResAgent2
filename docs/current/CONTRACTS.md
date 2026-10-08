@@ -270,6 +270,8 @@ PDF 解析默认上限为 300 秒，同时受 Run 剩余时间约束。CLI 可�
 
 `web_fetch(url)` 抓取一个网页并登记一个 `web_page` 工件。URL 只接受无凭据的 `http`/`https`；成功工件保存 source/final URL、title、提取文本、content type、parser 和 fetched_at，Scientific 可用 `read_artifact` 分段读取。HTML提取保留可见链接文字及合法http(s)地址，相对地址按重定向后的final URL解析；忽略空/非法/非http(s)/带凭据目标但保留可见文字，不自动抓取链接或转换为论文。轻量解析不模拟浏览器布局，也不解释HTML `<base>`。失败不生成页面工件，直接返回 `error_type`/`retry_after`。Fetcher 只接受 HTML/XHTML/text，严格按 UTF-8 解码并拒绝 NUL、PDF 和其他二进制；最多5次重定向，每次连接只使用已核对的公网地址，DNS解析、HTTP和响应读入受共享 Run 截止时间约束。不执行 JavaScript，也不提供浏览器会话。
 
+HTML 的 `<pre>` 区域保留换行、缩进和空白，包括嵌套 code/span 的连续文本；普通说明文字继续规范化空白。此规则避免保存代码示例时丢失有意义的结构，不代表完整网页布局或 Markdown 转换。
+
 网页搜索结果只是线索和查询回执，网页正文是带来源的通用材料；二者都不会自动转换成 `literature_paper`。Scientific 根据用户目标自主决定调用 `web_search`、`web_fetch` 或 `literature_search`，没有固定的“先网页后论文”流程。成功的网页工件和搜索回执进入同一 Run 的 research index，但论文证据规则仍按工件 kind 精确判断。
 
 <a id="compiler"></a>
@@ -385,6 +387,8 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 <a id="trace"></a>
 
 ### LLM 计量与 trace
+
+trace 是可选诊断输出。两个模型客户端共用私有 JSONL 写入函数；该函数中的 JSON 序列化或文件系统写入失败时发出仅含异常类型的告警，保留模型响应、原始请求错误和 action 校验反馈，不自动重试或再次扣量。Run 用量、Session 等权威状态保存错误仍按原流程处理，不能因 trace 的容错而被忽略。
 
 最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；Tavily 和网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
 

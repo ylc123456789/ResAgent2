@@ -156,7 +156,7 @@ def _head_tail(text: str, max_chars: int) -> str:
     available = max_chars - len(marker)
     head = (available + 1) // 2
     tail = available // 2
-    return text[:head] + marker + text[-tail:]
+    return text[:head] + marker + (text[-tail:] if tail else "")
 
 
 def recent_tool_snippets(

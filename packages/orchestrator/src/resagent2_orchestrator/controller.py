@@ -187,7 +187,7 @@ class ResearchController:
                 run = self.scheduler.store.load(run_id)
                 code = (ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else
                         ErrorCode.BUDGET_EXHAUSTED if isinstance(error, BudgetExhaustedError) else ErrorCode.CONTRACT_ERROR)
-                return self._fail_run(run, ModuleError(code=code, message=str(error) or type(error).__name__, retryable=False))
+                return self._fail_run(run, ModuleError(code=code, message=str(error).strip() or type(error).__name__, retryable=False))
             with execution_budget(max_llm_calls=request.budget.max_llm_calls,
                                   timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
                                   usage=RunUsagePort(run, self.scheduler.store)):
@@ -345,7 +345,7 @@ class ResearchController:
             self._save(accepted)
             return accepted
         except Exception as error:
-            return self._fail_run(run, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error) or type(error).__name__, retryable=False))
+            return self._fail_run(run, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error).strip() or type(error).__name__, retryable=False))
 
     def _fail_run(self, run, error):
         run.status = RunStatus.FAILED
@@ -397,7 +397,7 @@ class ResearchController:
             active = self._active_work_request(run)
             code = (ErrorCode.TIMEOUT if isinstance(error, DeadlineExceededError) else
                     ErrorCode.BUDGET_EXHAUSTED if isinstance(error, BudgetExhaustedError) else ErrorCode.CONTRACT_ERROR)
-            failure = ModuleError(code=code, message=str(error) or type(error).__name__, retryable=False,
+            failure = ModuleError(code=code, message=str(error).strip() or type(error).__name__, retryable=False,
                                   details={"compiler_usage_known": isinstance(error, CompilationError)})
             if active:
                 _transition_work_request(active, WorkRequestStatus.FAILED, error=failure)

@@ -9,15 +9,15 @@ from resagent2_contracts import (
     RunPermissions, TaskProposal, WorkRequest, WorkRequestDraft, WorkflowProposal,
 )
 from resagent2_orchestrator import (
-    InMemoryRunStore, ModuleBinding, ResearchRun, ScriptedModulePort, WorkflowScheduler,
+    InMemoryRunStore, JsonRunStore, ModuleBinding, ResearchRun, ScriptedModulePort, WorkflowScheduler,
 )
 
 
-def scheduler(tmp_path, proposals, results):
+def scheduler(tmp_path, proposals, results, *, store=None):
     port = ScriptedModulePort(results)
     engine = WorkflowScheduler(
         bindings={"experiment": ModuleBinding(owner=AgentOwner.EXPERIMENT, port=port)},
-        store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
+        store=store or InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
     now = datetime.now(UTC)
     run = ResearchRun(
@@ -39,6 +39,71 @@ def scheduler(tmp_path, proposals, results):
 def task(task_id, dependencies=(), **kwargs):
     return TaskProposal(id=task_id, work_request_id="work_test", workflow_agent_kind="experiment",
                         instruction=f"Complete {task_id}", depends_on=list(dependencies), **kwargs)
+
+
+@pytest.mark.parametrize("stage", ["request", "invoke", "reception"])
+@pytest.mark.parametrize("error", [RuntimeError(), OSError(), RuntimeError("   "), RuntimeError("Original message")],
+                         ids=["empty-runtime-error", "empty-os-error", "whitespace-only", "with-message"])
+def test_boundary_exceptions_persist_failed_attempt(tmp_path, monkeypatch, stage, error):
+    store = JsonRunStore(tmp_path / "state")
+    engine, port, run_id = scheduler(tmp_path, [
+        task("task_source"), task("task_followup", ["task_source"]),
+    ], [AgentResult(status="completed", report="Task completed")], store=store)
+
+    def reject(*args, **kwargs):
+        raise error
+
+    if stage == "request":
+        monkeypatch.setattr(engine, "_module_request", reject)
+    elif stage == "invoke":
+        monkeypatch.setattr(port, "invoke", reject)
+    else:
+        monkeypatch.setattr("resagent2_orchestrator.scheduler.receive_artifacts", reject)
+
+    result = engine.run_until_stable(run_id)
+    persisted = JsonRunStore(store.root).load(run_id)
+
+    assert result == persisted
+    source, followup = persisted.workflow.tasks
+    assert source.status == "failed"
+    assert len(source.attempts) == 1
+    attempt = source.attempts[0]
+    assert attempt.status == "failed"
+    assert attempt.finished_at is not None
+    assert attempt.error.message == (str(error).strip() or type(error).__name__)
+    assert attempt.error.message in attempt.report
+    expected_code = "artifact_missing" if stage == "reception" and isinstance(error, OSError) else "contract_error"
+    assert attempt.error.code == expected_code
+    assert not attempt.error.retryable
+    assert followup.status == "blocked"
+    assert not followup.attempts
+    assert persisted.work_requests[0].status == "stable"
+
+
+def test_empty_reception_error_preserves_original_agent_failure(tmp_path, monkeypatch):
+    original = ModuleError(
+        code="tool_failed", message="Training failed", retryable=True,
+        details={"stderr_tail": "Diagnostic"},
+    )
+    engine, _, run_id = scheduler(tmp_path, [task("task_source")], [
+        AgentResult(status="failed", report="Training failed", error=original),
+    ], store=JsonRunStore(tmp_path / "state"))
+
+    def reject(*args, **kwargs):
+        raise RuntimeError()
+
+    monkeypatch.setattr("resagent2_orchestrator.scheduler.receive_artifacts", reject)
+    result = engine.run_until_stable(run_id)
+    assert result == engine.store.load(run_id)
+    attempt = result.workflow.tasks[0].attempts[0]
+    assert attempt.status == "failed"
+    assert attempt.error.code == original.code
+    assert attempt.error.message == original.message
+    assert attempt.error.details == {
+        "stderr_tail": "Diagnostic", "artifact_registration_error": "RuntimeError",
+    }
+    assert attempt.error.retryable is False
+    assert "reception failed: RuntimeError" in attempt.report
 
 
 @pytest.mark.parametrize("fault", ["missing", "ambiguous"])

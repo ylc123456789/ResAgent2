@@ -18,6 +18,7 @@ ALLOWED_IMPORT_ROOTS = {
     "httpx",
     "ipaddress",
     "json",
+    "logging",
     "math",
     "os",
     "pathlib",

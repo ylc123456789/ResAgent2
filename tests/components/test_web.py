@@ -12,7 +12,7 @@ from resagent2_components import (
     WebSearchError,
     TavilyWebSearchBackend,
 )
-from resagent2_components.web import _retry_after
+from resagent2_components.web import _HTMLTextParser, _retry_after
 from resagent2_runtime.http import NonPublicAddressError, ResponseTooLargeError
 
 
@@ -152,6 +152,75 @@ def test_web_page_fetcher_extracts_html_and_ignores_noncontent(monkeypatch):
     assert page.text == "Hello\nworld\n."
     assert page.parser == "html.parser"
     assert page.final_url == "https://example.test/page"
+
+
+@pytest.mark.parametrize("html, expected", [
+    ("<pre>    line  one\n\n\tline two  \n</pre>", "    line  one\n\n\tline two  \n"),
+    (
+        "<pre><code>for <span>x</span> in xs:\n    <b>print</b>(x)\n\n    pass\n</code></pre>",
+        "for x in xs:\n    print(x)\n\n    pass\n",
+    ),
+    (
+        "<p>  Before   text </p><pre><code>  a  b\n\n  c</code></pre><p>After  text</p>",
+        "Before text\n  a  b\n\n  c\nAfter text",
+    ),
+    ("<pre>  &lt;tag&gt;&amp;value<br>    next</pre>", "  <tag>&value\n    next"),
+    ("<pre>  first\n    second", "  first\n    second"),
+])
+def test_web_page_fetcher_preserves_preformatted_whitespace(monkeypatch, html, expected):
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+
+    assert WebPageFetcher().fetch("https://example.test/page").text == expected
+
+
+def test_web_page_parser_preserves_preformatted_text_across_feed_chunks():
+    parser = _HTMLTextParser("https://example.test/page")
+    for chunk in ("<pre><code>  first", "  word\n", "\n    sec", "ond</code></pre>"):
+        parser.feed(chunk)
+    parser.close()
+
+    assert parser.text_parts == ["  first  word\n\n    second"]
+
+
+def test_web_page_fetcher_preserves_links_inside_preformatted_text(monkeypatch):
+    html = b'<pre>    <a href="/docs">read  docs</a>\n    next</pre><a href="/other">Other  link</a>'
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+
+    assert WebPageFetcher().fetch("https://example.test/page").text == (
+        "    read  docs (https://example.test/docs)\n    next\n"
+        "Other link (https://example.test/other)"
+    )
+
+
+@pytest.mark.parametrize("html, expected", [
+    (
+        '<pre><a href="/docs">line<br/>next</a></pre>',
+        "line\nnext (https://example.test/docs)",
+    ),
+    (
+        '<pre>before<a href="/docs">  \n\t </a>after</pre>',
+        "before  \n\t after",
+    ),
+])
+def test_web_page_fetcher_preserves_preformatted_link_whitespace(monkeypatch, html, expected):
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+
+    assert WebPageFetcher().fetch("https://example.test/page").text == expected
 
 
 def test_web_page_fetcher_preserves_links_and_nested_visible_labels(monkeypatch):

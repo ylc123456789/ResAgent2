@@ -18,6 +18,7 @@ from .budget import (
     execution_budget,
 )
 from .http import ResponseTooLargeError, send_request
+from ._trace import write_trace_record
 
 
 class ModelRequestError(RuntimeError):
@@ -134,16 +135,9 @@ class ModelRequestClient:
     def _write_trace(self, record: dict, api_key: str) -> None:
         if self.trace_level == "off" or self.trace_dir is None:
             return
-        self.trace_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.trace_dir, 0o700)
         self._trace_seq += 1
         record = _redact({"sequence": self._trace_seq, **record}, api_key)
-        line = json.dumps(record, ensure_ascii=False, default=str)
-        path = self.trace_dir / "llm_traces.jsonl"
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        os.chmod(path, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+        write_trace_record(self.trace_dir, record)
 
     def request(self, body: dict) -> dict:
         """Return one JSON object or raise a safe, categorized transport error."""

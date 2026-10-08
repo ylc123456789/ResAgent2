@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from resagent2_contracts import (
     AgentRequest, ArtifactRef, DatasetRef, RecordedAnswer, WorkFeedback, WorkRecord,
-    TaskAcceptanceSpec, ConclusionRequirements,
+    TaskAcceptanceSpec, ConclusionRequirements, ResearchArtifactEntry, ResearchIndexGroup,
+    scientific_session_id, task_session_id,
 )
-from resagent2_runtime import ContextMaterial, ContextSection
+from resagent2_runtime import AgentState, ContextMaterial, ContextSection
 from .artifacts import ArtifactReadError, RegisteredArtifactReader
 from .text import slice_text_lines
 
@@ -20,6 +22,13 @@ def read_artifact_json(reader: RegisteredArtifactReader, artifact_id: str, model
     return model.model_validate(value) if model is not None else value
 
 
+def _request_session_id(request: AgentRequest) -> str:
+    return request.parent_session_id or (
+        scientific_session_id(request.run_id) if request.task_id is None else
+        task_session_id(request.run_id, request.task_id, request.attempt_number)
+    )
+
+
 def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=None) -> dict:
     """Verify structured material and invocation scope without choosing its presentation."""
     reader = reader or RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
@@ -30,7 +39,8 @@ def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=Non
                 or answer.attempt_number != request.attempt_number
                 or ref.task_id != answer.task_id or ref.attempt_number != answer.attempt_number
                 or ref.session_id != answer.session_id
-                or (request.task_id is None and answer.session_id != request.parent_session_id)):
+                or (answer.session_id is not None
+                    and answer.session_id != _request_session_id(request))):
             raise ArtifactReadError("answer does not belong to the resumed invocation")
     elif ref.kind == "work_feedback":
         feedback = WorkFeedback.model_validate(value)
@@ -45,6 +55,71 @@ def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=Non
     elif ref.kind == "conclusion_requirements":
         ConclusionRequirements.model_validate(value)
     return value
+
+
+def request_task_context(request: AgentRequest) -> dict:
+    """Project the instruction and verified user dialogue for this invocation."""
+    reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
+    session_id = _request_session_id(request)
+    answers = []
+    for ref in request.input_artifacts:
+        if ref.kind != "answer":
+            continue
+        same_scope = (ref.task_id, ref.attempt_number) == (request.task_id, request.attempt_number)
+        same_session = ref.session_id == session_id if request.task_id is None else (
+            ref.session_id is None or ref.session_id == session_id
+        )
+        if ref.id not in request.resume_artifact_ids and not (same_scope and same_session):
+            continue
+        value = read_request_material(request, ref, reader=reader)
+        answer = RecordedAnswer.model_validate(value).model_dump(mode="json")
+        answers.append({
+            "artifact_id": ref.id, "question_id": answer["question_id"],
+            "question": answer["question_text"], "values": answer["values"],
+            "answered_at": answer["answered_at"],
+        })
+    return {"instruction": request.instruction, "user_answers": answers}
+
+
+def merge_artifact_index(existing: list, refs: Iterable[ArtifactRef]) -> list[dict]:
+    """Append registered artifact navigation once, preserving original order."""
+    entries = {}
+    for value in existing:
+        entry = ResearchArtifactEntry.model_validate(value)
+        entries[entry.artifact_id] = entry.model_dump(mode="json", exclude_none=True)
+    for ref in refs:
+        if ref.id not in entries:
+            entries[ref.id] = ResearchArtifactEntry.from_ref(ref).model_dump(mode="json", exclude_none=True)
+    return list(entries.values())
+
+
+def artifact_index_context(
+    request: AgentRequest, state: AgentState, *,
+    groups: list[ResearchIndexGroup] | None = None, index_artifact_id: str | None = None,
+) -> ContextSection:
+    """Render the complete authorized directory without copying artifact contents."""
+    entries = merge_artifact_index([], request.input_artifacts)
+    by_id = {entry["artifact_id"]: entry for entry in entries}
+    for entry in merge_artifact_index(state.memory.get("artifact_index", []), []):
+        if entry["artifact_id"] not in by_id:
+            entries.append(entry)
+            by_id[entry["artifact_id"]] = entry
+    value = {"artifacts": entries}
+    if groups is not None:
+        value["index_artifact_id"] = index_artifact_id
+        value["groups"] = [
+            {"key": group.key, "title": group.title,
+             "artifact_ids": [entry.artifact_id for entry in group.artifacts]}
+            for group in groups
+        ]
+        for group in groups:
+            for entry in group.artifacts:
+                if entry.execution_status is not None:
+                    by_id[entry.artifact_id]["execution_status"] = entry.execution_status.value
+    return ContextSection(
+        name="artifact_index", content=json.dumps(value, ensure_ascii=False),
+        priority=95, required=True,
+    )
 
 
 def read_work_feedback_source(
@@ -84,6 +159,8 @@ def request_materials_context(request: AgentRequest) -> list[ContextSection | Co
     required = set(request.resume_artifact_ids)
     sections: list[ContextSection | ContextMaterial] = []
     for ref in request.input_artifacts:
+        if ref.kind == "answer":
+            continue
         if ref.id not in required and ref.kind not in {"acceptance_requirements", "conclusion_requirements"}:
             continue
         value = read_request_material(request, ref, reader=reader)

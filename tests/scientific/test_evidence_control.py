@@ -3,12 +3,11 @@
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from resagent2_components import RegisteredArtifactReader
-from resagent2_contracts import AgentOwner, ArtifactCandidate
+from resagent2_contracts import AgentOwner, AgentPermissions, AgentRequest, ArtifactCandidate, TaskBudget
 from resagent2_orchestrator import ArtifactRegistry
 from resagent2_runtime import AgentState, FinishCandidate
 from resagent2_scientific.completion import ScientificCompletionCheck
@@ -86,8 +85,9 @@ def test_registered_unread_citation_does_not_block_control_tools(tmp_path, actio
 
 
 def test_context_has_no_pending_citation_action():
-    request = SimpleNamespace(
-        run_id="run_s", input_artifacts=[], resume_artifact_ids=[], instruction="Judge supplied evidence",
+    request = AgentRequest(
+        run_id="run_s", agent=AgentOwner.SCIENTIFIC, instruction="Judge supplied evidence",
+        budget=TaskBudget(max_llm_calls=10, timeout_seconds=60), permissions=AgentPermissions(),
     )
     sections = build_context(request, _state({
         "read_artifact_ids": ["artifact_old"],

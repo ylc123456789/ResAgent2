@@ -32,6 +32,7 @@ from .loop import (
     ContextBuilder,
     PermissionPolicy,
 )
+from .model_request import ModelRequestClient, ModelRequestError, ModelRequestHTTPError
 from .models import (
     AgentAction,
     AgentEvent,
@@ -82,6 +83,9 @@ __all__ = [
     "LLMClient",
     "LLMExhaustedError",
     "ModelProfile",
+    "ModelRequestClient",
+    "ModelRequestError",
+    "ModelRequestHTTPError",
     "NativeToolCall",
     "OpenAICompatibleClient",
     "PermissionDecision",

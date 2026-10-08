@@ -2,6 +2,22 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+<a id="unified-context-closeout"></a>
+
+## 2026-10-08：网页能力与统一上下文主线采用
+
+用户确认设计原则整理，并授权最终复查后合并 `feat/unified-context`。本次将通用网页工具、统一上下文、已验收的五项审查修复和四份 current 文档整理一并合入 main；保留开发分支与原历史。合并前本地回归 **2062 passed / 1 skipped**、mock completed（13 工件），最终产品代码与服务器已验收的 `fbd5ee8` 一致；后续只改文档。schema 24 三场景与 L3 的测试方汇总、服务器证据目录、最终复查与既有环境差异见[采用与验收记录](reviews/UNIFIED_CONTEXT_MERGE_CLOSEOUT_2026-10-08.md)。下文各阶段的“尚未测试”“不合并”保留为当时状态，不代表本次收尾状态。
+
+## 2026-10-08：完整代码审查与设计经验
+
+对 `feat/unified-context@3341536`（schema 24.0）完成跨包生产路径审查、本地回归和离线边界复现。确认四处 P2：上下文截断越界、可选 trace 覆盖业务结果、网页提取丢失预格式化结构、Scheduler 空异常消息阻止失败状态保存；另有一处 P3 不可达登记分支。共享循环、单一工件登记权威、完整目录、协议历史与预算主线在本轮范围内未发现需要重做的架构问题；性能取舍和已排除误报另列。
+
+审查阶段本地 **2014 passed / 1 skipped**、mock completed（13 工件）；`pip check` 保留既有本地 cryptography 缺项。随后按用户授权在同一分支局部修复五项，同时补齐 Controller 同根因的纯空白异常转换。最终本地 **2062 passed / 1 skipped**、mock completed（13 工件）、diff check 干净，schema 仍为 24.0。测试方报告服务器冻结 `fbd5ee8`：同样回归/mock通过、源码指针9/9、pip/diff clean；真实 Python JSON 官方页任务 completed，5 次模型调用，代码块的网页工件/读取回执/最终输出一致性9/9。首次校验基准错误及修正保留，不当作产品缺陷或首轮全绿；关闭搜索服务的场景仅验证抓取与材料消费，不新增搜索质量结论。四处 P2 和一处 P3 验收关闭，未重跑完整 L3，分支不合并；后续收尾只修改文档。通用设计经验包括权威事实与派生视图、预算性质测试、诊断隔离、错误路径契约和分层验证。发现、实施、服务器证据路径与覆盖边界见[完整审查](reviews/CODE_REVIEW_2026-10-08.md)；规范见[设计原则](../current/DESIGN_PRINCIPLES.md)。
+
+## 2026-10-06：通用网页工具
+
+`feat/web-search-hardening` 从 `main@0e5bb96` 增加通用 `web_search` 与独立 `web_fetch`：默认复用DeepSeek key使用托管搜索，也可显式选择Tavily。沿现有Components/Capabilities/Scientific分层、Registry和research index交接；额外搜索模型请求共用Runtime预算/截止时间/trace，Scientific仍按用户目标选择材料，没有固定“网页→论文”顺序；schema保持23.0。本地及服务器最终回归均1926 passed / 1 skipped、mock13工件；服务器pip check clean，本地pdfminer-six缺cryptography的环境差异如实保留。`f69df60` 已通过大陆服务器探针与两个真实任务验收，并独立核对32/32冻结hash、60 public + 5 private清单及共享用量。实测搜索snippet全空、结果含噪声，记录为质量限制，不将任务完成等同检索精度优秀。本轮已收尾，保留独立分支、未合并main。完整结果及后续部署检查见[实施及交接](reviews/WEB_TOOLS_2026-10-06.md)，取舍见[ADR-0025](decisions/0025-general-web-capability.md)。 后续质量审查已确认搜索结果交接丢失，`c6d95b6`修复结果保留/预览，`fb5b4ec`保留网页链接；Ubuntu-D回归1950 passed / 1 skipped、mock13工件，真实响应复放恢复24条而不新增付费请求，随后5b71d1b服务器回归及成对测试已完成，24/24冻结hash、97public/77private清单独立核对。复核发现强化提示增加消耗且未证明排序收益，三次失败实际为列表形状的max_uses_exceeded，非畸形来源，分母更正为27次。第二阶段恢复DSH短提示、保留已知次数限制下的有效来源并明示partial；三份旧失败响应恢复45/43/48条，无新付费请求。055db16已完成服务器1982 passed/1skip、mock13、三份旧失败复放45/43/48、六次真实搜索及Scientific网页任务；独立重算10/10工件和40public/21private清单。输入规模回到旧短提示基线，一手来源仍有缺口；补充缓存口径、官方源码漏报、完整论文DOI和未自然触发partial等范围。实现、证据勘误与验收见[信息保留和质量复测](reviews/WEB_QUALITY_2026-10-06.md)，继续保留分支不合并。
+
 ## 2026-10-05：文献搜索合并收尾
 
 用户确认采用后，fix/literature-search@1735d40以合并提交ac240e3进入main；保留开发分支、原阶段记录和服务器失败现场，schema仍为23.0。生产代码与已验收5ff44f1一致；Ubuntu-D九包源码指针、合并代码一致性、mock completed/13工件及文档检查通过。current的接口/上下文/架构与代码一致，当前联网范围为arXiv/OpenAlex检索及PDF获取，未实现通用网页搜索。相对main的收益、混合排序和模型表述边界见[对照与收尾](reviews/LITERATURE_MAIN_COMPARISON_2026-10-05.md)。

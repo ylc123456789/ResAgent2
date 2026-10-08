@@ -79,7 +79,7 @@ def _reads(context):
 
 
 def _assert_composed(context, limit=256_000):
-    assert {"artifact_reads", "tool_contracts", "research", "research_materials"} <= set(context.included_sections)
+    assert {"artifact_reads", "tool_contracts", "research", "artifact_index"} <= set(context.included_sections)
     assert "evidence_control_state" not in context.included_sections
     assert "read_artifact_summaries" not in context.included_sections
     contracts = context.text.split("## tool_contracts\n", 1)[1].split("\n\n## ", 1)[0]

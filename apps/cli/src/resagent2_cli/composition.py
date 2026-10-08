@@ -17,6 +17,9 @@ from resagent2_components import (
     ArxivLiteratureBackend,
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
+    DeepSeekWebSearchBackend,
+    TavilyWebSearchBackend,
+    WebPageFetcher,
 )
 from resagent2_components import (
     DatasetCatalog,
@@ -45,6 +48,7 @@ from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
     JsonSessionStore,
     ModelProfile,
+    ModelRequestClient,
     OpenAICompatibleClient,
     PromptLLMClient,
 )
@@ -73,6 +77,23 @@ def _positive_int_env(name: str, default: int) -> int:
     if value < 1:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _web_search_provider() -> str | None:
+    """Validate explicit provider credentials before creating clients or files."""
+
+    explicit_provider = os.environ.get("RESAGENT2_WEB_SEARCH_PROVIDER")
+    provider = "deepseek" if explicit_provider is None else explicit_provider
+    if provider not in {"deepseek", "tavily", "off"}:
+        raise ValueError("RESAGENT2_WEB_SEARCH_PROVIDER must be deepseek, tavily, or off")
+    if provider == "off":
+        return None
+    key_env = "DEEPSEEK_API_KEY" if provider == "deepseek" else "TAVILY_API_KEY"
+    if not os.environ.get(key_env, "").strip():
+        if explicit_provider is not None:
+            raise ValueError(f"RESAGENT2_WEB_SEARCH_PROVIDER={provider} requires {key_env}")
+        return None
+    return provider
 
 
 def _model_profile() -> ModelProfile:
@@ -142,6 +163,16 @@ def build_application(
     pdf_parse_timeout_seconds = _positive_int_env(
         "RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS", DEFAULT_PDF_PARSE_TIMEOUT_SECONDS,
     )
+    web_timeout_seconds = _positive_int_env(
+        "RESAGENT2_WEB_TIMEOUT_SECONDS", 30,
+    )
+    web_max_response_bytes = _positive_int_env(
+        "RESAGENT2_WEB_MAX_RESPONSE_BYTES", 4 * 1024 * 1024,
+    )
+    web_search_timeout_seconds = _positive_int_env(
+        "RESAGENT2_WEB_SEARCH_TIMEOUT_SECONDS", 60,
+    )
+    web_search_provider = _web_search_provider()
     root = Path(data_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     registry = _registry()
@@ -186,6 +217,27 @@ def build_application(
         scheduler.artifact_registry,
         run_store,
     )
+    web_search_backend = None
+    if web_search_provider == "deepseek":
+        web_search_backend = DeepSeekWebSearchBackend(
+            ModelRequestClient(
+                endpoint="https://api.deepseek.com/anthropic/v1/messages",
+                api_key_env="DEEPSEEK_API_KEY",
+                timeout_seconds=web_search_timeout_seconds,
+                max_response_bytes=web_max_response_bytes,
+                extra_headers={"anthropic-version": "2023-06-01"},
+                api_key_headers=("x-api-key", "Authorization"),
+                trace_dir=_trace_dir(),
+                trace_level=os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off"),
+            ),
+            model=os.environ.get("RESAGENT2_WEB_SEARCH_MODEL", "deepseek-flash"),
+        )
+    elif web_search_provider == "tavily":
+        web_search_backend = TavilyWebSearchBackend(
+            os.environ["TAVILY_API_KEY"],
+            timeout_seconds=web_timeout_seconds,
+            max_response_bytes=web_max_response_bytes,
+        )
     scientific = ScientificAgent(
         _client(),
         literature_backend=MultiSourceLiteratureBackend(
@@ -193,6 +245,11 @@ def build_application(
             OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
         ),
         literature_parser=partial(parse_pdf, timeout_seconds=pdf_parse_timeout_seconds),
+        web_search_backend=web_search_backend,
+        web_page_fetcher=WebPageFetcher(
+            timeout_seconds=web_timeout_seconds,
+            max_response_bytes=web_max_response_bytes,
+        ),
         registration_port=registration,
         store=scientific_store,
         max_context_tokens=scientific_context_tokens,

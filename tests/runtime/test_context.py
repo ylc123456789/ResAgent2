@@ -122,6 +122,32 @@ def test_snippets_pack_whole_then_truncate_newest_first() -> None:
     assert "context_truncated" not in original
 
 
+@pytest.mark.parametrize("remaining", [0, 1, 20, 21, 22, 23, 24, 100])
+def test_snippets_respect_total_budget_at_truncation_boundary(remaining: int) -> None:
+    state = _snippet_state(
+        {"path": "older.txt", "content": "A" * 100000, "truncated": False},
+        {"path": "latest.txt", "content": "B" * (1000 - remaining), "truncated": False},
+    )
+    before = state.model_dump(mode="json")
+
+    snippets = recent_tool_snippets(
+        state, tool="read_file", identity_keys=("path",), text_key="content",
+        max_total_chars=1000,
+    )
+
+    assert sum(len(snippet["content"]) for snippet in snippets) == 1000
+    assert snippets[-1]["content"] == "B" * (1000 - remaining)
+    assert snippets[-1]["truncated"] is False
+    if remaining:
+        assert snippets[0]["path"] == "older.txt"
+        assert len(snippets[0]["content"]) == remaining
+        assert snippets[0]["truncated"] is True
+        assert snippets[0]["context_truncated"] is True
+    else:
+        assert len(snippets) == 1
+    assert state.model_dump(mode="json") == before
+
+
 def test_snippets_deduplicate_ranges_but_keep_original_event_ids() -> None:
     state = _snippet_state(
         {"path": "a.py", "content": "first read"},

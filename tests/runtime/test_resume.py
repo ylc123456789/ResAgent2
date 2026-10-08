@@ -1,6 +1,9 @@
 
 from resagent2_contracts import AgentPermissions
 from datetime import UTC, datetime
+import json
+
+import pytest
 
 from resagent2_contracts import (AgentOwner, ModuleStatus, AgentRequest, TaskBudget, SessionStatus)
 from resagent2_runtime import (
@@ -13,9 +16,46 @@ from resagent2_runtime import (
     ContextSection,
     FinishTool,
     InMemorySessionStore,
+    JsonSessionStore,
     ScriptedLLMClient,
     AgentState,
 )
+
+
+def test_json_session_round_trip_records_current_schema(tmp_path):
+    from resagent2_contracts import SCHEMA_VERSION
+
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_schema", agent_name="scientific", owner=AgentOwner.SCIENTIFIC,
+        run_id="run_schema", created_at=now, updated_at=now,
+    )
+    store = JsonSessionStore(tmp_path)
+    store.save(state)
+    value = json.loads((tmp_path / "session_schema.json").read_text(encoding="utf-8"))
+    assert value["schema_version"] == SCHEMA_VERSION == "24.0"
+    assert store.load(state.session_id) == state
+
+
+@pytest.mark.parametrize("version", [None, "23.0", "25.0"])
+def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_path, version):
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_schema", agent_name="scientific", owner=AgentOwner.SCIENTIFIC,
+        run_id="run_schema", created_at=now, updated_at=now,
+    )
+    value = state.model_dump(mode="json")
+    if version is None:
+        value.pop("schema_version")
+    else:
+        value["schema_version"] = version
+    path = tmp_path / "session_schema.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    before = path.read_bytes()
+    store = JsonSessionStore(tmp_path)
+    with pytest.raises(ValueError, match="Session schema_version must be 24.0"):
+        store.load(state.session_id)
+    assert path.read_bytes() == before
 
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:

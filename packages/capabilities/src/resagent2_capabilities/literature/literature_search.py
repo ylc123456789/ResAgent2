@@ -12,6 +12,7 @@ from resagent2_contracts import ArtifactCandidate
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_components.artifacts import ArtifactRegistrationPort, RegisteredArtifactReader
+from resagent2_components import merge_artifact_index
 from resagent2_components.literature import LiteratureSearchBackend, LiteratureSearchError, render_paper
 
 
@@ -44,10 +45,7 @@ class LiteratureSearchToolInput(RuntimeModel):
 
 def literature_outputs(state: AgentState, refs) -> dict:
     """Return registered outputs for handoff; registration is not reading."""
-    return {"literature_output_artifact_ids": list(dict.fromkeys([
-        *state.memory.get("literature_output_artifact_ids", []),
-        *[ref.id for ref in refs],
-    ]))}
+    return {"artifact_index": merge_artifact_index(state.memory.get("artifact_index", []), refs)}
 
 
 class LiteratureSearchTool:

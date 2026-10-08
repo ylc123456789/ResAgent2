@@ -18,6 +18,11 @@ and shared text size/encoding/newline rules; public Run fields remain unchanged.
 Later literature_search updates add source/scope/page, small-batch defaults,
 500-character previews and honest pagination/error guidance without changing Run fields.
 Title lookup treats the complete query as one phrase and describes identity checks.
+Optional web_search/web_fetch add bounded web leads and page artifacts; existing
+tool schemas remain unchanged. Later web_search guidance describes bounded previews
+with full received results retained in its artifact and no hosted-cost guarantee.
+Known search-use limits retain valid partial results with an explicit incomplete reason.
+Schema 24 only updates embedded versions for the unified context/session memory format.
 """
 
 import hashlib
@@ -38,6 +43,8 @@ from resagent2_capabilities import (
     ReplaceTextTool,
     RunSetupTool,
     SearchTextTool,
+    WebFetchTool,
+    WebSearchTool,
 )
 from resagent2_coding.verification import RunVerificationTool
 from resagent2_capabilities import RunShellTool
@@ -57,7 +64,8 @@ def tool_surface_fingerprints() -> dict[str, str]:
                    ReadFileTool, ReplaceTextTool, RunSetupTool, RunShellTool, SearchTextTool),
         "coding": (RunVerificationTool, DeletePathTool),
         "runtime": (AskUserTool, FinishTool),
-        "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool),
+        "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool,
+                       WebFetchTool, WebSearchTool),
     }
     result = {}
     for group, classes in groups.items():

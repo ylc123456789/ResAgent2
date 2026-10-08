@@ -33,6 +33,8 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 
 非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 使用它；Interpreter 用固定代码组织材料，不调用模型。runtime 不认识编译或解释业务。
 
+`ModelRequestClient.request(body)`供托管搜索等组件发送一次独立的模型JSON请求。调用方构造和解释供应商格式；Runtime只负责HTTP上限、发送前共享用量登记、总截止时间和私有trace，不增加Agent、Session或重试。full保留请求及可取得的JSON响应，metadata保留内容hash；HTTP失败只保留状态和Retry-After，认证header不进trace，当前key即使被回显也会遮蔽。`response_valid`只说明返回了JSON对象，业务成功由调用组件校验。
+
 文件/Git/进程/Artifact、环境、仓库 materialization、数据集、硬件和领域策略
 均不属于 runtime。
 
@@ -81,6 +83,8 @@ AgentLoop 统一返回 `AgentResult`。提问和工作请求被转换成 JSON ar
 [http.py](src/resagent2_runtime/http.py) 使用 httpx 与可取消的总超时覆盖完整响应读取；每次 HTTP/重试取操作超时与当前截止时间的较小值。Components 的进程与环境操作沿用该截止时间并在超时后终止进程树。显式等待用户的时间由 Run 扣除，安装、下载及普通停机不扣除；恢复不重置余额。step 只记动作时序，没有隐藏的 50 步/50 次上限。
 
 HTTP 取消后不等待默认 executor 的 DNS 线程。系统解析可能在后台结束，但不会恢复已取消的 HTTP 请求；本地取消不保证供应商停止计算或计费。
+
+普通 HTTP 调用保持原行为。可选 `send_request(public_only=True)` 在同一超时范围内异步解析并检查全部目标地址，只连接已验证的公网 IP，保留原域名的 Host/TLS SNI 和逻辑响应 URL；重定向逐次检查，拒绝 localhost、非公网和混合公私地址。该路径关闭环境代理和连接复用，避免代理重新解析域名或不同 TLS 域名共用按 IP 建立的连接。Components 的网页抓取使用这一传输约束；Runtime 不识别网页/论文业务、不登记工件或评价来源。
 
 共用 [compaction.py](src/resagent2_runtime/compaction.py)：完整原生输入超过有效上限 80%，或必需上下文实际装不下时，尝试总结较早完整 turn；保留至少最新完整 turn，近期历史以 20% 额度为目标。仅支持压缩的客户端调用 summarize_history，OpenAICompatibleClient 复用原 HTTP/trace/计量实现；没有单独摘要 Agent。
 

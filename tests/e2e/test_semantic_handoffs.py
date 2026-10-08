@@ -160,10 +160,17 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     assert '"kind": "module_report"' in scientific_client.contexts[1].text
     context_payloads = [json.loads(line) for line in scientific_client.contexts[1].text.splitlines()
                         if line.startswith("{")]
-    materials = next(value for value in context_payloads if "index_artifact_id" in value and "index" in value)
-    assert materials["index"]["run_id"] == run.run_id
-    assert report_id in {entry["artifact_id"] for group in materials["index"]["groups"]
-                         for entry in group["artifacts"]}
+    materials = next(value for value in context_payloads if "index_artifact_id" in value and "artifacts" in value)
+    index_reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
+    frozen_index = json.loads(index_reader.read_text(materials["index_artifact_id"])["content"])
+    assert frozen_index["run_id"] == run.run_id
+    assert materials["groups"] == [
+        {"key": group["key"], "title": group["title"],
+         "artifact_ids": [entry["artifact_id"] for entry in group["artifacts"]]}
+        for group in frozen_index["groups"]
+    ]
+    assert report_id in {entry["artifact_id"] for entry in materials["artifacts"]}
+    assert report_id in {artifact_id for group in materials["groups"] for artifact_id in group["artifact_ids"]}
     assert '"index_changes"' not in scientific_client.contexts[1].text
     assert '"work_outcome"' not in scientific_client.contexts[1].text
     assert run.final_opinion.statement == answer

@@ -23,6 +23,7 @@ from resagent2_contracts import (
     WorkOutcome,
     WorkRequest,
     WorkRequestDraft,
+    WorkRequestStatus,
     WorkTaskOutcome,
     WorkflowAgentRegistry,
     WorkflowAgentDefinition,
@@ -89,6 +90,47 @@ def assert_unconsumed(run):
     assert run.scientific_session.status == "paused"
     assert run.pending_question is None
     assert run.delivered_answer_ids == []
+
+
+@pytest.mark.parametrize("stage", ["handoff", "reception", "compiler"])
+@pytest.mark.parametrize("message", ["", "   ", "Original message"],
+                         ids=["empty", "whitespace-only", "with-message"])
+def test_boundary_exceptions_persist_terminal_error(tmp_path, monkeypatch, stage, message):
+    controller, run, request = prepared(tmp_path)
+
+    def reject(*args, **kwargs):
+        raise RuntimeError(message)
+
+    if stage == "handoff":
+        monkeypatch.setattr(controller, "_prepare_research_handoff", reject)
+        actual = controller.run_until_stable(run.run_id)
+    elif stage == "reception":
+        monkeypatch.setattr("resagent2_orchestrator.controller.receive_artifacts", reject)
+        actual = controller._apply_turn(run.run_id, request, reply(run, "needs_user_input"))
+    else:
+        class RejectingCompiler:
+            compile = staticmethod(reject)
+
+        controller.compiler = RejectingCompiler()
+        run.work_requests[0] = run.work_requests[0].model_copy(update={
+            "status": WorkRequestStatus.REQUESTED, "workflow_revision": None, "outcome": None,
+        })
+        controller.scheduler.store.save(run)
+        actual = controller.run_until_stable(run.run_id)
+
+    durable = JsonRunStore(controller.scheduler.store.root).load(run.run_id)
+    assert actual == durable
+    assert durable.status == "failed"
+    assert durable.terminal_error.code == "contract_error"
+    assert durable.terminal_error.message == (message.strip() or "RuntimeError")
+    assert durable.terminal_error.retryable is False
+    assert durable.pending_question is None
+    assert durable.delivered_answer_ids == []
+    if stage == "compiler":
+        assert durable.work_requests[0].status == "failed"
+        assert durable.work_requests[0].error == durable.terminal_error
+    else:
+        assert durable.work_requests[0].status == "stable"
 
 
 @pytest.mark.parametrize("status", ["request_work","needs_user_input","completed","failed"])

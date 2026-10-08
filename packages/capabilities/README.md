@@ -9,6 +9,7 @@
 | [execution/](src/resagent2_capabilities/execution/__init__.py) | [run_shell](src/resagent2_capabilities/execution/run_shell.py) |
 | [environment/](src/resagent2_capabilities/environment/__init__.py) | [prepare_environment](src/resagent2_capabilities/environment/prepare_environment.py)、[run_setup](src/resagent2_capabilities/environment/run_setup.py)、[audit_env](src/resagent2_capabilities/environment/audit_env.py)、[guidance.py](src/resagent2_capabilities/environment/guidance.py) |
 | [literature/](src/resagent2_capabilities/literature/__init__.py) | [literature_search](src/resagent2_capabilities/literature/literature_search.py)、fetch_literature_fulltext |
+| `web.py` | `web_search`（注入搜索 provider）、`web_fetch`（可独立注入网页组件） |
 
 每组按模型可调用的 Tool 拆分实现文件，例如 `read_file.py`、`replace_text.py`；`__init__.py` 只显式导出公开的 Tool 与输入模型。顶层包同样只负责导出；不要求与 Components 的文件一一对应。
 
@@ -34,9 +35,16 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 文献 Tool 接收注入的来源组件与 ArtifactRegistrationPort，将真实材料交给 Registry 冻结，不自行生成 ArtifactId/hash。literature_search 默认返回5篇，支持 source / scope / page 和原有年份筛选；title 将完整查询作为一个标题短语（外层双引号可省略），topic 仍接受关键词/短语，模型需核对返回的题录身份；auto 只用于首页，续页请求固定实际来源及过滤条件。回执与反馈保留来源、执行查询、页号、来源尝试和明确错误，区分成功空结果与失败。每篇结果登记 literature_paper 保留完整来源摘要，工具预览前500字符并标明裁剪和复用；fetch_literature_fulltext(paper_artifact_id) 按需登记原始 PDF 和解析文本，同 Run 复用已冻结材料，包括授权输入中的外部导入论文和 PDF；原件已存在时无需联网。工具不接受任意路径或 URL 代替论文工件 ID，也不自行增加 LLM 摘要。来源选择与 HTTP 规则在 [文献组件](../components/README.md#literature)，环境和数据集实现也在 Components。
 
+网页工具是通用材料入口，不是文献工具的别名：
+
+- `web_search(query, max_results=5)` 仅在配置搜索 provider 时装配；DeepSeek 托管搜索和显式 Tavily 共用这个工具及输入 schema。它登记一个 `web_search` 查询回执，保存有界响应内本次收到的全部规范化标题、URL 和 snippet 线索。工具只预览前 `max_results` 条，并返回 `result_count`、`omitted_count` 和预览 `truncated`；省略项可用 `read_artifact` 读取。预览大小不等于托管搜索次数或费用上限，每次一批、不支持分页；正常结果、成功空结果与失败分别保留 `status=results` / `empty` / `failed`。提供方内部搜索次数达到限制且有有效来源时为 `status=partial`，以 `incomplete_reason=max_uses_exceeded` 明示限制、仍登记并允许读取已返回来源；此时 `ok=True` 仅指材料可用，不表示搜索完整。没有有效来源的次数限制仍失败；其他错误不降级为部分成功。失败回执带 `error_type` 和可选 `retry_after`，不登记论文。
+- `web_fetch(url)` 可独立装配，抓取一个无凭据的 http(s) HTML/XHTML/text URL，登记一个 `web_page` 工件。返回页面的 source/final URL、title 和提取文本，HTML中的链接文字及合法http(s)地址保留，相对地址按final URL解析，不自动获取链接指向的页面/PDF。Scientific 用 `read_artifact` 分段读取；私有/非公网地址、重定向到非公网地址、PDF、二进制、NUL、无效 UTF-8、超时和超大响应返回结构化失败且不生成页面工件。网页正文和摘要是外部不可信材料，不得当作指令执行。
+
+两个工具都由 Scientific 按用户目标自主选择；没有固定的调用顺序，网页材料不自动转换为 `literature_paper`。搜索回执和网页正文进入 research index，但不替代论文 kind 要求或来源核对。Provider 适配、URL/响应边界和错误归一化在 [联网组件](../components/README.md#web)，Tool 只负责 schema、登记和模型可见回执。DeepSeek 后端的额外模型请求由注入的 Runtime 客户端占用共享 Run 预算；Tool 通过可选 trace hook 传递当前 Run/Session/步骤，不创建另一个 Agent 或 Session。
+
 通用材料读取与作用域校验在 Components；Scientific 的 WorkFeedback 事实框和报告呈现在 `agents/scientific/context.py`。选择与预算仍由 Runtime 统一管理，详见 [CONTEXT](../../docs/current/CONTEXT.md#budgets)，这里不再维护另一份额度表。
 
-测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 23.0，旧权限和确认字段不保留兼容解释。
+测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 24.0，旧权限和确认字段不保留兼容解释。文献和网页工具登记的工件共同并入 Session 的 artifact_index；工具回执仍按原生协议保存，不把目录当成授权或正文。
 
 `run_shell` 是 Coding/Experiment 共用的 Linux Bash 工具，取代 Experiment 的 `run_command`。
 执行能力与日志/超时在 Components，Tool 负责模型参数和回执；不新增运行循环。

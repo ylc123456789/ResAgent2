@@ -560,6 +560,19 @@ def test_task_artifact_id_is_validated_before_creating_files(tmp_path):
     assert not (registry.root / "run_invalid").exists()
 
 
+def test_system_registration_rejects_scientific_search_without_freezing_output(tmp_path):
+    registry = ArtifactRegistry(tmp_path / "artifacts")
+    candidate = ArtifactCandidate(
+        kind="literature_search", path="search.json", media_type="application/json",
+        summary="Search results", content="{}",
+    )
+
+    with pytest.raises(ArtifactRegistrationError, match="unsupported system artifact kind"):
+        registry.register_system_artifact(candidate, run_id="run_search", source_type="search")
+
+    assert not (registry.root / "run_search").exists()
+
+
 @pytest.mark.parametrize("entry", ["task", "import", "scientific", "system", "final"])
 def test_all_registration_ids_have_one_format_and_survive_registry_restart(tmp_path, entry):
     root = tmp_path / "artifacts"

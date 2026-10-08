@@ -38,7 +38,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `23.0`（`SCHEMA_VERSION="23.0"`）；旧 schema 的 Run 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `24.0`（`SCHEMA_VERSION="24.0"`）；旧 schema 的 Run/Session 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
 
@@ -54,13 +54,15 @@ Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instructio
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 
-已有学习率调度与置信度校准的真实仓库 L3 案例；提示词一致性阶段完成校准 L3，后续 schema 20 的共享 Shell、文本读取和委托约束完成定向验收。具体提交、证据与覆盖边界见 [本轮收尾](docs/history/reviews/PROMPT_SHELL_ACCEPTANCE_2026-10-01.md)，早期调度案例见 [原验收记录](docs/history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。这些是已测案例的闭环证据，不代表当前版本重跑过所有 L3 或具有通用成功率保证。
+已有学习率调度与置信度校准的真实仓库 L3 案例；schema 24 的统一上下文已完成服务器三场景与校准 L3，随后审查修复完成回归及真实网页材料消费。版本、证据来源和覆盖边界见 [主线采用与验收汇总](docs/history/reviews/UNIFIED_CONTEXT_MERGE_CLOSEOUT_2026-10-08.md)，早期调度案例见 [原验收记录](docs/history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)。这些是已测案例的闭环证据，不代表当前版本重跑过所有 L3 或具有通用成功率保证。
 
 ## 通用部分如何复用
 
 Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。`capabilities` 放模型可调用的 Tool；`components` 放文件授权、Git、进程、环境、工件读取、文献后端等普通 Python 实现。Tool、Agent 和组合根按需直接调用组件，不要求一一对应，也不强制经过中间层。Runtime 仍只管运行机制。入口见 [工具目录](packages/capabilities/README.md) 与 [组件目录](packages/components/README.md)。
 
 论文按篇登记，摘要、原始 PDF 与解析正文有独立身份。除在线检索外，可通过 CLI 论文清单在创建 Run 时导入材料，或在等待用户时补入；同一科研目录负责导航，全文按需解析，访问历史只记日志。用法见 [外部论文导入](apps/cli/README.md#literature-import)。
+
+Scientific 可使用独立的 `web_search` 与 `web_fetch`。搜索默认可复用 DeepSeek key，也可选择 Tavily 或关闭；抓取单页不依赖搜索后端。网页和文献材料进入同一工件索引，由模型按目标选择工具和读取范围，不规定固定顺序。接口与限制见[网页工具](docs/current/CONTRACTS.md#web)。三个 Agent 的上下文统一为固定契约、任务需求、配对工具历史、当前任务上下文与完整工件索引，具体构造见 [CONTEXT](docs/current/CONTEXT.md)。
 
 LLM 客户端的必需方法是 `next_action`；最小客户端由共享入口在调用前计一次，自带 HTTP 重试的客户端须逐次接入同一用量接口。trace hooks 可选。Compiler 复用 LLM、上下文与执行预算基础；Interpreter 只组织已记录内容，不调用模型。两者都不运行 AgentLoop。
 

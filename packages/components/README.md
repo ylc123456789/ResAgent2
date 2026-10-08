@@ -17,12 +17,13 @@
 | [text.py](src/resagent2_components/text.py) | 共享工作区文本大小与编码规则、有界读入、写入前验证、行字符窗口与长行呈现 |
 | [materials.py](src/resagent2_components/materials.py) | 通用工件读取、作用域与冻结 hash 校验；Scientific 专用反馈呈现在 Scientific 上下文 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、本地导入清单、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
+| [web.py](src/resagent2_components/web.py) | provider-neutral 网页搜索适配、单页 HTML/text 抓取、严格编码与响应边界 |
 
 `process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Shell 是 Capabilities 的共享模型入口，Experiment 从实际执行回执生成实验记录。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
 
 ## 依赖与状态
 
-公开导入入口为 `resagent2_components`；实现内部小函数跟随相关文件，不为单个辅助函数建文件。基础操作只使用实际需要的依赖；共享上下文投影和现有论文模型可使用 Runtime 的类型/选择函数。不得 import Capabilities、具体 Agent 或 Orchestrator，不启动 AgentLoop 或直接调用 LLM。
+公开导入入口为 `resagent2_components`；实现内部小函数跟随相关文件，不为单个辅助函数建文件。基础操作只使用实际需要的依赖；共享上下文投影和现有论文模型可使用 Runtime 的类型/选择函数。不得 import Capabilities、具体 Agent 或 Orchestrator，不启动 AgentLoop 或创建 Agent/Session。供应商托管搜索的模型请求经组合根注入的 Runtime `ModelRequestClient` 执行；组件只构造供应商请求和归一化结果，不自行管理模型传输、Run 预算或研究决策。
 
 不要求所有组件纯函数：环境绑定、资源 IO 和文献来源索引保持既有状态；但不新建一份 Run/Session，不替代 Controller/Scheduler 的状态归属。ArtifactRegistrationPort 由组合根注入，登记实现仍在 Orchestrator；Components 不反向依赖它。
 
@@ -73,3 +74,15 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 测试入口：[Components](../../tests/components/)、[含 Tool 的文献集成](../../tests/capabilities/test_literature.py)、[依赖边界](../../tests/components/test_components_boundary.py)。
 
 文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。普通调用方可传 `parse_pdf(timeout_seconds=...)`；CLI 使用正整数配置 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 绑定解析器，经 Scientific 注入全文工具。Components 不自行读取该环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+
+<a id="web"></a>
+
+## 通用网页组件
+
+`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回本次有界响应内收到的全部规范化结果；`max_results` 是可用时提交给提供方的数量提示，模型预览由 Capabilities 控制。`WebPageFetcher.fetch(url)` 获取并解析一个网页。组合根可注入 `DeepSeekWebSearchBackend` 或 `TavilyWebSearchBackend`，每次只发一次请求，不提供分页、自动重试或隐式换源；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
+
+`DeepSeekWebSearchBackend(client, model="deepseek-flash", max_tokens=4096, max_uses=5)` 构造独立 Anthropic-compatible 托管 `web_search` 请求，沿用 DSH 简短提示 `Perform a web search for the query: {query}`，保持4096输出tokens/`max_uses=5`的既有设置；按返回顺序保留各原生批次、按精确URL去重，不按预览大小裁掉后续来源。将原生 `web_search_result` 的URL/title/page_age归一化为普通网页线索；snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，生成正文不充当证据。缺少原生结果块为 `search_not_executed`，明确空列表才是成功空结果；原生工具错误无论位于对象还是列表，都按同一路径校验：只有 `max_uses_exceeded` 且存在有效来源时返回已校验来源和 `incomplete_reason`；无来源则报 `search_limit_exceeded`。其他工具错误保留 `provider_error` / `rate_limited`，畸形条目仍拒绝；`max_tokens` / `pause_turn` 等未完成响应仍为 `incomplete_response`，不自动续传。注入的 Runtime `ModelRequestClient` 负责认证、响应字节/时间上限、一次共享模型用量占用和 trace，组件不启动模型循环、不创建 Session。CLI 默认复用已有 DeepSeek key，显式 Tavily 仍走普通 HTTP；部署选择和费用限制见 [CLI 配置](../../apps/cli/README.md#通用联网搜索和网页获取)。
+
+`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML解析器保留链接文字及合法http(s)目标，相对href按最终响应URL解析；内联文字与链接内的块分隔保留，空或非法目标只保留可见文字。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
+
+网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。

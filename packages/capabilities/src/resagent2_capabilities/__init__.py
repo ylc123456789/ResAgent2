@@ -35,6 +35,12 @@ from .literature import (
     LiteratureSearchToolInput,
     LiteratureSearchTool,
 )
+from .web import (
+    WebFetchInput,
+    WebFetchTool,
+    WebSearchInput,
+    WebSearchTool,
+)
 
 __all__ = [
     'FetchLiteratureFulltextInput',
@@ -51,6 +57,10 @@ __all__ = [
     'ListFilesTool',
     'LiteratureSearchTool',
     'LiteratureSearchToolInput',
+    'WebFetchInput',
+    'WebFetchTool',
+    'WebSearchInput',
+    'WebSearchTool',
     'PrepareEnvironmentInput',
     'PrepareEnvironmentTool',
     'ReadArtifactInput',

@@ -59,14 +59,21 @@ from resagent2_orchestrator.handoffs import read_json, system_artifact
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
-def _context_material(context, ref):
-    name = f"material_{ref.id}"
-    assert context.included_sections.count(name) == 1
+def _context_answer(context, ref):
+    assert context.included_sections.count("research") == 1
+    assert f"material_{ref.id}" not in context.included_sections
     lines = context.text.splitlines()
-    payload = json.loads(lines[lines.index(f"## {name}") + 1])
-    assert payload["artifact_id"] == ref.id
-    assert payload["kind"] == ref.kind
-    return payload["content"]
+    payload = json.loads(lines[lines.index("## research") + 1])
+    return next(answer for answer in payload["user_answers"] if answer["artifact_id"] == ref.id)
+
+
+def _answer_projection(ref, answer):
+    value = answer.model_dump(mode="json")
+    return {
+        "artifact_id": ref.id, "question_id": answer.question_id,
+        "question": answer.question_text, "values": answer.values,
+        "answered_at": value["answered_at"],
+    }
 
 
 @pytest.fixture
@@ -1229,7 +1236,7 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
     assert restored.scientific_session.id == paused.scientific_session.id
     context = rebuilt.scientific_port.llm_client.contexts[0]
     answer_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer")
-    assert _context_material(context, answer_ref) == restored.answers[0].model_dump(mode="json")
+    assert _context_answer(context, answer_ref) == _answer_projection(answer_ref, restored.answers[0])
 
 
 def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path):
@@ -1262,7 +1269,7 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert again.pending_question.id != forged.question_id
     first_context = second.scientific_port.llm_client.contexts[0]
     first_ref = next(ref for ref in again.artifacts.values() if ref.kind == "answer")
-    assert _context_material(first_context, first_ref) == again.answers[0].model_dump(mode="json")
+    assert _context_answer(first_context, first_ref) == _answer_projection(first_ref, again.answers[0])
     assert "Forged question" not in first_context.text
 
     before = JsonRunStore(tmp_path / "runs").load(paused.run_id).model_dump_json()
@@ -1280,8 +1287,9 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert [answer.values for answer in restored.answers] == [{"answer": "第二个"}] * 2
     last_context = third.scientific_port.llm_client.contexts[0]
     last_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer" and ref.id != first_ref.id)
-    assert _context_material(last_context, last_ref) == restored.answers[1].model_dump(mode="json")
-    # Historical artifacts remain readable; only the new answer is a required resume material.
+    assert _context_answer(last_context, last_ref) == _answer_projection(last_ref, restored.answers[1])
+    assert _context_answer(last_context, first_ref) == _answer_projection(first_ref, restored.answers[0])
+    # Both verified answers remain task dialogue without separate material sections.
     assert f"material_{first_ref.id}" not in last_context.included_sections
     assert restored.delivered_answer_ids == [answer.question_id for answer in restored.answers]
     final_session = JsonSessionStore(tmp_path / "sessions").load(restored.scientific_session.id)

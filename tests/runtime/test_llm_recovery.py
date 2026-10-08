@@ -409,3 +409,26 @@ def test_correction_keeps_previously_completed_work(recovery):
     assert result.llm_calls == state.llm_calls_used == 3
     assert state.memory["kept"] == 7
     assert [e.tool for e in state.events if e.type == "action"] == ["write_value", "finish"]
+
+
+def test_trace_storage_failure_does_not_interrupt_schema_recovery(recovery, caplog):
+    definition, request, store = recovery
+    trace_dir = definition.llm_client.trace_dir
+    trace_dir.mkdir()
+    (trace_dir / "llm_traces.jsonl").mkdir()
+    bad_schema = '{"tool":"finish","report":"Done"}'
+    with mock.patch("resagent2_runtime.llm.send_request", side_effect=[
+        _response(bad_schema), _response(_FINISH),
+    ]) as provider:
+        result = AgentLoop(store=store).run(definition, request, session_id="session_r")
+
+    state = store.load("session_r")
+    assert result.status == ModuleStatus.COMPLETED
+    assert result.llm_calls == state.llm_calls_used == provider.call_count == 2
+    # The schema-validation trace also fails; feedback still reaches the next request.
+    request_body = json.loads(provider.call_args_list[1].args[0].content)
+    assert "runtime_feedback" in request_body["messages"][0]["content"]
+    assert "No tool was executed" not in state.model_dump_json()
+    assert state.runtime_feedback is None
+    assert caplog.text.count("Could not write optional LLM trace") == 3
+    assert "PRIVATE_REASONING" not in caplog.text

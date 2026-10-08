@@ -111,7 +111,7 @@ class ScientificCompletionCheck:
             available_ids = [
                 *sorted(self._input_artifact_ids),
                 *[item.id for item in registered if item.run_id == state.run_id],
-                *state.memory.get("literature_output_artifact_ids", []),
+                *[entry["artifact_id"] for entry in state.memory.get("artifact_index", [])],
                 *opinion.evidence_artifact_ids,
                 *[item.id for item in candidate.artifacts if isinstance(item, ArtifactRef)],
             ]

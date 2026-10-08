@@ -192,8 +192,9 @@ class WorkflowScheduler:
         except Exception as error:
             attempt.status = AttemptStatus.FAILED
             attempt.finished_at = datetime.now(UTC)
-            attempt.error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error), retryable=False)
-            attempt.report = str(error)
+            message = str(error).strip() or type(error).__name__
+            attempt.error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False)
+            attempt.report = message
             task.status = TaskStatus.FAILED
             self._evaluate_run(run)
             self._save(run)
@@ -243,8 +244,9 @@ class WorkflowScheduler:
                 calls = claimed
             result = AgentResult.model_validate(value)
         except Exception as error:
-            result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {error}",
-                                 llm_calls=calls, error=ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error), retryable=False))
+            message = str(error).strip() or type(error).__name__
+            result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {message}",
+                                 llm_calls=calls, error=ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False))
         attempt.report = result.report
         attempt.session = result.session
         task.warnings.extend(result.warnings)
@@ -271,14 +273,15 @@ class WorkflowScheduler:
                 draft = read_json(control_ref, QuestionDraft)
         except Exception as error:
             attempt.artifact_ids = list(dict.fromkeys([*attempt.artifact_ids, *(set(run.artifacts)-before)]))
+            message = str(error).strip() or type(error).__name__
             failure = (result.error.model_copy(update={
                 "retryable": False,
-                "details": {**result.error.details, "artifact_registration_error": str(error)},
+                "details": {**result.error.details, "artifact_registration_error": message},
             }) if result.error is not None else ModuleError(
                 code=ErrorCode.ARTIFACT_MISSING if isinstance(error, (ArtifactRegistrationError, OSError)) else ErrorCode.CONTRACT_ERROR,
-                message=str(error), retryable=False,
+                message=message, retryable=False,
             ))
-            result = AgentResult(status=ModuleStatus.FAILED, report=f"{attempt.report}; reception failed: {error}",
+            result = AgentResult(status=ModuleStatus.FAILED, report=f"{attempt.report}; reception failed: {message}",
                                  error=failure)
         attempt.report = result.report
         if result.status == ModuleStatus.NEEDS_USER_INPUT:

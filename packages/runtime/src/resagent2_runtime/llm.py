@@ -23,6 +23,7 @@ from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
 from .http import send_request
+from ._trace import write_trace_record
 from .tool_calling import (
     NativeToolCallError, native_actions, native_input, native_input_text, parse_tool_turn,
 )
@@ -339,17 +340,8 @@ class OpenAICompatibleClient:
         """Append one JSONL trace line (the API key is never recorded)."""
         if self.trace_dir is None or self.trace_level == "off":
             return
-        self.trace_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.trace_dir, 0o700)
         self._trace_seq += 1
-        line = json.dumps(
-            {"sequence": self._trace_seq, **record}, ensure_ascii=False, default=str
-        )
-        path = self.trace_dir / "llm_traces.jsonl"
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-        os.chmod(path, 0o600)
+        write_trace_record(self.trace_dir, {"sequence": self._trace_seq, **record})
 
     def record_validation(self, validation_error: str) -> None:
         """Record caller-side candidate validation, keyed by the last call_id."""

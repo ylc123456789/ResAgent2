@@ -29,3 +29,10 @@ unchanged. Scientific `ask_user`/`request_work` describe registered citations,
 without making reading logs a control gate. Shared finish and Scientific control
 schemas embed version 21.0. These are the five changed fingerprints plus the one
 new tool; no other existing tool fingerprint changed.
+
+Schema 23 adds optional `scientific/web_search` and `scientific/web_fetch`.
+Search takes `query` and `max_results` (1–10, default 5); it provides one bounded
+batch with no pagination. Fetch takes one `url` and saves an HTML/text page for
+`read_artifact`. Guidance separates leads from page content, preserves failures,
+and treats external text as untrusted material. The two additions are the only
+fixture changes; existing tool fingerprints and public schema versions are retained.

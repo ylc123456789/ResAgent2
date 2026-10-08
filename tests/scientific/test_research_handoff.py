@@ -134,12 +134,12 @@ def test_first_invocation_presents_directory_not_flat_authorization(tmp_path):
     refs = handoff(tmp_path)
     initial = request(refs[:3])
     rendered = sections(initial)
-    material = json.loads(rendered["research_materials"])
+    material = json.loads(rendered["artifact_index"])
     assert material["index_artifact_id"] == refs[2].id
-    assert material["index"]["groups"][0]["title"] == "Measure accuracy"
+    assert material["groups"][0]["title"] == "Measure accuracy"
     assert "input_artifacts" not in rendered
-    assert all(ref.uri not in rendered["research_materials"] for ref in refs)
-    assert all(ref.sha256 not in rendered["research_materials"] for ref in refs)
+    assert all(ref.uri not in rendered["artifact_index"] for ref in refs)
+    assert all(ref.sha256 not in rendered["artifact_index"] for ref in refs)
     assert "work_brief" not in rendered
     assert "task_private" not in json.dumps(rendered)
     assert "workflow_revision" not in json.dumps(rendered)
@@ -148,23 +148,20 @@ def test_first_invocation_presents_directory_not_flat_authorization(tmp_path):
 def test_direct_materials_use_same_research_index_shape(tmp_path):
     data = freeze(tmp_path, "artifact_input", "data", {"value": 2})
     rendered = sections(request([data]))
-    material = json.loads(rendered["research_materials"])
+    material = json.loads(rendered["artifact_index"])
     assert material["index_artifact_id"] is None
-    index = ResearchIndex.model_validate(material["index"])
-    assert index.groups[0].key == "inputs"
-    assert index.groups[0].artifacts[0].artifact_id == data.id
+    assert material["artifacts"][0]["artifact_id"] == data.id
 
 
 def test_feedback_presents_full_directory_once_and_current_reports(tmp_path):
     refs = handoff(tmp_path)
     rendered = sections(request(refs, parent=SESSION, resume=[refs[-1].id]))
-    navigation = json.loads(rendered["research_materials"])
+    navigation = json.loads(rendered["artifact_index"])
     assert navigation["index_artifact_id"] == refs[2].id
-    assert {entry["artifact_id"] for group in navigation["index"]["groups"]
-            for entry in group["artifacts"]} == {refs[0].id, refs[1].id}
+    assert {entry["artifact_id"] for entry in navigation["artifacts"]} >= {refs[0].id, refs[1].id}
     material = json.loads(rendered[f"material_{refs[-1].id}"])["content"]
     assert material["work_request_id"] == "work_measure"
-    assert material["previous_work_request"]["objective"] == navigation["index"]["groups"][0]["title"]
+    assert material["previous_work_request"]["objective"] == navigation["groups"][0]["title"]
     assert material["previous_work_request"]["expected_evidence"] == ["accuracy"]
     assert material["previous_work_request"]["constraints"] == ["Preserve the evaluation split"]
     assert material["tasks"] == [{
@@ -187,10 +184,12 @@ def test_answer_resume_keeps_full_directory_without_repeating_previous_report(tm
     }, session=SESSION)
     rendered = sections(request(with_indexed_answer(tmp_path, refs, answer), parent=SESSION, resume=[answer.id]))
     assert f"material_{refs[-1].id}" not in rendered
-    directory = json.loads(rendered["research_materials"])["index"]
+    directory = json.loads(rendered["artifact_index"])
     assert directory["groups"][0]["title"] == "Measure accuracy"
-    assert "Which metric matters?" in rendered[f"material_{answer.id}"]
-    assert "accuracy" in rendered[f"material_{answer.id}"]
+    assert f"material_{answer.id}" not in rendered
+    assert "Which metric matters?" in rendered["research"]
+    assert "accuracy" in rendered["research"]
+    assert answer.id in rendered["artifact_index"]
 
 
 def test_directory_read_observes_only_directory(tmp_path):
@@ -322,9 +321,9 @@ def test_resumed_handoff_shows_full_history_and_only_current_report(tmp_path):
     )
     current = state()
     rendered = render_sections(build_context(turn, current))
-    navigation = json.loads(rendered["research_materials"])
-    assert navigation == {"index_artifact_id": latest.id, "index": full_index.model_dump(mode="json")}
-    assert [group["title"] for group in navigation["index"]["groups"]] == [
+    navigation = json.loads(rendered["artifact_index"])
+    assert navigation["index_artifact_id"] == latest.id
+    assert [group["title"] for group in navigation["groups"]] == [
         "Measure the baseline", "Measure accuracy",
     ]
     material = json.loads(rendered[f"material_{feedback_ref.id}"])["content"]
@@ -333,7 +332,7 @@ def test_resumed_handoff_shows_full_history_and_only_current_report(tmp_path):
     assert "index" not in material
     assert "index_changes" not in json.dumps(rendered)
     assert "input_artifacts" not in rendered
-    assert historical.id not in rendered["research_materials"]
+    assert historical.id in rendered["artifact_index"]
     assert all(ref.uri not in json.dumps(rendered) for ref in turn.input_artifacts)
     assert all(ref.sha256 not in json.dumps(rendered) for ref in turn.input_artifacts)
     assert _observed_artifact_ids(current) == []

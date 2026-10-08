@@ -116,7 +116,7 @@
 
 最终本地验证：**2062 passed / 1 skipped**（55.74 秒），mock `run_golden completed`、13 工件，`git diff --check` 干净。新增 48 个参数化用例覆盖此次边界。产品逻辑与公共 schema 未新增兼容层、业务模式或 Agent。本轮没有执行真实模型、GPU 或服务器 L3，也没有修改已有依赖环境。
 
-### 服务器复核建议
+### 服务器复核步骤（已完成，实测见下节）
 
 检出 `feat/unified-context` 最新修复提交并冻结实际 SHA，先核对 editable 包均来自源码树，然后从仓库根执行：
 
@@ -131,4 +131,49 @@ git diff --check
 
 若要补充真实材料消费，只需一个短网页任务：让 Scientific 阅读官方文档中的多行代码示例，检查冻结 `web_page` 中换行/缩进与读取内容一致。模型自主选择工具，不预设工具顺序。完整 L3 不作为这些确定性修复的门槛，服务器此前的 L3 成功也不能倒写为此修复提交的验收。
 
-上述五项已完成本地修复与验证，保留当前分支，**不合并 main**。服务器复核仍待执行。
+上述五项已完成本地修复与验证；随后服务器复核完成，结果见以下记录。保留当前分支，**不合并 main**。
+
+## 服务器验收与收尾（2026-10-08）
+
+产品验收冻结在 `fbd5ee80b2b22608d3d89b06af9b0bcf84575188`（代码修复 `85598bb`，后续 `fbd5ee8` 只修改文档），分支为 `feat/unified-context`，schema 24.0。以下根据测试方提供的服务器报告和补测汇报同步记录；本次文档收尾没有重新执行测试或独立复算服务器清单。
+
+### 回归与环境
+
+| 检查 | 服务器报告结果 |
+| --- | --- |
+| editable 源码指针 | 9/9 import 均来自源码树，另有独立 `ALL_IMPORTS_OK` 核对 |
+| 版本 | `SCHEMA_VERSION`、`AgentState.schema_version` 均为 24.0 |
+| 全量回归 | **2062 passed / 1 skipped**，104.11 秒 |
+| 受影响文件定向测试 | 8 个文件，241 passed，1.70 秒 |
+| mock E2E | `run_golden completed`，13 工件 |
+| `pip check` | `No broken requirements found`；服务器没有复现本地既有 cryptography 缺项 |
+| `git diff --check` | 无输出，rc=0 |
+
+相对 `3341536` 的 2014 个通过用例新增 48 个，与本地一致。运行后产品仓库仍是冻结提交，仅有既有未跟踪 `.ipynb_checkpoints/`；测试没有修改产品源码。
+
+### 真实网页材料消费
+
+Run 为 `run_web_material_fbd5ee8_20261008`，目标是从 `https://docs.python.org/3/library/json.html` 逐字抄录 `sort_keys=True, indent=4` 的多行示例。测试方报告 CLI exit 0、Run completed，Scientific 使用 5 次真实模型调用，网页抓取 1 次，无 GPU。网页工件为 39051 字节、1366 行。
+
+该场景配置 `RESAGENT2_WEB_SEARCH_PROVIDER=off`，保留 `web_fetch`，模型自主选择工具顺序。已知 URL 的抓取不依赖搜索后端，因此收窄适合验证这一材料链；不把它当作搜索后端或搜索质量的新验收。
+
+测试方报告原文一致性 **9/9 PASS**：冻结网页中的示例与当时实时官方页面去标签后的代码逐字节一致，保留 5 个物理行和 4 空格缩进；Scientific 两次 `read_artifact` 读取行 1–80、80–220，回执合计 7078 字符，包含同一示例；最终 `scientific_opinion.statement` 和 `scientific_report` 均逐字包含代码块。
+
+```python
+>>> print(json.dumps({'6': 7, '4': 5}, sort_keys=True, indent=4))
+{
+    "4": 5,
+    "6": 7
+}
+```
+
+首版校验脚本以记忆中的 `{'4': 5, '6': 7}` 为基准，曾报 1 个 FAIL。测试方随后抓取原始 HTML，处理语法高亮拆开的标签，确认官方示例输入本身是 `{'6': 7, '4': 5}`。基准修正后原文一致，产品代码与冻结工件没有因此更改。该过程属于验收基准纠正，保留说明，不能写成首轮即全部通过。
+
+### 证据位置与结论
+
+- 回归记录：`/root/autodl-tmp/resagent2/runs/unified-context-fbd5ee8-20261008/`，报告 `protocol/SERVER_VERIFICATION_fbd5ee8_20261008.md` 已追加真实网页场景，MANIFEST 记录 5 个文件。
+- 真实网页记录：`/root/autodl-tmp/resagent2/runs/web-material-fbd5ee8-20261008/`，MANIFEST 记录 27 个文件；包含校验脚本、冻结网页副本及元信息、读取回执、最终输出、Run/Session 和 full trace。full trace 保留在服务器，不复制进公共仓库。
+
+据上述报告，本轮四处 P2 和一处 P3 的修复验收已完成，原先缺少的真实网页材料消费也已补齐。错误转换、上下文预算和 trace 隔离以确定性边界测试为主要依据；真实网页任务证明这一示例的抓取、冻结、显式读取和输出链正确。没有新增完整 L3、搜索质量或通用网页提取成功率的结论。
+
+本次后续提交仅同步文档，产品验收基线仍为 `fbd5ee8`；分支继续保留，**不合并 main**。

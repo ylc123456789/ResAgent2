@@ -6,7 +6,7 @@
 
 对 `feat/unified-context@3341536`（schema 24.0）完成跨包生产路径审查、本地回归和离线边界复现。确认四处 P2：上下文截断越界、可选 trace 覆盖业务结果、网页提取丢失预格式化结构、Scheduler 空异常消息阻止失败状态保存；另有一处 P3 不可达登记分支。共享循环、单一工件登记权威、完整目录、协议历史与预算主线在本轮范围内未发现需要重做的架构问题；性能取舍和已排除误报另列。
 
-审查阶段本地 **2014 passed / 1 skipped**、mock completed（13 工件）；`pip check` 保留既有本地 cryptography 缺项。随后按用户授权在同一分支局部修复五项，同时补齐 Controller 同根因的纯空白异常转换。最终本地 **2062 passed / 1 skipped**、mock completed（13 工件）、diff check 干净，schema 仍为 24.0；未重跑付费模型、GPU 或 L3，服务器修复复核待执行，分支不合并。通用设计经验包括权威事实与派生视图、预算性质测试、诊断隔离、错误路径契约和分层验证。发现、实施与服务器复核说明见[完整审查](reviews/CODE_REVIEW_2026-10-08.md)；规范见[设计原则](../current/DESIGN_PRINCIPLES.md)。
+审查阶段本地 **2014 passed / 1 skipped**、mock completed（13 工件）；`pip check` 保留既有本地 cryptography 缺项。随后按用户授权在同一分支局部修复五项，同时补齐 Controller 同根因的纯空白异常转换。最终本地 **2062 passed / 1 skipped**、mock completed（13 工件）、diff check 干净，schema 仍为 24.0。测试方报告服务器冻结 `fbd5ee8`：同样回归/mock通过、源码指针9/9、pip/diff clean；真实 Python JSON 官方页任务 completed，5 次模型调用，代码块的网页工件/读取回执/最终输出一致性9/9。首次校验基准错误及修正保留，不当作产品缺陷或首轮全绿；关闭搜索服务的场景仅验证抓取与材料消费，不新增搜索质量结论。四处 P2 和一处 P3 验收关闭，未重跑完整 L3，分支不合并；后续收尾只修改文档。通用设计经验包括权威事实与派生视图、预算性质测试、诊断隔离、错误路径契约和分层验证。发现、实施、服务器证据路径与覆盖边界见[完整审查](reviews/CODE_REVIEW_2026-10-08.md)；规范见[设计原则](../current/DESIGN_PRINCIPLES.md)。
 
 ## 2026-10-06：通用网页工具
 

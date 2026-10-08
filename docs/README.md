@@ -16,20 +16,20 @@
 
 ## 当前参考入口
 
-- [设计原则与架构约束](current/DESIGN_PRINCIPLES.md)：先说明 LLM 驱动、分层自主和双向信息交接，再列出十二条开发约束；明确开闭原则、依赖倒置、当前实现和待讨论事项。
+- [设计原则](current/DESIGN_PRINCIPLES.md)：开头列出十一条核心原则，逐条解释通用理由及项目落实；重点是 LLM 中心、主线聚焦、交接保真、统一协作、渐进式披露与简洁、证据驱动的工程方法。
 - [架构](current/ARCHITECTURE.md)：模块职责、调用方向、状态所有权和能力边界。
 - [模块接口与契约](current/CONTRACTS.md)：按调用边界把方法、输入输出、字段、失败和恢复约定放在一起。原 CONTRACTS 与 INTERFACES 已合并，不再维护独立接口卡。
 - [模型上下文](current/CONTEXT.md)：Scientific、Coding、Experiment、Compiler 和 Interpreter 实际看到什么；信息来源、用途、刷新、裁剪和预算。字段定义仍链接契约，不另造一套字段规范。
 
 [上下文审查与方案演变](history/reviews/CONTEXT_REVIEW_2026-09-13.md) 保留最初问题与随后获批的实现；[最终验收与边界](history/reviews/CONTEXT_128K_ACCEPTANCE.md#verified-closeout) 记录真实回归、文献回放补验和报告勘误。历史候选不代替当前行为。
 
-文献基础与外部导入的 schema 22 验收及 120 秒解析边界见[本轮收尾](history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)；后续性能计划不代表当前已实现可调超时。
+文献基础与外部导入的 schema 22 验收及当时的 120 秒解析边界见[历史收尾](history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。当前解析超时已可配置，默认 300 秒，仍受 Run 期限限制；规则见[文献契约](current/CONTRACTS.md#literature)，部署配置见 [CLI](../apps/cli/README.md)。
 
 CLI 命令、环境变量和部署配置以 [CLI README](../apps/cli/README.md) 为准，不在架构文档再复制参数表。各包 README 只作包内入口和简短说明。
 
 查具体操作的实现可看 [Components](../packages/components/README.md)；查模型可调用入口看 [Capabilities](../packages/capabilities/README.md)。二者没有一一对应关系，调用约定统一在 [普通组件接口](current/CONTRACTS.md#components)。
 
-想看系统能否完成真实研究任务，使用[当前 L3 规程](guides/L3_RESEARCH_TEST.md)：2026-09-26 改为置信度校准案例，通过真实 CLI、有限用户问答和独立证据复核评价；`f8439c23` 的 R4 与 `c13f672` 的提示词阶段已分别完成校准 L3，后续 schema 20 完成定向工具补测，范围与限制见[最新收尾](history/README.md#prompt-shell-closeout)。指南说明公开科研 Agent 基准的做法、新题目、当前产物/交接验收和预算边界。
+想看系统能否完成真实研究任务，使用[当前 L3 规程](guides/L3_RESEARCH_TEST.md)：通过真实 CLI、有限用户问答和独立证据复核评价置信度校准案例。schema 24 的三场景、L3 与后续修复验收汇总见[主线采用记录](history/reviews/UNIFIED_CONTEXT_MERGE_CLOSEOUT_2026-10-08.md)，前期结果保留在[历史收尾](history/README.md#prompt-shell-closeout)。指南说明公开科研 Agent 基准的做法、当前产物/交接验收和预算边界。
 
 旧学习率调度的[规程](history/reviews/L3_RESEARCH_TEST_2026-09-16.md)与 [e6688f3 验收](history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)保留为历史；旧暂停、超限和文献后端补验均不改写，也不代表新案例通过。更早的外部基准与自进化取舍见[当时调研](history/reviews/L3_BENCHMARKS_AND_SELF_IMPROVEMENT_2026-09-15.md)。
 

@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-10：原生 Agent 协议与工具事实回执验收
+
+`fix/native-agent-receipts@2ea65d3`（实现 `db7a7cf`，schema 24.0）完成服务器验收：2106 passed / 1 skipped、mock 13 工件、服务器 pip check 与 diff 检查通过；真实网页材料核对 17/17、分段读取探针 14/14。只读复核公共清单 37/37、登记工件 8/8 hash 一致。旧环境补装声明依赖的首次失败与修复过程保留；错误边界由确定性测试覆盖，不冒称真实自然触发。本轮无需追加 L3，分支尚未合并。详见[验收收尾](reviews/NATIVE_AGENT_RECEIPTS_ACCEPTANCE_2026-10-10.md)和 [ADR-0026](decisions/0026-native-agent-protocol-and-tool-receipts.md)。
+
 <a id="unified-context-closeout"></a>
 
 ## 2026-10-08：网页能力与统一上下文主线采用

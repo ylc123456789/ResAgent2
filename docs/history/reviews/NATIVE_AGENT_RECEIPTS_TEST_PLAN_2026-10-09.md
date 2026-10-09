@@ -1,5 +1,7 @@
 # 原生 Agent 协议与工具回执：服务器测试交接
 
+> 本文保留交接步骤。2026-10-10 服务器已完成验收，结果、环境偏差和只读复核见[验收收尾](NATIVE_AGENT_RECEIPTS_ACCEPTANCE_2026-10-10.md)；分支尚未合并。
+
 ## 范围与版本
 
 基线是 `main@fbf1a00b46892f5c226855824f0bdf2fd4765124`，分支是 `fix/native-agent-receipts`。实现提交为 `db7a7cf5edd995bbbd87e0f68b8c4c12ca5c881c`。验收分支最新 HEAD（包括本文），开始前记录完整 SHA。schema 仍为 **24.0**；请创建全新 Run。现有原生生产 Session 的协议身份不变，旧正文 JSON Session 不支持恢复，没有兼容层。
@@ -135,4 +137,4 @@ resagent2 run \
 
 报告分别说明协议/事实正确性、真实任务完成情况和材料使用质量。无需清理旧 Conda 环境或服务器根目录杂散文件。
 
-2026-10-09 本地最终验证：`pytest tests apps/cli/tests -q` 为 **2106 passed, 1 skipped**（59.63s）；mock 为 `run_golden completed`、13 工件；`git diff --check` 通过。`pip check` 有既有环境缺项：`pdfminer-six 20260107 requires cryptography, which is not installed`，服务器须独立核验，不能据此写 clean。服务器验收尚未执行。
+2026-10-09 本地最终验证：`pytest tests apps/cli/tests -q` 为 **2106 passed, 1 skipped**（59.63s）；mock 为 `run_golden completed`、13 工件；`git diff --check` 通过。`pip check` 有既有环境缺项：`pdfminer-six 20260107 requires cryptography, which is not installed`，服务器须独立核验，不能据此写 clean。上述为本地交接时状态；后续服务器验收已通过，见[验收收尾](NATIVE_AGENT_RECEIPTS_ACCEPTANCE_2026-10-10.md)。

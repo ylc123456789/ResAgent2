@@ -32,7 +32,10 @@ from resagent2_contracts import (
     QuestionDraft,
 )
 
-from .context import DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer, ContextMaterial
+from .context import (
+    DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer,
+    ContextMaterial, _head_tail,
+)
 from .budget import (
     BudgetExhaustedError, DeadlineExceededError, current_budget, execution_budget, invoke_model,
 )
@@ -50,7 +53,7 @@ from .models import (
     ToolCallTurn,
     ToolObservation,
 )
-from .store import InMemorySessionStore, SessionStore
+from .store import InMemorySessionStore, SessionLoadError, SessionStore
 from .tools import Tool, ToolRegistry
 from .tool_calling import (
     NativeToolCallError, complete_pending_turn, native_actions,
@@ -69,11 +72,7 @@ def _trim_json(value, limit: int) -> str:
     """
     if value is None:
         return ""
-    text = json.dumps(value, ensure_ascii=False, default=str)
-    if len(text) > limit:
-        half = max(limit // 2 - 1, 1)
-        text = text[:half] + " … " + text[-half:]
-    return text
+    return _head_tail(json.dumps(value, ensure_ascii=False, default=str), limit)
 
 
 class ContextBuilder(Protocol):
@@ -232,7 +231,19 @@ class AgentLoop:
                     report=error.message,
                     error=error,
                 )
-            state = self.store.load(resume_id)
+            try:
+                state = self.store.load(resume_id)
+            except SessionLoadError as error:
+                failure = ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message=f"cannot resume session: {error}",
+                    retryable=False,
+                )
+                return AgentResult(
+                    status=ModuleStatus.FAILED,
+                    report=failure.message,
+                    error=failure,
+                )
             if (
                 state.status not in {SessionStatus.PAUSED, SessionStatus.ACTIVE}
                 or state.run_id != request.run_id

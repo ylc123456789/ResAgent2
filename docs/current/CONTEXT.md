@@ -93,7 +93,7 @@ Provider 的 `reasoning_content` 与相应工具回合保存在 Session，近期
 - 用户回答后，调用方将已冻结答案交给原作用域；任务需求显示累计问答。操作批准另由准确的待执行快照与权限检查处理。
 - 工作稳定后，Scientific 的本轮上下文显示 `work_feedback` 的事实框和报告，目录并入已授权交付物；原来的 `request_work` 调用仍在历史中。工作结果不追加到用户问答。
 
-Loop 还会按需加入 `runtime_feedback`、`pending_operation` 和 `history_checkpoint`。它们分别说明仍需处理的拒绝、尚未执行的准确操作、旧交互的有损交接。当前事实和回答优先于旧回执与摘要；普通工具的 `ok=False` 回执不一定同时形成 required 拒绝反馈。
+Loop 还会按需加入 `runtime_feedback`、`pending_operation` 和 `history_checkpoint`。它们分别说明仍需处理的拒绝、尚未执行的准确操作、旧交互的有损交接。当前事实和回答优先于旧回执与摘要；普通工具的 `ok=False` 回执不一定同时形成 required 拒绝反馈。反馈中的有界 JSON 摘录与其他头尾摘录共用字符裁剪函数，省略标记也计入上限；摘录不是可重新解析的完整 JSON，也不改写原事件。
 
 原生回执保留工具的 `ok`、说明和返回内容，不把内部 `memory_updates` 发给模型。工具先施加的 IO 裁剪不会在历史层恢复，历史层也不另做约 400 字符裁剪。Loop 的拒绝明细另有约 800 字符的预览边界。
 
@@ -349,6 +349,8 @@ prepare/setup 开始前清除信息快照，进程恢复后的新绑定不继承
 Loop 先保存整批 assistant 调用，每项派发前记录正在执行的 call ID，完成后保存回执。重启时，已完成项保留；正在执行却没有持久回执的项记为结果未知，后续项记为未开始，不自动重放。它防止把不确定副作用当作安全重试，不承诺掉电持久性或 exactly-once。
 
 Session 恢复校验 Run、Agent、任务、尝试及协议身份。原生身份绑定协议版本、API endpoint 和模型，不含 API key；换模型、换 endpoint 或旧正文 JSON Session 均不静默接续。当前 schema 24.0 拒绝旧版本 Run / Session，原始记录保留，不迁移或自动重写。
+
+恢复时，Session 文件的读取、UTF-8 解码、JSON 解析或状态校验失败由存储边界标识，Loop 返回 `failed / contract_error`，不调用模型、不重写原文件。此时没有可用的恢复状态，因此不返回新的 SessionRef。自定义存储的编程错误与权威保存失败仍向上暴露。
 
 Session 是权威续传存储，与可选 trace 独立；关闭 trace 不影响工具历史和 reasoning 持久化。Session 目录 / 文件按 `0700/0600` 管理。权威用量或状态保存失败不能当作成功，trace 写入失败则只告警，不覆盖模型结果。
 

@@ -1,5 +1,6 @@
 """Shared bounded context helpers."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -296,3 +297,32 @@ def test_context_skips_large_optional_and_keeps_priority_tie_order() -> None:
     assert context.omitted_sections == [large_name, "last"]
     assert context.text == "## system\nab\n\n## first\n"
     assert context.estimated_tokens == composer.estimate_tokens(context.text) == 6
+
+
+@pytest.mark.parametrize("limit", [0, 1, 2, 3, 18, 19, 20, 21, 22, 23, 24, 99, 100, 101])
+@pytest.mark.parametrize("body", ["ASCII_" * 100, "中文😀αβ_" * 100])
+def test_json_feedback_respects_shared_truncation_bound(limit, body):
+    from resagent2_runtime.loop import _trim_json
+
+    encoded = json.dumps({"content": body}, ensure_ascii=False)
+    result = _trim_json({"content": body}, limit)
+
+    assert len(result) <= limit
+    if limit <= len("\n... [truncated] ...\n"):
+        assert result == encoded[:limit]
+    else:
+        head, tail = result.split("\n... [truncated] ...\n")
+        assert encoded.startswith(head)
+        assert encoded.endswith(tail)
+        assert abs(len(head) - len(tail)) <= 1
+        assert len(result) == limit
+
+
+def test_json_feedback_retains_complete_short_values_and_absent_value():
+    from resagent2_runtime.loop import _trim_json
+
+    value = {"message": "中文 😀", "count": 1}
+    expected = json.dumps(value, ensure_ascii=False)
+    assert _trim_json(value, len(expected)) == expected
+    assert _trim_json(value, len(expected) + 10) == expected
+    assert _trim_json(None, 0) == ""

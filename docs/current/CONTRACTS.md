@@ -768,7 +768,7 @@ Python 包版本与 wire schema 独立演进。公共模型当前仅接受 24.0�
 
 ResearchRun 顶层没有 schema_version，但必填 request 等公共模型带版本；JsonRunStore.load 重新校验整个 Run，旧版本 Run 拒绝恢复。读取失败不改写原文件，应创建新 Run。已有 state/session/trace 保留，不迁移、不重写、不自动清理。
 
-AgentState 顶层保存 schema_version=24.0。JsonSessionStore.load 在模型解析前检查原始 JSON 的版本；缺版本、23.0 和其他版本明确拒绝，不能用默认值接受旧记录。原生 Session 还必须匹配创建时的协议、endpoint 和 model 身份。不读取旧 memory 目录字段，也不提供迁移或兼容回退。
+AgentState 顶层保存 schema_version=24.0。JsonSessionStore.load 在模型解析前检查原始 JSON 的版本；缺版本、23.0 和其他版本明确拒绝，不能用默认值接受旧记录。原生 Session 还必须匹配创建时的协议、endpoint 和 model 身份。不读取旧 memory 目录字段，也不提供迁移或兼容回退。持久记录的读取、解码、解析或状态校验失败通过内部 SessionLoadError 交给 AgentLoop，以 failed / contract_error 返回且 llm_calls=0，不改写原记录或伪造 SessionRef；诊断不包含损坏记录的正文或校验输入值。
 
 <a id="exports"></a>
 

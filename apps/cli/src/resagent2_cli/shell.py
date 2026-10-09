@@ -158,18 +158,24 @@ class TraceTail:
             self.offset = 0
         if size <= self.offset:
             return []
-        with self.path.open(encoding="utf-8") as handle:
+        with self.path.open("rb") as handle:
             handle.seek(self.offset)
             raw = handle.read()
-        self.offset = size
+        # The writer may still be appending JSON or a UTF-8 character. Consume
+        # complete JSONL records only, keeping the byte offset before that tail.
+        complete_end = raw.rfind(b"\n") + 1
+        if not complete_end:
+            return []
+        complete = raw[:complete_end]
+        self.offset += complete_end
         records: list[dict] = []
-        for line in raw.splitlines():
+        for line in complete.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
+                record = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
             if run_id is not None and record.get("run_id") != run_id:
                 continue

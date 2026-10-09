@@ -1,12 +1,17 @@
-from e2e.native_fixtures import tool_turns
-
-from resagent2_contracts import AgentPermissions
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 
 import pytest
 
-from resagent2_contracts import (AgentOwner, ModuleStatus, AgentRequest, TaskBudget, SessionStatus)
+from e2e.native_fixtures import tool_turns
+from resagent2_contracts import (
+    AgentOwner,
+    AgentPermissions,
+    AgentRequest,
+    ModuleStatus,
+    SessionStatus,
+    TaskBudget,
+)
 from resagent2_runtime import (
     AgentAction,
     AgentDefinition,
@@ -280,3 +285,122 @@ def test_resume_rejects_mismatched_task() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     assert result.error.code.value == "contract_error"
+
+
+def _resume_fixture(owner):
+    client = ScriptedLLMClient([])
+    definition = AgentDefinition(
+        name=owner.value, owner=owner, system_prompt="unused",
+        tools=(FinishTool(),), llm_client=client, context_builder=_context,
+        permission_policy=AllowListPermissionPolicy({"finish"}),
+        completion_check=_AcceptFinish(),
+    )
+    task_scope = {} if owner == AgentOwner.SCIENTIFIC else {
+        "task_id": "task_load", "attempt_number": 1,
+    }
+    request = AgentRequest(
+        run_id="run_load", agent=owner, instruction="Continue the existing task",
+        parent_session_id="session_load", permissions=AgentPermissions(),
+        budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
+        **task_scope,
+    )
+    now = datetime.now(UTC)
+    state = AgentState(
+        session_id="session_load", agent_name=owner.value, owner=owner,
+        run_id=request.run_id, task_id=request.task_id,
+        attempt_number=request.attempt_number, status=SessionStatus.PAUSED,
+        tool_protocol_key=client.tool_session_key, created_at=now, updated_at=now,
+    )
+    return definition, request, state
+
+
+@pytest.mark.parametrize("owner", [AgentOwner.SCIENTIFIC, AgentOwner.CODING, AgentOwner.EXPERIMENT])
+@pytest.mark.parametrize("damage", [
+    "invalid_json", "invalid_utf8", "old_schema", "missing_schema",
+    "future_schema", "invalid_state", "non_object",
+])
+def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_path, owner, damage):
+    from resagent2_runtime.store import SessionLoadError
+
+    definition, request, state = _resume_fixture(owner)
+    value = state.model_dump(mode="json")
+    if damage == "old_schema":
+        value["schema_version"] = "23.0"
+    elif damage == "future_schema":
+        value["schema_version"] = "25.0"
+    elif damage == "missing_schema":
+        value.pop("schema_version")
+    elif damage == "invalid_state":
+        value["llm_calls_used"] = "PRIVATE_CORRUPT_VALUE"
+    elif damage == "non_object":
+        value = []
+    content = json.dumps(value).encode("utf-8")
+    if damage == "invalid_json":
+        content = b'{"PRIVATE_CORRUPT_VALUE":'
+    elif damage == "invalid_utf8":
+        content = b"PRIVATE_CORRUPT_VALUE\xff"
+    store = JsonSessionStore(tmp_path)
+    path = tmp_path / "session_load.json"
+    path.write_bytes(content)
+
+    with pytest.raises(SessionLoadError):
+        store.load(state.session_id)
+    result = AgentLoop(store=store).run(definition, request, session_id=state.session_id)
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error.code.value == "contract_error"
+    assert result.error.retryable is False
+    assert result.report == result.error.message
+    assert "cannot resume session" in result.report
+    if damage in {"old_schema", "future_schema", "missing_schema", "non_object"}:
+        assert "schema_version must be 24.0" in result.report
+    assert result.llm_calls == 0
+    assert result.session is None
+    assert definition.llm_client.contexts == []
+    assert "PRIVATE_CORRUPT_VALUE" not in result.model_dump_json()
+    assert path.read_bytes() == content
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_resume_unreadable_record_is_structured_without_rewriting_record(tmp_path, monkeypatch):
+    from pathlib import Path
+    from resagent2_runtime.store import SessionLoadError
+
+    definition, request, state = _resume_fixture(AgentOwner.CODING)
+    store = JsonSessionStore(tmp_path)
+    store.save(state)
+    path = tmp_path / "session_load.json"
+    original = path.read_bytes()
+    original_read = Path.read_text
+
+    def unreadable(source, *args, **kwargs):
+        if source == path:
+            raise PermissionError("record is unreadable")
+        return original_read(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    with pytest.raises(SessionLoadError):
+        store.load(state.session_id)
+    result = AgentLoop(store=store).run(definition, request, session_id=state.session_id)
+
+    assert result.status == ModuleStatus.FAILED
+    assert result.error.code.value == "contract_error"
+    assert result.error.retryable is False
+    assert result.llm_calls == 0
+    assert definition.llm_client.contexts == []
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError, ValueError])
+def test_resume_does_not_hide_custom_store_programming_errors(error_type):
+    definition, request, state = _resume_fixture(AgentOwner.CODING)
+
+    class BrokenStore(InMemorySessionStore):
+        def load(self, session_id):
+            raise error_type("custom store bug")
+
+    store = BrokenStore()
+    store.save(state)
+    with pytest.raises(error_type, match="custom store bug"):
+        AgentLoop(store=store).run(definition, request, session_id=state.session_id)
+    assert definition.llm_client.contexts == []

@@ -294,6 +294,8 @@ bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh resume <Run ID> <�
 
 失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning/tool calls。顶层响应字段对应最后一次尝试。Agent 原生调用的 `request_text` 是序列化的 `{messages, tools}` JSON，`raw_tool_calls` 是 Provider 返回的数组，单工具 `parsed_action` 为 `{tool, arguments}`、多工具为该对象的数组，`tools` 按执行顺序记录名称；工具调用的 `raw_response_text` 可以为 null，不代表空动作。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应和原生 tool calls；压缩调用显示 compaction，其 action_valid/tool/parsed_action 为 null，不是无效工具动作；逐次失败细节查看 JSONL 的 attempts。
 
+交互实时视图按字节位置读取已完成的 JSONL 行，等待末尾尚未写完的 JSON 或 UTF-8 字符补齐后再展示；完整行的 UTF-8/JSON 损坏时跳过，不阻塞后续记录。该视图仍只展示既有元数据，不改变 full trace 的私有边界。
+
 三个 Agent 的 Session 独立保存在 data root 下的 `sessions/coding`、`sessions/experiment`、`sessions/scientific`，目录/文件权限为 `0700` / `0600`。Session 持久化不受 LLM trace level 控制：即使 trace 为 `off`，原生 assistant/tool 配对历史和 Provider 返回的 reasoning 仍会完整保存；模型输入仅续传近期完整回合与可用交接摘要，不累积旧 prompt。原始 Session 文件不会因压缩变小，仍需按需管理存储。它们可能包含敏感输入或工具结果，应按与 full trace 相同的可信存储边界管理。
 
 原生 Session 创建时绑定协议版本、API endpoint 和模型名的哈希身份，不包含 API key；恢复必须匹配。旧 JSON-only Session、没有该身份的旧记录，或更换了模型/API endpoint 后都不会静默续接，需要新建 Run，当前没有记录迁移。运行时会在工具派发前保存 checkpoint，重启仅把 executing_call_id 对应缺回执项标记未知，后续缺回执项标记未开始，已完成回执不变且不自动重放；这不承诺掉电持久性，也不是有副作用工具的 exactly-once 保证。

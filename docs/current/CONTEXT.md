@@ -80,7 +80,7 @@ tools:       当前 Agent 的完整工具说明和参数 schema
 
 最后一条 `user` 内包含 Agent 职责提示、任务需求、当前材料与状态、工件目录及存在时的历史摘要。职责提示在领域文本中名为 `system` 段，**不是**第一条 API `system` 消息。旧轮次的领域 prompt 不保存在这段 assistant/tool 历史里。
 
-工具说明来自实际注入的 Tool：其说明、`model_guidance` 和输入模型共同生成 `tools`。原生路径不再重复注入 `tool_contracts` 文本，也不使用正文 JSON 路径的短 `recent_observations` 预览。显式注入仅有 `next_action` 的最小客户端时仍可走正文 JSON；这不是原生调用失败后的降级。
+工具说明来自实际注入的 Tool：其说明、`model_guidance` 和输入模型共同生成 `tools`，同一注册表负责派发与参数校验。所有 Agent 客户端必须提供原生 `next_tool_call` 和稳定的协议身份；脚本客户端也返回原生回合。不再接收正文 JSON 动作、注入重复的 `tool_contracts` 文本或生成 `recent_observations` 短历史。未知工具进入有界纠错反馈并保存对应未执行回执，不直接结束整次尝试。Compiler 的结构化输出不属于 Agent 动作协议。
 
 Provider 的 `reasoning_content` 与相应工具回合保存在 Session，近期回合按协议续传；它不进入业务 memory，不作为科研证据。源码见 [原生协议投影](../../packages/runtime/src/resagent2_runtime/tool_calling.py) 与 [客户端](../../packages/runtime/src/resagent2_runtime/llm.py)。
 
@@ -96,6 +96,8 @@ Provider 的 `reasoning_content` 与相应工具回合保存在 Session，近期
 Loop 还会按需加入 `runtime_feedback`、`pending_operation` 和 `history_checkpoint`。它们分别说明仍需处理的拒绝、尚未执行的准确操作、旧交互的有损交接。当前事实和回答优先于旧回执与摘要；普通工具的 `ok=False` 回执不一定同时形成 required 拒绝反馈。
 
 原生回执保留工具的 `ok`、说明和返回内容，不把内部 `memory_updates` 发给模型。工具先施加的 IO 裁剪不会在历史层恢复，历史层也不另做约 400 字符裁剪。Loop 的拒绝明细另有约 800 字符的预览边界。
+
+用户回答按当前 Task/Attempt 或 Scientific Session 的作用域进入任务需求部分。问答暂停后的续跑保留原作用域和累计回答；失败重试新建 Task Attempt/Session，不自动继承旧问答，必要时重新提问。这是尝试隔离，不是历史压缩或工件删除。
 
 ### 2.4 完整索引、分组与正文是三件事
 
@@ -197,7 +199,7 @@ Controller 冻结并交付结果；Scientific 的 builder 校验来源后生成�
 
 ### 4.1 一次读取和下一轮可见正文不同
 
-`read_file` / `read_artifact` 先返回一个受 IO 边界限制的片段。该结果进入 Session 事件及原生回执；下一轮 `workspace_context` 再从记录中选择有界正文工作集。工具返回过的内容不会因此永远全部可见，工作集省略也不会删除原事件或冻结文件。
+`read_file` / `read_artifact` 先返回一个受 IO 边界限制的片段。`start_char/end_char` 回显请求范围，`truncated` 只表示请求窗口被工具上限裁剪，不表示整份文件是否读完。`next_start_char` 给出实际返回末端在同一所选行范围中的字符位置；该行范围没有余文时为 null。按需连续读取时保持行范围不变，以该位置作为下一段起点。该结果进入 Session 事件及原生回执；下一轮 `workspace_context` 再从记录中选择有界正文工作集。工具返回过的内容不会因此永远全部可见，工作集省略也不会删除原事件或冻结文件。
 
 两个入口仅读严格 UTF-8 文本：无效编码或 NUL 产生可恢复错误，不自动解析二进制，不新增成功读取记录。先检查整份文本，再选范围；缩小窗口不能绕过检查。保留原换行与 Unicode 字符偏移。工件先校验授权、登记来源和整份冻结 hash；二进制工件可以登记及验证存在，但存在不等于返回过正文。
 
@@ -221,7 +223,7 @@ Controller 冻结并交付结果；Scientific 的 builder 校验来源后生成�
 
 `observed_at` 是原事件序号，不是文件版本或时钟。文件片段还会标记记录中较晚的内置编辑、删除或 Coding 实测 Shell 变化；这说明它是改动前的观察。无标记只表示没有记录到这类后续改动，不能证明外部没改文件。冻结工件不使用这类新鲜度标记。
 
-`truncated` 表示这里显示的正文遭到工具或工作集裁剪；额外工作集裁剪另置 `context_truncated=True`。请求范围不等于裁剪后正文的精确覆盖范围，不能从头尾片段推算续读偏移。`content_omitted` 表示本轮没放入正文；false 也不代表全部读史已放入。
+`truncated` 表示这里显示的正文遭到工具或工作集裁剪；额外工作集裁剪另置 `context_truncated=True`。请求范围不等于裁剪后正文的精确覆盖范围，不能从头尾片段推算续读偏移。`next_start_char` 仍是原工具回执的返回末端，不代表工作集头尾片段之间已连续呈现；需要缺口内容时按范围补读。`content_omitted` 表示本轮没放入正文；false 也不代表全部读史已放入。
 
 源码与测试：[共享工作集](../../packages/components/src/resagent2_components/context.py)、[片段选择](../../packages/runtime/src/resagent2_runtime/context.py)、[读取时序测试](../../tests/e2e/test_workspace_read_history.py)。
 
@@ -346,7 +348,7 @@ prepare/setup 开始前清除信息快照，进程恢复后的新绑定不继承
 
 Loop 先保存整批 assistant 调用，每项派发前记录正在执行的 call ID，完成后保存回执。重启时，已完成项保留；正在执行却没有持久回执的项记为结果未知，后续项记为未开始，不自动重放。它防止把不确定副作用当作安全重试，不承诺掉电持久性或 exactly-once。
 
-Session 恢复校验 Run、Agent、任务、尝试及协议身份。原生身份绑定协议版本、API endpoint 和模型，不含 API key；换模型、换 endpoint 或 JSON-only / 原生协议不一致均不静默接续。当前 schema 24.0 拒绝旧版本 Run / Session，原始记录保留，不迁移或自动重写。
+Session 恢复校验 Run、Agent、任务、尝试及协议身份。原生身份绑定协议版本、API endpoint 和模型，不含 API key；换模型、换 endpoint 或旧正文 JSON Session 均不静默接续。当前 schema 24.0 拒绝旧版本 Run / Session，原始记录保留，不迁移或自动重写。
 
 Session 是权威续传存储，与可选 trace 独立；关闭 trace 不影响工具历史和 reasoning 持久化。Session 目录 / 文件按 `0700/0600` 管理。权威用量或状态保存失败不能当作成功，trace 写入失败则只告警，不覆盖模型结果。
 

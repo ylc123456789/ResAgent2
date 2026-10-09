@@ -22,7 +22,7 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 
 `ModelProfile` 只描述一个已注入模型的上下文窗口、输出预留和安全余量；
 `AgentDefinition.max_context_tokens` 描述当前模块自己的输入上限。Loop 使用两者
-计算实际预算，并把正文 JSON 的 Action schema，或原生请求的 `messages + tools` 完整序列化结果计入模型容量。模型能力来自组合根配置，runtime
+计算实际预算，并把 Agent 原生请求的 `messages + tools` 完整序列化结果，以及 Compiler 结构化输出的 schema 分别计入各自模型容量。模型能力来自组合根配置，runtime
 不查询供应商，也不维护模型名称表。
 
 ContextComposer 对包含标题、分隔符及原生协议开销的完整请求统一估算预算。固定 `ContextSection` 原样保留；可伸缩的 `ContextMaterial(name, render, weight, priority, required)` 仅是本轮纯渲染描述，不持久化。先放固定段和材料最小导航框，再给材料相对起始份额，空余按优先级借用。材料扩展到整包80%软水位，与历史压缩触发点同源；固定必需输入仍可使用到100%硬上限。过大的材料因此缩减，而不是因为局部比例直接报错。
@@ -43,9 +43,8 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
 ```text
 选择客户端支持的调用协议
   → OpenAICompatibleClient：从 Tool.input_model 派生完整原生 tools schema
-    或无原生能力的测试/注入客户端：注入简短 tool_contracts，正文返回 AgentAction JSON
   → 构建并裁剪 Context
-  → 每轮取得 1–8 个原生候选动作，或一个正文 JSON 候选
+  → 每轮取得 1–8 个原生候选动作
   → action schema 校验
   → Tool 是否属于 Profile
   → Tool input schema 校验与 PermissionPolicy：allow / ask / deny
@@ -54,19 +53,19 @@ ContextComposer 对包含标题、分隔符及原生协议开销的完整请求�
   → CompletionCheck
 ```
 
-`AgentAction.arguments` 保持通用对象，以便同一 Loop 复用不同 Tool 集。`OpenAICompatibleClient` 的 AgentLoop 走 `next_tool_call`，把每个 Tool 既有 `input_model` 的完整 JSON Schema 放进原生 `tools` 参数；Compiler 经 `PromptLLMClient.next_action` 从正文读取 JSON。没有 `next_tool_call` 的测试或注入客户端继续使用 `next_action`，Loop 为它们从同一 `input_model` 渲染简短必填参数契约。Agent 的两种客户端路径最终都由 ToolRegistry 做完整输入模型校验；Compiler 的 JSON 结果由其调用方校验。底层协议不改变这些模块的业务接口。
+`AgentAction.arguments` 保持通用对象，同一 Loop 复用不同 Tool 集；工具名及输入校验只由实际 ToolRegistry 决定。所有 Agent 客户端，包括 ScriptedLLMClient，都必须实现原生 `next_tool_call`；ScriptedLLMClient 接收 ToolCallTurn，不接收正文 JSON 动作。Compiler 通过独立 StructuredLLMClient / PromptLLMClient.next_action 从正文读取结构化 JSON。两者共用既有传输、上下文容量与 Run 用量，Agent 的协议历史只属于 Session。
 
 PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，Capabilities 的 OperationPermissionPolicy 适配 Components 的固定规则与执行边界；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过现有 question/answer 工件确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
 
 原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work` 必须单独调用；零个、超量或混入控制工具的批次整体拒绝，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
 
-Session 创建时固定 `tool_protocol_key`：正文 JSON 为 `None`；OpenAICompatibleClient 使用不含 API key 的协议、endpoint、model 身份 hash；当前串行检查点协议为 `openai-compatible-tools/v2`。其他原生客户端必须提供非空、稳定且能标识协议配置的 `tool_session_key`。恢复不允许协议/endpoint/model 切换，没有隐式迁移。
+Session 创建时固定非空 `tool_protocol_key`：OpenAICompatibleClient 使用不含 API key 的协议、endpoint、model 身份 hash；当前串行检查点协议为 `openai-compatible-tools/v2`。其他原生客户端必须提供非空、稳定且能标识协议配置的 `tool_session_key`。恢复不允许协议/endpoint/model 切换，没有隐式迁移。
 
 `tool_turns` 保存 assistant 的 `content`、`reasoning_content`、原始 `tool_calls` 和按调用 ID 配对的 `tool_results`。整批先保存，每个工具派发前记录 `executing_call_id`，结果和执行标记的清除一起保存。进程重启时已完成回执不变；当时正在执行但无回执的调用记为 unknown outcome；其余缺回执调用记为未执行。绝不自动重放；这是进程重启 checkpoint，不保证掉电持久化，也不是跨外部副作用的 exactly-once 事务。
 
 下一轮原生请求发送检查点摘要、近期已配对的 assistant/tool 协议消息，以及重新构建的业务 Context；不会累积旧的完整业务 prompt。较早完整交互可在输入压力下总结，原始 tool_turns/events 不删除。Session 文件始终按目录 `0700`、文件 `0600` 保存，和 trace 档位无关。`reasoning_content` 只为同一 Session 的供应商协议续传，不进入 memory、事件证据或业务完成判据。
 
-模型正文解析失败以标准 `json.JSONDecodeError` 交还调用方，不在客户端原样重试。AgentLoop 把解析原因送入现有 required `runtime_feedback`，同 Session/Attempt 纠正；与 schema 错误共用连续失败上限、调用预算和超时，不执行非法 JSON 中看似正确的动作前缀。只把简短原因送回模型；正文 JSON 的原始坏正文只在 full trace 保留，原生回复则按上述协议边界进入 Session。网络/响应封装故障仍按原有策略有界重试，每次实际尝试都入账。非循环调用方经 PromptLLMClient 收到相同异常，自行使用其既有纠错边界；适配器不增加隐藏重试。
+原生工具参数解析失败以标准 `json.JSONDecodeError` 交还 Loop，不在客户端原样重试。AgentLoop 把简短原因送入现有 required `runtime_feedback`，同 Session/Attempt 纠正；与 schema 错误、未知工具共用连续失败上限、调用预算和超时，保存配对的未执行回执。原生回复按上述协议边界进入 Session。网络/响应封装故障仍按原有策略有界重试，每次实际尝试都入账。非循环调用方经 PromptLLMClient 收到相同异常，自行使用其既有纠错边界；适配器不增加隐藏重试。
 
 Tool 不直接修改 AgentState，只返回 memory_updates 等结构化结果，由 AgentLoop 应用。所有 Agent 共用 FinishTool，提交 FinishCandidate(status, report, artifacts)，status 复用 completed/failed。CompletionDecision.complete 表示候选事实检查通过，随后由 Loop 接通现有 AgentResult.status；模型声明失败使用 AGENT_REPORTED_FAILURE，与真实技术故障区分。候选被拒绝则沿原反馈继续同一 Session；Scientific 只接受完成的合法意见，不以 failed 绕过 Run 交付要求。
 

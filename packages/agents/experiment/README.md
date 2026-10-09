@@ -1,6 +1,6 @@
 # Experiment Agent
 
-`NativeExperimentAgent.invoke(AgentRequest) -> AgentResult` 使用一套 ExperimentAction、
+`NativeExperimentAgent.invoke(AgentRequest) -> AgentResult` 使用统一原生工具协议、
 EXPERIMENT_PROMPT 和 ExperimentCompletionCheck。
 
 同一入口可以分析已有结果，也可以准备环境、执行实验并整理结果。
@@ -15,7 +15,7 @@ audit_env 可用于显式诊断，不是每次命令前必须由模型单独调�
 
 finish 统一提交 status、report 和 artifacts，复用 completed/failed 状态。
 Agent 按目标与证据声明任务是否完成；代码检查候选文件、授权与输出事实。
-历史命令失败不自动判整个任务失败，完整 execution_record 由真实观察生成并保留。
+历史命令失败不自动判整个任务失败，完整 execution_record 从 run_shell、run_setup 的真实命令观察按事件顺序生成；未执行的拒绝回执不冒充执行事实。
 声明 failed 也须通过产物事实检查，再沿现有失败交接与依赖阻断流程返回。
 模型不能伪造执行记录，科学充分性仍由 Scientific 判断。
 

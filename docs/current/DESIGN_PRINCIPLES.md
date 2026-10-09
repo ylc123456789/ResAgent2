@@ -108,7 +108,7 @@ Controller 冻结工作记录和反馈；Scientific 先看到完整目录、必�
 
 三个 Agent 都使用 `invoke(AgentRequest) → AgentResult`。业务输入为 `instruction + input_artifacts`，业务输出为 `report + artifacts`；其余字段承载必要控制。上游通过公共结果、SessionRef 和工件协作，不读取下游私有 memory 来驱动流程。
 
-Coding 可以分析现有代码，也可以修改和验证；Experiment 可以解释已有结果，也可以执行新实验。具体行为由任务决定，可写权限不要求必须修改。回答问题后仍沿同一调用继续原工作，失败重试才创建新 Attempt。详见[统一调用契约](CONTRACTS.md#module)。
+Coding 可以分析现有代码，也可以修改和验证；Experiment 可以解释已有结果，也可以执行新实验。具体行为由任务决定，可写权限不要求必须修改。回答问题后仍沿同一调用继续原工作，失败重试才创建独立 Attempt；新尝试不自动继承旧问答，必要时重新询问。详见[统一调用契约](CONTRACTS.md#module)。
 
 **修改时问自己：是否可以沿统一接口表达需求，新增模式或专用输入输出是否真的必要？**
 
@@ -124,7 +124,7 @@ Coding 可以分析现有代码，也可以修改和验证；Experiment 可以�
 
 ### 在 ResAgent2 中
 
-三个 Agent 共用 AgentLoop。`ask_user`、`finish` 和 Scientific 的 `request_work` 都通过工具协议表达；`request_work` 不另建一套模型动作格式，跨 Agent 执行由 Controller 接管。
+三个 Agent 共用仅使用原生 function call 的 AgentLoop，模型可用工具由实际注册的 Tool 定义，不另维护动作名清单。`ask_user`、`finish` 和 Scientific 的 `request_work` 都通过工具协议表达；`request_work` 不另建一套模型动作格式，跨 Agent 执行由 Controller 接管。
 
 模型上下文也使用共同的四部分：
 

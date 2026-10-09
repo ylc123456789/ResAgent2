@@ -234,7 +234,7 @@ Scientific 的普通产物归属 Session，包括 literature_search、literature
 
 注入的进程内 ModulePort 与原生 Agent 的确定性 finalizer 是可信实现。模型 finish 候选不能提交 `execution_record`、`verification_result` 或 `observation_trace`；原生代码从真实命令回执、验证状态和读取观察中生成它们。Coding 的 patch 同样从实际差异生成。
 
-任务是否完成由 Coding/Experiment 通过统一 finish 的 status 声明，不从命令 argv 或历史退出码推断。系统生成的 execution_record 保留全部命令事实；一次操作失败不自动等于任务失败，后续成功也不抹去旧记录。任务报告解释失败与交付的关系，Scientific 判断科研充分性。
+任务是否完成由 Coding/Experiment 通过统一 finish 的 status 声明，不从命令 argv 或历史退出码推断。系统生成的 execution_record 保留 run_shell、run_setup 实际命令结果及其事件顺序；未执行的 blocked 回执不是命令事实；一次操作失败不自动等于任务失败，后续成功也不抹去旧记录。任务报告解释失败与交付的关系，Scientific 判断科研充分性。
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
@@ -441,14 +441,15 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 | `memory_updates` | 由 Loop 合入 Session 的确定性更新，不是第二份外部结果信封 |
 | `question` / `request_work` / `finish_candidate` | 至多一个非空；普通工具可全为空，Loop 负责形成对应控制或完成结果 |
 
-OpenAICompatibleClient 的 AgentLoop 通过 `next_tool_call` 把每个既有 `Tool.input_model.model_json_schema()` 作为原生 `tools` 参数的完整参数 schema；无 `next_tool_call` 的测试或注入客户端继续走 `next_action`，并收到从同一 input_model 派生的必填顶层参数与 guidance，作为 required `tool_contracts`。无论走哪条路径，供应商返回都不替代执行前的 ToolRegistry 完整校验。
+所有 AgentLoop 客户端通过 `next_tool_call` 返回原生工具回合。每个 `Tool.input_model.model_json_schema()` 与说明共同生成 `tools`；实际注册表决定工具可用性并在执行前完整校验参数。三个 Agent 不维护自己的工具名 Literal，也不解析模型正文作为备用动作。仅有 `next_action` 的客户端不能运行 AgentLoop；Compiler 的结构化输出使用独立接口。
 
 | 可注入入口 | 约定 |
 |---|---|
 | AgentLoop.run(definition, request, *, session_id, initial_memory=None) | 循环、观测、反馈、Session，不调度 Workflow |
-| ContextBuilder(request, state, max_context_tokens) | 返回固定ContextSection及按需渲染的ContextMaterial；Runtime补工具契约/反馈/历史，builder不预占独立硬额度 |
+| ContextBuilder(request, state, max_context_tokens) | 返回固定ContextSection及按需渲染的ContextMaterial；Runtime补反馈与原生历史容量，builder不预占独立硬额度 |
 | ContextComposer.compose(...) | 先保留固定段与材料导航框，再按权重分配、按优先级借用；完整请求统一计量，最小required仍装不下明确失败 |
-| LLMClient.next_action(context, action_type) | 最小客户端必需方法；供测试/注入客户端及正文 JSON 调用方返回候选 dict/模型 |
+| LLMClient.next_tool_call(context, schemas, turns, *, max_input_tokens) | Agent 客户端必需方法；返回 ToolCallTurn，不执行工具；须提供稳定非空 tool_session_key |
+| StructuredLLMClient.next_action(context, action_type) | 无状态结构化输出接口，供 PromptLLMClient / Compiler 使用 |
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
 | PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
@@ -460,7 +461,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 ### 授权、确认与执行
 
-参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具走既有拒绝策略，Action 不忽略旧字段或其他未知字段。
+参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具与参数错误一样进入有界纠错，并为对应调用保存未执行回执；整批预检发现未知工具时不执行批内任何项。Action 不忽略其他未知字段。
 
 `OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。共享 `run_shell` 替代 Experiment 的旧 `run_command`，每次都要求精确脚本、起始目录、绑定环境和 Bash 配置的单次确认，即使 confirm_commands=False；批准不能扩大 Run 授权。它执行 Linux `/bin/bash --noprofile --norc -o pipefail -c`，保留脚本首尾空白，不隐式开启 errexit，不提供持久终端或后台任务管理。通用脚本不套用单条 argv 分类或语义猜测；安装和角色职责由工具指引及用户审核约束，不宣称脚本内部被沙箱隔离。`run_verification` 和 `run_setup` 保留自己的命令范围与固定规则；confirm_commands 可为它们增加确认，需确认的验证一次只提交一条命令。环境创建/安装仍使用受控环境 Tool。
 
@@ -479,7 +480,7 @@ Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或�
 
 ### 原生调用批次与格式纠错
 
-OpenAICompatibleClient 区分传输/响应封装失败和模型输出拒绝：前者至多三次 HTTP 尝试，仍受剩余调用数和时间限制；正文 JSON 解析失败或原生 arguments 不是 JSON object 时，完成本次 trace 后直接交回 Loop，不在客户端原样重试。
+OpenAICompatibleClient 区分传输/响应封装失败和模型输出拒绝：前者至多三次 HTTP 尝试，仍受剩余调用数和时间限制；原生 framing 或 arguments JSON 被拒绝时，完成本次 trace 后直接交回 Loop，不在客户端原样重试。损坏的 HTTP 压缩正文按响应失败记录，不新增自动重试。
 
 原生每轮接受1–8个 tool calls，整批先校验参数/权限，再逐项复核权限与超时、串行执行。`finish / ask_user / request_work` 必须独占一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果、取消余下项，不回滚副作用；assistant content 不作为备用动作解析。
 
@@ -487,9 +488,11 @@ Loop 保存已发生 HTTP 尝试，把简短拒绝原因和“未执行工具”
 
 Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `PromptLLMClient.next_action` 从正文 JSON 获取结构。其 JSONDecodeError 在已有“最多两版 draft”内携带解析原因重编，所有消耗保留；没有新一层重试。PromptLLMClient 只透传异常并记录 last_attempts，不自行纠错。JSON 能解析但字段不符仍走原有 schema 校验。响应封装缺失/非字符串 content 等协议错误不伪装成模型正文解析错误。
 
+HTTP 解码失败在请求所属边界转为现有领域错误：搜索保存失败回执工件并更新目录，网页抓取返回失败回执、不登记正文。Run 截止和预算异常继续交给运行时处理，不冒充网页超时；ModelRequestClient 保持单次请求计量。
+
 ### 原生 Session 身份与恢复
 
-创建 Session 时写入 `AgentState.tool_protocol_key`。正文 JSON 客户端固定为 `None`；OpenAICompatibleClient 的 `tool_session_key` 是协议、endpoint、model 的稳定 hash，不含 API key。其他声明 `next_tool_call` 的客户端必须提供非空、稳定且能标识其协议配置的 tool_session_key。恢复时客户端身份须完全相同，拒绝 JSON↔原生及原生 endpoint/model 变化，不自动迁移。
+创建 Session 时写入 `AgentState.tool_protocol_key`。OpenAICompatibleClient 的 `tool_session_key` 是协议、endpoint、model 的稳定 hash，不含 API key；其他原生客户端也须提供非空、稳定且能标识其协议配置的身份。恢复时身份须完全相同；旧正文 JSON Session、endpoint/model 变化均拒绝，不自动迁移。
 
 `AgentState.tool_turns` 按轮保存 assistant `content`、`reasoning_content`、原始 `tool_calls` 和按 call ID 配对的 `tool_results`。Loop 先保存整批 call，每次派发前保存 executing_call_id，随后按 observation/event 路径配对该调用的 receipt 并清除执行标记。重启保留已完成回执；正在执行且缺回执的项记为 unknown outcome，其余缺回执项记为未开始；不自动重放。它防止把未知结果误判为成功，但只保证进程重启 checkpoint，不保证掉电持久化，也不是外部副作用的 exactly-once 事务。
 
@@ -507,11 +510,12 @@ Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `Promp
 | 无效文本 | 含 NUL 或无效 UTF-8 返回可恢复错误，不新增成功阅读记录 |
 | 工作区文本大小 | 读、搜、创建、替换共用10 MiB上限；读取核对声明大小与实际读入长度，写入前验证编码和最终字节数 |
 | 冻结工件 | 不受工作区大小上限约束，读取前校验整份 hash；存在/完整性验证不要求文本可解码 |
-| IO 与分页 | 字符窗口不等于流式读取，不能绕过整份检查或改变冻结内容 |
+| 分段读取回执 | start/end 行与字符字段回显请求范围；truncated 只表示请求窗口被返回上限裁剪；next_start_char 是实际返回末端，相对于完整所选行范围，无余文时为 null |
+| IO 与分段读取 | 字符窗口不等于流式读取，不能绕过整份检查或改变冻结内容；连续读取保持行范围不变，不把请求 end_char 当作实际返回终点 |
 | `search_text` | 大小写不敏感字面子串，不是正则；a\|b 仍匹配原文字面串 |
 | 搜索覆盖 | skipped_count、skipped_files（最多50条）、skipped_files_truncated 描述授权候选中跳过文件及原因；incomplete 表示跳过或触及结果上限，零匹配不能因此当成完整无匹配 |
 
-**模型输入容量。** ModelProfile 声明窗口、输出预留和安全余量，模块声明输入上限，有效额度取两者较小值。正文 JSON 路径计量渲染 Context，有 Profile 时另预留 Action schema；原生路径计量完整 messages + tools，含历史、schema 与 JSON 转义。估算与分配规则见 [CONTEXT](CONTEXT.md#budgets)。输入压缩不另开模型调用额度；step 仅记录时序，不形成第二份预算。
+**模型输入容量。** ModelProfile 声明窗口、输出预留和安全余量，模块声明输入上限，有效额度取两者较小值。Agent 计量完整原生 messages + tools，含历史、schema 与 JSON 转义；Compiler 的结构化请求计量正文及其输出 schema。估算与分配规则见 [CONTEXT](CONTEXT.md#budgets)。输入压缩不另开模型调用额度；step 仅记录时序，不形成第二份预算。
 
 <a id="components"></a>
 
@@ -576,8 +580,8 @@ trace 与 Session 是独立边界：metadata 只留内容 hash，不表示 Sessi
 | 调用约定 | 必须成立的规则 |
 |---|---|
 | 失败反馈 | Loop 的动作拒绝、工具异常与 finish 拒绝可形成持久 required runtime_feedback；普通 ok=False 观察不自动全部变成该反馈。工具正常返回后清除 tool_error 旧反馈，完成反馈按检查流程更新/清除 |
-| 用户问答 | request_task_context 校验作用域后注入当前作用域累计原题和 values；request_materials_context 跳过 answer。ask_user 成功只代表已发问，不代表已答复或资源已准备 |
-| 原生历史 | 重放检查点后的完整配对 assistant/tool 回合，末尾加入最新业务上下文；不重复保存每轮完整 prompt。正文 JSON 路径使用有界 recent_observations 预览 |
+| 用户问答 | request_task_context 校验作用域后注入当前作用域累计原题和 values；request_materials_context 跳过 answer。ask_user 成功只代表已发问，不代表已答复或资源已准备；续跑保留原作用域，失败重试的新 Attempt 不自动继承旧问答 |
+| 原生历史 | 重放检查点后的完整配对 assistant/tool 回合，末尾加入最新业务上下文；不重复保存每轮完整 prompt |
 | 读取材料 | 文件/工件片段只构成本轮工作集，有来源、范围、观察序号、截断/省略标识；旧文件片段可能过时。已读 ID 或短预览不证明全文在上下文中，也不证明论断成立 |
 | 执行诊断 | command_results 使用真实命令观察与日志尾部，不依赖短历史预览，不替代当前状态或完成验收 |
 | 完整目录 | 当前输入与 Session 工具输出按真实 artifact_id 合并去重，required artifact_index 不选条目或静默截断；目录不是访问授权 |

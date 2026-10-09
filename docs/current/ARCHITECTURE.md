@@ -133,7 +133,7 @@ Runtime 的 `finish/ask_user` 和 Scientific 的控制工具留在职责所属�
 
 Scientific Session 属于整个 Run，跨工作回合复用；Coding/Experiment Session 属于 `Run + Task + Attempt`。上层保存 SessionRef，通过公共结果协作，不读 Agent 的私有 memory 来驱动调度。
 
-**问答续跑不是 retry。** Controller 根据当前 PendingQuestion 生成包含原题的 RecordedAnswer，冻结为 answer 工件。恢复指向这次回答，并在任务需求部分呈现当前作用域的问答。回答继续原 Attempt、Session、输出目录和基线；失败重试才创建新 Attempt。批准同样绑定准确动作及作用域，不会因为读到 answer 就自动获得授权。
+**问答续跑不是 retry。** Controller 根据当前 PendingQuestion 生成包含原题的 RecordedAnswer，冻结为 answer 工件。恢复指向这次回答，并在任务需求部分呈现当前作用域的问答。回答继续原 Attempt、Session、输出目录和基线；失败重试才创建新 Attempt 和 Session。新的尝试不自动继承旧尝试的问答，缺少必要条件时重新询问；旧回答和尝试历史仍持久保存。批准同样绑定准确动作及作用域，不会因为读到 answer 就自动获得授权。
 
 Controller 是 Run 的业务入口：`create_run` 创建后推进到稳定状态，`answer_question` 保存回答再续跑，`run_until_stable` 不伪造答案或绕过 paused。外部论文可在创建时导入，或仅在 paused 时追加并刷新目录；导入不答题、不恢复、不重置预算，也不创建独立论文库。
 

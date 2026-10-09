@@ -38,4 +38,6 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 
 - [ADR-0025：通用网页工具与已有文献能力并存](0025-general-web-capability.md)（可选搜索 provider、按需抓取网页，Scientific 自主选择材料入口）
 
+- [ADR-0026：统一原生 Agent 动作与工具事实回执](0026-native-agent-protocol-and-tool-receipts.md)（移除正文 JSON 动作路径，保留独立尝试问答作用域，补齐回执与分段读取）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。

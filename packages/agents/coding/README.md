@@ -1,6 +1,6 @@
 # Coding Agent
 
-`NativeCodingAgent.invoke(AgentRequest) -> AgentResult` 使用一套 CodingAction、
+`NativeCodingAgent.invoke(AgentRequest) -> AgentResult` 使用统一原生工具协议、
 CODING_PROMPT 和 CodingCompletionCheck。解释、调查、修改均由 instruction 表达。
 
 读写权限由 WorkspaceGrant 约束；只读源码仍可以通过受控输出通道提交报告。

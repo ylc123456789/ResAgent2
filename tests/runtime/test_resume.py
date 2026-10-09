@@ -1,3 +1,4 @@
+from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import AgentPermissions
 from datetime import UTC, datetime
@@ -86,7 +87,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
         system_prompt="Ask then finish.",
         tools=(AskUserTool(), FinishTool()),
         llm_client=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(
                     tool="ask_user",
                     arguments={
@@ -95,7 +96,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
                     },
                 ),
                 AgentAction(tool="finish", arguments={'report': '{"dataset": "demo"}'}),
-            ]
+            ])
         ),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"ask_user", "finish"}),
@@ -186,7 +187,7 @@ def test_resume_rejects_non_paused_session() -> None:
         owner=AgentOwner.SCIENTIFIC,
         system_prompt="finish only",
         tools=(FinishTool(),),
-        llm_client=ScriptedLLMClient([AgentAction(tool="finish", arguments={'report': '{}'})]),
+        llm_client=ScriptedLLMClient(tool_turns([AgentAction(tool="finish", arguments={'report': '{}'})])),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"finish"}),
         completion_check=_AcceptFinish(),
@@ -213,6 +214,7 @@ def test_resume_recovers_active_session_after_interruption() -> None:
     store.save(
         AgentState(
             session_id="session_interrupted",
+            tool_protocol_key=ScriptedLLMClient.tool_session_key,
             agent_name="finisher",
             owner=AgentOwner.SCIENTIFIC,
             run_id="run_resume",
@@ -230,7 +232,7 @@ def test_resume_recovers_active_session_after_interruption() -> None:
         system_prompt="finish only",
         tools=(FinishTool(),),
         llm_client=ScriptedLLMClient(
-            [AgentAction(tool="finish", arguments={'report': '{}'})]
+            tool_turns([AgentAction(tool="finish", arguments={'report': '{}'})])
         ),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"finish"}),
@@ -256,13 +258,13 @@ def test_resume_rejects_mismatched_task() -> None:
         system_prompt="ask then finish",
         tools=(AskUserTool(), FinishTool()),
         llm_client=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(
                     tool="ask_user",
                     arguments={"text": "Which?", "requested_fields": ["x"]},
                 ),
                 AgentAction(tool="finish", arguments={'report': '{}'}),
-            ]
+            ])
         ),
         context_builder=_context,
         permission_policy=AllowListPermissionPolicy({"ask_user", "finish"}),

@@ -1,5 +1,7 @@
 """Resource refresh uses artifact inputs and persisted Sessions across processes."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions
 
 import json
@@ -56,7 +58,7 @@ def _probe(root, kind, phase):
     actions = [_ask(scientific)]
     if phase and not scientific:
         actions.insert(0, {"tool": "read_file", "arguments": {"path": "util.py"}})
-    client = ScriptedLLMClient(actions)
+    client = ScriptedLLMClient(tool_turns(actions))
     registry = ArtifactRegistry(root / "artifacts")
     refs = [_system_artifact(registry, "dataset_catalog", {"datasets": [ref.model_dump(mode="json") for ref in datasets]})]
     resume = []
@@ -130,7 +132,7 @@ def test_native_agents_recheck_resources_across_processes(tmp_path, kind):
             (dataset_root / "catalog.json").write_text('{"demo": "demo"}')
         if phase == 2:
             (dataset_root / "demo").mkdir()
-        code = ("import runpy; " + f"ns = runpy.run_path({str(Path(__file__).resolve())!r}); "
+        code = (f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r}); import runpy; " + f"ns = runpy.run_path({str(Path(__file__).resolve())!r}); "
                 + f"ns['_probe']({str(tmp_path)!r}, {kind!r}, {phase})")
         proc = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, timeout=30)
         assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -1,7 +1,10 @@
 """Exercise native Agent assembly and real Runtime composition at read-pool capacity."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions
 
+from copy import deepcopy
 import hashlib
 import json
 import subprocess
@@ -26,6 +29,8 @@ from resagent2_runtime import (
     InMemorySessionStore, ToolObservation,
 )
 
+from resagent2_runtime.tool_calling import native_input_text
+
 
 def _body(label: str) -> str:
     prefix, suffix = f"{label}_BEGIN\n", f"\n{label}_END"
@@ -37,20 +42,28 @@ ARTIFACT_BODY = _body("ARTIFACT")
 
 
 class _CaptureClient:
+    tool_session_key = "test-native-tools/v1"
+
     def __init__(self):
         self.contexts = []
+        self.schemas = []
+        self.histories = []
+        self.input_limits = []
 
-    def next_action(self, context, action_type):
+    def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
         self.contexts.append(context)
+        self.schemas.append(deepcopy(schemas))
+        self.histories.append([turn.model_copy(deep=True) for turn in turns])
+        self.input_limits.append(max_input_tokens)
         # Pause after observing the prompt; no environment installation, code
         # execution, or fabricated success is needed for this composition test.
-        return {
+        return tool_turns([{
             "tool": "ask_user",
             "arguments": {
                 "text": "Confirm the next evaluation?",
                 "requested_fields": ["approval"],
             },
-        }
+        }])[0]
 
 
 def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tokens=None, artifact_first=False):
@@ -82,6 +95,7 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
         owner=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT,
         run_id=request.run_id, task_id=request.task_id, attempt_number=1,
         status=SessionStatus.PAUSED, created_at=now, updated_at=now,
+        tool_protocol_key=_CaptureClient.tool_session_key,
         memory={
             "workspace_snapshot": baseline.to_memory(),
             "read_paths": ["train.py"], "read_artifact_ids": [artifact.id],
@@ -98,8 +112,10 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     ]
     if artifact_first:
         read_observations.reverse()
-    # Old reads must survive a populated recent-observation window. Long list
-    # values also exercise Runtime's real per-observation trimming and listing.
+    # Synthetic source events isolate reconstruction of the read working set;
+    # they are not a claimed native tool transcript. Real paired histories are
+    # exercised in the Scientific capacity and workspace read-history tests.
+    # Old reads must survive later listings without a second source cache.
     observations = [*read_observations, *[
         ("list_files", {"path": ".", "paths": [f"package/module_{i:02d}.py" for i in range(80)],
                         "truncated": False})
@@ -131,6 +147,16 @@ def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tok
     return agent, client, request
 
 
+def _assert_native_capacity(client, limit):
+    context = client.contexts[0]
+    measured = ContextComposer.estimate_tokens(native_input_text(
+        context.text, client.schemas[0], client.histories[0],
+    ))
+    assert measured == context.estimated_tokens
+    assert measured > ContextComposer.estimate_tokens(context.text)
+    assert measured <= client.input_limits[0] == limit
+
+
 @pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
 @pytest.mark.parametrize("artifact_first", [False, True])
 def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch, capability, artifact_first):
@@ -142,11 +168,14 @@ def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch
     assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
     assert len(client.contexts) == 1
     context = client.contexts[0]
-    assert {"file_reads", "artifact_reads", "environment", "tool_contracts", "recent_observations", "runtime_feedback"} <= set(context.included_sections)
-    assert context.estimated_tokens <= 256_000
-    assert ContextComposer.estimate_tokens(context.text) <= 256_000
-    assert "read_file: path" in context.text
-    assert "read_artifact: artifact_id" in context.text
+    assert {"file_reads", "artifact_reads", "environment", "runtime_feedback"} <= set(context.included_sections)
+    assert "tool_contracts" not in context.included_sections
+    assert "recent_observations" not in context.included_sections
+    schemas = {schema["function"]["name"]: schema["function"] for schema in client.schemas[0]}
+    assert {"read_file", "read_artifact", "ask_user"} <= schemas.keys()
+    assert "path" in schemas["read_file"]["parameters"]["required"]
+    assert "artifact_id" in schemas["read_artifact"]["parameters"]["required"]
+    _assert_native_capacity(client, 256_000)
     assert "RECOVERABLE_FEEDBACK" in context.text
     # Parse the actual client input, not the context-builder's intermediate
     # sections: runtime contracts/history/feedback and budgeting ran already.
@@ -177,7 +206,7 @@ def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkey
         assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
         assert result.llm_calls == 1
         assert len(client.contexts) == 1
-        assert client.contexts[0].estimated_tokens <= explicit_limit
+        _assert_native_capacity(client, explicit_limit)
         return
     # One token cannot fit the required context. The agent must fail explicitly
     # instead of expanding the caller's requested limit.
@@ -192,15 +221,15 @@ def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkey
 def test_model_capacity_reduces_read_pools_before_they_are_built(tmp_path, monkeypatch, capability):
     agent, client, request = _native_with_full_read_history(tmp_path, monkeypatch, capability)
     budgets = []
-    def context_budget(action_type, limit):
+    def tool_input_limit(limit):
         budgets.append(limit)
         return 32_000
-    client.context_budget = context_budget
+    client.tool_input_limit = tool_input_limit
     result = agent.invoke(request)
     assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
     assert budgets == [256_000]
     context = client.contexts[0]
-    assert context.estimated_tokens <= 32_000
+    _assert_native_capacity(client, 32_000)
     reads = {}
     for name, key in (("file_reads", "file_snippets"), ("artifact_reads", "artifact_snippets")):
         section = context.text.split(f"## {name}\n", 1)[1].split("\n\n## ", 1)[0]

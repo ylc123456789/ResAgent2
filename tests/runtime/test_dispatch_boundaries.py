@@ -1,3 +1,4 @@
+from e2e.native_fixtures import tool_turn
 """Dispatch deadlines and unambiguous control signals, without real time or LLMs."""
 
 from resagent2_contracts import AgentPermissions
@@ -65,10 +66,12 @@ def _run_dispatch(stage, elapsed, *, should_execute):
         # before dispatch must not erase them.
         last_attempts = 2
 
-        def next_action(self, context, action_type):
+        tool_session_key = "dispatch-native/v1"
+
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             if stage == "llm":
                 clock.now = elapsed
-            return {"tool": "write", "arguments": {}}
+            return tool_turn("write")
 
     class Policy:
         def check(self, action, state, request):

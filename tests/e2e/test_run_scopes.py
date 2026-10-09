@@ -1,5 +1,7 @@
 """Deterministic checks for shared application state across multiple Runs."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 
 import hashlib
@@ -83,9 +85,9 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
             pytest.fail("direct conclusion must not compile a workflow")
 
     sessions = JsonSessionStore(tmp_path / "sessions")
-    agent = ScientificAgent(ScriptedLLMClient([
+    agent = ScientificAgent(ScriptedLLMClient(tool_turns([
         {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "No evidence requested"})}]}},
-    ]), store=sessions)
+    ])), store=sessions)
     scheduler = WorkflowScheduler(
         bindings={}, store=JsonRunStore(tmp_path / "runs"),
         artifact_root=tmp_path / "artifacts",
@@ -122,7 +124,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
     }
     store = JsonSessionStore(tmp_path / "sessions")
     agent = agent_type(
-        ScriptedLLMClient([ask, ask, ask]), store=store,
+        ScriptedLLMClient(tool_turns([ask, ask, ask])), store=store,
         resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
     )
     coding = agent_type is NativeCodingAgent
@@ -184,10 +186,10 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
             assert run_id == "run_b"
             return artifact  # Even a misbehaving injected resolver cannot bypass the reader.
 
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": artifact.id}},
         {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Evidence unavailable"})}]}},
-    ])
+    ]))
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("must not read"))
     agent = ScientificAgent(client, registration_port=WrongResolver())
     result = agent.invoke(AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_b', instruction='Check Run isolation', budget=TaskBudget(max_llm_calls=3, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
@@ -250,16 +252,18 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             )
 
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
         artifact_id = None
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "scope test"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "scope test"}}])[0]
             if self.step == 2:
                 self.artifact_id = _paper_ref(registration).id
-                return {"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}])[0]
             assert self.step == 3
             assert "artifact_reads" in context.included_sections
             section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
@@ -267,8 +271,8 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             assert len(snippets) == 1
             assert snippets[0]["artifact_id"] == self.artifact_id
             assert _paper().abstract in snippets[0]["content"]
-            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
-                            "evidence_artifact_ids": [self.artifact_id]})}]}}
+            return tool_turns([{"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
+                            "evidence_artifact_ids": [self.artifact_id]})}]}}])[0]
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
@@ -292,22 +296,24 @@ def test_resumed_scientific_does_not_return_historical_input_refs(registration):
             )
 
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "history"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "history"}}])[0]
             if self.step == 2:
-                return {"tool": "read_artifact", "arguments": {"artifact_id": _paper_ref(registration).id}}
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": _paper_ref(registration).id}}])[0]
             if self.step == 3:
-                return {"tool": "ask_user", "arguments": {
+                return tool_turns([{"tool": "ask_user", "arguments": {
                     "assessment": {"statement": "Need permission to conclude"},
                     "text": "Proceed with this evidence?", "requested_fields": ["approve"],
-                }}
+                }}])[0]
             assert self.step == 4
             assert _paper().abstract in context.text
-            return {"tool": "finish", "arguments": {
+            return tool_turns([{"tool": "finish", "arguments": {
                 "report": "Only abstract-level evidence is available",
                 "artifacts": [{
                     "kind": "scientific_opinion", "path": "opinion.json",
@@ -317,7 +323,7 @@ def test_resumed_scientific_does_not_return_historical_input_refs(registration):
                         "evidence_artifact_ids": [_paper_ref(registration).id],
                     }),
                 }],
-            }}
+            }}])[0]
 
     agent = ScientificAgent(Client(), literature_backend=Backend(), registration_port=registration)
     request = AgentRequest(run_id='run_a', agent=AgentOwner.SCIENTIFIC, instruction='Review evidence', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from e2e.native_fixtures import tool_turns
+
 import io
 import json
 import shlex
@@ -81,7 +83,7 @@ def test_shell_answer_reaches_controller_and_resumes_same_session(
                            "content": json.dumps({"verdict": "inconclusive", "statement": "Need empirical evidence"})}],
         }},
     ]
-    monkeypatch.setattr(composition, "_client", lambda: ScriptedLLMClient(actions))
+    monkeypatch.setattr(composition, "_client", lambda: ScriptedLLMClient(tool_turns(actions)))
     args = _parser().parse_args([
         "run", "--goal", "Choose a metric", "--workspace", str(tmp_path), "--read-only",
     ])

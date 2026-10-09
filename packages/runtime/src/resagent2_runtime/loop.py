@@ -9,7 +9,7 @@ from time import monotonic
 from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner,
@@ -51,7 +51,7 @@ from .models import (
     ToolObservation,
 )
 from .store import InMemorySessionStore, SessionStore
-from .tools import Tool, ToolRegistry, tool_contracts_text
+from .tools import Tool, ToolRegistry
 from .tool_calling import (
     NativeToolCallError, complete_pending_turn, native_actions,
     native_context_budget, native_input_text, native_tool_schemas, tool_receipt,
@@ -59,7 +59,6 @@ from .tool_calling import (
 )
 
 _CONSECUTIVE_FAILURE_LIMIT = 5
-_RECENT_OBSERVATION_LIMIT = 6
 
 
 def _trim_json(value, limit: int) -> str:
@@ -160,7 +159,6 @@ class AgentDefinition:
     context_builder: ContextBuilder
     permission_policy: PermissionPolicy
     completion_check: CompletionCheck
-    action_type: type[AgentAction] = AgentAction
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS
 
 
@@ -200,12 +198,18 @@ class AgentLoop:
         self._initial_usage = current_budget().usage.used
         self._active_call_id = None
         now = datetime.now(UTC)
-        native_call = getattr(definition.llm_client, "next_tool_call", None)
-        protocol_key = (
-            getattr(definition.llm_client, "tool_session_key", None)
-            if native_call is not None else None
-        )
-        if native_call is not None and (not isinstance(protocol_key, str) or not protocol_key.strip()):
+        if not callable(getattr(definition.llm_client, "next_tool_call", None)):
+            return AgentResult(
+                status=ModuleStatus.FAILED,
+                report="Agent client must implement native tool calls",
+                error=ModuleError(
+                    code=ErrorCode.CONTRACT_ERROR,
+                    message="Agent client must implement native tool calls",
+                    retryable=False,
+                ),
+            )
+        protocol_key = getattr(definition.llm_client, "tool_session_key", None)
+        if not isinstance(protocol_key, str) or not protocol_key.strip():
             return AgentResult(
                 status=ModuleStatus.FAILED,
                 report="native client must provide a stable tool_session_key",
@@ -290,16 +294,11 @@ class AgentLoop:
             )
 
         try:
-            schemas = native_tool_schemas(definition.tools) if native_call is not None else []
+            schemas = native_tool_schemas(definition.tools)
         except Exception as error:
             return self._failure(
                 state, ErrorCode.CONTRACT_ERROR,
                 f"tool schema construction failed: {error}", retryable=False,
-            )
-        if state.tool_turns and native_call is None:
-            return self._failure(
-                state, ErrorCode.CONTRACT_ERROR,
-                "native Session requires a tool-calling client", retryable=False,
             )
         interrupted = False
         for turn in state.tool_turns:
@@ -328,25 +327,20 @@ class AgentLoop:
                        task_id=request.task_id, agent=definition.name, step=state.step)
             try:
                 context_limit = definition.max_context_tokens
-                if native_call is not None:
-                    budgeter = getattr(definition.llm_client, "tool_input_limit", None)
-                    if budgeter is not None:
-                        context_limit = min(context_limit, budgeter(context_limit))
-                else:
-                    budgeter = getattr(definition.llm_client, "context_budget", None)
-                    if budgeter is not None:
-                        context_limit = min(context_limit, budgeter(definition.action_type, context_limit))
+                budgeter = getattr(definition.llm_client, "tool_input_limit", None)
+                if budgeter is not None:
+                    context_limit = min(context_limit, budgeter(context_limit))
                 if context_limit < 1:
                     raise ContextBudgetExceeded("effective context limit must be positive")
                 context = None
                 context_error = None
                 try:
                     context = self._compose_context(
-                        definition, request, state, schemas, context_limit, native=native_call is not None,
+                        definition, request, state, schemas, context_limit,
                     )
                 except ContextBudgetExceeded as error:
                     context_error = error
-                if native_call is not None and callable(getattr(definition.llm_client, "summarize_history", None)):
+                if callable(getattr(definition.llm_client, "summarize_history", None)):
                     checkpoint = state.history_checkpoint
                     plan = plan_compaction(
                         current_context=context.text if context is not None else "",
@@ -362,7 +356,7 @@ class AgentLoop:
                         if failure is not None:
                             return failure
                         context = self._compose_context(
-                            definition, request, state, schemas, context_limit, native=True,
+                            definition, request, state, schemas, context_limit,
                         )
                 if context is None:
                     raise context_error or ContextBudgetExceeded("current context does not fit")
@@ -393,40 +387,31 @@ class AgentLoop:
                 limiter(request.budget.max_llm_calls - self._run_llm_calls)
             charged = False
             try:
-                if native_call is not None:
-                    reply = invoke_model(definition.llm_client, "next_tool_call", context, schemas,
-                                         self._active_turns(state), max_input_tokens=context_limit)
-                else:
-                    reply = invoke_model(definition.llm_client, "next_action", context, definition.action_type)
+                reply = invoke_model(definition.llm_client, "next_tool_call", context, schemas,
+                                     self._active_turns(state), max_input_tokens=context_limit)
                 self._sync_usage(state)
                 charged = True
                 if self._run_llm_calls > request.budget.max_llm_calls:
                     return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
                                          "Client exceeded the allocated LLM-call budget", retryable=False)
-                if native_call is not None:
-                    turn = ToolCallTurn.model_validate(reply)
-                    used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
-                    rejection = None
-                    if turn.tool_results or turn.executing_call_id is not None:
-                        rejection = "A model reply cannot provide tool execution receipts"
-                    if any(call.id in used_ids for call in turn.tool_calls):
-                        rejection = "Provider reused a historical tool call ID; no tool was executed"
-                    if rejection is not None:
-                        validator = getattr(definition.llm_client, "record_validation", None)
-                        if validator is not None:
-                            validator(rejection)
-                        raise NativeToolCallError(rejection)
-                    if turn.tool_calls or turn.content or turn.reasoning_content:
-                        state.tool_turns.append(turn)
-                        # Checkpoint before any dispatch. Missing receipts on
-                        # resume are unknown outcomes, never replay instructions.
-                        self._save(state)
-                    raw_actions = native_actions(turn)
-                else:
-                    raw_actions = [reply]
-                actions = []
-                for raw_action in raw_actions:
-                    actions.append(definition.action_type.model_validate(raw_action))
+                turn = ToolCallTurn.model_validate(reply)
+                used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
+                rejection = None
+                if turn.tool_results or turn.executing_call_id is not None:
+                    rejection = "A model reply cannot provide tool execution receipts"
+                if any(call.id in used_ids for call in turn.tool_calls):
+                    rejection = "Provider reused a historical tool call ID; no tool was executed"
+                if rejection is not None:
+                    validator = getattr(definition.llm_client, "record_validation", None)
+                    if validator is not None:
+                        validator(rejection)
+                    raise NativeToolCallError(rejection)
+                if turn.tool_calls or turn.content or turn.reasoning_content:
+                    state.tool_turns.append(turn)
+                    # Checkpoint before dispatch. Missing receipts on resume
+                    # are unknown outcomes, never replay instructions.
+                    self._save(state)
+                actions = [AgentAction.model_validate(raw) for raw in native_actions(turn)]
                 if len(actions) > 1:
                     failure = self._preflight_batch(definition, registry, request, state, actions)
                     if failure is not None:
@@ -435,21 +420,13 @@ class AgentLoop:
                 if not charged:
                     self._sync_usage(state)
                 if isinstance(error, json.JSONDecodeError):
-                    # next_action raised before the success-path accounting.
-                    # Count any preceding transport retries as well.
+                    # Count preceding transport retries as well. Invalid argument
+                    # JSON never executes; calls remain in paired protocol history.
                     summary = (
                         f"Native tool arguments were not valid JSON: {error}. "
                         "Return native tool calls with JSON objects of arguments. "
                         "No tool was executed."
-                    ) if native_call is not None else (
-                        f"LLM output was not valid JSON: {error}. "
-                        "Return exactly one JSON object matching the action "
-                        "schema and tool contracts, with no surrounding text "
-                        "or additional actions. No tool was executed."
                     )
-                    # Feedback never quotes invalid output. Native calls remain
-                    # in the paired protocol history, not domain memory; JSON-only
-                    # clients keep the raw response exclusively in full trace.
                     details = None
                 elif isinstance(error, PermissionError):
                     summary = f"Tool execution denied: {error}. No tool was executed."
@@ -509,7 +486,7 @@ class AgentLoop:
                 )
 
             for index, action in enumerate(actions):
-                self._active_call_id = turn.tool_calls[index].id if native_call is not None else None
+                self._active_call_id = turn.tool_calls[index].id
                 state.step += 1
                 self._append_event(
                     state,
@@ -520,12 +497,13 @@ class AgentLoop:
                 self._save(state)
 
                 if not registry.contains(action.tool):
-                    return self._failure(
-                        state,
-                        ErrorCode.INVALID_INPUT,
-                        f"unknown tool: {action.tool}",
-                        retryable=True,
-                    )
+                    self._feedback(state, f"Unknown tool: {action.tool}. Use the provided tools.",
+                                   tool=action.tool)
+                    failure = self._note_failure(state, consecutive_failures)
+                    if failure is not None:
+                        return failure
+                    consecutive_failures += 1
+                    break
 
                 try:
                     registry.validate(action.tool, action.arguments)
@@ -593,8 +571,7 @@ class AgentLoop:
                             if state.pending_action is None or state.pending_action.action_id != permission.approval_id:
                                 raise PermissionError("approval is not pending")
                             state.pending_action = None
-                        if native_call is not None:
-                            state.tool_turns[-1].executing_call_id = self._active_call_id
+                        state.tool_turns[-1].executing_call_id = self._active_call_id
                         self._save(state)
                         observation = registry.dispatch(action.tool, action.arguments, state,
                                                         prepared=permission.prepared)
@@ -797,10 +774,10 @@ class AgentLoop:
         start = state.history_checkpoint.history_start if state.history_checkpoint else 0
         return state.tool_turns[start:]
 
-    def _compose_context(self, definition, request, state, schemas, context_limit, *, native):
+    def _compose_context(self, definition, request, state, schemas, context_limit):
         """Use the same domain builder with a bounded, paired protocol suffix."""
         turns = self._active_turns(state)
-        material_limit = native_context_budget(context_limit, schemas, turns) if native else context_limit
+        material_limit = native_context_budget(context_limit, schemas, turns)
         sections = list(definition.context_builder(request, state, material_limit))
         if state.pending_action is not None:
             sections.insert(0, ContextSection(
@@ -832,9 +809,6 @@ class AgentLoop:
                 ),
                 required=True, priority=900,
             ))
-        recent = self._recent_observations_section(state) if not native else None
-        if recent is not None:
-            sections.insert(0, recent)
         if state.runtime_feedback is not None:
             content = (
                 "Your previous action was rejected. Address this "
@@ -855,25 +829,14 @@ class AgentLoop:
                     required=True,
                 ),
             )
-        if not native:
-            sections.append(
-                ContextSection(
-                    name="tool_contracts",
-                    content=tool_contracts_text(definition.tools),
-                    priority=990,
-                    required=True,
-                )
-            )
-        compose_options = {}
-        if native:
-            compose_options["measure"] = lambda text: self.context_composer.estimate_tokens(
-                native_input_text(text, schemas, turns)
-            )
+        measure = lambda text: self.context_composer.estimate_tokens(
+            native_input_text(text, schemas, turns)
+        )
         return self.context_composer.compose(
             definition.system_prompt,
             sections,
             max_tokens=context_limit,
-            **compose_options,
+            measure=measure,
         )
 
     def _compact_history(self, definition, request, state, schemas, context_limit, plan) -> AgentResult | None:
@@ -909,7 +872,7 @@ class AgentLoop:
         # The writing target is not a second hard budget: retain the complete
         # summary when it fits with current required context and recent turns.
         proposed = state.model_copy(update={"history_checkpoint": checkpoint})
-        self._compose_context(definition, request, proposed, schemas, context_limit, native=True)
+        self._compose_context(definition, request, proposed, schemas, context_limit)
         state.history_checkpoint = checkpoint
         self._append_event(state, event_type="compaction", tool=None,
                            data=checkpoint.model_dump(mode="json"))
@@ -953,8 +916,7 @@ class AgentLoop:
         """Validate the whole batch before its first side effect; recheck at dispatch."""
         for action in actions:
             if not registry.contains(action.tool):
-                return self._failure(state, ErrorCode.INVALID_INPUT,
-                                     f"unknown tool: {action.tool}", retryable=True)
+                raise NativeToolCallError(f"Unknown tool: {action.tool}. Use the provided tools.")
             registry.validate(action.tool, action.arguments)
             try:
                 permission = definition.permission_policy.check(action, state, request)
@@ -1016,40 +978,6 @@ class AgentLoop:
                 mode="json"
             )
         return details
-
-    @staticmethod
-    def _recent_observations_section(
-        state: AgentState,
-        *,
-        limit: int = _RECENT_OBSERVATION_LIMIT,
-        value_chars: int = 400,
-    ) -> ContextSection | None:
-        """Build bounded history previews with their durable event sequence."""
-        observations = [e for e in state.events if e.type == "observation"]
-        if not observations:
-            return None
-        recent = observations[-limit:]
-        lines: list[str] = []
-        for event in recent:
-            data = event.data if isinstance(event.data, dict) else {}
-            summary = data.get("summary", "")
-            ok = data.get("ok", True)
-            lines.append(
-                f"Event {event.sequence}. {event.tool}: {summary} "
-                f"[{'ok' if ok else 'FAILED'}]"
-                f"\n   Value preview: {_trim_json(data.get('value'), value_chars)}"
-            )
-        return ContextSection(
-            name="recent_observations",
-            content=(
-                "Recent tool history (oldest first; session event sequence). "
-                "Values are bounded history previews, not complete tool results. "
-                "An ellipsis here means preview truncation; it does not change "
-                "the original read result's truncated flag.\n" + "\n".join(lines)
-            ),
-            priority=950,
-            required=False,
-        )
 
     def _feedback(
         self,

@@ -96,7 +96,7 @@ def test_read_file_character_offsets_count_unicode_after_selecting_lines(tmp_pat
     assert result.value == {
         "path": "unicode.txt", "start_line": 2, "end_line": 2,
         "start_char": 1, "end_char": 4, "content": "\u6587\U0001f600a",
-        "truncated": False,
+        "truncated": False, "next_start_char": 4,
     }
 
 

@@ -9,8 +9,19 @@ from pydantic import BaseModel
 
 from resagent2_runtime import (
     AgentAction, ContextBudgetExceeded, ModelProfile, OpenAICompatibleClient,
-    PromptLLMClient, ScriptedLLMClient,
+    PromptLLMClient,
 )
+
+
+class StructuredClient:
+    """Stateless structured-output fixture, separate from Agent tool calls."""
+    def __init__(self, outputs):
+        self.outputs = iter(outputs)
+        self.contexts = []
+
+    def next_action(self, context, output_type):
+        self.contexts.append(context)
+        return next(self.outputs)
 
 
 def _adapter(client, *, limit=512):
@@ -20,7 +31,7 @@ def _adapter(client, *, limit=512):
 
 
 def test_plain_prompt_uses_required_context_without_agent_loop():
-    client = ScriptedLLMClient([{"tool": "finish"}])
+    client = StructuredClient([{"tool": "finish"}])
     adapter = _adapter(client)
     # These hooks are optional for minimal clients.
     adapter.set_trace_context(run_id="run_plain")
@@ -40,7 +51,7 @@ def test_plain_prompt_accepts_a_schema_without_agent_action_fields():
         accepted: bool
 
     response = Decision(accepted=True)
-    adapter = _adapter(ScriptedLLMClient([response]))
+    adapter = _adapter(StructuredClient([response]))
     assert adapter.next_action("Review this proposal", Decision) is response
 
     instruction = OpenAICompatibleClient._action_instruction(Decision)
@@ -51,11 +62,11 @@ def test_plain_prompt_accepts_a_schema_without_agent_action_fields():
 
 def test_plain_prompt_rejects_invalid_component_limit():
     with pytest.raises(ValueError, match="must be positive"):
-        _adapter(ScriptedLLMClient([]), limit=0)
+        _adapter(StructuredClient([]), limit=0)
 
 
 def test_over_budget_prompt_does_not_call_provider_or_reuse_previous_count():
-    client = ScriptedLLMClient([{"tool": "finish"}])
+    client = StructuredClient([{"tool": "finish"}])
     adapter = _adapter(client, limit=64)
     adapter.next_action("Complete", AgentAction)
     assert adapter.last_attempts == 1

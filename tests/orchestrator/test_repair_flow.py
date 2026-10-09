@@ -9,6 +9,8 @@ Verifies two things:
 
 from __future__ import annotations
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import RunPermissions, ExecutionLimits
 
 import json
@@ -167,7 +169,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
         artifact_root=tmp_path / "artifacts",
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([_request_work(), _request_work(), _finish()]),
+        ScriptedLLMClient(tool_turns([_request_work(), _request_work(), _finish()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
@@ -248,7 +250,7 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
         artifact_root=tmp_path / "artifacts",
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([_request_work(), _request_work(), _finish_after_repair()]),
+        ScriptedLLMClient(tool_turns([_request_work(), _request_work(), _finish_after_repair()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(

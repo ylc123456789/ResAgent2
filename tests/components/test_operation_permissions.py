@@ -1,4 +1,6 @@
 """Shared operation decisions and durable single-use approval."""
+
+from e2e.native_fixtures import tool_turns
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -60,7 +62,7 @@ def execute(req, actions, tool, store, *, binding=None):
     tools = (tool, FinishTool())
     definition = AgentDefinition(
         name="permissions", owner=AgentOwner.CODING, system_prompt="Test",
-        tools=tools, llm_client=ScriptedLLMClient(actions),
+        tools=tools, llm_client=ScriptedLLMClient(tool_turns(actions)),
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary,

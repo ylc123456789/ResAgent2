@@ -1,8 +1,9 @@
-"""JSON-only injected clients keep bounded recovery; native clients share the ledger."""
+"""Native argument errors recover in place; transport failures may retry a Task."""
 
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 
 import json
+from uuid import uuid4
 from datetime import UTC, datetime
 from unittest import mock
 from httpx import TransportError
@@ -29,12 +30,6 @@ from resagent2_runtime import (
     InMemorySessionStore,
     OpenAICompatibleClient,
 )
-
-
-class _JSONOnlyClient(OpenAICompatibleClient):
-    """Exercise the minimal next_action protocol without native-tool support."""
-
-    next_tool_call = None
 
 
 class _FakeResponse:
@@ -72,14 +67,14 @@ def test_bad_json_stops_at_existing_limits(
     monkeypatch, tmp_path, call_budget, expected_code, calls,
 ) -> None:
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
-    client = _JSONOnlyClient(
+    client = OpenAICompatibleClient(
         model="test-model",
         api_base="https://example.com/v1",
         api_key_env="TEST_LLM_KEY",
         trace_dir=tmp_path / "traces",
         trace_level="full",
     )
-    bad = _FakeResponse({"choices": [{"message": {"content": "not valid json"}}]})
+    bad = _response("not valid json")
     definition = AgentDefinition(
         name="recovery",
         owner=AgentOwner.CODING,
@@ -94,7 +89,7 @@ def test_bad_json_stops_at_existing_limits(
 
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
-        mock.patch("resagent2_runtime.llm.send_request", return_value=bad),
+        mock.patch("resagent2_runtime.llm.send_request", side_effect=lambda *a, **k: _response("not valid json")),
     ):
         result = AgentLoop(store=InMemorySessionStore()).run(
             definition, request, session_id="session_recovery"
@@ -110,7 +105,7 @@ def test_bad_json_stops_at_existing_limits(
 
     trace_file = tmp_path / "traces" / "llm_traces.jsonl"
     record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
-    assert record["raw_response_text"] == "not valid json"
+    assert record["raw_tool_calls"][0]["function"]["arguments"] == "not valid json"
     assert record["action_valid"] is False
     assert len(trace_file.read_text().splitlines()) == calls
 
@@ -129,14 +124,12 @@ class _LoopPort:
 
 
 @pytest.mark.parametrize("network_failure", [False, True])
-@pytest.mark.parametrize("native", [False, True])
 def test_scheduler_keeps_attempt_for_json_but_retries_transport(
-    monkeypatch, tmp_path, network_failure, native,
+    monkeypatch, tmp_path, network_failure,
 ) -> None:
     """Correct JSON in-place; unchanged transport exhaustion retries the Task."""
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
-    client_type = OpenAICompatibleClient if native else _JSONOnlyClient
-    client = client_type(
+    client = OpenAICompatibleClient(
         model="test-model",
         api_base="https://example.com/v1",
         api_key_env="TEST_LLM_KEY",
@@ -191,37 +184,17 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
             ],
         ),
     )
-    bad = _FakeResponse({"choices": [{"message": {"content": "not valid json"}}]})
+    bad = _response("not valid json")
     if network_failure:
         bad = TransportError("unavailable")
-    valid = _FakeResponse(
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": json.dumps(
-                            {"tool": "finish", "arguments": {'report': '{"answer": "Recovered", "evidence_files": ["train.py"]}'}}
-                        )
-                    }
-                }
-            ]
-        }
-    )
-
-    if native:
-        message = valid._payload["choices"][0]["message"]
-        action = json.loads(message["content"])
-        message["content"] = None
-        message["tool_calls"] = [{
-            "id": "call_finish", "type": "function",
-            "function": {"name": action["tool"], "arguments": json.dumps(action["arguments"])},
-        }]
+    valid = _response(_FINISH)
+    failures = [bad, bad, bad] if network_failure else [_response("not valid json") for _ in range(3)]
 
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
         mock.patch(
             "resagent2_runtime.llm.send_request",
-            side_effect=[bad, bad, bad, valid],
+            side_effect=[*failures, valid],
         ),
     ):
         run = engine.run_until_stable("run_recovery_chain")
@@ -256,7 +229,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
 def recovery(monkeypatch, tmp_path):
     monkeypatch.setenv("TEST_LLM_KEY", "dummy")
     monkeypatch.setattr("resagent2_runtime.llm.time.sleep", lambda _: None)
-    client = _JSONOnlyClient(
+    client = OpenAICompatibleClient(
         model="test-model", api_base="https://example.invalid/v1",
         api_key_env="TEST_LLM_KEY", trace_dir=tmp_path / "traces", trace_level="full",
     )
@@ -273,9 +246,17 @@ def recovery(monkeypatch, tmp_path):
 
 
 def _response(content):
+    try:
+        action = json.loads(content)
+    except json.JSONDecodeError:
+        name, arguments = "write_value", content
+    else:
+        name, arguments = action["tool"], json.dumps(action.get("arguments", {}))
     return _FakeResponse({
         "choices": [{"finish_reason": "stop", "message": {
-            "content": content, "reasoning_content": "PRIVATE_REASONING",
+            "content": None, "reasoning_content": "PRIVATE_REASONING",
+            "tool_calls": [{"id": f"call_{uuid4().hex}", "type": "function",
+                            "function": {"name": name, "arguments": arguments}}],
         }}],
         "usage": {"completion_tokens": 20},
     })
@@ -304,18 +285,18 @@ def test_bad_json_feedback_preserves_state_and_never_executes_prefix(recovery, b
     assert state.memory["kept"] == 7
     assert [e.tool for e in state.events if e.type == "action"] == ["write_value", "finish"]
     assert state.runtime_feedback is None
-    assert "PRIVATE_" not in state.model_dump_json()
+    assert all(len(turn.tool_results) == len(turn.tool_calls) for turn in state.tool_turns)
+    assert not json.loads(state.tool_turns[0].tool_results[state.tool_turns[0].tool_calls[0].id])["ok"]
     records = [json.loads(line) for line in
                (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
     assert len(records) == 3
-    assert records[0]["raw_response_text"] == bad
+    assert records[0]["raw_tool_calls"][0]["function"]["arguments"] == bad
     assert records[0]["action_valid"] is False
     assert records[0]["finish_reason"] == "stop"
     assert records[0]["usage"] == {"completion_tokens": 20}
     assert records[1]["included_sections"].count("runtime_feedback") == 1
-    assert "Return exactly one JSON object" in records[1]["request_text"]
+    assert "Return native tool calls with JSON objects of arguments" in records[1]["request_text"]
     assert "No tool was executed" in records[1]["request_text"]
-    assert "PRIVATE_" not in records[1]["request_text"]
     assert "runtime_feedback" not in records[2]["included_sections"]
 
 
@@ -341,7 +322,7 @@ def test_transport_then_bad_json_counts_all_attempts_without_exceeding_budget(
                (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
     assert len(records[0]["attempts"]) == 2
     assert records[0]["attempts"][0]["raw_response_text"] is None
-    assert records[0]["attempts"][1]["raw_response_text"] == "bad JSON"
+    assert records[0]["attempts"][1]["raw_tool_calls"][0]["function"]["arguments"] == "bad JSON"
     assert sum(r["retry_number"] + 1 for r in records) == result.llm_calls
 
 
@@ -359,7 +340,7 @@ def test_json_and_schema_errors_share_feedback_and_failure_limit(recovery):
     records = [json.loads(line) for line in
                (definition.llm_client.trace_dir / "llm_traces.jsonl").read_text().splitlines()]
     assert sum("model" in r for r in records) == 5
-    assert sum("schema_validation_error" in r for r in records) == 2
+    assert sum(r["action_valid"] for r in records) == 2
 
 
 def test_json_correction_still_respects_wall_clock(recovery):
@@ -384,9 +365,13 @@ def test_json_feedback_is_provider_neutral(recovery):
         def __init__(self):
             self.contexts = []
 
-        def next_action(self, context, action_type):
+        tool_session_key = "other-native/v1"
+
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
+            from resagent2_runtime.tool_calling import parse_tool_turn
             self.contexts.append(context)
-            return json.loads("bad JSON" if len(self.contexts) == 1 else _FINISH)
+            response = _response("bad JSON" if len(self.contexts) == 1 else _FINISH)
+            return parse_tool_turn(response._payload["choices"][0]["message"], "stop")
 
     definition, request, store = recovery
     client = OtherClient()
@@ -427,8 +412,8 @@ def test_trace_storage_failure_does_not_interrupt_schema_recovery(recovery, capl
     assert result.llm_calls == state.llm_calls_used == provider.call_count == 2
     # The schema-validation trace also fails; feedback still reaches the next request.
     request_body = json.loads(provider.call_args_list[1].args[0].content)
-    assert "runtime_feedback" in request_body["messages"][0]["content"]
+    assert "runtime_feedback" in request_body["messages"][-1]["content"]
     assert "No tool was executed" not in state.model_dump_json()
     assert state.runtime_feedback is None
-    assert caplog.text.count("Could not write optional LLM trace") == 3
+    assert caplog.text.count("Could not write optional LLM trace") == 2
     assert "PRIVATE_REASONING" not in caplog.text

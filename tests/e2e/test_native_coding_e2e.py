@@ -1,4 +1,6 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 import subprocess
 import sys
@@ -93,7 +95,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
-            [
+            tool_turns([
                 _PREPARE, _AUDIT,
                 {
                     "tool": "replace_text",
@@ -111,7 +113,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
                     "tool": "finish",
                     "arguments": {"report": "Updated VALUE"},
                 },
-            ]
+            ])
         )
     )
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=coding)}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
@@ -159,7 +161,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
-            [
+            tool_turns([
                 _PREPARE,
                 _AUDIT,
                 {
@@ -186,7 +188,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
                     "tool": "finish",
                     "arguments": {"report": "Updated VALUE"},
                 },
-            ]
+            ])
         )
     )
 

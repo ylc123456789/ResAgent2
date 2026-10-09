@@ -203,7 +203,7 @@ class AgentState(RuntimeModel):
     runtime_feedback: ToolObservation | None = None
     runtime_feedback_source: Literal["completion_check", "tool_error"] | None = None
     events: list[AgentEvent] = Field(default_factory=list)
-    # None identifies JSON-only sessions; native continuation is bound to the
+    # Native continuation requires this identity and is bound to the
     # client's protocol/configuration identity, never credentials.
     tool_protocol_key: NonEmptyStr | None = None
     tool_turns: list[ToolCallTurn] = Field(default_factory=list)

@@ -28,7 +28,6 @@ from resagent2_runtime import (
 
 from .completion import CodingCompletionCheck, derive_control_state
 from .context import CODING_PROMPT, build_context
-from .models import CodingAction
 from .verification import RunVerificationTool
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
@@ -156,7 +155,7 @@ class NativeCodingAgent:
             completion_check=CodingCompletionCheck(
                 repository, boundary, baseline=baseline, env_binding=binding, output_dir=request.output_dir,
             ),
-            action_type=CodingAction, max_context_tokens=self.max_context_tokens,
+            max_context_tokens=self.max_context_tokens,
         )
         result = self.loop.run(
             definition, request,

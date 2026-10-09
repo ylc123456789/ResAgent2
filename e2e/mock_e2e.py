@@ -16,6 +16,7 @@ from resagent2_orchestrator import (
     ScriptedModulePort, WorkflowScheduler,
 )
 from resagent2_runtime import InMemorySessionStore, ScriptedLLMClient
+from e2e.native_fixtures import tool_turn, tool_turns
 from resagent2_scientific import ScientificAgent
 
 RUN_ID = "run_golden"
@@ -63,20 +64,22 @@ def run_mock_e2e(*, workdir: Path | None = None):
         store=JsonRunStore(workdir / "state"), artifact_root=workdir / "artifacts", data_root=workdir,
     )
     class GoldenClient(ScriptedLLMClient):
-        def next_action(self, context, action_type):
-            action = super().next_action(context, action_type)
-            if action["tool"] == "request_work":
-                return action
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
+            turn = super().next_tool_call(context, schemas, turns, max_input_tokens=max_input_tokens)
+            call = turn.tool_calls[0]
+            if call.name == "request_work":
+                return turn
             run = scheduler.store.load(RUN_ID)
             evidence = next(ref for ref in run.artifacts.values() if ref.kind == "metrics")
             assert evidence.id in context.text
-            if action["tool"] == "read_artifact":
-                return {"tool": "read_artifact", "arguments": {"artifact_id": evidence.id}}
-            return finish_action(evidence.id)
+            if call.name == "read_artifact":
+                return tool_turn("read_artifact", {"artifact_id": evidence.id}, call_id=call.id)
+            action = finish_action(evidence.id)
+            return tool_turn(action["tool"], action["arguments"], call_id=call.id)
 
-    scientific = ScientificAgent(GoldenClient([
+    scientific = ScientificAgent(GoldenClient(tool_turns([
         request_work_action(), {"tool": "read_artifact"}, {"tool": "finish"},
-    ]), store=InMemorySessionStore())
+    ])), store=InMemorySessionStore())
     controller = ResearchController(interpreter=DeterministicWorkInterpreter(), scientific_port=scientific, compiler=DeterministicWorkflowCompiler(proposal()),
                                     scheduler=scheduler, registry=registry())
     return controller.create_run(RUN_ID, ResearchRequest(goal='Determine whether the method improves accuracy', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3)))

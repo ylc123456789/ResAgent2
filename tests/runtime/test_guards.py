@@ -1,3 +1,4 @@
+from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import AgentPermissions
 import pytest
@@ -40,7 +41,7 @@ def definition(actions, *, allowed_tools: set[str]) -> AgentDefinition:
         owner=AgentOwner.CODING,
         system_prompt="Test runtime guards.",
         tools=(WriteValueTool(), FinishTool()),
-        llm_client=ScriptedLLMClient(actions),
+        llm_client=ScriptedLLMClient(tool_turns(actions)),
         context_builder=context_builder,
         permission_policy=AllowListPermissionPolicy(allowed_tools),
         completion_check=NeverFinish(),
@@ -98,8 +99,7 @@ def test_llm_action_must_match_the_typed_action_schema() -> None:
             [
                 {
                     "tool": "finish",
-                    "arguments": {'report': '{}'},
-                    "undocumented_field": True,
+                    "arguments": {'report': '{}', "undocumented_field": True},
                 }
             ],
             allowed_tools={"finish"},

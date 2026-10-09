@@ -216,6 +216,10 @@ class ModelRequestClient:
                         validation_error = "model request execution limit exceeded"
                         raise error from None
                 raise ModelRequestError(validation_error, error_type=error_type) from None
+            except httpx.DecodingError:
+                outcome = "failed"
+                error_type, validation_error = "invalid_response", "model response body could not be decoded"
+                raise ModelRequestError(validation_error, error_type=error_type) from None
             except httpx.TransportError:
                 error_type, validation_error = "network_error", "model request transport failed"
                 raise ModelRequestError(validation_error, error_type=error_type) from None

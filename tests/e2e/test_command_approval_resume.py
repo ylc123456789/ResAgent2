@@ -1,5 +1,7 @@
 """Native Agent approval resumes must re-audit and actually run the approved command."""
 
+from e2e.native_fixtures import tool_turns
+
 from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
@@ -113,7 +115,7 @@ def command(case, tag):
 def invoke(case, req, actions):
     # Recreate both Agent and SessionStore on every invoke, as controller resume does.
     agent = case.agent_type(
-        ScriptedLLMClient(actions), store=JsonSessionStore(case.root / "sessions"),
+        ScriptedLLMClient(tool_turns(actions)), store=JsonSessionStore(case.root / "sessions"),
         resource_layout=ResourceLayout(resource_root=case.root / "resources"),
     )
     return agent.invoke(req)

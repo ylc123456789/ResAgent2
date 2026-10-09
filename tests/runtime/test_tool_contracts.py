@@ -14,7 +14,6 @@ from resagent2_runtime import AgentAction, AskUserTool, FinishTool
 from resagent2_scientific.tools import (
     AskUserTool as ScientificAskUserTool, RequestWorkTool,
 )
-from resagent2_runtime.tools import tool_contracts_text
 from resagent2_runtime.tool_calling import native_tool_schemas
 
 
@@ -39,13 +38,10 @@ class _AskTool:
     input_model = _AskInput
 
 
-def test_tool_contracts_lists_required_arguments_only() -> None:
-    text = tool_contracts_text((_FinishTool, _AskTool))
-
-    assert "finish: opinion, summary" in text
-    assert "ask_user: text, reason" in text
-    # Optional / defaulted fields must not be presented as required.
-    assert "optional_note" not in text
+def test_native_schemas_list_required_arguments() -> None:
+    schemas = native_tool_schemas((_FinishTool, _AskTool))
+    assert schemas[0]["function"]["parameters"]["required"] == ["opinion", "summary"]
+    assert schemas[1]["function"]["parameters"]["required"] == ["text", "reason"]
 
 
 def test_agent_action_has_no_reasoning_summary() -> None:
@@ -57,9 +53,8 @@ def test_agent_action_has_no_reasoning_summary() -> None:
 def test_ask_user_contract_requires_requested_fields() -> None:
     from resagent2_runtime import AskUserTool
 
-    text = tool_contracts_text((AskUserTool(),))
-    assert "ask_user: text, requested_fields" in text
-    assert "reason" not in text
+    required = native_tool_schemas((AskUserTool(),))[0]["function"]["parameters"]["required"]
+    assert required == ["text", "requested_fields"]
 
 
 def test_tool_contracts_include_optional_model_guidance() -> None:
@@ -71,11 +66,10 @@ def test_tool_contracts_include_optional_model_guidance() -> None:
         input_model = _ReadInput
         model_guidance = "read a bounded start_line/end_line range when truncated"
 
-    text = tool_contracts_text((_ReadTool, _FinishTool))
-    assert "- read_file: path" in text
-    assert "read a bounded start_line/end_line range when truncated" in text
-    # A tool without guidance still emits only its one contract line.
-    assert "- finish: opinion, summary" in text
+    schemas = native_tool_schemas((_ReadTool, _FinishTool))
+    assert schemas[0]["function"]["parameters"]["required"] == ["path"]
+    assert _ReadTool.model_guidance in schemas[0]["function"]["description"]
+    assert schemas[1]["function"]["parameters"]["required"] == ["opinion", "summary"]
 
 
 @pytest.mark.parametrize("tool_class", [
@@ -83,14 +77,11 @@ def test_tool_contracts_include_optional_model_guidance() -> None:
     RequestWorkTool, ScientificAskUserTool, FinishTool, AskUserTool,
     RunVerificationTool, RunShellTool,
 ])
-def test_operational_guidance_reaches_both_model_protocols(tool_class) -> None:
+def test_operational_guidance_reaches_native_tool_schema(tool_class) -> None:
     # Guidance is class-level. Rendering it needs no environment or filesystem.
     tool = object.__new__(tool_class)
-    text = tool_contracts_text((tool,))
     native = native_tool_schemas((tool,))[0]["function"]
 
     assert tool.model_guidance.strip()
-    assert f"- {tool.name}:" in text
     assert native["name"] == tool.name
-    assert tool.model_guidance in text
     assert tool.model_guidance in native["description"]

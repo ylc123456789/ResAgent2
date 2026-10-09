@@ -88,7 +88,6 @@ def _exact_limit(definition, request, state) -> int:
         state,
         schemas,
         1_000_000,
-        native=True,
     )
     start = state.history_checkpoint.history_start if state.history_checkpoint else 0
     return ContextComposer.estimate_tokens(

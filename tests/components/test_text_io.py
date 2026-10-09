@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from resagent2_components import RegisteredArtifactReader
-from resagent2_components.text import MAX_WORKSPACE_TEXT_BYTES, TextFileTooLargeError, read_text_file
+from resagent2_components.text import (
+    MAX_WORKSPACE_TEXT_BYTES,
+    TextFileTooLargeError,
+    read_text_file,
+    slice_text_lines,
+)
 from resagent2_contracts import AgentOwner, ArtifactRef
 
 
@@ -44,3 +49,78 @@ def test_workspace_processing_limit_does_not_restrict_registered_text(tmp_path):
     result = reader.read_text(ref.id, start_line=1, end_line=1)
     assert result["content"] == "selected\r\n"
     assert result["truncated"] is False
+
+
+@pytest.mark.parametrize("end_char", [None, 100, 10])
+def test_clipped_window_continues_at_returned_boundary(end_char):
+    body = "0123456789abcdefghij"
+    first = slice_text_lines(body, start_char=2, end_char=end_char, max_chars=5)
+    assert first["content"] == "23456"
+    assert first["start_char"] == 2
+    assert first["end_char"] == end_char
+    assert first["truncated"] is True
+    assert first["next_start_char"] == 7
+    second = slice_text_lines(body, start_char=first["next_start_char"], max_chars=5)
+    assert second["content"] == "789ab"
+
+
+@pytest.mark.parametrize("max_chars", [5, 20])
+def test_complete_explicit_window_is_not_the_end_of_selected_lines(max_chars):
+    first = slice_text_lines("0123456789", end_char=5, max_chars=max_chars)
+    assert first["content"] == "01234"
+    assert first["truncated"] is False
+    assert first["next_start_char"] == 5
+    second = slice_text_lines("0123456789", start_char=first["next_start_char"], max_chars=5)
+    assert second["content"] == "56789"
+    assert second["next_start_char"] is None
+
+
+@pytest.mark.parametrize("body,start_char,end_char", [
+    ("01234", 0, 5),
+    ("01234", 0, None),
+    ("01234", 2, 100),
+    ("01234", 5, None),
+    ("01234", 10, None),
+    ("", 0, None),
+])
+def test_selected_line_end_and_empty_windows_have_no_continuation(body, start_char, end_char):
+    result = slice_text_lines(body, start_char=start_char, end_char=end_char, max_chars=5)
+    assert result["content"] == body[start_char:end_char]
+    assert result["truncated"] is False
+    assert result["next_start_char"] is None
+
+
+@pytest.mark.parametrize("window_size", [3, 7])
+def test_continuation_rebuilds_unicode_with_fixed_line_coordinates(window_size):
+    selected = "中文😀abc\r\nαβγdelta\r\n"
+    body = "not selected\r\n" + selected + "also not selected\r\n"
+    pieces = []
+    start_char = 0
+    while True:
+        result = slice_text_lines(
+            body, start_line=2, end_line=3,
+            start_char=start_char, end_char=start_char + window_size, max_chars=3,
+        )
+        assert result["start_line"] == 2
+        assert result["end_line"] == 3
+        assert result["content"] == selected[start_char:start_char + 3]
+        pieces.append(result["content"])
+        next_start = result["next_start_char"]
+        if next_start is None:
+            break
+        assert next_start == start_char + len(result["content"])
+        assert next_start > start_char
+        start_char = next_start
+    assert "".join(pieces) == selected
+
+
+def test_continuation_is_relative_to_selected_lines_not_the_whole_file():
+    result = slice_text_lines("header\r\n中文😀\r\nfooter\r\n", start_line=2, end_line=2, max_chars=3)
+    assert result["content"] == "中文😀"
+    assert result["next_start_char"] == 3
+    tail = slice_text_lines(
+        "header\r\n中文😀\r\nfooter\r\n", start_line=2, end_line=2,
+        start_char=result["next_start_char"], max_chars=3,
+    )
+    assert tail["content"] == "\r\n"
+    assert tail["next_start_char"] is None

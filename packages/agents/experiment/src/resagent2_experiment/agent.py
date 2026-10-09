@@ -27,7 +27,6 @@ from resagent2_runtime import (
 
 from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
-from .models import ExperimentAction
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
@@ -130,7 +129,7 @@ class NativeExperimentAgent:
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),
-            action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
+            max_context_tokens=self.max_context_tokens,
         )
         result = self.loop.run(
             definition, request,

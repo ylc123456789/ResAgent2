@@ -491,3 +491,49 @@ def test_web_page_link_card_blocks_and_nested_anchors_keep_separate_labels(monke
         "Second (https://example.test/second)",
         "After",
     ]
+
+
+@pytest.mark.parametrize("operation,error_class", [("search", WebSearchError), ("fetch", WebFetchError)])
+def test_corrupt_compressed_response_is_a_structured_failure(monkeypatch, operation, error_class):
+    from resagent2_runtime import http
+
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(
+            200, headers={"content-encoding": "gzip", "content-type": "text/html"},
+            stream=httpx.ByteStream(b"PRIVATE_CORRUPT_RESPONSE"),
+        )
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(http.httpx, "AsyncClient", lambda **kwargs: original(
+        transport=httpx.MockTransport(respond), **kwargs,
+    ))
+    with pytest.raises(error_class, match="could not be decoded") as raised:
+        if operation == "search":
+            TavilyWebSearchBackend("secret").search("q", max_results=1)
+        else:
+            WebPageFetcher().fetch("https://example.test/page")
+    assert raised.value.error_type == "invalid_response"
+    assert "PRIVATE_CORRUPT_RESPONSE" not in str(raised.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("operation", ["search", "fetch"])
+@pytest.mark.parametrize("error_type", ["budget", "deadline"])
+def test_web_request_boundaries_do_not_convert_run_limits(monkeypatch, operation, error_type):
+    from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError
+
+    error = BudgetExhaustedError("exhausted") if error_type == "budget" else DeadlineExceededError("expired")
+
+    def send(request, **kwargs):
+        raise error
+
+    monkeypatch.setattr("resagent2_components.web.send_request", send)
+    with pytest.raises(type(error)) as raised:
+        if operation == "search":
+            TavilyWebSearchBackend("secret").search("q", max_results=1)
+        else:
+            WebPageFetcher().fetch("https://example.test/page")
+    assert raised.value is error

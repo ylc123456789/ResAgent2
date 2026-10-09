@@ -3,7 +3,7 @@
 import json
 from dataclasses import replace
 from io import BytesIO
-from httpx import TransportError
+from httpx import DecodingError, TransportError
 
 import pytest
 
@@ -144,7 +144,7 @@ def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
     assert "tool_history" in records[-1]["included_sections"]
 
 
-@pytest.mark.parametrize("failure", ["bad_arguments", "prose", "multiple", "schema", "duplicate_ids", "missing_id", "length"])
+@pytest.mark.parametrize("failure", ["bad_arguments", "prose", "multiple", "schema", "duplicate_ids", "missing_id", "length", "unknown", "unknown_batch"])
 def test_rejected_native_response_never_executes_and_recovers_in_same_session(setup, failure):
     definition, store, requests, install = setup
     call = _call("write_value", {"key": "unsafe", "value": 99}, call_id="call_bad")
@@ -163,6 +163,10 @@ def test_rejected_native_response_never_executes_and_recovers_in_same_session(se
         del call["id"]
     elif failure == "length":
         bad["choices"][0]["finish_reason"] = "length"
+    elif failure == "unknown":
+        bad = _reply([_call("unregistered", call_id="call_unknown")])
+    elif failure == "unknown_batch":
+        bad = _reply([call, _call("unregistered", call_id="call_unknown")])
     install([bad, _reply()])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     state = store.load("session_native")
@@ -483,8 +487,13 @@ def test_native_session_cannot_resume_with_json_only_client(setup):
     install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
-    from resagent2_runtime import ScriptedLLMClient
-    scripted = ScriptedLLMClient([])
+    class JsonOnlyClient:
+        contexts = []
+
+        def next_action(self, *args):
+            raise AssertionError("JSON action fallback must not run")
+
+    scripted = JsonOnlyClient()
     result = AgentLoop(store=store).run(
         replace(definition, llm_client=scripted), _request(parent="session_native"), session_id="session_native",
     )
@@ -727,3 +736,31 @@ def test_reported_client_usage_cannot_replace_shared_accounting(setup, reported)
     assert result.llm_calls == store.load("session_native").llm_calls_used == 1
     definition.llm_client.next_tool_call.assert_called_once()
     assert store.load("session_native").step == 1
+
+
+def test_unknown_tools_use_existing_bounded_feedback_limit(setup):
+    definition, store, requests, install = setup
+    install([_reply([_call("unregistered", call_id=f"call_unknown_{i}")]) for i in range(6)])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert not result.error.retryable
+    assert result.llm_calls == len(requests) == 5
+    assert "Unknown tool" in state.runtime_feedback.summary
+    assert all(len(turn.tool_results) == len(turn.tool_calls) for turn in state.tool_turns)
+    assert all(not json.loads(receipt)["ok"] for turn in state.tool_turns
+               for receipt in turn.tool_results.values())
+    tool_messages(state.tool_turns)
+
+
+def test_decoding_failure_preserves_diagnostics_without_provider_retry(setup):
+    definition, store, requests, install = setup
+    install([DecodingError("corrupt gzip response")])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert result.llm_calls == len(requests) == definition.llm_client.last_attempts == 1
+    row, = _rows(definition)
+    assert len(row["attempts"]) == 1
+    assert row["validation_error"] == "corrupt gzip response"
+    assert not row["action_valid"]
+    assert store.load("session_native").tool_turns == []

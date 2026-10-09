@@ -1,5 +1,7 @@
 """Scientific receives recorded work reports without observing their source artifacts."""
 
+from e2e.native_fixtures import tool_turns
+
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -223,10 +225,10 @@ def test_directory_citation_cannot_satisfy_original_evidence_requirement(tmp_pat
 
 def test_reading_directory_does_not_mark_sources_read_or_block_unread_citation(tmp_path):
     refs = handoff(tmp_path)
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": refs[2].id}},
         finish([refs[0].id]),
-    ])
+    ]))
     result = ScientificAgent(client).invoke(request(refs[:3]))
     assert result.status == "completed"
     assert len(client.contexts) == 2
@@ -261,7 +263,7 @@ def test_latest_work_record_still_controls_completion_after_answer(tmp_path):
         "assessment": {"statement": "Need measurements"},
         "work_request": {"objective": "Measure accuracy", "expected_evidence": ["accuracy"]},
     }}
-    client = ScriptedLLMClient([work, ask, finish(), finish(limitations=["The requested measurement failed."])])
+    client = ScriptedLLMClient(tool_turns([work, ask, finish(), finish(limitations=["The requested measurement failed."])]))
     agent = ScientificAgent(client)
     first = agent.invoke(request())
     failed = WorkTaskOutcome(
@@ -294,7 +296,7 @@ def test_invalid_raw_record_stops_before_model_invocation(tmp_path, invalid):
         record["work_request_id"] = "work_other"
         record["work_outcome"]["work_request_id"] = "work_other"
         refs[1] = freeze(tmp_path, "artifact_record", "work_record", record, session=SESSION)
-    client = ScriptedLLMClient([finish()])
+    client = ScriptedLLMClient(tool_turns([finish()]))
     result = ScientificAgent(client).invoke(request(refs, parent=SESSION, resume=[refs[-1].id]))
     assert result.status == "failed"
     assert result.error.code == ErrorCode.INVALID_INPUT

@@ -25,7 +25,6 @@ from resagent2_runtime import (
 
 from .completion import ScientificCompletionCheck, _observed_artifact_ids
 from .context import SCIENTIFIC_PROMPT, build_context
-from .models import ScientificAction
 from .tools import AskUserTool, FinishTool, RequestWorkTool
 
 
@@ -141,7 +140,7 @@ class ScientificAgent:
                 input_artifact_ids=[item.id for item in request.input_artifacts],
                 registered_artifacts=(lambda: list_registered(run_id=request.run_id)) if list_registered else None,
             ),
-            action_type=ScientificAction, max_context_tokens=self.max_context_tokens,
+            max_context_tokens=self.max_context_tokens,
         )
         if request.parent_session_id is None and self.store.exists(session_id):
             request = request.model_copy(update={"parent_session_id": session_id})

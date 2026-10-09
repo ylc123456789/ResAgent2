@@ -23,6 +23,7 @@ from .llm import (
     OpenAICompatibleClient,
     PromptLLMClient,
     ScriptedLLMClient,
+    StructuredLLMClient,
 )
 from .loop import (
     AgentDefinition,
@@ -94,6 +95,7 @@ __all__ = [
     "recent_tool_listing",
     "recent_tool_snippets",
     "ScriptedLLMClient",
+    "StructuredLLMClient",
     "SessionStore",
     "Tool",
     "ToolCallTurn",

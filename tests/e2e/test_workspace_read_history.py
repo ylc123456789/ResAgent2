@@ -1,7 +1,10 @@
 """Native tool flow preserves the timing of reads across a successful edit."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions
 
+from copy import deepcopy
 import json
 import subprocess
 
@@ -14,17 +17,26 @@ from resagent2_contracts import (
     WorkflowAgentKind, ModuleStatus, AgentRequest, TaskBudget,
     WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind, task_session_id,
 )
-from resagent2_runtime import InMemorySessionStore
+from resagent2_runtime import ContextComposer, InMemorySessionStore
+from resagent2_runtime.tool_calling import native_input_text
 
 
 class _ActionClient:
+    tool_session_key = "test-native-tools/v1"
+
     def __init__(self, actions):
         self.actions = iter(actions)
         self.contexts = []
+        self.schemas = []
+        self.histories = []
+        self.input_limits = []
 
-    def next_action(self, context, action_type):
+    def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
         self.contexts.append(context)
-        return next(self.actions)
+        self.schemas.append(deepcopy(schemas))
+        self.histories.append([turn.model_copy(deep=True) for turn in turns])
+        self.input_limits.append(max_input_tokens)
+        return tool_turns([next(self.actions)])[0]
 
 
 def _workspace_reads(context):
@@ -55,8 +67,8 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
         {"tool": "read_file", "arguments": {
             "path": "train.py", "start_line": 2, "end_line": 5,
         }},
-        # The edit must remain explainable after it rotates out of Runtime's
-        # short recent-observation window. These use the real listing Tool.
+        # Later real tool calls must retain earlier reads and the edit in
+        # both the working set and the paired native protocol history.
         *[{"tool": "list_files", "arguments": {"path": "."}} for _ in range(7)],
         {"tool": "ask_user", "arguments": {
             "text": "Continue with verification?", "requested_fields": ["approval"],
@@ -89,9 +101,28 @@ def test_native_coding_read_history_marks_only_successful_later_edits(tmp_path, 
     else:
         assert "modified_after_read_at" not in snippets[0]
         assert "return totla" in snippets[1]["content"]
-    history = client.contexts[-1].text.split("## recent_observations\n", 1)[1].split("\n\n## ", 1)[0]
-    assert "replace_text" not in history
-    assert "read_file" not in history
+    history = client.histories[-1]
+    assert len(history) == len(actions) - 1
+    assert [call.name for turn in history for call in turn.tool_calls] == [
+        action["tool"] for action in actions[:-1]
+    ]
+    receipts = []
+    for turn in history:
+        assert set(turn.tool_results) == {call.id for call in turn.tool_calls}
+        receipts.append(json.loads(turn.tool_results[turn.tool_calls[0].id]))
+    assert receipts[0]["value"]["content"] == snippets[0]["content"]
+    assert receipts[2]["value"]["content"] == snippets[1]["content"]
+    assert [receipts[index]["observed_at"] for index in (0, 2)] == [
+        event.sequence for event in reads
+    ]
+    assert receipts[1]["ok"] is edit_succeeds
+    names = {schema["function"]["name"] for schema in client.schemas[-1]}
+    assert {"read_file", "replace_text", "list_files", "ask_user"} <= names
+    context = client.contexts[-1]
+    measured = ContextComposer.estimate_tokens(native_input_text(context.text, client.schemas[-1], history))
+    assert measured == context.estimated_tokens
+    assert measured <= client.input_limits[-1]
+    assert "recent_observations" not in context.included_sections
     assert (root / "train.py").read_text(encoding="utf-8") == (
         source.replace("return totla", "return total") if edit_succeeds else source
     )

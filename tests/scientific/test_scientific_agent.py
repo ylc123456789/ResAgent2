@@ -1,5 +1,7 @@
 """Scientific uses the common result while retaining evidence and recovery rules."""
 
+from e2e.native_fixtures import tool_turns
+
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -113,10 +115,10 @@ def test_work_record_requires_paired_request():
 
 def test_finish_with_existing_evidence_completes(tmp_path):
     ref = artifact(tmp_path)
-    agent = ScientificAgent(ScriptedLLMClient([
+    agent = ScientificAgent(ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
         finish(evidence=[ref.id], verdict="supports"),
-    ]))
+    ])))
     result = agent.invoke(request(artifacts=[ref]))
     assert result.status == "completed", result.report
     assert content(result, "scientific_opinion")["verdict"] == "supports"
@@ -124,7 +126,7 @@ def test_finish_with_existing_evidence_completes(tmp_path):
 
 
 def test_request_work_has_only_artifact_control_content():
-    result = ScientificAgent(ScriptedLLMClient([work()])).invoke(request())
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([work()]))).invoke(request())
     assert result.status == "request_work", result.report
     assert result.control.action == "request_work"
     assert result.control.candidate_index == 0
@@ -133,7 +135,7 @@ def test_request_work_has_only_artifact_control_content():
 
 
 def test_request_work_permission_is_enforced():
-    result = ScientificAgent(ScriptedLLMClient([work()])).invoke(request(request_work=False))
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([work()]))).invoke(request(request_work=False))
     assert result.status == "failed"
 
 
@@ -153,10 +155,10 @@ def test_imported_literature_can_satisfy_requirements_after_reading(tmp_path):
     ref = artifact(tmp_path, kind="literature_paper")
     requirements = artifact(tmp_path, "artifact_requirements", kind="conclusion_requirements",
                             content={"required_evidence_kinds": ["literature_paper"]})
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
         finish(evidence=[ref.id], verdict="supports"),
-    ])
+    ]))
     result = ScientificAgent(client).invoke(request(artifacts=[ref, requirements]))
     assert result.status == "completed", result.report
     assert content(result, "observation_trace")["observed_artifact_ids"] == [ref.id]
@@ -197,10 +199,10 @@ def test_literature_search_ref_is_returned_without_duplicate_registration(tmp_pa
             return list(self.refs.values())
 
     register = Register()
-    result = ScientificAgent(ScriptedLLMClient([
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([
         {"tool": "literature_search", "arguments": {"query": "method"}},
         finish(evidence=["artifact_literature_paper"]),
-    ]), literature_backend=Backend(), registration_port=register).invoke(request())
+    ])), literature_backend=Backend(), registration_port=register).invoke(request())
     assert result.status == "completed", result.report
     assert register.calls == 2
     assert all(ref in result.artifacts for ref in register.refs.values())
@@ -208,7 +210,7 @@ def test_literature_search_ref_is_returned_without_duplicate_registration(tmp_pa
 
 
 def test_question_pauses_with_content_reference():
-    result = ScientificAgent(ScriptedLLMClient([ask()])).invoke(request())
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([ask()]))).invoke(request())
     assert result.status == "needs_user_input"
     assert result.control.action == "ask_user"
     assert content(result, "question")["requested_fields"] == ["dataset"]
@@ -223,7 +225,7 @@ def test_question_schema_retains_visible_background_guidance():
 
 
 def test_feedback_resume_reuses_session_and_is_idempotent(tmp_path):
-    client = ScriptedLLMClient([work(), finish(), finish(verdict="supports", evidence=["artifact_wrong"])])
+    client = ScriptedLLMClient(tool_turns([work(), finish(), finish(verdict="supports", evidence=["artifact_wrong"])]))
     agent = ScientificAgent(client)
     first = agent.invoke(request())
     refs = feedback(tmp_path, first.session.id)
@@ -238,7 +240,7 @@ def test_feedback_resume_reuses_session_and_is_idempotent(tmp_path):
 
 
 def test_answer_resume_projects_registered_content(tmp_path):
-    client = ScriptedLLMClient([ask(), finish()])
+    client = ScriptedLLMClient(tool_turns([ask(), finish()]))
     agent = ScientificAgent(client)
     first = agent.invoke(request())
     answer = artifact(tmp_path, "artifact_answer", kind="answer", session=first.session.id,
@@ -252,7 +254,7 @@ def test_answer_resume_projects_registered_content(tmp_path):
 
 
 def test_unread_citation_is_rejected(tmp_path):
-    result = ScientificAgent(ScriptedLLMClient([finish(evidence=["artifact_unread"], verdict="supports")])).invoke(
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([finish(evidence=["artifact_unread"], verdict="supports")]))).invoke(
         request(artifacts=[artifact(tmp_path)]),
     )
     assert result.status == "failed"
@@ -261,17 +263,17 @@ def test_unread_citation_is_rejected(tmp_path):
 
 def test_unread_citation_can_be_recovered_by_reading(tmp_path):
     ref = artifact(tmp_path)
-    agent = ScientificAgent(ScriptedLLMClient([
+    agent = ScientificAgent(ScriptedLLMClient(tool_turns([
         finish(evidence=[ref.id], verdict="supports"),
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
         finish(evidence=[ref.id], verdict="supports"),
-    ]))
+    ])))
     result = agent.invoke(request(artifacts=[ref]))
     assert result.status == "completed"
 
 
 def test_failed_work_requires_limitation_in_opinion(tmp_path):
-    agent = ScientificAgent(ScriptedLLMClient([work(), finish()]))
+    agent = ScientificAgent(ScriptedLLMClient(tool_turns([work(), finish()])))
     first = agent.invoke(request())
     from resagent2_contracts import ModuleError
     unresolved = WorkTaskOutcome(
@@ -285,9 +287,9 @@ def test_failed_work_requires_limitation_in_opinion(tmp_path):
 
 def test_budget_exhaustion_counts_real_calls(tmp_path):
     ref = artifact(tmp_path)
-    result = ScientificAgent(ScriptedLLMClient([
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
-    ] * 4)).invoke(request(artifacts=[ref], budget=2))
+    ] * 4))).invoke(request(artifacts=[ref], budget=2))
     assert result.status == "failed"
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
     assert result.llm_calls == 2
@@ -297,12 +299,12 @@ def test_budget_exhaustion_counts_real_calls(tmp_path):
 def test_assessment_cannot_cite_unobserved_evidence(tool):
     action = ask() if tool == "ask_user" else work()
     action["arguments"]["assessment"]["evidence_artifact_ids"] = ["artifact_unread"]
-    result = ScientificAgent(ScriptedLLMClient([action])).invoke(request())
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([action]))).invoke(request())
     assert result.status == "failed"
 
 
 def test_repeated_first_request_uses_persisted_result():
-    client = ScriptedLLMClient([work(), finish()])
+    client = ScriptedLLMClient(tool_turns([work(), finish()]))
     agent = ScientificAgent(client)
     first = agent.invoke(request())
     duplicate = agent.invoke(request())
@@ -315,10 +317,10 @@ def test_repeated_first_request_uses_persisted_result():
 def test_earlier_reads_remain_in_context(tmp_path):
     a = artifact(tmp_path, "artifact_a")
     b = artifact(tmp_path, "artifact_b")
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": a.id}},
         {"tool": "read_artifact", "arguments": {"artifact_id": b.id}}, finish(evidence=[a.id, b.id]),
-    ])
+    ]))
     result = ScientificAgent(client).invoke(request(artifacts=[a, b]))
     assert result.status == "completed"
     assert "artifact_reads" in client.contexts[-1].included_sections
@@ -326,9 +328,9 @@ def test_earlier_reads_remain_in_context(tmp_path):
 
 
 def test_obsolete_opinion_fields_are_rejected():
-    result = ScientificAgent(ScriptedLLMClient([
+    result = ScientificAgent(ScriptedLLMClient(tool_turns([
         finish(acknowledged_task_ids=["task_unknown"]),
-    ])).invoke(request())
+    ]))).invoke(request())
     assert result.status == "failed"
 
 

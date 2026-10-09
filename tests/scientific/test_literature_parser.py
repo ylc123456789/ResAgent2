@@ -1,5 +1,7 @@
 """Scientific forwards a parser chosen by its caller to the full-text tool."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_components import RegisteredArtifactReader
 from resagent2_components.literature import LiteraturePaper
 from resagent2_components.literature.fulltext import PdfText
@@ -55,7 +57,7 @@ def test_injected_parser_reads_frozen_pdf_and_registers_its_text(tmp_path):
         assert path.read_bytes() == original
         return PdfText("## Page 1\nInjected parser text.", 1, [], "injected-test")
 
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "fetch_literature_fulltext", "arguments": {"paper_artifact_id": paper_ref.id}},
         {"tool": "finish", "arguments": {
             "report": "Parser injection checked",
@@ -67,7 +69,7 @@ def test_injected_parser_reads_frozen_pdf_and_registers_its_text(tmp_path):
                 ).model_dump_json(),
             }],
         }},
-    ])
+    ]))
     result = ScientificAgent(
         client, registration_port=register, literature_parser=parser,
     ).invoke(AgentRequest(

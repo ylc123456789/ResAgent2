@@ -3,12 +3,11 @@
 from datetime import UTC, datetime
 import json
 import subprocess
-from typing import get_args
 
 import httpx
 import pytest
 
-from resagent2_coding import CodingAction, NativeCodingAgent
+from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
     AgentPermissions, AgentRequest, ArtifactCandidate, ModuleStatus, QuestionDraft,
     RecordedAnswer, TaskBudget, WorkspaceAccess, WorkspaceGrant,
@@ -90,8 +89,8 @@ def test_native_coding_deletes_file_or_empty_directory_without_asking(
     assert not target.exists()
     assert (repo / "keep.txt").read_text() == "keep\n"
     assert result.control is None
-    assert all(names == set(get_args(CodingAction.model_fields["tool"].annotation))
-               for names in sent)
+    assert sent and {"delete_path", "finish"} <= sent[0]
+    assert all(names == sent[0] for names in sent)
     if not directory:
         patch = next(item for item in result.artifacts if item.kind == "code_patch")
         assert "deleted file mode" in patch.content

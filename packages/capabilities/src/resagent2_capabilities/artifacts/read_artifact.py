@@ -29,11 +29,16 @@ class ReadArtifactTool:
     model_guidance = (
         "Read UTF-8 text only; NUL bytes or invalid UTF-8 are rejected "
         "and failed reads are not recorded as read. "
-        "If an artifact read is truncated, read a bounded start_line/end_line "
-        "range. For a long line or JSON string, use start_char/end_char to read "
-        "small character windows within those same lines (zero-based, end exclusive). "
-        "Keep the line range fixed while paging characters. Do not repeat an "
-        "unbounded read. The full frozen file is integrity-checked before any range is returned."
+        "Read only needed portions using bounded start_line/end_line or "
+        "start_char/end_char ranges (zero-based characters, end exclusive). "
+        "To continue within the same lines, set start_char to next_start_char "
+        "and choose a new bounded end_char. Keep the line range fixed; do not "
+        "use the requested end_char as the continuation offset. "
+        "next_start_char=None means the selected lines are exhausted, not "
+        "necessarily the whole artifact. truncated=False means the requested "
+        "window fit the tool output limit, not that the selected lines are exhausted. "
+        "Do not repeat an unbounded read. The full frozen file is integrity-checked "
+        "before any range is returned."
     )
 
     def __init__(self, reader: RegisteredArtifactReader) -> None:

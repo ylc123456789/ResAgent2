@@ -1,5 +1,7 @@
 """Actual search/freeze/read/context and full-text chains; scripted, no network."""
 
+from e2e.native_fixtures import tool_turns
+
 import hashlib
 import json
 from datetime import date
@@ -91,12 +93,14 @@ def _registered(client, kind):
 
 def test_search_continuation_reaches_scientific_with_complete_abstract(tmp_path):
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "comparison"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "comparison"}}])[0]
             receipts = _registered(self, "literature_search")
             receipt = json.loads(_path(receipts[-1]).read_text())
             if self.step == 2:
@@ -106,7 +110,7 @@ def test_search_continuation_reaches_scientific_with_complete_abstract(tmp_path)
                 assert receipt["next_request"]["max_results"] == 5
                 assert receipt["next_request"]["page"] == 2
                 assert receipt["next_request"]["source"] == "arxiv"
-                return {"tool": "literature_search", "arguments": receipt["next_request"]}
+                return tool_turns([{"tool": "literature_search", "arguments": receipt["next_request"]}])[0]
             assert len(_registered(self, "literature_paper")) == 6
             ref = next(ref for ref in _registered(self, "literature_paper")
                        if ref.metadata["paper"]["paper_id"] == "2401.00005")
@@ -115,10 +119,10 @@ def test_search_continuation_reaches_scientific_with_complete_abstract(tmp_path)
                 assert receipt["next_request"] is None
                 assert receipt["total_results"] == 6
                 assert TAIL_EVIDENCE not in context.text
-                return {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}}
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": ref.id}}])[0]
             assert self.step == 4
             assert TAIL_EVIDENCE in context.text
-            return _finish(ref.id, TAIL_EVIDENCE)
+            return tool_turns([_finish(ref.id, TAIL_EVIDENCE)])[0]
 
     controller, _ = _controller(tmp_path, Client(), _papers())
     run = controller.create_run(RUN_ID, ResearchRequest(
@@ -134,13 +138,15 @@ def test_search_continuation_reaches_scientific_with_complete_abstract(tmp_path)
 
 def test_literature_tail_reaches_actual_scientific_context(tmp_path):
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
         tail_line = None
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "comparison", "max_results": 6}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "comparison", "max_results": 6}}])[0]
             papers = _registered(self, "literature_paper")
             assert len(papers) == 6
             ref = next(ref for ref in papers if ref.metadata["paper"]["paper_id"] == "2401.00005")
@@ -155,10 +161,10 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
                 lines = body.splitlines()
                 self.tail_line = next(i for i, line in enumerate(lines, 1) if TAIL_EVIDENCE in line)
                 assert self.tail_line > 1
-                return {"tool": "read_artifact", "arguments": {
+                return tool_turns([{"tool": "read_artifact", "arguments": {
                     "artifact_id": ref.id,
                     "start_line": self.tail_line, "end_line": self.tail_line,
-                }}
+                }}])[0]
             assert self.step == 3
             assert "artifact_reads" in context.included_sections
             section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
@@ -167,7 +173,7 @@ def test_literature_tail_reaches_actual_scientific_context(tmp_path):
             assert snippets[0]["artifact_id"] == ref.id
             assert snippets[0]["truncated"] is False
             assert TAIL_EVIDENCE in snippets[0]["content"]
-            return _finish(ref.id, TAIL_EVIDENCE)
+            return tool_turns([_finish(ref.id, TAIL_EVIDENCE)])[0]
 
     client = Client()
     controller, agent = _controller(tmp_path, client, _papers())
@@ -225,24 +231,26 @@ def test_search_fetch_read_finish_preserves_registered_source_chain(tmp_path, mo
     monkeypatch.setattr(fulltext_tool, "parse_pdf", parse)
 
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "controlled result"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "controlled result"}}])[0]
             paper = _registered(self, "literature_paper")[0]
             if self.step == 2:
                 assert evidence not in context.text
-                return {"tool": "fetch_literature_fulltext", "arguments": {"paper_artifact_id": paper.id}}
+                return tool_turns([{"tool": "fetch_literature_fulltext", "arguments": {"paper_artifact_id": paper.id}}])[0]
             text = _registered(self, "literature_fulltext")[0]
             if self.step == 3:
                 assert evidence not in context.text  # Obtaining a file did not return its text.
-                return {"tool": "read_artifact", "arguments": {"artifact_id": text.id}}
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": text.id}}])[0]
             assert self.step == 4
             assert evidence in context.text
             assert "artifact_reads" in context.included_sections
-            return _finish(text.id, evidence)
+            return tool_turns([_finish(text.id, evidence)])[0]
 
     client = Client()
     controller, agent = _controller(tmp_path, client, _papers()[:1])

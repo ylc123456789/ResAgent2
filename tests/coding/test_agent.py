@@ -1,5 +1,7 @@
 """Unified Coding invocation, workspace ownership and operation authorization."""
 
+from e2e.native_fixtures import tool_turns
+
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -11,8 +13,8 @@ from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ErrorCode, ModuleStatus,
     TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
-from resagent2_coding import CodingAction, NativeCodingAgent
-from resagent2_runtime import ScriptedLLMClient
+from resagent2_coding import NativeCodingAgent
+from resagent2_runtime import AgentAction, ScriptedLLMClient
 
 
 def init_repo(root: Path) -> None:
@@ -46,9 +48,9 @@ def edit():
 def test_same_protocol_can_explain_without_edits(tmp_path, writable):
     init_repo(tmp_path)
     before = (tmp_path / "util.py").read_text()
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_file", "arguments": {"path": "util.py"}}, finish(),
-    ])
+    ]))
     result = NativeCodingAgent(client).invoke(request(tmp_path, writable=writable))
     assert result.status == ModuleStatus.COMPLETED
     assert result.report == "add is implemented in util.py"
@@ -61,7 +63,7 @@ def test_read_only_can_deliver_report_content(tmp_path):
     artifact = {"kind": "module_report", "path": "explanation.md",
                 "media_type": "text/markdown", "summary": "Code explanation",
                 "content": "The function returns a + b."}
-    result = NativeCodingAgent(ScriptedLLMClient([finish(artifacts=[artifact])])).invoke(request(tmp_path))
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([finish(artifacts=[artifact])]))).invoke(request(tmp_path))
     assert result.status == ModuleStatus.COMPLETED
     assert any(item.kind == "module_report" and item.content == artifact["content"] for item in result.artifacts)
     assert not (tmp_path / "explanation.md").exists()
@@ -69,7 +71,7 @@ def test_read_only_can_deliver_report_content(tmp_path):
 
 def test_edit_uses_same_finish_and_derives_patch(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([edit(), finish("Added a docstring; tests not run")])).invoke(
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([edit(), finish("Added a docstring; tests not run")]))).invoke(
         request(tmp_path, writable=True),
     )
     assert result.status == ModuleStatus.COMPLETED
@@ -81,21 +83,21 @@ def test_edit_uses_same_finish_and_derives_patch(tmp_path):
 
 def test_new_file_becomes_code_artifact(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         {"tool": "create_file", "arguments": {"path": "new.py", "content": "VALUE = 1\n"}},
         finish("Added a constant"),
-    ])).invoke(request(tmp_path, writable=True))
+    ]))).invoke(request(tmp_path, writable=True))
     assert result.status == ModuleStatus.COMPLETED
     assert "new.py" in {item.path for item in result.artifacts}
 
 
 def test_two_tasks_isolate_changed_files(tmp_path):
     init_repo(tmp_path)
-    first = NativeCodingAgent(ScriptedLLMClient([edit(), finish()])).invoke(request(tmp_path, writable=True))
+    first = NativeCodingAgent(ScriptedLLMClient(tool_turns([edit(), finish()]))).invoke(request(tmp_path, writable=True))
     assert first.status == ModuleStatus.COMPLETED
-    second = NativeCodingAgent(ScriptedLLMClient([
+    second = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         {"tool": "create_file", "arguments": {"path": "second.py", "content": "X = 2\n"}}, finish(),
-    ])).invoke(request(tmp_path, writable=True, task_id="task_second"))
+    ]))).invoke(request(tmp_path, writable=True, task_id="task_second"))
     assert {item.path for item in second.artifacts if item.kind == "code_change"} == {"second.py"}
     assert "Return the sum" not in next(item.content for item in second.artifacts if item.kind == "code_patch")
 
@@ -103,38 +105,38 @@ def test_two_tasks_isolate_changed_files(tmp_path):
 def test_read_only_inspects_shared_dirty_workspace(tmp_path):
     init_repo(tmp_path)
     (tmp_path / "util.py").write_text("# previous accepted change\n")
-    result = NativeCodingAgent(ScriptedLLMClient([
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         {"tool": "read_file", "arguments": {"path": "./util.py"}}, finish(),
-    ])).invoke(request(tmp_path))
+    ]))).invoke(request(tmp_path))
     assert result.status == ModuleStatus.COMPLETED
 
 
 def test_write_action_has_one_schema_but_read_only_grant_denies_it(tmp_path):
     init_repo(tmp_path)
-    CodingAction.model_validate(edit())
-    result = NativeCodingAgent(ScriptedLLMClient([edit()])).invoke(request(tmp_path))
+    AgentAction.model_validate(edit())
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([edit()]))).invoke(request(tmp_path))
     assert result.status == ModuleStatus.FAILED
     assert "Return the sum" not in (tmp_path / "util.py").read_text()
 
 
 def test_disallowed_verification_command_does_not_execute(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         {"tool": "run_verification", "arguments": {"commands": ["touch unauthorized"]}},
-    ])).invoke(request(tmp_path, writable=True))
+    ]))).invoke(request(tmp_path, writable=True))
     assert result.status == ModuleStatus.FAILED
     assert not (tmp_path / "unauthorized").exists()
 
 
 def test_process_permission_is_enforced(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([{'tool': 'run_verification', 'arguments': {'commands': ['python -m pytest']}}])).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([{'tool': 'run_verification', 'arguments': {'commands': ['python -m pytest']}}]))).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
     assert result.status == ModuleStatus.FAILED
 
 
 def test_failed_call_retains_diagnostic_patch(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([edit()])).invoke(request(tmp_path, writable=True))
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([edit()]))).invoke(request(tmp_path, writable=True))
     assert result.status == ModuleStatus.FAILED
     patch = next(item for item in result.artifacts if item.kind == "code_patch")
     assert patch.metadata["diagnostic"]
@@ -145,10 +147,10 @@ def test_failed_call_retains_diagnostic_patch(tmp_path):
 @pytest.mark.parametrize("kind", ["verification_result", "execution_record", "observation_trace", "literature_search"])
 def test_model_cannot_fabricate_system_record(tmp_path, kind):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient([finish(artifacts=[{
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([finish(artifacts=[{
         "kind": kind, "path": "fake.json", "summary": "fake pass",
         "media_type": "application/json", "content": '{"passed": true}',
-    }])])).invoke(request(tmp_path))
+    }])]))).invoke(request(tmp_path))
     assert result.status == ModuleStatus.FAILED
 
 
@@ -160,9 +162,9 @@ def test_missing_workspace_is_blocked(tmp_path):
 def test_explicit_failure_keeps_one_patch_and_does_not_require_a_failed_command(tmp_path):
     init_repo(tmp_path)
     report = "Added documentation, but the requested behavior still needs implementation."
-    agent = NativeCodingAgent(ScriptedLLMClient([
+    agent = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         edit(), finish(report, status="failed"),
-    ]))
+    ])))
     result = agent.invoke(request(tmp_path, writable=True))
     assert result.status == result.session.status == "failed"
     assert result.error.code == ErrorCode.AGENT_REPORTED_FAILURE

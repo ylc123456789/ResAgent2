@@ -19,12 +19,21 @@ from resagent2_runtime import (
     AgentAction,
     ContextBudgetExceeded,
     PromptLLMClient,
-    ScriptedLLMClient,
 )
 
 
+class StructuredClient:
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.contexts = []
+
+    def next_action(self, context, action_type):
+        self.contexts.append(context)
+        return next(self.replies)
+
+
 def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path, composition_scope):
-    client = ScriptedLLMClient([{"tool": "finish"}])
+    client = StructuredClient([{"tool": "finish"}])
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
     controller, _ = real_e2e._build_controller(tmp_path, None)
     layout = controller.scientific_port.resource_layout
@@ -55,7 +64,7 @@ def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, t
             "key": "measure", "workflow_agent_kind": "experiment", "instruction": instructions,
         }],
     }
-    client = ScriptedLLMClient([draft])
+    client = StructuredClient([draft])
     monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
     controller, _ = real_e2e._build_controller(tmp_path, None)
     request = WorkRequest(

@@ -17,6 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from resagent2_runtime.budget import DeadlineExceededError
 from resagent2_runtime.http import NonPublicAddressError, ResponseTooLargeError, send_request
 
 
@@ -122,12 +123,18 @@ class TavilyWebSearchBackend:
                 f"Tavily HTTP {status}; request rejected",
                 error_type=error_type, retry_after=retry_after or None,
             ) from None
+        except DeadlineExceededError:
+            raise
         except (httpx.TimeoutException, TimeoutError):
             raise WebSearchError("Tavily request timed out", error_type="timeout") from None
         except ResponseTooLargeError:
             raise WebSearchError(
                 "Tavily response exceeded the configured byte limit",
                 error_type="response_too_large",
+            ) from None
+        except httpx.DecodingError:
+            raise WebSearchError(
+                "Tavily response body could not be decoded", error_type="invalid_response",
             ) from None
         except httpx.TransportError:
             raise WebSearchError("Tavily network request failed", error_type="network_error") from None
@@ -314,6 +321,8 @@ class WebPageFetcher:
                 error_type="rate_limited" if status == 429 else "request_rejected",
                 retry_after=retry_after or None,
             ) from None
+        except DeadlineExceededError:
+            raise
         except (httpx.TimeoutException, TimeoutError):
             raise WebFetchError("webpage request timed out", error_type="timeout") from None
         except NonPublicAddressError:
@@ -326,6 +335,10 @@ class WebPageFetcher:
             raise WebFetchError(
                 "webpage response exceeded the configured byte limit",
                 error_type="response_too_large",
+            ) from None
+        except httpx.DecodingError:
+            raise WebFetchError(
+                "webpage response body could not be decoded", error_type="invalid_response",
             ) from None
         except httpx.TransportError:
             raise WebFetchError("webpage network request failed", error_type="network_error") from None

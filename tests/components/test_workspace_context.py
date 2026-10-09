@@ -178,6 +178,7 @@ def test_registered_artifact_provenance_survives_context_truncation(tmp_path):
     assert snippet["context_truncated"] is True
     assert snippet["kind"] == "text"
     assert (snippet["start_char"], snippet["end_char"]) == (2_500, 160_000)
+    assert snippet["next_start_char"] == value["next_start_char"] == 130_500
     assert snippet["provenance"] == {
         "producer": "experiment", "task_id": "task_source", "attempt_number": 2,
     }
@@ -543,3 +544,34 @@ def test_actual_context_bounds_packages_and_retains_complete_tool_receipt(
     assert shown["count"] == 1000
     assert len(complete["items"]) == 1000
     assert json.dumps(receipt.value, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("tool,source_key,group", [
+    ("read_file", "path", "file_snippets"),
+    ("read_artifact", "artifact_id", "artifact_snippets"),
+])
+@pytest.mark.parametrize("has_remaining_source", [False, True])
+def test_context_clipping_preserves_original_read_continuation(
+    tool, source_key, group, has_remaining_source,
+):
+    from resagent2_components.text import slice_text_lines
+
+    state = _state()
+    body = "x" * (120_000 if has_remaining_source else 100_000)
+    receipt = {source_key: "source", **slice_text_lines(body, end_char=100_000)}
+    assert receipt["truncated"] is False
+    assert receipt["next_start_char"] == (100_000 if has_remaining_source else None)
+    _observe(state, tool, receipt)
+    before = state.model_dump_json()
+
+    snippet = _reads(state, max_context_tokens=2048)[group][0]
+
+    assert snippet["context_truncated"] is True
+    assert len(snippet["content"]) < len(receipt["content"])
+    assert snippet["next_start_char"] == receipt["next_start_char"]
+    assert snippet["end_char"] == receipt["end_char"]
+    content = next(s.content for s in workspace_context(state) if s.name in ("file_reads", "artifact_reads"))
+    assert "next_start_char belongs to the original tool result" in content
+    assert "head and tail omit source content" in content
+    assert "reread needed gaps" in content
+    assert state.model_dump_json() == before

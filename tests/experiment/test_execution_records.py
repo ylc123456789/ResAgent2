@@ -1,5 +1,7 @@
 """Actual command receipts remain machine-readable across completion outcomes."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, ErrorCode
 
 from datetime import UTC, datetime
@@ -63,11 +65,11 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
     binding = SimpleNamespace(current=None, hard_constraint=None)
     definition = AgentDefinition(
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
-        tools=tools, llm_client=ScriptedLLMClient([
+        tools=tools, llm_client=ScriptedLLMClient(tool_turns([
             {"tool": "run_shell", "arguments": {"command": "python train.py"}},
             {"tool": "run_shell", "arguments": {"command": "python train.py"}},
             {"tool": "finish", "arguments": {"status": status, "report": "Recorded the outcome"}},
-        ]),
+        ])),
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary, binding=binding, request=req,

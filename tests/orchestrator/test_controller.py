@@ -1,5 +1,7 @@
 """Tests for the Phase 7.5 ResearchController (DEVELOPMENT_PLAN §7.5)."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import RunPermissions, ExecutionLimits
 
 from datetime import UTC, datetime
@@ -108,15 +110,17 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
     }
 
     class TimedClient(ScriptedLLMClient):
-        def next_action(self, context, action_type):
+        tool_session_key = "test-native-tools/v1"
+
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             run_clock.advance(10)  # Real work before each pause/finish must still count.
-            return super().next_action(context, action_type)
+            return super().next_tool_call(context, schemas, turns, max_input_tokens=max_input_tokens)
 
     def rebuild(actions):
         controller = _build_recoverable_controller(
             JsonRunStore(tmp_path / "runs"), JsonSessionStore(tmp_path / "sessions"), actions,
         )
-        controller.scientific_port.llm_client = TimedClient(actions)
+        controller.scientific_port.llm_client = TimedClient(tool_turns(actions))
         return controller
 
     first = rebuild([ask])
@@ -283,7 +287,7 @@ def build_controller(
     )
     compiler = DeterministicWorkflowCompiler(proposal("work_1"), patch=None)
     scientific = ScientificAgent(
-        ScriptedLLMClient(actions),
+        ScriptedLLMClient(tool_turns(actions)),
         store=InMemorySessionStore(),
     )
     return ResearchController(
@@ -373,7 +377,7 @@ def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
     """A crash after runtime checkpointing cannot orphan the first session."""
     store = InMemoryRunStore()
     scientific = ScientificAgent(
-        ScriptedLLMClient([finish_action(ScientificVerdict.INCONCLUSIVE)]),
+        ScriptedLLMClient(tool_turns([finish_action(ScientificVerdict.INCONCLUSIVE)])),
         store=InMemorySessionStore(),
     )
 
@@ -489,7 +493,7 @@ def test_multiple_serial_work_cycles(tmp_path) -> None:
         },
         store=InMemoryRunStore(),
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -529,7 +533,7 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
         request_work_action(),
         finish_action(limitations=["a task failed"]),
     ]
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -709,7 +713,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
         store=InMemoryRunStore(),
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([request_work_action(), finish_action()]),
+        ScriptedLLMClient(tool_turns([request_work_action(), finish_action()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
@@ -768,7 +772,7 @@ def test_task_question_resume_does_not_consume_attempt_budget() -> None:
         store=InMemoryRunStore(),
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([request_work_action(), finish_action()]),
+        ScriptedLLMClient(tool_turns([request_work_action(), finish_action()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
@@ -816,7 +820,7 @@ def test_compilation_failure_fails_run() -> None:
         store=InMemoryRunStore(),
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([request_work_action()]),
+        ScriptedLLMClient(tool_turns([request_work_action()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
@@ -957,7 +961,7 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
-            ScriptedLLMClient([request_work_action(), request_work_action()]),
+            ScriptedLLMClient(tool_turns([request_work_action(), request_work_action()])),
             store=InMemorySessionStore(),
         ),
         compiler=compiler, scheduler=scheduler, registry=registry(),
@@ -1010,7 +1014,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
         },
         store=InMemoryRunStore(),
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1052,7 +1056,7 @@ def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
         request_work_action(),
         finish_action(limitations=["a task failed"]),
     ]
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1077,7 +1081,7 @@ def test_untrusted_reading_log_does_not_control_run_completion() -> None:
             from resagent2_scientific import ScientificAgent
 
             self.agent = ScientificAgent(
-                ScriptedLLMClient([request_work_action(), finish_action()]),
+                ScriptedLLMClient(tool_turns([request_work_action(), finish_action()])),
                 store=InMemorySessionStore(),
             )
 
@@ -1127,7 +1131,7 @@ def test_run_total_llm_budget_exhaustion() -> None:
         },
         store=InMemoryRunStore(),
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1156,7 +1160,7 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
         },
         store=InMemoryRunStore(),
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1191,7 +1195,7 @@ def _build_recoverable_controller(
         },
         store=run_store,
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=session_store)
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=session_store)
     return ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1350,7 +1354,7 @@ def test_budget_overrun_does_not_complete(tmp_path) -> None:
         },
         store=InMemoryRunStore(),
     )
-    scientific = ScientificAgent(ScriptedLLMClient(actions), store=InMemorySessionStore())
+    scientific = ScientificAgent(ScriptedLLMClient(tool_turns(actions)), store=InMemorySessionStore())
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=scientific,
@@ -1455,7 +1459,7 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
-            ScriptedLLMClient([request_work_action(), finish_action()]),
+            ScriptedLLMClient(tool_turns([request_work_action(), finish_action()])),
             store=InMemorySessionStore(),
         ),
         compiler=_CountingCompiler(),
@@ -1499,7 +1503,7 @@ def test_failed_compiler_usage_comes_from_reservations(tmp_path, usage_known) ->
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
-            ScriptedLLMClient([request_work_action()]),
+            ScriptedLLMClient(tool_turns([request_work_action()])),
             store=InMemorySessionStore(),
         ),
         compiler=compiler,
@@ -1604,7 +1608,8 @@ def test_invalid_work_input_is_corrected_in_same_scientific_session():
     assert len(run.work_requests) == 1
     assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
     client = controller.scientific_port.llm_client
-    assert "Invalid work input artifacts" in client.contexts[1].text
+    assert any("Invalid work input artifacts" in receipt
+               for turn in client.histories[1] for receipt in turn.tool_results.values())
     state = controller.scientific_port.store.load(run.scientific_session.id)
     assert state.run_id == run.run_id
     assert state.llm_calls_used == 3

@@ -1,5 +1,7 @@
 """Scientific failures and caches remain bound to the owning session."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions
 
 from datetime import UTC, datetime
@@ -38,7 +40,7 @@ def state(*, foreign=False):
     }),
 }]])
 def test_invalid_finish_settles_owned_session_and_is_idempotent(tmp_path, artifacts):
-    client = ScriptedLLMClient([{"tool": "finish", "arguments": {"report": "Done", "artifacts": artifacts}}])
+    client = ScriptedLLMClient(tool_turns([{"tool": "finish", "arguments": {"report": "Done", "artifacts": artifacts}}]))
     store = JsonSessionStore(tmp_path / "sessions")
     agent = ScientificAgent(client, store=store)
     result = agent.invoke(request())

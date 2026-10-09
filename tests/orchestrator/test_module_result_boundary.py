@@ -1,5 +1,7 @@
 """The replaceable ModulePort must obey both envelope and Agent routing contracts."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import RunPermissions, ExecutionLimits
 from resagent2_runtime.budget import current_budget
 
@@ -213,7 +215,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
 
     monkeypatch.setattr("resagent2_experiment.agent.EnvironmentBinding", prepared_binding)
     command = f"{shlex.quote(sys.executable)} train.py"
-    agent = NativeExperimentAgent(ScriptedLLMClient([
+    agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
         {"tool": "run_shell", "arguments": {"command": command}},
         {"tool": "run_shell", "arguments": {"command": command}},
         {"tool": "finish", "arguments": {
@@ -223,7 +225,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
                 "summary": "Requested but absent output",
             }] if missing_output else [],
         }},
-    ]))
+    ])))
     results = []
 
     class Port:

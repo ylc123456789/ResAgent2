@@ -72,24 +72,27 @@ class ModelProfile:
 
 
 class LLMClient(Protocol):
-    """Provider-neutral interface: only ``next_action`` is required.
+    """Native tool-calling client; Session owns the paired protocol history.
 
-    Consumers feature-detect optional budget and trace hooks. A minimal client
-    needs none of them; absent attempt accounting means one call per request.
-    AgentLoop prefers ``next_tool_call`` when provided; Compiler still uses
-    ``next_action``. Native history belongs to Session, never to the client.
+    Budget and trace hooks are optional. A minimal client consumes one model
+    request per call and provides a stable protocol identity for continuation.
     """
 
-    def next_action(
-        self,
-        context: ComposedContext,
-        action_type: type[BaseModel],
-    ) -> BaseModel | dict:
-        """Return a candidate, or raise JSONDecodeError for malformed output.
+    @property
+    def tool_session_key(self) -> str: ...
 
-        The caller owns schema validation and bounded correction feedback;
-        transport failures remain separate from invalid model output.
-        """
+    def next_tool_call(
+        self, context: ComposedContext, schemas: list[dict],
+        turns: list[ToolCallTurn], *, max_input_tokens: int,
+    ) -> ToolCallTurn: ...
+
+
+class StructuredLLMClient(Protocol):
+    """Structured output for stateless callers such as Workflow Compiler."""
+
+    def next_action(
+        self, context: ComposedContext, action_type: type[BaseModel],
+    ) -> BaseModel | dict: ...
 
 
 class PromptLLMClient:
@@ -103,7 +106,7 @@ class PromptLLMClient:
 
     def __init__(
         self,
-        client: LLMClient,
+        client: StructuredLLMClient,
         *,
         system_prompt: str,
         max_context_tokens: int,
@@ -170,23 +173,27 @@ class LLMTextResponseError(ValueError):
 
 
 class ScriptedLLMClient:
-    """Deterministic mock LLM that returns predefined structured candidates."""
+    """Deterministic native client returning predefined tool-call turns."""
 
-    def __init__(self, actions: list[BaseModel | dict]) -> None:
-        self._actions = deque(actions)
+    tool_session_key = "scripted-native-tools/v1"
+
+    def __init__(self, turns: list[ToolCallTurn]) -> None:
+        self._turns = deque(ToolCallTurn.model_validate(turn) for turn in turns)
         self.contexts: list[ComposedContext] = []
+        self.schemas: list[list[dict]] = []
+        self.histories: list[list[ToolCallTurn]] = []
 
-    def next_action(
-        self,
-        context: ComposedContext,
-        action_type: type[BaseModel],
-    ) -> BaseModel | dict:
-        """Record context and return the next scripted candidate."""
-
+    def next_tool_call(
+        self, context: ComposedContext, schemas: list[dict],
+        turns: list[ToolCallTurn], *, max_input_tokens: int,
+    ) -> ToolCallTurn:
+        """Record current context and return the next native model reply."""
         self.contexts.append(context)
-        if not self._actions:
-            raise LLMExhaustedError("scripted LLM has no remaining action")
-        return self._actions.popleft()
+        self.schemas.append(schemas)
+        self.histories.append([turn.model_copy(deep=True) for turn in turns])
+        if not self._turns:
+            raise LLMExhaustedError("scripted LLM has no remaining turn")
+        return self._turns.popleft()
 
 
 class OpenAICompatibleClient:
@@ -559,6 +566,10 @@ class OpenAICompatibleClient:
                     if not native and not text and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
+                except httpx.DecodingError as error:
+                    outcome = "failed"
+                    last_error = error
+                    raise
                 except httpx.HTTPStatusError as error:
                     detail = error.response.content[:2000].decode("utf-8", errors="replace")
                     outcome = "failed"

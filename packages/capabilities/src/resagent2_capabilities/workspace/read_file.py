@@ -46,9 +46,14 @@ class ReadFileTool:
         "Workspace text files are limited to 10 MiB; each result is bounded to "
         "128000 characters. Line ranges are one-based and inclusive. Character "
         "offsets are zero-based within the selected lines, with an exclusive "
-        "end_char. Source newline characters are preserved. If a read result "
-        "is truncated, use a bounded line range or advance start_char/end_char "
-        "for a long line or JSON string; do not repeat the same unbounded read."
+        "end_char. Source newline characters are preserved. Read only needed "
+        "portions using bounded line or character ranges. To continue within "
+        "the same lines, set start_char to next_start_char and choose a new "
+        "bounded end_char. Keep the line range fixed; do not use the requested "
+        "end_char as the continuation offset. next_start_char=None means the "
+        "selected lines are exhausted, not necessarily the whole file. "
+        "truncated=False means the requested window fit the tool output limit, "
+        "not that the selected lines are exhausted. Do not repeat the same unbounded read."
     )
 
     def __init__(

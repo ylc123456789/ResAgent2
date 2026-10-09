@@ -135,6 +135,7 @@ def test_failed_durable_charge_never_dispatches(client, monkeypatch):
     ("json", "failed", "invalid_response"),
     ("list", "failed", "invalid_response"),
     ("utf8", "failed", "invalid_response"),
+    ("gzip", "failed", "invalid_response"),
     ("large", "failed", "response_too_large"),
 ])
 def test_failed_attempt_is_charged_traced_and_never_retried(client, monkeypatch, failure, outcome, error_type):
@@ -148,6 +149,11 @@ def test_failed_attempt_is_charged_traced_and_never_retried(client, monkeypatch,
             raise httpx.ConnectError(f"PRIVATE_PROVIDER_ERROR {KEY}", request=request)
         if failure == "timeout":
             raise httpx.ReadTimeout(f"PRIVATE_PROVIDER_ERROR {KEY}", request=request)
+        if failure == "gzip":
+            return httpx.Response(
+                200, headers={"content-encoding": "gzip"},
+                stream=httpx.ByteStream(f"PRIVATE_PROVIDER_ERROR {KEY}".encode()),
+            )
         content = {"json": b"PRIVATE_INVALID_JSON", "list": b"[]", "utf8": b"\xff", "large": b"x" * 100}
         return httpx.Response(200, content=content[failure])
 

@@ -1,4 +1,6 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,7 +63,6 @@ from resagent2_orchestrator.handoffs import system_artifact
 
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
-from resagent2_experiment.models import ExperimentAction
 from resagent2_capabilities import RunShellTool
 
 
@@ -151,7 +152,7 @@ class _NativeExperimentPort:
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
             llm_client=ScriptedLLMClient(
-                ([] if request.parent_session_id else [
+                tool_turns(([] if request.parent_session_id else [
                     {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
                     {"tool": "audit_env", "arguments": {}},
                 ]) + [
@@ -166,7 +167,7 @@ class _NativeExperimentPort:
                             }],
                         },
                     },
-                ]
+                ])
             ),
             context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
             permission_policy=OperationPermissionPolicy(
@@ -175,7 +176,6 @@ class _NativeExperimentPort:
             completion_check=ExperimentCompletionCheck(
                 boundary,
             ),
-            action_type=ExperimentAction,
         )
         return self._loop.run(
             definition,

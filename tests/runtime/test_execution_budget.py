@@ -1,3 +1,4 @@
+from e2e.native_fixtures import tool_turns
 """One wallet and one deadline cover nested invocations and transport retries."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,11 +68,11 @@ def test_nested_scope_cannot_replace_usage_or_reset_expired_time():
 
 
 def test_minimal_clients_use_the_same_wallet_once_per_invocation():
-    client = ScriptedLLMClient([{"tool": "finish"}] * 2)
+    client = ScriptedLLMClient(tool_turns([{"tool": "finish"}] * 2))
     with execution_budget(max_llm_calls=1, timeout_seconds=30) as budget:
-        assert invoke_model(client, "next_action", _context(), AgentAction) == {"tool": "finish"}
+        assert invoke_model(client, "next_tool_call", _context(), [], [], max_input_tokens=512).tool_calls[0].name == "finish"
         with pytest.raises(BudgetExhaustedError):
-            invoke_model(client, "next_action", _context(), AgentAction)
+            invoke_model(client, "next_tool_call", _context(), [], [], max_input_tokens=512)
         assert list(budget.usage.requests.values()) == ["succeeded"]
         assert len(client.contexts) == 1
 

@@ -25,7 +25,7 @@ ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有四
 
 CLI 接收目标、工作区和配置，组成 ResearchRequest，调用 ResearchController.create_run。这里同时开始执行，通常一直到完成、失败或需要你回答才返回。
 
-CLI 只是入口，不再实现一套调度。它和 E2E 脚本都负责装配依赖，但两者是独立入口。
+CLI 只是入口，不再实现一套调度。真实 E2E 脚本复用 CLI 的应用装配，只提供场景输入和检查；两者的命令入口不同，业务实现与部署配置相同。
 
 如果已用其他工具找到论文，可在创建时提供论文清单，或在 Run 等待用户时补充。
 Controller 将元信息与可选本地 PDF 冻结，放入同一材料登记表和科研目录。Scientific

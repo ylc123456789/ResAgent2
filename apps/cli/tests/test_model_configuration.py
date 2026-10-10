@@ -53,8 +53,8 @@ def test_output_headroom_preserves_every_module_input_limit(defaults, component,
 def test_real_e2e_translation_uses_the_shared_cli_default(defaults, monkeypatch, tmp_path):
     from e2e import real_e2e
 
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: ScriptedLLMClient([]))
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    monkeypatch.setattr(composition, "_client", lambda: ScriptedLLMClient([]))
+    controller = real_e2e._application(tmp_path).controller
 
     assert controller.compiler._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
     assert composition._component_context_limit("compiler") == DEFAULT_AGENT_CONTEXT_TOKENS
@@ -74,8 +74,8 @@ def test_composition_uses_fixed_interpreter_without_a_model_client(defaults, mon
         controller = composition.build_application(data_root=tmp_path).controller
     else:
         from e2e import real_e2e
-        monkeypatch.setattr(real_e2e, "_new_llm_client", client)
-        controller, _ = real_e2e._build_controller(tmp_path, None)
+        monkeypatch.setattr(composition, "_client", client)
+        controller = real_e2e._application(tmp_path).controller
 
     assert isinstance(controller.interpreter, DeterministicWorkInterpreter)
     # Scientific, Coding, Experiment and Compiler only.

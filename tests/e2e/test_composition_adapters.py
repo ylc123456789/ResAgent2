@@ -1,10 +1,11 @@
-"""The independent E2E composition root uses production mechanisms."""
+"""Real E2E uses the CLI application and its budgeted compiler adapter."""
 
 from datetime import UTC, datetime
 
 import pytest
 
 from e2e import real_e2e
+from resagent2_cli import composition
 from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
 from resagent2_runtime.budget import execution_budget
 
@@ -34,8 +35,8 @@ class StructuredClient:
 
 def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path, composition_scope):
     client = StructuredClient([{"tool": "finish"}])
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    monkeypatch.setattr(composition, "_client", lambda: client)
+    controller = real_e2e._application(tmp_path).controller
     layout = controller.scientific_port.resource_layout
     assert all(
         binding.port.resource_layout is layout
@@ -65,8 +66,8 @@ def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, t
         }],
     }
     client = StructuredClient([draft])
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    monkeypatch.setattr(composition, "_client", lambda: client)
+    controller = real_e2e._application(tmp_path).controller
     request = WorkRequest(
         id="work_review", run_id="run_review", scientific_session_id="session_review",
         request=WorkRequestDraft(objective=instructions, expected_evidence=["accuracy"]),

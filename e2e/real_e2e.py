@@ -1,7 +1,8 @@
 """Real closed-loop tests with native Coding/Experiment/Scientific agents.
 
-Drives the Phase 5-7 native agents through the ResearchController with the real
-DeepSeek LLM. Environments are bound to run_id + workspace_id (ADR-0009); set
+Uses the production CLI application builder for every stage. Full-system
+scenarios drive its ResearchController; direct stages invoke its bound Agent.
+Environments are bound to run_id + workspace_id (ADR-0009); set
 RESAGENT2_ENV_ROOT to a stable directory to reuse conda envs across runs
 (RESAGENT2_CONDA_EXE overrides conda, RESAGENT2_DATASET_ROOT points at datasets).
 
@@ -10,8 +11,6 @@ Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-res
 """
 
 from __future__ import annotations
-
-from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 
 import os
 import json
@@ -24,13 +23,15 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from resagent2_cli.composition import CliApplication, build_application
 from resagent2_contracts import (
+    AgentPermissions,
+    RunPermissions,
+    ExecutionLimits,
     AgentOwner,
     AttemptStatus,
     ArtifactCandidate,
     WorkflowAgentKind,
-    WorkflowAgentDefinition,
-    WorkflowAgentRegistry,
     AgentResult,
     ModuleStatus,
     AgentRequest,
@@ -49,35 +50,12 @@ from resagent2_contracts import (
     WorkspaceSpec,
 )
 from resagent2_components import (
-    ArxivLiteratureBackend,
-    MultiSourceLiteratureBackend,
-    OpenAlexLiteratureBackend,
-)
-from resagent2_components import (
     DatasetCatalog,
     ResourceLayout,
     RegisteredArtifactReader,
     read_artifact_json,
 )
-from resagent2_coding import NativeCodingAgent
-from resagent2_experiment import NativeExperimentAgent
-from resagent2_orchestrator import (
-    ArtifactRegistry,
-    JsonRunStore,
-    LLMWorkflowCompiler,
-    DeterministicWorkInterpreter,
-    ModuleBinding,
-    ResearchController,
-    ScientificArtifactRegistration,
-    WorkflowScheduler,
-)
-from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS,
-    JsonSessionStore,
-    OpenAICompatibleClient,
-    PromptLLMClient,
-)
-from resagent2_scientific import ScientificAgent
+from resagent2_orchestrator import ArtifactRegistry
 
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
@@ -295,30 +273,6 @@ _EXPECTED_TASK_CAPABILITIES = {
     WorkflowAgentKind.EXPERIMENT,
 }
 
-_DEFAULT_MODEL = "deepseek-v4-flash"
-
-
-def _llm_trace_dir() -> Path | None:
-    value = os.environ.get("RESAGENT2_LLM_TRACE_DIR")
-    return Path(value) if value else None
-
-
-def _llm_trace_level() -> str:
-    return os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
-
-
-def _new_llm_client() -> OpenAICompatibleClient:
-    """Use the same model and provider settings as the production CLI."""
-
-    return OpenAICompatibleClient(
-        model=os.environ.get("RESAGENT2_MODEL", _DEFAULT_MODEL),
-        api_base=os.environ.get("RESAGENT2_API_BASE", "https://api.deepseek.com/v1"),
-        api_key_env=os.environ.get("RESAGENT2_API_KEY_ENV", "DEEPSEEK_API_KEY"),
-        trace_dir=_llm_trace_dir(),
-        trace_level=_llm_trace_level(),
-    )
-
-
 def _repo(workdir: Path) -> Path:
     repo = workdir / "repo"
     repo.mkdir(parents=True, exist_ok=True)
@@ -341,63 +295,8 @@ def _grant(repo: Path) -> WorkspaceGrant:
     )
 
 
-def _coding_agent(
-    session_store, resource_layout: ResourceLayout | None = None
-) -> NativeCodingAgent:
-    return NativeCodingAgent(
-        _new_llm_client(),
-        store=session_store,
-        resource_layout=resource_layout,
-    )
-
-
-def _experiment_agent(
-    session_store, resource_layout: ResourceLayout
-) -> NativeExperimentAgent:
-    return NativeExperimentAgent(
-        _new_llm_client(),
-        store=session_store,
-        resource_layout=resource_layout,
-    )
-
-
-def _scientific_agent(
-    registration_port,
-    session_store: JsonSessionStore,
-    resource_layout: ResourceLayout,
-) -> ScientificAgent:
-    return ScientificAgent(
-        _new_llm_client(),
-        literature_backend=MultiSourceLiteratureBackend(
-            ArxivLiteratureBackend(),
-            OpenAlexLiteratureBackend(api_key=os.environ.get("OPENALEX_API_KEY")),
-        ),
-        registration_port=registration_port,
-        store=session_store,
-        resource_layout=resource_layout,
-    )
-
-
-def _registry() -> WorkflowAgentRegistry:
-    return WorkflowAgentRegistry(
-        definitions=[
-            WorkflowAgentDefinition(
-                workflow_agent_kind=WorkflowAgentKind.CODING,
-                description=NativeCodingAgent.description,
-            ),
-            WorkflowAgentDefinition(
-                workflow_agent_kind=WorkflowAgentKind.EXPERIMENT,
-                description=NativeExperimentAgent.description,
-            ),
-        ]
-    )
-
-
-def _build_controller(workdir: Path, repo: Path | None):
-    """Assemble the registry, scheduler and controller for one E2E scenario."""
-    registry = _registry()
-    run_store = JsonRunStore(workdir / "state")
-    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
+def _application(workdir: Path, repo: Path | None = None) -> CliApplication:
+    """Prepare scenario workspaces and reuse the production application builder."""
     workspaces = {}
     if repo is not None:
         workspaces["ws_main"] = WorkspaceSpec(
@@ -406,46 +305,7 @@ def _build_controller(workdir: Path, repo: Path | None):
             location=str(repo),
             access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
         )
-    scheduler = WorkflowScheduler(
-        bindings={
-            WorkflowAgentKind.CODING: ModuleBinding(
-                owner=AgentOwner.CODING,
-                port=_coding_agent(
-                    JsonSessionStore(workdir / "coding_sessions"), resource_layout
-                ),
-            ),
-            WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-                owner=AgentOwner.EXPERIMENT,
-                port=_experiment_agent(
-                    JsonSessionStore(workdir / "experiment_sessions"), resource_layout
-                ),
-            ),
-        },
-        store=run_store,
-        artifact_root=workdir / "artifacts",
-        data_root=workdir / "data",
-        workspaces=workspaces,
-    )
-    controller = ResearchController(
-        scientific_port=_scientific_agent(
-            ScientificArtifactRegistration(scheduler.artifact_registry, run_store),
-            JsonSessionStore(workdir / "scientific_sessions"),
-            resource_layout,
-        ),
-        compiler=LLMWorkflowCompiler(
-            PromptLLMClient(
-                _new_llm_client(),
-                system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
-                max_context_tokens=DEFAULT_AGENT_CONTEXT_TOKENS,
-                section_name="compiler_request",
-            )
-        ),
-        interpreter=DeterministicWorkInterpreter(),
-        scheduler=scheduler,
-        registry=registry,
-        dataset_ref_source=DatasetCatalog(resource_layout.dataset_root),
-    )
-    return controller, run_store
+    return build_application(data_root=workdir / "data", workspaces=workspaces)
 
 
 _BUGGY_TRAIN_PY = """\
@@ -588,10 +448,9 @@ def _training_metrics(run):
                 yield metrics
 
 
-def _dataset_materials(workdir: Path, layout: ResourceLayout, run_id: str):
+def _dataset_materials(registry: ArtifactRegistry, layout: ResourceLayout, run_id: str):
     """Give direct invocations the same frozen dataset catalog as Controller calls."""
     refs = DatasetCatalog(layout.dataset_root).references()
-    registry = ArtifactRegistry(workdir / "artifacts")
     return [registry.register_system_artifact(
         ArtifactCandidate(
             kind="dataset_catalog", path="dataset_catalog.json", media_type="application/json",
@@ -604,13 +463,16 @@ def _dataset_materials(workdir: Path, layout: ResourceLayout, run_id: str):
 
 def run_code(workdir: Path) -> AgentResult:
     repo = _repo(workdir)
-    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
+    app = _application(workdir, repo)
+    agent = app.controller.scheduler.bindings[WorkflowAgentKind.CODING].port
     request = AgentRequest(
         run_id="run_real",
         task_id="task_code",
         attempt_number=1,
         agent=AgentOwner.CODING,
-        input_artifacts=_dataset_materials(workdir, resource_layout, "run_real"),
+        input_artifacts=_dataset_materials(
+            app.controller.scheduler.artifact_registry, agent.resource_layout, "run_real",
+        ),
         instruction=(
             "Goal:\nImplement the Squeeze-and-Excitation forward pass in train.py\n\n"
             "Task:\nImplement SELayer.forward in train.py (it raises NotImplementedError)"
@@ -621,18 +483,21 @@ def run_code(workdir: Path) -> AgentResult:
         output_dir=str(workdir / "out"),
         permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
     )
-    return _coding_agent(JsonSessionStore(workdir / "sessions"), resource_layout).invoke(request)
+    return agent.invoke(request)
 
 
 def run_experiment(workdir: Path) -> AgentResult:
     repo = _repo(workdir)
-    resource_layout = ResourceLayout.from_env(data_root=workdir / "data")
+    app = _application(workdir, repo)
+    agent = app.controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT].port
     request = AgentRequest(
         run_id="run_real",
         task_id="task_experiment",
         attempt_number=1,
         agent=AgentOwner.EXPERIMENT,
-        input_artifacts=_dataset_materials(workdir, resource_layout, "run_real"),
+        input_artifacts=_dataset_materials(
+            app.controller.scheduler.artifact_registry, agent.resource_layout, "run_real",
+        ),
         instruction=(
             "Goal:\nRun train.py and record baseline and candidate accuracy\n\n"
             "Task:\nRun train.py (it trains both the baseline and the SE candidate "
@@ -645,9 +510,7 @@ def run_experiment(workdir: Path) -> AgentResult:
         output_dir=str(workdir / "out"),
         permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
     )
-    return _experiment_agent(
-        JsonSessionStore(workdir / "sessions"), resource_layout
-    ).invoke(request)
+    return agent.invoke(request)
 
 
 def run_full(workdir: Path) -> bool:
@@ -676,7 +539,7 @@ def run_full(workdir: Path) -> bool:
         permissions=RunPermissions(execute_commands=True, prepare_environment=True),
         execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2),
     )
-    controller, _ = _build_controller(workdir, repo)
+    controller = _application(workdir, repo).controller
     run = controller.create_run("run_full_real", request)
     tasks = run.workflow.tasks if run.workflow is not None else []
     for task in tasks:
@@ -751,7 +614,7 @@ def _literature_succeeded(run) -> bool:
 
 def run_direct(workdir: Path) -> bool:
     """Scenario 1: the Scientific Agent concludes inconclusive without any work."""
-    controller, _ = _build_controller(workdir, None)
+    controller = _application(workdir).controller
     request = ResearchRequest(
         goal=(
             "Determine whether the observed CIFAR-10 accuracy improvement is a "
@@ -788,7 +651,7 @@ def run_repair(workdir: Path) -> bool:
         permissions=RunPermissions(execute_commands=True, prepare_environment=True),
         execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=3),
     )
-    controller, _ = _build_controller(workdir, repo)
+    controller = _application(workdir, repo).controller
     run = controller.create_run("run_repair", request)
     tasks = run.workflow.tasks if run.workflow is not None else []
     for task in tasks:
@@ -820,7 +683,7 @@ def run_ask_start(workdir: Path) -> bool:
         permissions=RunPermissions(execute_commands=True, prepare_environment=True),
         execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
-    controller, _ = _build_controller(workdir, None)
+    controller = _application(workdir).controller
     run = controller.create_run("run_ask", request)
     print(f"run status={run.status.value}")
     if run.pending_question is not None:
@@ -831,8 +694,9 @@ def run_ask_start(workdir: Path) -> bool:
 
 def run_ask_resume(workdir: Path, answer_text: str) -> bool:
     """Scenario 4b: resume the paused run in a fresh process and complete it."""
-    controller, run_store = _build_controller(workdir, None)
-    run = run_store.load("run_ask")
+    app = _application(workdir)
+    controller = app.controller
+    run = app.run_store.load("run_ask")
     question = run.pending_question
     if question is None:
         print("no pending question to answer")
@@ -849,7 +713,7 @@ def run_ask_resume(workdir: Path, answer_text: str) -> bool:
 
 def run_literature(workdir: Path) -> bool:
     """Scenario 5: gather literature evidence and cite it in the opinion."""
-    controller, _ = _build_controller(workdir, None)
+    controller = _application(workdir).controller
     request = ResearchRequest(
         goal=(
             "According to the literature, does the Squeeze-and-Excitation (SE) "

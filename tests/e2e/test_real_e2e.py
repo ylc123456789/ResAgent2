@@ -6,7 +6,7 @@ import pytest
 
 from resagent2_contracts import AgentOwner, ArtifactRef, AttemptStatus, WorkflowAgentKind, RunStatus, TaskStatus
 
-from e2e.real_e2e import _literature_succeeded, _new_llm_client, _real_e2e_succeeded, _repair_succeeded
+from e2e.real_e2e import _application, _literature_succeeded, _real_e2e_succeeded, _repair_succeeded
 
 
 def _artifact(tmp_path, task, kind, content, *, number=1, metadata=None):
@@ -173,22 +173,24 @@ def test_repair_rejects_incomplete_recovery(tmp_path, missing) -> None:
     assert not _repair_succeeded(run)
 
 
-def test_real_e2e_uses_the_configured_current_model(monkeypatch) -> None:
+def test_real_e2e_uses_the_configured_current_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RESAGENT2_WEB_SEARCH_PROVIDER", "off")
     monkeypatch.delenv("RESAGENT2_MODEL", raising=False)
-    assert _new_llm_client().model == "deepseek-v4-flash"
+    assert _application(tmp_path / "default").controller.scientific_port.llm_client.model == "deepseek-v4-flash"
 
     monkeypatch.setenv("RESAGENT2_MODEL", "deepseek-v4-pro")
-    assert _new_llm_client().model == "deepseek-v4-pro"
+    assert _application(tmp_path / "configured").controller.scientific_port.llm_client.model == "deepseek-v4-pro"
 
 
 def test_direct_agent_dataset_material_is_a_frozen_registered_snapshot(tmp_path):
     from e2e.real_e2e import _dataset_materials
     from resagent2_components import RegisteredArtifactReader, ResourceLayout, read_artifact_json
+    from resagent2_orchestrator import ArtifactRegistry
     layout = ResourceLayout(resource_root=tmp_path / "resources")
     layout.dataset_root.mkdir(parents=True)
     catalog = layout.dataset_root / "catalog.json"
     catalog.write_text('{"demo": "demo"}')
-    refs = _dataset_materials(tmp_path, layout, "run_direct")
+    refs = _dataset_materials(ArtifactRegistry(tmp_path / "artifacts"), layout, "run_direct")
     catalog.write_text("{}")
     data = read_artifact_json(RegisteredArtifactReader(refs, run_id="run_direct"), refs[0].id)
     assert data["datasets"][0]["dataset_id"] == "demo"

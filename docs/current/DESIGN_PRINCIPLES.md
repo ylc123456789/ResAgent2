@@ -198,7 +198,7 @@ Agent 系统仍是软件系统。职责分离、依赖倒置、开闭原则和�
 
 ### 在 ResAgent2 中
 
-Scheduler 依赖 `ModulePort`，CLI/E2E 入口注入具体 Agent；Orchestrator 不 import 具体 Agent 实现。三个 Agent 共用 AgentLoop，通过 `AgentDefinition` 注入提示词、工具、上下文、权限策略和完成检查。
+Scheduler 依赖 `ModulePort`，CLI 的统一组合根注入具体 Agent，真实 E2E 复用这一装配；Orchestrator 不 import 具体 Agent 实现。三个 Agent 共用 AgentLoop，通过 `AgentDefinition` 注入提示词、工具、上下文、权限策略和完成检查。
 
 Capabilities 提供模型工具入口，Components 提供普通操作与共享呈现；二者不必逐项配对。内部固定操作可以直接使用组件，专业工具可以复用同一执行部件。新增普通工具通常只需调整工具、输入 schema 和所属 Agent 的装配，无需复制核心循环；公共契约变化则同步生产者、校验、存储和消费者。
 

@@ -9,13 +9,13 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 24.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 24.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：
 
-当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。命令和 E2E 仍独立装配。
+当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。真实 E2E 同样通过 CLI 的 `build_application` 装配。
 
 ```bash
 conda env create -f environment.yml
@@ -332,7 +332,7 @@ Loop/Composer先计入tools、续传历史、固定领域正文及材料导航�
 
 默认值采用 DeepSeek 官方 Harness 的 1M 容量 / 256000 输出额度策略；依据、取舍和验收见 [模型输出默认配置](../../docs/history/reviews/MODEL_OUTPUT_DEFAULTS.md)。更大上限不强迫输出到上限，但允许长思考消耗更多时间和 tokens；这不是对任意任务永不截断的保证。
 
-**升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。程序化客户端和独立 E2E 组合根不会自动继承 CLI 的部署默认值。
+**升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。真实 E2E 复用 CLI 的配置与校验；自行创建的程序化客户端仍须显式配置。
 
 如果脚本仍设置某个Agent或Compiler的 `*_CONTEXT_TOKENS=8192` 或 `128000`，该显式覆盖会继续生效，不会随代码默认值升级；使用新的统一默认需移除它或明确设为256000。更大输入允许保留更多工具历史和已读材料，但也可能增加调用耗时和费用，不保证消除模型错误、重复动作或循环。
 
@@ -386,4 +386,4 @@ DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/message
 - 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。
 
-文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；程序化调用和独立 E2E 不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；真实 E2E 共用这一装配及配置；自行创建的程序化调用不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

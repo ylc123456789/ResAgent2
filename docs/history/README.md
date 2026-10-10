@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-10：真实 E2E 共用 CLI 装配
+
+真实 E2E 删除重复模型、Agent 和 Controller 装配，所有阶段复用 CLI `build_application`，统一部署配置、工具注入和数据目录；定向 Agent 场景仍直接调用已装配 binding，mock 保留确定性替身。schema 24.0 不变，旧 E2E 目录不自动迁移。本地 2195 passed / 1 skipped、mock completed / 13 工件；新增用例验证实际配置、磁盘问答恢复和单 Agent 调用。既有本地 cryptography 缺项如实记录，未执行付费真实模型或 L3；实现、边界和服务器检查见[验证记录](reviews/E2E_CLI_COMPOSITION_2026-10-10.md)。
+
 ## 2026-10-10：收敛网页搜索提供方
 
 按用户决定删除 Tavily 适配器、配置与装配、专用测试和当前支持说明，只维护 DeepSeek 托管搜索。保留 `WebSearchBackend` 接口、独立网页抓取和共享预算契约；旧 `tavily` 配置明确报错，不留兼容层或静默回退。旧网页能力阶段记录继续描述当时事实。取舍见 [ADR-0027](decisions/0027-deepseek-only-web-search.md)，本地验证和独立复核命令见[实现与验证](reviews/TAVILY_REMOVAL_2026-10-10.md)。

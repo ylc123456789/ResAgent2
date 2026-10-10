@@ -51,7 +51,7 @@
 - `answer_question(run_id, answer)` 校验当前问题、记录回答，再继续同一个 Run。
 - `run_until_stable(run_id)` 推进可恢复执行，不制造答案或绕过暂停。
 
-Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控制链。CLI 与 E2E 分别装配依赖，业务行为共用 Controller。
+Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控制链。CLI 与真实 E2E 共用 `build_application` 装配依赖；完整研究场景使用 Controller，定向 Agent 场景使用应用中已装配的 binding。
 
 <a id="research-request"></a>
 
@@ -730,7 +730,7 @@ class EnvironmentSpec:
 
 #### 数据集目录与当前可用性
 
-`dataset_root`（`ResourceLayout.dataset_root`）是所有数据集的共享根，不是某个数据集目录。部署者在根下 `catalog.json` 维护 `dataset_id → relative_path`；CLI/E2E 各自把 DatasetCatalog 经现有 DatasetRefSource Port 注入 Controller。调用方不提交目录路径或完整表。Controller 在推进回合及回答后的恢复入口读取目录，将新增引用保存到 `ResearchRun.dataset_refs`，不改写 ResearchRequest。
+`dataset_root`（`ResourceLayout.dataset_root`）是所有数据集的共享根，不是某个数据集目录。部署者在根下 `catalog.json` 维护 `dataset_id → relative_path`；CLI 与真实 E2E 共用的 build_application 把 DatasetCatalog 经现有 DatasetRefSource Port 注入 Controller。调用方不提交目录路径或完整表。Controller 在推进回合及回答后的恢复入口读取目录，将新增引用保存到 `ResearchRun.dataset_refs`，不改写 ResearchRequest。
 
 Run 中保存的是本 Run 累计发现的目录引用，不是实际使用清单、完整数据内容或数据版本快照。已有同名引用不允许改路径，不因后来删掉 catalog 条目而撤销 Run 中已有引用；但实际目录的存在性会重新检查。数据内容不复制、不做整库 hash，不承诺目录内部数据未被外部修改。
 

@@ -92,7 +92,7 @@ Compiler 按职责路由：实现代码和正确性验证交 Coding；为回答�
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e8eef8", "primaryTextColor": "#172b4d", "primaryBorderColor": "#597fa6", "lineColor": "#597fa6", "textColor": "#172b4d", "edgeLabelBackground": "#ffffff"}, "flowchart": {"nodeSpacing": 35, "rankSpacing": 55}}}%%
 flowchart TB
-    Root[CLI / E2E<br/>组合根] -->|注入实现| Orch[Orchestrator]
+    Root[CLI build_application<br/>统一组合根] -->|注入实现| Orch[Orchestrator]
     Root -->|创建并配置| Agents[Scientific / Coding / Experiment]
     Orch -->|ModulePort| Agents
     Agents -.-> Shared[runtime · capabilities · components<br/>循环、工具与普通操作]
@@ -100,7 +100,7 @@ flowchart TB
     Shared -.-> Contracts[contracts<br/>各模块共享的数据约定]
 ```
 
-CLI 是产品组合根，`real_e2e.py` 是独立验收组合根。它们创建模型客户端、状态存储、Agent、资源与供应商后端，并注入 Controller/Scheduler。Orchestrator 调用 Agent 时只使用 `ModulePort` 的公共接口，不 import 某个 Agent 的具体实现。Port 是进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。`contracts` 是各模块共同依赖的数据约定；图中只画一个入口，避免把所有公共类型依赖连成交叉箭头。
+CLI 的 `build_application` 是产品组合根，创建模型客户端、状态存储、Agent、资源与供应商后端，并注入 Controller/Scheduler。`real_e2e.py` 复用这一装配入口，只组织场景输入和验收断言：完整研究场景调用 Controller，Coding / Experiment 定向场景调用已装配的 Agent binding；不再另建模型、上下文或联网配置。Orchestrator 调用 Agent 时只使用 `ModulePort` 的公共接口，不 import 某个 Agent 的具体实现。Port 是进程内 Python 调用约定，不是网络服务，也不自动提供隔离或幂等。`contracts` 是各模块共同依赖的数据约定；图中只画一个入口，避免把所有公共类型依赖连成交叉箭头。
 
 图中省略的精确项目依赖如下；标准库和第三方库不列在这里：
 
@@ -112,7 +112,7 @@ CLI 是产品组合根，`real_e2e.py` 是独立验收组合根。它们创建�
 | `capabilities` | `contracts`、`runtime`、`components` | 不 import Agent 或 Orchestrator |
 | 三个 Agent | `contracts`、`runtime`、`components`、`capabilities` | 不直接 import、调用其他 Agent |
 | `orchestrator` | `contracts`；`runtime.budget`；`components.workspace/artifacts/materials/literature` | 不 import 具体 Agent 或模型 Tool |
-| CLI / E2E 组合根 | 装配所需各包 | 具体行为仍调用拥有者接口 |
+| CLI 组合根 / E2E 场景入口 | CLI 装配所需各包，真实 E2E 复用已装配应用 | 具体行为仍调用拥有者接口；mock 保留确定性测试替身 |
 
 Components 可以直接被 Agent 的准备/完成步骤或组合根调用，不要求先经过 Tool；其共享内容投影可以使用 Runtime。Capabilities 与 Components 没有一一对应关系，不建立逐项配对的类或自动映射。通用 `run_shell`、安装和 Coding 的领域 `run_verification` 共用 ProcessRunner，但专业验证规则仍留在 Coding。
 

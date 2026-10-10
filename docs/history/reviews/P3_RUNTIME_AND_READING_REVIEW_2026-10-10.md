@@ -109,4 +109,4 @@ next_start_char 是实际返回后的下一字符在同一行选择内的位置�
 
 依赖选择依据是现有 Python 栈和 Markdownify 的公开转换扩展接口；借鉴 DSH 使用成熟 HTML→Markdown 库的做法，不据此声称 Markdownify 普遍优于 Turndown。新增依赖范围在 components/pyproject.toml 声明；无需另一套 Agent、工件或上下文框架。
 
-本阶段本地最终回归 **2207 passed / 1 skipped**、mock completed（13工件）、diff check clean；网页专项97 passed。本地 pip check 仍为既有 cryptography 缺项。详细结果和服务器判断点统一记录在[本轮测试方案](P3_WEB_READING_TEST_PLAN_2026-10-10.md)，不将前阶段 2169 测试结果当作这次网页转换验收。服务器复测和 L3 尚未执行；L3 可在问题修复验收后按既有规程独立进行。
+本阶段本地最终回归 **2207 passed / 1 skipped**、mock completed（13工件）、diff check clean；网页专项97 passed。本地 pip check 仍为既有 cryptography 缺项。详细结果和服务器判断点统一记录在[本轮测试方案](P3_WEB_READING_TEST_PLAN_2026-10-10.md)，不将前阶段 2169 测试结果当作这次网页转换验收。服务器现已在 `9e31735` 验收通过：完整回归2207/1 skipped、mock13工件、pip/diff clean，真实网页任务completed，独立复算23/23通过；见[验收收尾](P3_WEB_READING_ACCEPTANCE_2026-10-10.md)。L3 尚未执行，可按既有规程在同一冻结提交独立进行。

@@ -1,5 +1,7 @@
 # P3：网页转换与分段读取服务器测试交接
 
+> 服务器已验收通过，冻结 `9e31735904232d3642a1b88d5a68202c98595f93`，结果见[验收收尾](P3_WEB_READING_ACCEPTANCE_2026-10-10.md)。以下保留当时的测试规程；L3 尚未运行。
+
 ## 范围和状态
 
 在 `fix/native-agent-receipts` 上，从 `74a59fc7813f779e1af269083769b5855af5dfb6` 继续修改；开始验收时冻结该分支最终完整 SHA。schema 保持 **24.0**，不合并 main。本轮只替换网页转换器、补读取范围事实并澄清工作区搜索覆盖，不调整搜索 provider、Agent 分工、四部分上下文或工件登记方式。
@@ -8,7 +10,7 @@
 
 2026-10-10 本地最终回归：**2207 passed / 1 skipped**（59.32秒，退出码0）；网页专项97 passed。mock 为 `run_golden completed`、13 工件，Coding/Experiment 各一次完成，退出码0；`git diff --check` clean。本地 `pip check` 退出码1，仍有既有 `pdfminer-six 20260107 requires cryptography, which is not installed`，不写成本地或服务器依赖 clean。
 
-本地另用生产 `WebPageFetcher` 实时获取 Python 官方 json.html，并以同一次响应的原始 HTML 中对应 `pre.get_text()` 为基准，确认含 `sort_keys=True, indent=4` 的五行示例在返回 Markdown 中逐字保留，包括四空格缩进。观察到 parser 为 `markdownify/html.parser`、正文45523字符；这是组件级公开网页验证，没有调用 LLM、GPU，也没有验证服务器完整 Agent/工件消费链。**服务器复测和 L3 尚未执行。**
+本地另用生产 `WebPageFetcher` 实时获取 Python 官方 json.html，并以同一次响应的原始 HTML 中对应 `pre.get_text()` 为基准，确认含 `sort_keys=True, indent=4` 的五行示例在返回 Markdown 中逐字保留，包括四空格缩进。观察到 parser 为 `markdownify/html.parser`、正文45523字符；这是组件级公开网页验证，没有调用 LLM、GPU，也没有验证服务器完整 Agent/工件消费链。**服务器复测现已完成，结果见验收收尾；L3 尚未执行。**
 
 ## 1. 同步、依赖和身份
 
@@ -122,7 +124,7 @@ resagent2 run \
 
 1. 网页成功登记为 web_page，source/final URL 与 parser 正确，冻结 SHA256 与登记 ref 一致。正文是 Markdown；不要把格式变化误报成整页损坏，也不要声称整个页面与旧纯文本逐字相同。
 2. 模型实际 read_artifact 的回执包含目标示例；total_lines/selected_chars 来自冻结文本，next_start_char 与实际范围一致。索引展示与原生 assistant/tool 配对正常，搜索关闭时请求中没有 web_search schema。
-3. 冻结 Markdown 中的目标代码正文、读取回执和最终意见/报告保持相同五行与缩进。独立保存本次官方 HTML，定位对应 pre，移除语法高亮标签后保留文本，用真实原文逐字符比较；排除 Markdown 围栏本身和围栏的分隔换行，但不要 strip 正文空格、重排键或用模型答案当基准。 原始 HTML 若由另一次独立请求取得，记录响应时间与页面变化，不能把更新后的页面差异直接判为提取错误。
+3. 冻结 Markdown 中的目标代码正文、读取回执和最终意见/报告保留同一代码示例的全部源换行与缩进（5条可见行，尾部空行也按实际原文核对）。独立保存本次官方 HTML，定位对应 pre，移除语法高亮标签后保留文本，用真实原文逐字符比较；排除 Markdown 围栏本身和围栏的分隔换行，但不要 strip 正文空格、重排键或用模型答案当基准。 原始 HTML 若由另一次独立请求取得，记录响应时间与页面变化，不能把更新后的页面差异直接判为提取错误。
 4. 原生调用数与唯一 Run 用量账本对齐；请求或读取失败如实报告。未自然触发坏 HTML、搜索上限或越界读取时标注未触发，由确定性测试证明相关边界。
 
 此前官方示例仅供定位，以本次实际页面为准；官方内容变化时记录变化：

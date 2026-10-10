@@ -41,6 +41,10 @@ def _trace_activity(record: dict) -> str:
     return "None"
 
 
+def _question_label(question: Any) -> str:
+    return "User question" if question.action is None else "Operation approval"
+
+
 def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
     """One compact, redrawable block for the in-progress view.
 
@@ -79,7 +83,7 @@ def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
         lines.append(f"→ {activity}")
     if run.pending_question is not None:
         question = run.pending_question
-        lines.append(f"? {question.text}")
+        lines.append(f"? {_question_label(question)}: {question.text}")
         if question.requested_fields:
             lines.append(f"  answer: {', '.join(question.requested_fields)}")
     return lines
@@ -114,7 +118,7 @@ def render_final(run: Any) -> list[str]:
                         f"    {latest.error.code.value}: {latest.error.message}"
                     )
     if run.pending_question is not None:
-        lines.append("Pending question:")
+        lines.append(f"Pending {_question_label(run.pending_question).lower()}:")
         lines.append(f"  {run.pending_question.text}")
         if run.pending_question.requested_fields:
             fields = ", ".join(run.pending_question.requested_fields)

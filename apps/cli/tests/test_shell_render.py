@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from resagent2_contracts import ActionSnapshot
+
 from resagent2_cli.render import (
     render_artifacts,
     render_final,
@@ -49,7 +51,7 @@ def test_render_final_preserves_terminal_cause():
 def test_render_live_header_and_pending_question():
     run = _run()
     run.pending_question = SimpleNamespace(
-        text="pick the primary metric", requested_fields=["primary_metric"]
+        text="pick the primary metric", requested_fields=["primary_metric"], action=None
     )
     joined = "\n".join(render_live(run, None))
     assert "run_x" in joined
@@ -150,11 +152,45 @@ def test_render_final_keeps_interim_assessment_without_final_opinion(status):
 def test_render_final_pending_question_fields():
     run = _run(status="paused")
     run.pending_question = SimpleNamespace(
-        text="choose", requested_fields=["metric", "seed"]
+        text="choose", requested_fields=["metric", "seed"], action=None
     )
     joined = "\n".join(render_final(run))
-    assert "Pending question:" in joined
+    assert "Pending user question:" in joined
     assert "Fields: metric, seed" in joined
+
+
+@pytest.mark.parametrize("renderer", [render_live, render_final])
+@pytest.mark.parametrize("is_approval, field, label", [
+    (False, "metric", "User question"),
+    (False, "approve", "User question"),
+    (True, "approve", "Operation approval"),
+])
+def test_pending_question_kind_comes_from_action(renderer, is_approval, field, label):
+    run = _run(status="paused")
+    action = ActionSnapshot(
+        action_id="action_train", tool="run_shell",
+        arguments={"command": "python train.py"},
+        context={"cwd": "/workspace", "environment": "/env"},
+        run_id=run.run_id, session_id="session_coding",
+        task_id="task_train", attempt_number=1,
+    ) if is_approval else None
+    run.pending_question = SimpleNamespace(
+        text="Choose the next step", requested_fields=[field], action=action,
+    )
+    before = deepcopy(run)
+
+    lines = renderer(run)
+
+    if renderer is render_live:
+        assert f"? {label}: Choose the next step" in lines
+        assert f"  answer: {field}" in lines
+    else:
+        assert f"Pending {label.lower()}:" in lines
+        assert "  Choose the next step" in lines
+        assert f"  Fields: {field}" in lines
+    other_label = "User question" if is_approval else "Operation approval"
+    assert other_label.lower() not in "\n".join(lines).lower()
+    assert run == before
 
 
 def test_render_artifacts_empty():

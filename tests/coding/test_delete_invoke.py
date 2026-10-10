@@ -12,7 +12,7 @@ from resagent2_contracts import (
     AgentPermissions, AgentRequest, ArtifactCandidate, ModuleStatus, QuestionDraft,
     RecordedAnswer, TaskBudget, WorkspaceAccess, WorkspaceGrant,
 )
-from resagent2_components import ResourceLayout
+from resagent2_components import RegisteredArtifactReader, ResourceLayout
 from resagent2_orchestrator.artifacts import ArtifactRegistry
 from resagent2_runtime import JsonSessionStore, OpenAICompatibleClient
 
@@ -108,7 +108,12 @@ def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path,
         assert "call the same tool with the same arguments" in current
         assert '"tool": "delete_path"' in current
         assert '"recursive": true' in current
-        assert '"approve": "yes"' in current
+        task = json.loads(current.split("## task\n", 1)[1].split("\n\n## ", 1)[0])
+        assert task["user_answers"] == []
+        index = json.loads(current.split("## artifact_index\n", 1)[1].split("\n\n## ", 1)[0])
+        assert ref.id in {entry["artifact_id"] for entry in index["artifacts"]}
+        reader = RegisteredArtifactReader(resumed.input_artifacts, run_id=request.run_id)
+        assert RecordedAnswer.model_validate_json(reader.read_text(ref.id)["content"]) == recorded
         receipts = [json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"]
         assert receipts[-1]["execution_status"] == "not_executed"
         assert target.is_dir()

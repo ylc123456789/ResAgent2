@@ -13,6 +13,7 @@ from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
     WorkflowAgentKind,
+    ActionSnapshot,
     DatasetRef,
     EnvironmentSpec,
     PendingQuestion,
@@ -254,9 +255,28 @@ def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
     assert store.load(run.run_id).pending_question == run.pending_question
 
 
-def test_show_reads_store_without_building_application(tmp_path: Path, capsys):
+@pytest.mark.parametrize("is_approval, field, heading", [
+    (False, "metric", "Pending user question:"),
+    (False, "approve", "Pending user question:"),
+    (True, "approve", "Pending operation approval:"),
+])
+def test_show_reads_store_without_building_application(
+    tmp_path: Path, capsys, is_approval, field, heading,
+):
+    run = _run(RunStatus.PAUSED)
+    action = ActionSnapshot(
+        action_id="action_train", tool="run_shell",
+        arguments={"command": "python train.py"},
+        context={"cwd": "/workspace", "environment": "/env"},
+        run_id=run.run_id, session_id="session_coding",
+        task_id="task_train", attempt_number=1,
+    ) if is_approval else None
+    run.pending_question = PendingQuestion(
+        id="question_next", run_id=run.run_id, text="Choose the next step",
+        requested_fields=[field], created_at=datetime.now(UTC), action=action,
+    )
     store = InMemoryRunStore()
-    store.save(_run(RunStatus.PAUSED))
+    store.save(run)
 
     result = cli(
         ["show", "run_test", "--data-root", str(tmp_path / "data")],
@@ -265,7 +285,11 @@ def test_show_reads_store_without_building_application(tmp_path: Path, capsys):
     )
 
     assert result == EXIT_COMPLETED
-    assert "Status: paused" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Status: paused" in output
+    assert heading in output
+    assert "Choose the next step" in output
+    assert f"Fields: {field}" in output
 
 
 def test_resume_uses_controller_and_returns_paused_exit(tmp_path: Path):

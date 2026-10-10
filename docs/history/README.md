@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-11：操作批准不再累计为任务需求
+
+三个 Agent 共用的任务投影在原件及作用域校验后，只保留业务问答；操作批准或拒绝继续持久保存、在授权目录中可读，由原有待执行动作与权限策略处理。CLI 区分 `User question` / `Operation approval`，未改权限范围或确认频率，schema 24.0 不变。本地验证、服务器复核命令，以及上下文与工件接入尚未落实原设计的偏差见[实现与复核记录](reviews/APPROVAL_CONTEXT_AND_ARTIFACT_REVIEW_2026-10-11.md)。本轮没有调整 ResearchIndex 定位或 WorkRequest 的最终结果接入。
+
 ## 2026-10-10：真实 E2E 共用 CLI 装配
 
 真实 E2E 删除重复模型、Agent 和 Controller 装配，所有阶段复用 CLI `build_application`，统一部署配置、工具注入和数据目录；定向 Agent 场景仍直接调用已装配 binding，mock 保留确定性替身。schema 24.0 不变，旧 E2E 目录不自动迁移。本地 2195 passed / 1 skipped、mock completed / 13 工件；新增用例验证实际配置、磁盘问答恢复和单 Agent 调用。既有本地 cryptography 缺项如实记录，未执行付费真实模型或 L3；实现、边界和服务器检查见[验证记录](reviews/E2E_CLI_COMPOSITION_2026-10-10.md)。

@@ -94,7 +94,7 @@ Controller 以 `source_type=import` 登记 `literature_paper` 和可选 `literat
 
 Agent 返回 `needs_user_input`、paused Session 和指向 `question` 工件的 ControlSignal。Orchestrator 分配并保存 PendingQuestion；用户只提交 `UserAnswer(question_id, values, answered_at)`。values 的键集合必须等于保存的问题字段；options 是供用户选择的提示，不是额外的字符串枚举校验。
 
-Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。完整问答也作为本 Run 的材料进入科研目录，Scientific 可以按原 ID 读取。阅读历史答案不消费批准、不恢复原任务，也不改变答案的作用域。
+Controller 从 PendingQuestion 配对原题，生成 `RecordedAnswer`：question_id、question_text、requested_fields、options、values、answered_at、run_id，以及 Task/Attempt 或 Scientific Session 作用域。它被冻结为 `answer` 工件，通过 input_artifacts 交回对应 Agent；`resume_artifact_ids` 标识本次恢复实际要消费的材料。业务问答与操作确认都保留完整记录和授权目录入口，Scientific 可以按原 ID 读取。只有 `action=None` 的业务回答在校验后进入上下文第二部分；带 `action` 的操作批准由权限策略处理，不作为任务需求累计。阅读历史答案不消费批准、不恢复原任务，也不改变答案的作用域。
 
 操作确认复用同一问答入口。`QuestionDraft / PendingQuestion / RecordedAnswer.action` 可携带 `ActionSnapshot`：action_id、工具、已校验参数、实际目录/环境/目标，以及 Run/Task/Attempt/Session 身份。Session 保存当前 pending_action，恢复时只消费本次 answer 工件。执行前重验权限、预算及目标，并先持久消费批准；下次相同命令仍需新的批准。批准不扩大授权，不再是当前待答问题的答案或字段不匹配的回答在状态修改前拒绝。消费后即使前置审计失败或进程中断也不恢复批准；缺少执行回执时不自动重放。
 
@@ -142,7 +142,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 | 部分 | 输入边界 |
 |---|---|
 | 固定契约 | Agent 职责、系统规则和工具 schema，由系统提供 |
-| 任务需求 | `instruction` + 本 Session / Task / Attempt 作用域内的累计问答；回答先经归属与冻结内容校验 |
+| 任务需求 | `instruction` + 本 Session / Task / Attempt 作用域内累计的业务问答（`action=None`）；先校验归属与冻结内容，操作批准不进入此部分 |
 | 原生协议历史 | Session 的 assistant/tool 成对回合；`request_work` 仍是普通控制工具调用 |
 | 当前任务上下文与完整索引 | 当前状态、必要恢复材料、近期读取片段，以及授权输入 ∪ Session 工具输出形成的唯一完整 `artifact_index` |
 
@@ -582,7 +582,7 @@ trace 与 Session 是独立边界：metadata 只留内容 hash，不表示 Sessi
 | 调用约定 | 必须成立的规则 |
 |---|---|
 | 失败反馈 | Loop 的动作拒绝、工具异常与 finish 拒绝可形成持久 required runtime_feedback；普通 ok=False 观察不自动全部变成该反馈。工具正常返回后清除 tool_error 旧反馈，完成反馈按检查流程更新/清除 |
-| 用户问答 | request_task_context 校验作用域后注入当前作用域累计原题和 values；request_materials_context 跳过 answer。ask_user 成功只代表已发问，不代表已答复或资源已准备；续跑保留原作用域，失败重试的新 Attempt 不自动继承旧问答 |
+| 用户问答 | request_task_context 校验作用域及冻结内容后，仅注入当前作用域 `action=None` 的累计原题和 values；request_materials_context 跳过 answer。操作批准保留原件与目录入口，由 pending_operation 和权限策略处理。ask_user 成功只代表已发问，不代表已答复或资源已准备；续跑保留原作用域，失败重试的新 Attempt 不自动继承旧问答 |
 | 原生历史 | 重放检查点后的完整配对 assistant/tool 回合，末尾加入最新业务上下文；不重复保存每轮完整 prompt |
 | 读取材料 | 文件/工件片段只构成本轮工作集，有来源、范围、观察序号、截断/省略标识；旧文件片段可能过时。已读 ID 或短预览不证明全文在上下文中，也不证明论断成立 |
 | 执行诊断 | command_results 使用真实命令观察与日志尾部，不依赖短历史预览，不替代当前状态或完成验收 |

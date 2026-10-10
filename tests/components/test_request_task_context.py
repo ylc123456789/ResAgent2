@@ -8,7 +8,7 @@ import pytest
 
 from resagent2_components import ArtifactReadError, request_task_context
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, RecordedAnswer, TaskBudget,
+    ActionSnapshot, AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, RecordedAnswer, TaskBudget,
 )
 from resagent2_runtime import AgentState
 from resagent2_coding.context import build_context as coding_context
@@ -23,14 +23,17 @@ ANSWERED_AT = datetime(2026, 10, 7, 1, 2, 3, tzinfo=UTC)
 
 
 def freeze_answer(root, artifact_id, *, task_id=None, attempt_number=None,
-                  session_id=None, body_scope=None):
+                  session_id=None, body_scope=None, action=None,
+                  question_text="Which device should be used?",
+                  requested_fields=None, values=None):
     scope = {
         "task_id": task_id, "attempt_number": attempt_number, "session_id": session_id,
     }
     answer = RecordedAnswer(
         run_id=RUN, question_id=f"question_{artifact_id}",
-        question_text="Which device should be used?", requested_fields=["device"],
-        values={"device": "cuda"}, answered_at=ANSWERED_AT, **(body_scope or scope),
+        question_text=question_text, requested_fields=requested_fields or ["device"],
+        values=values or {"device": "cuda"}, action=action,
+        answered_at=ANSWERED_AT, **(body_scope or scope),
     )
     path = root / f"{artifact_id}.json"
     path.write_text(answer.model_dump_json(), encoding="utf-8")
@@ -157,3 +160,93 @@ def test_fresh_scientific_invocation_can_use_its_run_session_answer(tmp_path):
     )
     invocation = request(AgentOwner.SCIENTIFIC, [ref]).model_copy(update={"parent_session_id": None})
     assert request_task_context(invocation)["user_answers"][0]["artifact_id"] == ref.id
+
+
+def approval_snapshot(owner):
+    return ActionSnapshot(
+        action_id="action_approval", tool="run_shell",
+        arguments={"command": "python train.py"}, context={"cwd": "/workspace"},
+        run_id=RUN, session_id=SESSION,
+        task_id=None if owner == AgentOwner.SCIENTIFIC else TASK,
+        attempt_number=None if owner == AgentOwner.SCIENTIFIC else 1,
+    )
+
+
+@pytest.mark.parametrize("owner,builder,section_name", [
+    (AgentOwner.CODING, coding_context, "task"),
+    (AgentOwner.EXPERIMENT, experiment_context, "task"),
+    (AgentOwner.SCIENTIFIC, scientific_context, "research"),
+])
+@pytest.mark.parametrize("decision", ["yes", "no"])
+def test_builders_keep_business_dialogue_and_index_without_approval_prose(
+    tmp_path, owner, builder, section_name, decision,
+):
+    scope = {"session_id": SESSION} if owner == AgentOwner.SCIENTIFIC else {
+        "task_id": TASK, "attempt_number": 1,
+    }
+    first = freeze_answer(tmp_path, "artifact_business_first", **scope)
+    approval = freeze_answer(
+        tmp_path, "artifact_operation_approval", **scope,
+        action=approval_snapshot(owner),
+        question_text="Confirm this Bash script: python train.py",
+        requested_fields=["approve"], values={"approve": decision},
+    )
+    latest = freeze_answer(
+        tmp_path, "artifact_business_latest", **scope,
+        question_text="How many seeds?", requested_fields=["seeds"], values={"seeds": "3"},
+    )
+    invocation = request(owner, [first, approval, latest]).model_copy(update={
+        "resume_artifact_ids": [approval.id],
+    })
+    original = invocation.model_dump_json()
+    state = AgentState(
+        session_id=SESSION, agent_name=owner.value, owner=owner, run_id=RUN,
+        task_id=invocation.task_id, attempt_number=invocation.attempt_number,
+        created_at=ANSWERED_AT, updated_at=ANSWERED_AT,
+    )
+    sections = builder(invocation, state)
+    task = next(section.content for section in sections if section.name == section_name)
+    dialogue = json.loads(task)
+    assert [answer["artifact_id"] for answer in dialogue["user_answers"]] == [first.id, latest.id]
+    assert "python train.py" not in task
+    assert dialogue["user_answers"][0]["values"] == {"device": "cuda"}
+    assert dialogue["user_answers"][1]["values"] == {"seeds": "3"}
+    index = json.loads(next(section.content for section in sections if section.name == "artifact_index"))
+    assert {entry["artifact_id"] for entry in index["artifacts"]} == {first.id, approval.id, latest.id}
+    assert invocation.model_dump_json() == original
+    frozen = json.loads((tmp_path / "artifact_operation_approval.json").read_text())
+    assert frozen["action"]["arguments"] == {"command": "python train.py"}
+    assert frozen["values"] == {"approve": decision}
+
+
+def test_business_answer_named_approve_remains_task_dialogue(tmp_path):
+    ref = freeze_answer(
+        tmp_path, "artifact_business_approve", session_id=SESSION,
+        question_text="Do you approve this research scope?",
+        requested_fields=["approve"], values={"approve": "yes"},
+    )
+    dialogue = request_task_context(request(AgentOwner.SCIENTIFIC, [ref]))
+    assert dialogue["user_answers"][0]["values"] == {"approve": "yes"}
+
+
+def test_excluded_approval_still_requires_frozen_bytes(tmp_path):
+    ref = freeze_answer(
+        tmp_path, "artifact_approval_hash", session_id=SESSION,
+        action=approval_snapshot(AgentOwner.SCIENTIFIC),
+        requested_fields=["approve"], values={"approve": "yes"},
+    )
+    path = tmp_path / "artifact_approval_hash.json"
+    path.write_text(path.read_text().replace("python train.py", "python other.py"))
+    with pytest.raises(ArtifactReadError, match="sha256"):
+        request_task_context(request(AgentOwner.SCIENTIFIC, [ref]))
+
+
+def test_excluded_approval_still_requires_body_scope_consistency(tmp_path):
+    ref = freeze_answer(
+        tmp_path, "artifact_approval_scope", task_id=TASK, attempt_number=1,
+        body_scope={"task_id": "task_other", "attempt_number": 1},
+        action=approval_snapshot(AgentOwner.CODING),
+        requested_fields=["approve"], values={"approve": "yes"},
+    )
+    with pytest.raises(ArtifactReadError, match="does not belong"):
+        request_task_context(request(AgentOwner.CODING, [ref]))

@@ -33,7 +33,7 @@ fetch_literature_fulltext，得到 literature_pdf 与 literature_fulltext 的引
 Scientific 不读取 CLI 环境变量，模型工具不接收超时覆盖参数。
 observation_trace 从真实工具访问确定性生成，模型不能自行填报，也不代表读完全文。
 
-回答与工作反馈按 resume_artifact_ids 从正式快照投影到必需上下文。Scientific
+业务回答与工作反馈按 resume_artifact_ids 从正式快照投影到必需上下文；操作批准保留原件和授权目录入口，不累积为任务需求。Scientific
 消费固定 Interpreter 组织的完整科研目录和本轮原报告，不生成另一份目录或简报。
 目录保留原 Artifact ID 及可选直接来源 ID；原文和身份仍以 Registry 为准。
 阅读答案不消费批准或改变恢复范围；同一 Session 的持久结果沿原恢复链复用。

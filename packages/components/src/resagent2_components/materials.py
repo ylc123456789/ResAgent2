@@ -58,7 +58,7 @@ def read_request_material(request: AgentRequest, ref: ArtifactRef, *, reader=Non
 
 
 def request_task_context(request: AgentRequest) -> dict:
-    """Project the instruction and verified user dialogue for this invocation."""
+    """Project verified business dialogue; operation approvals stay with policy."""
     reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
     session_id = _request_session_id(request)
     answers = []
@@ -72,7 +72,10 @@ def request_task_context(request: AgentRequest) -> dict:
         if ref.id not in request.resume_artifact_ids and not (same_scope and same_session):
             continue
         value = read_request_material(request, ref, reader=reader)
-        answer = RecordedAnswer.model_validate(value).model_dump(mode="json")
+        recorded = RecordedAnswer.model_validate(value)
+        if recorded.action is not None:
+            continue
+        answer = recorded.model_dump(mode="json")
         answers.append({
             "artifact_id": ref.id, "question_id": answer["question_id"],
             "question": answer["question_text"], "values": answer["values"],

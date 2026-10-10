@@ -313,7 +313,7 @@ Loop 先取模块上限与模型可用容量的较小值，为完整 schema 和�
 
 ### 6.2 用量控制不靠模型自行记账
 
-Run / Task 的执行预算约束模型请求次数与时间。Agent 动作、Compiler、历史摘要、HTTP 重试和 DeepSeek 托管搜索共享权威用量及截止时间；Tavily 与网页抓取只占时间。嵌套调用只能缩小范围，不能另换钱包。发送前持久占用，暂停恢复不重置，崩溃留下的未知请求不退款。
+Run / Task 的执行预算约束模型请求次数与时间。Agent 动作、Compiler、历史摘要、HTTP 重试和 DeepSeek 托管搜索共享权威用量及截止时间；网页抓取只占时间。嵌套调用只能缩小范围，不能另换钱包。发送前持久占用，暂停恢复不重置，崩溃留下的未知请求不退款。
 
 任务数与尝试数由 ExecutionLimits 控制，step 只记录动作时序。三个 Agent 的当前上下文不自动显示 Run 用量、实时剩余时间或 TaskBudget 数值；Coding / Experiment 的权限和确认开关在 `execution_context`，Scientific 的 `research` 是指令与问答。Compiler 看到剩余任务容量，不拿一份独立模型钱包。
 

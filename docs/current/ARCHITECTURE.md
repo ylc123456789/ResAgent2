@@ -172,7 +172,7 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 | 文件、Git、环境与进程 | Components 执行普通操作，Tool 提供模型入口；执行前检查路径和操作授权，领域规则留在所属 Agent | [Components](../../packages/components/README.md)、[Tools](../../packages/capabilities/README.md) |
 | 数据集 | 部署 catalog 提供登记，Controller 保存 Run 引用，Agent 检查实际可用性；缺所需资源时问用户 | [资源契约](CONTRACTS.md#resources) |
 | 文献 | arXiv/OpenAlex 后端查询；查询回执和每篇论文分别登记；按需获取 PDF 与解析文本，不固定检索阶段 | [文献流程](CONTEXT.md#literature) |
-| 网页 | 独立 `web_search` 寻找来源，`web_fetch` 获取单页；默认可用 DeepSeek 托管搜索，也可选 Tavily 或关闭搜索 | [联网组件](../../packages/components/README.md#web) |
+| 网页 | 独立 `web_search` 寻找来源，`web_fetch` 获取单页；默认可用 DeepSeek 托管搜索，也可关闭搜索 | [联网组件](../../packages/components/README.md#web) |
 | 模型请求 | Agent 原生 function call、Compiler 无状态 JSON 编译、托管搜索独立请求共用 Run 用量和截止时间 | [Runtime](CONTRACTS.md#tools) |
 | 上下文 | Agent builder 选择当前业务材料，Runtime 接入协议历史与反馈，Composer 计量并分配材料空间 | [上下文构造](CONTEXT.md) |
 

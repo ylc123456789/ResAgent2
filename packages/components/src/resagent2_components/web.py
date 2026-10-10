@@ -6,7 +6,6 @@ resagent2_capabilities.web.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -70,101 +69,10 @@ class WebSearchBackend(Protocol):
     name: str
 
     def search(self, query: str, *, max_results: int) -> WebSearchResult:
-        """Return received results within response limits; max_results is a provider hint."""
+        """Return all received sources within response limits; max_results sets the tool preview size."""
 
 
 MAX_WEB_SNIPPET_CHARS = 2000
-
-
-class TavilyWebSearchBackend:
-    """Small Tavily adapter; provider responses never cross the component boundary."""
-
-    name = "tavily"
-    endpoint = "https://api.tavily.com/search"
-
-    def __init__(
-        self, api_key: str, *, timeout_seconds: int = 30,
-        max_response_bytes: int = 2 * 1024 * 1024,
-    ) -> None:
-        if not api_key or not api_key.strip():
-            raise ValueError("Tavily API key must not be empty")
-        self.api_key = api_key
-        self.timeout_seconds = timeout_seconds
-        self.max_response_bytes = max_response_bytes
-
-    def search(self, query: str, *, max_results: int) -> WebSearchResult:
-        if not isinstance(query, str) or not query.strip():
-            raise WebSearchError("web query must not be empty", error_type="invalid_query")
-        if type(max_results) is not int or not 1 <= max_results <= 10:
-            raise WebSearchError("max_results must be between 1 and 10", error_type="invalid_query")
-        request = httpx.Request(
-            "POST", self.endpoint,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json", "Accept": "application/json",
-                "User-Agent": USER_AGENT,
-            },
-            content=json.dumps({
-                "query": query.strip(),
-                "max_results": max_results,
-                "search_depth": "basic",
-                "include_answer": False,
-                "include_raw_content": False,
-                "include_images": False,
-            }).encode("utf-8"),
-        )
-        try:
-            response = send_request(
-                request, timeout=self.timeout_seconds,
-                max_response_bytes=self.max_response_bytes,
-            )
-        except httpx.HTTPStatusError as error:
-            status = error.response.status_code
-            retry_after = _retry_after(error.response.headers.get("Retry-After"))
-            error_type = "rate_limited" if status == 429 else "request_rejected"
-            raise WebSearchError(
-                f"Tavily HTTP {status}; request rejected",
-                error_type=error_type, retry_after=retry_after or None,
-            ) from None
-        except DeadlineExceededError:
-            raise
-        except (httpx.TimeoutException, TimeoutError):
-            raise WebSearchError("Tavily request timed out", error_type="timeout") from None
-        except ResponseTooLargeError:
-            raise WebSearchError(
-                "Tavily response exceeded the configured byte limit",
-                error_type="response_too_large",
-            ) from None
-        except httpx.DecodingError:
-            raise WebSearchError(
-                "Tavily response body could not be decoded", error_type="invalid_response",
-            ) from None
-        except httpx.TransportError:
-            raise WebSearchError("Tavily network request failed", error_type="network_error") from None
-        try:
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("response is not an object")
-            raw_results = payload.get("results", [])
-            if not isinstance(raw_results, list):
-                raise ValueError("results is not a list")
-            results = []
-            for item in raw_results:
-                if not isinstance(item, dict) or not item.get("url") or not item.get("title"):
-                    continue
-                results.append(WebSearchItem(
-                    title=str(item["title"]).strip(),
-                    url=str(item["url"]).strip(),
-                    snippet=str(item.get("content", "")).strip()[:MAX_WEB_SNIPPET_CHARS],
-                    score=float(item["score"]) if item.get("score") is not None else None,
-                    published_at=str(item["published_date"]).strip()
-                    if item.get("published_date") else None,
-                ))
-            return WebSearchResult(
-                provider=self.name, query=query.strip(), results=results,
-            )
-        except (ValueError, TypeError, KeyError):
-            raise WebSearchError("Tavily returned invalid JSON", error_type="invalid_response") from None
 
 
 def _retry_after(value: str | None) -> float:

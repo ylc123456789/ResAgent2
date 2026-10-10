@@ -1,6 +1,5 @@
 """Deterministic tests for provider-neutral web components."""
 
-import json
 import socket
 from datetime import UTC, datetime, timedelta
 
@@ -9,11 +8,9 @@ import pytest
 from resagent2_components import (
     WebFetchError,
     WebPageFetcher,
-    WebSearchError,
-    TavilyWebSearchBackend,
 )
 from resagent2_components.web import _retry_after
-from resagent2_runtime.http import NonPublicAddressError, ResponseTooLargeError
+from resagent2_runtime.http import NonPublicAddressError
 
 
 def _response(content: bytes, *, status=200, content_type="application/json", url="https://api.test/search"):
@@ -33,97 +30,6 @@ def resolve_test_hosts_as_public(monkeypatch):
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
         ],
     )
-
-
-def test_tavily_normalizes_results_and_bounds_snippet(monkeypatch):
-    observed = {}
-
-    def send(request, **kwargs):
-        observed["request"] = request
-        observed["kwargs"] = kwargs
-        return _response(json.dumps({
-            "results": [{
-                "title": "A",
-                "url": "https://example.test/a",
-                "content": "x" * 2500,
-                "score": 0.9,
-                "published_date": "2026-01-01",
-            }],
-        }).encode())
-
-    monkeypatch.setattr("resagent2_components.web.send_request", send)
-    result = TavilyWebSearchBackend("secret", timeout_seconds=7).search(
-        "  query  ", max_results=3,
-    )
-
-    assert result.provider == "tavily"
-    assert result.query == "query"
-    assert result.results[0].snippet == "x" * 2000
-    assert observed["kwargs"]["timeout"] == 7
-    assert observed["request"].headers["User-Agent"].startswith("ResAgent2/")
-    payload = json.loads(observed["request"].content)
-    assert observed["request"].headers["Authorization"] == "Bearer secret"
-    assert "api_key" not in payload
-    assert payload["query"] == "query"
-    assert payload["include_raw_content"] is False
-
-
-def test_tavily_keeps_received_results_even_if_provider_exceeds_hint(monkeypatch):
-    requests = []
-
-    def send(request, **kwargs):
-        requests.append(json.loads(request.content))
-        return _response(json.dumps({"results": [
-            {"title": "A", "url": "https://example.test/a"},
-            {"title": "B", "url": "https://example.test/b"},
-        ]}).encode())
-
-    monkeypatch.setattr("resagent2_components.web.send_request", send)
-    result = TavilyWebSearchBackend("secret").search("q", max_results=1)
-    assert requests[0]["max_results"] == 1
-    assert [item.url for item in result.results] == [
-        "https://example.test/a", "https://example.test/b",
-    ]
-
-
-@pytest.mark.parametrize("content", [b"[]", b"null", b'{"results": {}}', b"{bad"])
-def test_tavily_invalid_json_is_structured_error(monkeypatch, content):
-    monkeypatch.setattr(
-        "resagent2_components.web.send_request",
-        lambda request, **kwargs: _response(content),
-    )
-
-    with pytest.raises(WebSearchError, match="invalid JSON") as raised:
-        TavilyWebSearchBackend("secret").search("q", max_results=1)
-    assert raised.value.error_type == "invalid_response"
-
-
-def test_tavily_rate_limit_preserves_retry_after(monkeypatch):
-    retry_at = (datetime.now(UTC) + timedelta(seconds=60)).strftime(
-        "%a, %d %b %Y %H:%M:%S GMT"
-    )
-
-    def send(request, **kwargs):
-        response = _response(b'{"error":"slow down"}', status=429)
-        response.headers["Retry-After"] = retry_at
-        response.raise_for_status()
-        return response
-
-    monkeypatch.setattr("resagent2_components.web.send_request", send)
-    with pytest.raises(WebSearchError) as raised:
-        TavilyWebSearchBackend("secret").search("q", max_results=1)
-    assert raised.value.error_type == "rate_limited"
-    assert raised.value.retry_after is not None and raised.value.retry_after > 0
-
-
-def test_tavily_response_limit_is_structured_error(monkeypatch):
-    def send(request, **kwargs):
-        raise ResponseTooLargeError("too large")
-
-    monkeypatch.setattr("resagent2_components.web.send_request", send)
-    with pytest.raises(WebSearchError, match="byte limit") as raised:
-        TavilyWebSearchBackend("secret").search("q", max_results=1)
-    assert raised.value.error_type == "response_too_large"
 
 
 def test_retry_after_accepts_seconds_and_http_date():
@@ -584,8 +490,7 @@ def test_web_page_fetcher_drops_control_character_link_targets(monkeypatch):
     assert page.text == "Before\n\nVisible label\n\nAfter"
 
 
-@pytest.mark.parametrize("operation,error_class", [("search", WebSearchError), ("fetch", WebFetchError)])
-def test_corrupt_compressed_response_is_a_structured_failure(monkeypatch, operation, error_class):
+def test_corrupt_compressed_webpage_is_a_structured_failure(monkeypatch):
     from resagent2_runtime import http
 
     calls = []
@@ -601,19 +506,15 @@ def test_corrupt_compressed_response_is_a_structured_failure(monkeypatch, operat
     monkeypatch.setattr(http.httpx, "AsyncClient", lambda **kwargs: original(
         transport=httpx.MockTransport(respond), **kwargs,
     ))
-    with pytest.raises(error_class, match="could not be decoded") as raised:
-        if operation == "search":
-            TavilyWebSearchBackend("secret").search("q", max_results=1)
-        else:
-            WebPageFetcher().fetch("https://example.test/page")
+    with pytest.raises(WebFetchError, match="could not be decoded") as raised:
+        WebPageFetcher().fetch("https://example.test/page")
     assert raised.value.error_type == "invalid_response"
     assert "PRIVATE_CORRUPT_RESPONSE" not in str(raised.value)
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("operation", ["search", "fetch"])
 @pytest.mark.parametrize("error_type", ["budget", "deadline"])
-def test_web_request_boundaries_do_not_convert_run_limits(monkeypatch, operation, error_type):
+def test_web_page_fetcher_does_not_convert_run_limits(monkeypatch, error_type):
     from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError
 
     error = BudgetExhaustedError("exhausted") if error_type == "budget" else DeadlineExceededError("expired")
@@ -623,8 +524,5 @@ def test_web_request_boundaries_do_not_convert_run_limits(monkeypatch, operation
 
     monkeypatch.setattr("resagent2_components.web.send_request", send)
     with pytest.raises(type(error)) as raised:
-        if operation == "search":
-            TavilyWebSearchBackend("secret").search("q", max_results=1)
-        else:
-            WebPageFetcher().fetch("https://example.test/page")
+        WebPageFetcher().fetch("https://example.test/page")
     assert raised.value is error

@@ -68,7 +68,6 @@ from .literature import (
 from .web_deepseek import DeepSeekWebSearchBackend
 
 from .web import (
-    TavilyWebSearchBackend,
     WebFetchError,
     WebPage,
     WebPageFetcher,
@@ -99,7 +98,6 @@ __all__ = [
     'LiteratureSearchError',
     'LiteratureUnavailableError',
     'DeepSeekWebSearchBackend',
-    'TavilyWebSearchBackend',
     'WebFetchError',
     'WebPage',
     'WebPageFetcher',

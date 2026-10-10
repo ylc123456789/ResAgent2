@@ -355,10 +355,9 @@ def test_search_limit_without_sources_freezes_failed_receipt(tmp_path, shape):
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "tavily"])
-def test_corrupt_compressed_search_response_freezes_a_readable_failure(tmp_path, monkeypatch, provider):
+def test_corrupt_compressed_search_response_freezes_a_readable_failure(tmp_path, monkeypatch):
     import httpx
-    from resagent2_components import DeepSeekWebSearchBackend, TavilyWebSearchBackend
+    from resagent2_components import DeepSeekWebSearchBackend
     from resagent2_runtime import ModelRequestClient, http
     from resagent2_runtime.budget import execution_budget
 
@@ -375,19 +374,15 @@ def test_corrupt_compressed_search_response_freezes_a_readable_failure(tmp_path,
     monkeypatch.setattr(http.httpx, "AsyncClient", lambda **kwargs: original(
         transport=httpx.MockTransport(respond), **kwargs,
     ))
-    if provider == "deepseek":
-        monkeypatch.setenv("TEST_SEARCH_KEY", "secret")
-        backend = DeepSeekWebSearchBackend(ModelRequestClient(
-            endpoint="https://model.example.test/search", api_key_env="TEST_SEARCH_KEY",
-        ))
-    else:
-        backend = TavilyWebSearchBackend("secret")
+    monkeypatch.setenv("TEST_SEARCH_KEY", "secret")
+    backend = DeepSeekWebSearchBackend(ModelRequestClient(
+        endpoint="https://model.example.test/search", api_key_env="TEST_SEARCH_KEY",
+    ))
     register = _Register(tmp_path / "artifacts")
     with execution_budget(max_llm_calls=1, timeout_seconds=5) as budget:
         observation = WebSearchTool(backend, register).execute(_state(), WebSearchInput(query="q"))
-        assert budget.usage.used == (1 if provider == "deepseek" else 0)
-        if provider == "deepseek":
-            assert list(budget.usage.requests.values()) == ["failed"]
+        assert budget.usage.used == 1
+        assert list(budget.usage.requests.values()) == ["failed"]
     assert len(calls) == 1
     assert not observation.ok and observation.value["status"] == "failed"
     assert observation.value["error_type"] == "invalid_response"
@@ -396,7 +391,7 @@ def test_corrupt_compressed_search_response_freezes_a_readable_failure(tmp_path,
     content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
     receipt = json.loads(content)
     assert receipt["status"] == "failed" and receipt["error_type"] == "invalid_response"
-    assert receipt["provider"] == provider and receipt["results"] == []
+    assert receipt["provider"] == "deepseek" and receipt["results"] == []
     assert "PRIVATE_CORRUPT_RESPONSE" not in content
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
     assert [entry["artifact_id"] for entry in observation.memory_updates["artifact_index"]] == [ref.id]

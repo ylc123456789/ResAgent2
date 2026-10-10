@@ -349,7 +349,7 @@ web_search(query, max_results=5)
 web_fetch(url)
 ```
 
-**启用与调用。** 只有组合根配置搜索 provider 时才注册 `web_search`；CLI 在已有 DeepSeek key 时默认使用托管搜索，也可显式选 Tavily 或关闭。无 provider 时不暴露搜索工具。`web_fetch` 独立抓取网页，不依赖搜索 provider。
+**启用与调用。** 只有组合根配置搜索 provider 时才注册 `web_search`；CLI 在已有 DeepSeek key 时默认使用托管搜索，也可关闭搜索；配置仅支持 `deepseek` / `off`，其他值明确报错。无 provider 时不暴露搜索工具。`web_fetch` 独立抓取网页，不依赖搜索 provider。
 
 `max_results` 为1–10，控制预览数量，不控制 provider 实际返回总量、托管搜索次数或费用。单次请求仍受字节与时间上限约束，不保证分页或穷尽搜索；工具不按关键词或域名自动决定相关性。
 
@@ -551,7 +551,7 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索保存失
 
 trace 是可选诊断输出。两个模型客户端共用私有 JSONL 写入函数；该函数中的 JSON 序列化或文件系统写入失败时发出仅含异常类型的告警，保留模型响应、原始请求错误和 action 校验反馈，不自动重试或再次扣量。Run 用量、Session 等权威状态保存错误仍按原流程处理，不能因 trace 的容错而被忽略。
 
-最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；Tavily 和网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
+最小客户端只有 next_action，由 invoke_model 在调用前占用一次。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
 
 **一次逻辑调用与 HTTP 尝试。**
 

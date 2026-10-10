@@ -62,7 +62,7 @@ Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 p
 
 论文按篇登记，摘要、原始 PDF 与解析正文有独立身份。除在线检索外，可通过 CLI 论文清单在创建 Run 时导入材料，或在等待用户时补入；同一科研目录负责导航，全文按需解析，访问历史只记日志。用法见 [外部论文导入](apps/cli/README.md#literature-import)。
 
-Scientific 可使用独立的 `web_search` 与 `web_fetch`。搜索默认可复用 DeepSeek key，也可选择 Tavily 或关闭；抓取单页不依赖搜索后端。网页和文献材料进入同一工件索引，由模型按目标选择工具和读取范围，不规定固定顺序。接口与限制见[网页工具](docs/current/CONTRACTS.md#web)。三个 Agent 的上下文统一为固定契约、任务需求、配对工具历史、当前任务上下文与完整工件索引，具体构造见 [CONTEXT](docs/current/CONTEXT.md)。
+Scientific 可使用独立的 `web_search` 与 `web_fetch`。搜索默认可复用 DeepSeek key，也可关闭；抓取单页不依赖搜索后端。网页和文献材料进入同一工件索引，由模型按目标选择工具和读取范围，不规定固定顺序。接口与限制见[网页工具](docs/current/CONTRACTS.md#web)。三个 Agent 的上下文统一为固定契约、任务需求、配对工具历史、当前任务上下文与完整工件索引，具体构造见 [CONTEXT](docs/current/CONTEXT.md)。
 
 LLM 客户端的必需方法是 `next_action`；最小客户端由共享入口在调用前计一次，自带 HTTP 重试的客户端须逐次接入同一用量接口。trace hooks 可选。Compiler 复用 LLM、上下文与执行预算基础；Interpreter 只组织已记录内容，不调用模型。两者都不运行 AgentLoop。
 

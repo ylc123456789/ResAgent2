@@ -12,7 +12,7 @@ from resagent2_components import (
     WebSearchError,
     TavilyWebSearchBackend,
 )
-from resagent2_components.web import _HTMLTextParser, _retry_after
+from resagent2_components.web import _retry_after
 from resagent2_runtime.http import NonPublicAddressError, ResponseTooLargeError
 
 
@@ -149,23 +149,23 @@ def test_web_page_fetcher_extracts_html_and_ignores_noncontent(monkeypatch):
     page = WebPageFetcher().fetch("https://example.test/page")
 
     assert page.title == "Page title"
-    assert page.text == "Hello\nworld\n."
-    assert page.parser == "html.parser"
+    assert page.text == "Hello **world**."
+    assert page.parser == "markdownify/html.parser"
     assert page.final_url == "https://example.test/page"
 
 
 @pytest.mark.parametrize("html, expected", [
-    ("<pre>    line  one\n\n\tline two  \n</pre>", "    line  one\n\n\tline two  \n"),
+    ("<pre>    line  one\n\n\tline two  \n</pre>", "```\n    line  one\n\n\tline two  \n\n```"),
     (
         "<pre><code>for <span>x</span> in xs:\n    <b>print</b>(x)\n\n    pass\n</code></pre>",
-        "for x in xs:\n    print(x)\n\n    pass\n",
+        "```\nfor x in xs:\n    print(x)\n\n    pass\n\n```",
     ),
     (
         "<p>  Before   text </p><pre><code>  a  b\n\n  c</code></pre><p>After  text</p>",
-        "Before text\n  a  b\n\n  c\nAfter text",
+        "Before text\n\n```\n  a  b\n\n  c\n```\n\nAfter text",
     ),
-    ("<pre>  &lt;tag&gt;&amp;value<br>    next</pre>", "  <tag>&value\n    next"),
-    ("<pre>  first\n    second", "  first\n    second"),
+    ("<pre>  &lt;tag&gt;&amp;value<br>    next</pre>", "```\n  <tag>&value\n    next\n```"),
+    ("<pre>  first\n    second", "```\n  first\n    second\n```"),
 ])
 def test_web_page_fetcher_preserves_preformatted_whitespace(monkeypatch, html, expected):
     monkeypatch.setattr(
@@ -178,15 +178,6 @@ def test_web_page_fetcher_preserves_preformatted_whitespace(monkeypatch, html, e
     assert WebPageFetcher().fetch("https://example.test/page").text == expected
 
 
-def test_web_page_parser_preserves_preformatted_text_across_feed_chunks():
-    parser = _HTMLTextParser("https://example.test/page")
-    for chunk in ("<pre><code>  first", "  word\n", "\n    sec", "ond</code></pre>"):
-        parser.feed(chunk)
-    parser.close()
-
-    assert parser.text_parts == ["  first  word\n\n    second"]
-
-
 def test_web_page_fetcher_preserves_links_inside_preformatted_text(monkeypatch):
     html = b'<pre>    <a href="/docs">read  docs</a>\n    next</pre><a href="/other">Other  link</a>'
     monkeypatch.setattr(
@@ -197,19 +188,19 @@ def test_web_page_fetcher_preserves_links_inside_preformatted_text(monkeypatch):
     )
 
     assert WebPageFetcher().fetch("https://example.test/page").text == (
-        "    read  docs (https://example.test/docs)\n    next\n"
-        "Other link (https://example.test/other)"
+        "```\n    read  docs (https://example.test/docs)\n    next\n```\n\n"
+        "[Other link](https://example.test/other)"
     )
 
 
 @pytest.mark.parametrize("html, expected", [
     (
         '<pre><a href="/docs">line<br/>next</a></pre>',
-        "line\nnext (https://example.test/docs)",
+        "```\nline\nnext (https://example.test/docs)\n```",
     ),
     (
         '<pre>before<a href="/docs">  \n\t </a>after</pre>',
-        "before  \n\t after",
+        "```\nbefore  \n\t after\n```",
     ),
 ])
 def test_web_page_fetcher_preserves_preformatted_link_whitespace(monkeypatch, html, expected):
@@ -237,14 +228,14 @@ def test_web_page_fetcher_preserves_links_and_nested_visible_labels(monkeypatch)
     page = WebPageFetcher().fetch("https://example.test/articles/index")
 
     assert page.text == (
-        "Before\nOriginal paper & code. (https://other.test/paper?q=1&lang=en)\n"
-        "Download PDF (https://example.test/download/file.pdf)\nAfter"
+        "Before\n\n[Original **paper** & *code*.](https://other.test/paper?q=1&lang=en)\n"
+        "[Download PDF](https://example.test/download/file.pdf)\n\nAfter"
     )
     assert calls == ["https://example.test/articles/index"]
     assert page.title == "Link page"
     assert page.source_url == page.final_url == calls[0]
     assert page.content_type == "text/html"
-    assert page.parser == "html.parser"
+    assert page.parser == "markdownify/html.parser"
     assert datetime.fromisoformat(page.fetched_at).tzinfo is not None
 
 
@@ -266,7 +257,7 @@ def test_web_page_fetcher_resolves_links_against_redirected_page(monkeypatch):
     monkeypatch.setattr("resagent2_components.web.send_request", send)
     page = WebPageFetcher().fetch("https://example.test/start")
 
-    assert page.text == "Next page (https://other.test/docs/next)"
+    assert page.text == "[Next page](https://other.test/docs/next)"
     assert page.source_url == "https://example.test/start"
     assert page.final_url == "https://other.test/docs/page"
     assert calls == [page.source_url, page.final_url]
@@ -289,7 +280,7 @@ def test_web_page_fetcher_keeps_labels_without_invalid_link_targets(monkeypatch,
     )
     page = WebPageFetcher().fetch("https://example.test/page")
 
-    assert page.text == "Before\nVisible\nlabel\nAfter"
+    assert page.text == "Before\n\nVisible **label**\n\nAfter"
 
 
 def test_web_page_fetcher_ignores_hidden_links_and_empty_labels(monkeypatch):
@@ -309,7 +300,7 @@ def test_web_page_fetcher_ignores_hidden_links_and_empty_labels(monkeypatch):
     page = WebPageFetcher().fetch("https://example.test/page")
 
     assert page.title == "Visible title"
-    assert page.text == "Plain label\nOpen link (https://other.test/page)"
+    assert page.text == "Plain label[Open **link**](https://other.test/page)"
 
 
 def test_web_page_fetcher_supports_plain_text(monkeypatch):
@@ -341,6 +332,9 @@ def test_web_page_fetcher_requires_utf8(monkeypatch):
 
 @pytest.mark.parametrize("content_type, content", [
     ("text/html", b"<title>Only title</title><script>render()</script>"),
+    ("text/html", b'<img src="/figure.png">'),
+    ("text/html", b'<a href="/paper"><img src="/figure.png" alt=""></a>'),
+    ("text/html", b'<a href="/paper"><img src="/figure.png" alt="  "></a>'),
     ("text/plain", b" \n\t"),
 ])
 def test_web_page_fetcher_rejects_empty_extraction(monkeypatch, content_type, content):
@@ -485,12 +479,109 @@ def test_web_page_link_card_blocks_and_nested_anchors_keep_separate_labels(monke
         lambda request, **kwargs: _response(html, content_type="text/html", url="https://example.test/page"),
     )
     page = WebPageFetcher().fetch("https://example.test/page")
-    assert page.text.splitlines() == [
-        "Paper title Download PDF (https://example.test/paper)",
-        "First (https://example.test/first)",
-        "Second (https://example.test/second)",
-        "After",
-    ]
+    assert page.text == (
+        "[Paper title\n\nDownload PDF](https://example.test/paper)"
+        "\n[First[Second](https://example.test/second)After](https://example.test/first)"
+    )
+    assert "https://example.test/paper" in page.text
+    assert "https://example.test/first" in page.text
+    assert "https://example.test/second" in page.text
+
+
+@pytest.mark.parametrize("html", [
+    "<p>Before</p><script>unclosed",
+    "<p>Before</p><style>unclosed",
+    "<p>Before</p><noscript>unclosed",
+    "<p>Before</p><template>unclosed",
+    "<p>Before</p><title>unclosed",
+])
+def test_web_page_fetcher_rejects_unterminated_content_elements(monkeypatch, html):
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    with pytest.raises(WebFetchError) as raised:
+        WebPageFetcher().fetch("https://example.test/page")
+    assert raised.value.error_type == "parse_failed"
+
+
+@pytest.mark.parametrize("tag", ["script", "style", "noscript", "template", "title"])
+def test_web_page_fetcher_accepts_closed_noncontent_elements(monkeypatch, tag):
+    html = f"<p>Before</p><{tag}>Noncontent</{tag}><p>After</p>"
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    assert WebPageFetcher().fetch("https://example.test/page").text == "Before\n\nAfter"
+
+
+def test_web_page_fetcher_keeps_escaped_script_as_visible_text(monkeypatch):
+    html = b"<p>Before</p><pre>&lt;script&gt;unclosed</pre><p>After</p>"
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.text == "Before\n\n```\n<script>unclosed\n```\n\nAfter"
+
+
+@pytest.mark.parametrize("tag", ["noscript", "template"])
+def test_web_page_fetcher_ignores_titles_inside_noncontent(monkeypatch, tag):
+    html = f"<title>Page title</title><{tag}><title>Hidden title</title></{tag}><p>Body</p>"
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html.encode(), content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.title == "Page title"
+    assert page.text == "Body"
+
+
+def test_web_page_fetcher_keeps_image_labels_without_image_targets(monkeypatch):
+    html = b'<p>Before</p><img src="/figure.png" alt="Measurement curve">' \
+           b'<p><a href="/paper"><img src="javascript:bad()" alt="Original paper"></a></p>'
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.text == "Before\n\nMeasurement curve\n\n[Original paper](https://example.test/paper)"
+
+
+def test_web_page_fetcher_ignores_foreign_document_titles(monkeypatch):
+    html = b"<svg><title>Icon title</title><svg/></svg><math><title>Math title</title></math>" \
+           b"<title>Page title</title><p>Body</p>"
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.title == "Page title"
+    assert page.text == "Body"
+
+
+def test_web_page_fetcher_drops_control_character_link_targets(monkeypatch):
+    html = b'<p>Before</p><a href="https://example.test/\x01bad">Visible label</a><p>After</p>'
+    monkeypatch.setattr(
+        "resagent2_components.web.send_request",
+        lambda request, **kwargs: _response(
+            html, content_type="text/html", url="https://example.test/page",
+        ),
+    )
+    page = WebPageFetcher().fetch("https://example.test/page")
+    assert page.text == "Before\n\nVisible label\n\nAfter"
 
 
 @pytest.mark.parametrize("operation,error_class", [("search", WebSearchError), ("fetch", WebFetchError)])

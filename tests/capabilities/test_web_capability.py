@@ -253,8 +253,9 @@ def test_web_page_links_survive_freezing_and_authorized_read(tmp_path, monkeypat
     ref = next(iter(register.refs.values()))
     content = RegisteredArtifactReader([ref], run_id="run_example").read_text(ref.id)["content"]
     assert observation.ok and observation.value["url"] == final_url
-    assert "Download PDF (https://example.test/papers/paper.pdf)" in content
-    assert ref.metadata["parser"] == "html.parser"
+    assert "https://example.test/papers/paper.pdf" in content
+    assert "Download" in content and "PDF" in content
+    assert ref.metadata["parser"] == "markdownify/html.parser"
     assert ref.metadata["source_url"] == "https://example.test/original"
     assert hashlib.sha256(content.encode()).hexdigest() == ref.sha256
     assert len(register.refs) == 1

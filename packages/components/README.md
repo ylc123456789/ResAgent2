@@ -39,7 +39,7 @@ workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环�
 
 `missing_required_artifacts` 共用 `RegisteredArtifactReader` 的 Run 授权与冻结 hash 检查，精确比较已登记 Ref 的 `output_name`；存在检查通过 `verify` 分块计算文件 hash，不解码文本或全量载入二进制产物；不扫描工作区、不按文件名猜测，也不把存在检查写成 Scientific 的观察记录。Scientific 和 Registry 复用此事实规则，登记权威仍在 Orchestrator。
 
-text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；read_text_file 预检大小后最多读取上限加1字节，encode_text 在写盘前核对编码及最终字节数。slice_text_lines 先选物理行，再选字符窗口，最后限制返回字符数，保留原换行；它不是流式读取。read_file 与 read_artifact 共用窗口规则，后者仍校验整份冻结 hash，不受工作区10 MiB限制。授权继续由原调用边界负责。
+text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；read_text_file 预检大小后最多读取上限加1字节，encode_text 在写盘前核对编码及最终字节数。slice_text_lines 先选物理行，再选字符窗口，最后限制返回字符数，保留原换行；回执同时提供整份文本 total_lines 和字符切片前的所选行段 selected_chars，空文件均为0，范围计数不随工具或上下文裁剪变化。它不是流式读取。read_file 与 read_artifact 共用窗口规则，后者仍校验整份冻结 hash，不受工作区10 MiB限制。授权继续由原调用边界负责。
 
 <a id="literature"></a>
 
@@ -83,6 +83,6 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 
 `DeepSeekWebSearchBackend(client, model="deepseek-flash", max_tokens=4096, max_uses=5)` 构造独立 Anthropic-compatible 托管 `web_search` 请求，沿用 DSH 简短提示 `Perform a web search for the query: {query}`，保持4096输出tokens/`max_uses=5`的既有设置；按返回顺序保留各原生批次、按精确URL去重，不按预览大小裁掉后续来源。将原生 `web_search_result` 的URL/title/page_age归一化为普通网页线索；snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，生成正文不充当证据。缺少原生结果块为 `search_not_executed`，明确空列表才是成功空结果；原生工具错误无论位于对象还是列表，都按同一路径校验：只有 `max_uses_exceeded` 且存在有效来源时返回已校验来源和 `incomplete_reason`；无来源则报 `search_limit_exceeded`。其他工具错误保留 `provider_error` / `rate_limited`，畸形条目仍拒绝；`max_tokens` / `pause_turn` 等未完成响应仍为 `incomplete_response`，不自动续传。注入的 Runtime `ModelRequestClient` 负责认证、响应字节/时间上限、一次共享模型用量占用和 trace，组件不启动模型循环、不创建 Session。CLI 默认复用已有 DeepSeek key，显式 Tavily 仍走普通 HTTP；部署选择和费用限制见 [CLI 配置](../../apps/cli/README.md#通用联网搜索和网页获取)。
 
-`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML解析器保留链接文字及合法http(s)目标，相对href按最终响应URL解析；内联文字与链接内的块分隔保留，空或非法目标只保留可见文字。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
+`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML/XHTML 使用 BeautifulSoup 的 html.parser 和 Markdownify 转为 Markdown，parser 为 markdownify/html.parser；text/plain 原文保持不变，parser 为 plain。普通链接保留为 Markdown 链接，相对href按最终响应URL解析，空或非法目标只保留可见文字；pre 正文保留换行、缩进和空白，输出代码围栏，嵌套 pre 加分隔，链接包住代码块时另列地址。图片只保留 alt 文字，不保留图片源地址或解析图像。SVG/MathML/noscript/template 内 title 不污染页面标题；script/style/noscript/template/title 未闭合、空提取或转换失败沿现有 parse_failed 路径报告，不生成残缺正文。依赖由本包 pyproject.toml 声明，editable 安装时一并解析，不新增 Node 运行时。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
 
 网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。

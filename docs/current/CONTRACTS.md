@@ -194,7 +194,7 @@ resume_artifact_ids 必须唯一、属于 input_artifacts 且指定 parent_sessi
 | `ArtifactCandidate` | 生产方提议保存的内容或文件 | 尚未登记，不可用自造 ID 引用 |
 | Registry 登记 | 解析合法来源、冻结内容并保存可信归属 | 不判断材料相关性或论断是否成立 |
 | `ArtifactRef` | 已登记原件的 ID、hash、归属和描述 | 引用本身不能绕过授权与磁盘复验 |
-| reader | 按授权 ID 核对整份 hash，再读取指定范围 | 核对完整性不等于记录已阅读；分页不等于流式 IO |
+| reader | 按授权 ID 核对整份 hash，再读取指定范围 | 核对完整性不等于记录已阅读；分段读取不等于流式 IO |
 
 ArtifactCandidate 含 `kind`、相对 `path`、`media_type`、`summary`、可选 `output_name`、`metadata` 和 UTF-8 `content`。有 content 时 path 是存储文件名；无 content 时须在授权工作区或本次 output_dir 解析唯一实际文件，同一路径在两个根目录都存在时拒绝。绝对路径、`..` 和越界软链拒绝。任务工件的 TaskId 在写入前校验；所有登记入口通过同一个函数生成 artifact_ 加完整 64 位 SHA256 的 ID。随后冻结内容、计算文件 sha256 并记录来源后生成 ArtifactRef。用于路径验收的 source_path 由实际源文件解析，忽略候选 metadata 中的自报值。
 
@@ -374,14 +374,16 @@ web_fetch(url)
 
 **DeepSeek 后端。** 另发一次独立模型请求，提示为 `Perform a web search for the query: {query}`，无 Agent/Session 或主对话历史，也无自动重试。只取原生 `web_search_result` 中的标题和链接，按供应商批次顺序保存并按精确 URL 去重；snippet 只取 URL 匹配 citation 的 `cited_text`，缺少时留空。生成回答不替代 Scientific 的判断，不作为证据；不透明 `encrypted_content` 不解释为摘要。调用计入同一个 Run 预算，见[计量](#trace)。
 
-**页面抓取。** `web_fetch` 成功登记一个 `web_page`，保存 source/final URL、title、提取文本、content type、parser 和 fetched_at；正文通过 `read_artifact` 分段读取。失败返回 error_type / retry_after，不生成页面工件。
+**页面抓取。** `web_fetch` 成功登记一个 `web_page`，保存 source/final URL、title、提取文本、content type、parser 和 fetched_at；正文通过 `read_artifact` 分段读取。HTML/XHTML 由 BeautifulSoup 解析并经 Markdownify 转成 Markdown，`parser="markdownify/html.parser"`；text/plain 保留原文，`parser="plain"`。失败返回 error_type / retry_after，不生成页面工件。
 
 | 抓取与提取边界 | 规则 |
 |---|---|
 | URL 与连接 | 仅无凭据 http/https；最多5次重定向，每次连接仅使用核对过的公网地址；DNS、HTTP、读入都受 Run 截止时间约束 |
 | 内容类型 | 仅 HTML/XHTML/text；严格 UTF-8，拒绝 NUL、PDF 和其他二进制 |
-| 链接 | 保留可见文字与合法 http(s) 地址；相对地址按重定向后的 final URL 解析；空/非法/非 http(s)/带凭据地址不保留，但保留可见文字 |
-| 代码块 | pre 保留换行、缩进、空白和嵌套 code/span 连续文本；普通说明文字规范化空白 |
+| 链接 | 普通链接保存为 Markdown 链接，保留可见文字与合法 http(s) 地址；相对地址按重定向后的 final URL 解析；空/非法/非 http(s)/带凭据地址不保留，但保留可见文字；代码块内链接保留空白并附地址 |
+| 代码块 | pre 正文保留换行、缩进、空白和嵌套 code/span 连续文本，以 fenced code block 表示；嵌套 pre 加入分隔，包住 pre 的链接另列地址，避免压平代码；普通文字按 Markdown 规则转换 |
+| 页面标题与坏 HTML | SVG/MathML/noscript/template 内 title 不充当页面标题；script/style/noscript/template/title 未闭合可能吞掉余下正文时返回 parse_failed，空提取或转换失败也返回 parse_failed，不登记残缺正文 |
+| 图片 | 只保留 alt 文字，不保留图片源地址或解析图像 |
 | 浏览器能力 | 不执行 JavaScript、不提供浏览器会话、不模拟布局、不解释 HTML base，不自动抓取链接或下载文件 |
 
 网页搜索和文献搜索都向统一工件目录提供材料。网页结果不自动转换为 `literature_paper`，论文的精确 kind 证据规则仍独立成立。Scientific 依据用户目标选择搜索、抓取、阅读或委托，没有固定的“先网页后论文”流程。
@@ -510,10 +512,10 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索保存失
 | 无效文本 | 含 NUL 或无效 UTF-8 返回可恢复错误，不新增成功阅读记录 |
 | 工作区文本大小 | 读、搜、创建、替换共用10 MiB上限；读取核对声明大小与实际读入长度，写入前验证编码和最终字节数 |
 | 冻结工件 | 不受工作区大小上限约束，读取前校验整份 hash；存在/完整性验证不要求文本可解码 |
-| 分段读取回执 | start/end 行与字符字段回显请求范围；truncated 只表示请求窗口被返回上限裁剪；next_start_char 是实际返回末端，相对于完整所选行范围，无余文时为 null |
+| 分段读取回执 | start/end 行与字符字段回显请求范围；total_lines 为整份文本物理行数，selected_chars 为所选行段在字符切片前的字符数，空文件均为0；truncated 只表示请求窗口被返回上限裁剪；next_start_char 是实际返回末端，相对于完整所选行范围，无余文时为 null |
 | IO 与分段读取 | 字符窗口不等于流式读取，不能绕过整份检查或改变冻结内容；连续读取保持行范围不变，不把请求 end_char 当作实际返回终点 |
 | `search_text` | 大小写不敏感字面子串，不是正则；a\|b 仍匹配原文字面串 |
-| 搜索覆盖 | skipped_count、skipped_files（最多50条）、skipped_files_truncated 描述授权候选中跳过文件及原因；incomplete 表示跳过或触及结果上限，零匹配不能因此当成完整无匹配 |
+| 搜索覆盖 | skipped_count、skipped_files（最多50条）、skipped_files_truncated 描述授权候选中跳过文件及原因；truncated 表示达到结果上限后停止，后续匹配未检查、匹配总数未知；incomplete 表示跳过或触及结果上限，零匹配不能因此当成完整无匹配 |
 
 **模型输入容量。** ModelProfile 声明窗口、输出预留和安全余量，模块声明输入上限，有效额度取两者较小值。Agent 计量完整原生 messages + tools，含历史、schema 与 JSON 转义；Compiler 的结构化请求计量正文及其输出 schema。估算与分配规则见 [CONTEXT](CONTEXT.md#budgets)。输入压缩不另开模型调用额度；step 仅记录时序，不形成第二份预算。
 

@@ -1,5 +1,7 @@
 # P3：运行时修复与网页、读取方案核对
 
+> 本文前半部分保留最初三项修复与调研时的状态。用户随后确认 Markdownify、搜索覆盖提示和读取范围信息，后续实施见文末；服务器交接见[网页转换与分段读取测试方案](P3_WEB_READING_TEST_PLAN_2026-10-10.md)。
+
 ## 基线与本轮范围
 
 分支 `fix/native-agent-receipts`，本轮基线为 `5220ee12f9839b56ae4e777005ed20977dd47a47`；main 仍为 `fbf1a00`，未合并。schema 保持 24.0。
@@ -95,3 +97,16 @@ next_start_char 是实际返回后的下一字符在同一行选择内的位置�
 - [DSH 行截断与末尾提示](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/fs/tool-fs/src/read-render.ts#L69)
 - [Pi 读取入口](https://github.com/earendil-works/pi/blob/e4c75a73222ae2c72abb5f5314fa35ee8effc508/packages/coding-agent/src/core/tools/read.ts)
 - [Pi 输出裁剪](https://github.com/earendil-works/pi/blob/e4c75a73222ae2c72abb5f5314fa35ee8effc508/packages/coding-agent/src/core/tools/truncate.ts)
+
+## 后续实施：网页转换、搜索提示与读取范围
+
+基于本分支已提交的 `74a59fc7813f779e1af269083769b5855af5dfb6` 继续修改，schema 仍为 24.0，不合并 main。前文“尚未改代码”是调研阶段状态；本阶段按用户确认实施以下改动：
+
+- 删除自制 `_HTMLTextParser`，在同一 WebPageFetcher 中使用 BeautifulSoup + Markdownify，将 HTML/XHTML 转为 Markdown；text/plain 保留原文。保留既有 HTTP、公网连接、响应上限、Registry 和 read_artifact 链路，不引入浏览器或 Node。
+- 用小型闭合检查识别会吞掉余下正文的未闭合 script/style/noscript/template/title，返回 parse_failed；保留合法链接与代码块正文空白，排除 SVG/MathML 图标标题，分隔嵌套 pre。库负责通用转换，项目规则只补既有材料保真边界。
+- search_text 保留达到 max_results 后停止的实现，明确“余下范围未检查、总匹配数未知”，不将恰好达到上限解释为已确认有更多匹配。
+- read_file/read_artifact 继续共用 slice_text_lines；回执新增 total_lines（整份物理行数）和 selected_chars（所选行段在字符切片前的字符数），同样进入上下文工作集。它们区分空文件和越界空窗口，不因展示裁剪改变。连续读取仍以实际 next_start_char 为准。
+
+依赖选择依据是现有 Python 栈和 Markdownify 的公开转换扩展接口；借鉴 DSH 使用成熟 HTML→Markdown 库的做法，不据此声称 Markdownify 普遍优于 Turndown。新增依赖范围在 components/pyproject.toml 声明；无需另一套 Agent、工件或上下文框架。
+
+本阶段本地最终回归 **2207 passed / 1 skipped**、mock completed（13工件）、diff check clean；网页专项97 passed。本地 pip check 仍为既有 cryptography 缺项。详细结果和服务器判断点统一记录在[本轮测试方案](P3_WEB_READING_TEST_PLAN_2026-10-10.md)，不将前阶段 2169 测试结果当作这次网页转换验收。服务器复测和 L3 尚未执行；L3 可在问题修复验收后按既有规程独立进行。

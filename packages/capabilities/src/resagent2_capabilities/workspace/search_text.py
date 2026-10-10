@@ -43,7 +43,9 @@ class SearchTextTool:
         "bytes. skipped_count and skipped_files report files skipped because "
         "they are too large, not UTF-8 text, or could not be read; details are "
         "limited to 50 files. incomplete means files were skipped or the result "
-        "limit stopped the search; zero matches then does not prove absence."
+        "limit stopped the search. At the result limit, further matches are "
+        "not checked and the total match count is unknown. Zero matches with "
+        "skipped files do not prove absence."
     )
 
     def __init__(
@@ -104,11 +106,16 @@ class SearchTextTool:
                 read_paths.append(relative)
         truncated = len(matches) >= args.max_results
         incomplete = bool(skipped_count) or truncated
+        summary = f"Found {len(matches)} matches for {args.query!r}"
+        if truncated:
+            summary += (
+                "; search incomplete: result limit reached; further matches not checked; "
+                "total match count unknown"
+            )
+        if skipped_count:
+            summary += f"; search incomplete: {skipped_count} files skipped"
         return ToolObservation(
-            summary=(
-                f"Found {len(matches)} matches for {args.query!r}"
-                + ("; search incomplete" if incomplete else "")
-            ),
+            summary=summary,
             value={
                 "matches": matches, "truncated": truncated,
                 "skipped_count": skipped_count, "skipped_files": skipped_files,

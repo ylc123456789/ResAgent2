@@ -90,6 +90,25 @@ def test_selected_line_end_and_empty_windows_have_no_continuation(body, start_ch
     assert result["next_start_char"] is None
 
 
+@pytest.mark.parametrize(
+    "body,start_line,end_line,expected_lines,expected_chars",
+    [
+        ("", None, None, 0, 0),
+        ("\n", None, None, 1, 1),
+        ("one", None, None, 1, 3),
+        ("one\r\ntwo\n", None, None, 2, 9),
+        ("one\r\ntwo\n", 2, 2, 2, 4),
+        ("one\r\ntwo\n", 8, 10, 2, 0),
+    ],
+)
+def test_read_window_reports_source_and_selected_sizes(
+    body, start_line, end_line, expected_lines, expected_chars,
+):
+    result = slice_text_lines(body, start_line=start_line, end_line=end_line)
+    assert result["total_lines"] == expected_lines
+    assert result["selected_chars"] == expected_chars
+
+
 @pytest.mark.parametrize("window_size", [3, 7])
 def test_continuation_rebuilds_unicode_with_fixed_line_coordinates(window_size):
     selected = "中文😀abc\r\nαβγdelta\r\n"
@@ -112,6 +131,22 @@ def test_continuation_rebuilds_unicode_with_fixed_line_coordinates(window_size):
         assert next_start > start_char
         start_char = next_start
     assert "".join(pieces) == selected
+
+
+@pytest.mark.parametrize(
+    "start_char,end_char,max_chars",
+    [
+        (0, None, 3), (0, 3, 10), (3, 8, 3), (8, None, 3), (20, None, 3),
+    ],
+)
+def test_range_sizes_are_not_clipped_by_character_window(start_char, end_char, max_chars):
+    body = "header\r\n中文😀abc\r\nfooter\r\n"
+    result = slice_text_lines(
+        body, start_line=2, end_line=2, start_char=start_char,
+        end_char=end_char, max_chars=max_chars,
+    )
+    assert result["total_lines"] == 3
+    assert result["selected_chars"] == len("中文😀abc\r\n")
 
 
 def test_continuation_is_relative_to_selected_lines_not_the_whole_file():

@@ -569,6 +569,8 @@ def test_context_clipping_preserves_original_read_continuation(
     assert snippet["context_truncated"] is True
     assert len(snippet["content"]) < len(receipt["content"])
     assert snippet["next_start_char"] == receipt["next_start_char"]
+    assert snippet["total_lines"] == receipt["total_lines"] == 1
+    assert snippet["selected_chars"] == receipt["selected_chars"] == len(body)
     assert snippet["end_char"] == receipt["end_char"]
     content = next(s.content for s in workspace_context(state) if s.name in ("file_reads", "artifact_reads"))
     assert "next_start_char belongs to the original tool result" in content

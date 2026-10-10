@@ -7,6 +7,7 @@ resagent2_capabilities.web.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,6 +17,8 @@ from typing import Protocol
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
+from markdownify import MarkdownConverter
 
 from resagent2_runtime.budget import DeadlineExceededError
 from resagent2_runtime.http import NonPublicAddressError, ResponseTooLargeError, send_request
@@ -179,117 +182,125 @@ def _retry_after(value: str | None) -> float:
             return 0.0
 
 
-class _HTMLTextParser(HTMLParser):
-    _ignored = {"script", "style", "noscript", "template"}
-    _blocks = {"br", "hr", "div", "p", "li", "ul", "ol", "section", "article",
-               "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "table", "tr", "td", "th"}
+class _HTMLClosureValidator(HTMLParser):
+    """Reject only unterminated tags that can hide the rest of a page."""
 
-    def __init__(self, base_url: str) -> None:
+    _tracked = frozenset({"script", "style", "noscript", "template", "title"})
+    _foreign = frozenset({"svg", "math"})
+
+    def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.title_parts: list[str] = []
-        self.text_parts: list[str] = []
-        self._base_url = base_url
-        self._ignored_depth = 0
-        self._in_title = False
-        self._link_url = ""
-        self._link_label_parts: list[str] = []
-        self._pre_depth = 0
-        self._pre_parts: list[str] = []
+        self._open: list[str] = []
+        self._foreign_depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
         tag = tag.lower()
-        if tag in self._ignored:
-            self._ignored_depth += 1
-        if self._ignored_depth:
-            return
-        if tag == "title":
-            self._in_title = True
-        if tag == "pre":
-            self._pre_depth += 1
-        if tag == "br" and self._pre_depth:
-            if not self._link_url:
-                self._pre_parts.append("\n")
-        if self._link_url and tag in self._blocks:
-            self._link_label_parts.append("\n" if tag == "br" and self._pre_depth else " ")
-        if tag == "a" and not self._in_title:
-            self._finish_link()
-            self._link_url = self._link_target(dict(attrs).get("href"))
+        if tag in self._foreign:
+            self._foreign_depth += 1
+        if tag in self._tracked and not (tag == "title" and self._foreign_depth):
+            self._open.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        # A self-closing foreign element does not open a depth scope.
+        return
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in self._ignored and self._ignored_depth:
-            self._ignored_depth -= 1
-            return
-        if self._ignored_depth:
-            return
-        if tag == "title":
-            self._in_title = False
-        if self._link_url and tag in self._blocks and not (tag == "br" and self._pre_depth):
-            self._link_label_parts.append(" ")
-        if tag == "a" and not self._in_title:
-            self._finish_link()
-        if tag == "pre" and self._pre_depth:
-            self._pre_depth -= 1
-            if not self._pre_depth:
-                self._finish_pre()
-
-    def handle_data(self, data: str) -> None:
-        if self._ignored_depth:
-            return
-        if self._link_url and not self._in_title:
-            self._link_label_parts.append(data)
-            return
-        if self._pre_depth and not self._in_title:
-            self._pre_parts.append(data)
-            return
-        if not data.strip():
-            return
-        value = " ".join(data.split())
-        if self._in_title:
-            self.title_parts.append(value)
-        else:
-            self.text_parts.append(value)
+        if tag in self._tracked and tag in self._open:
+            if self._open[-1] != tag:
+                raise ValueError(f"misnested {tag} element")
+            self._open.pop()
+        if tag in self._foreign and self._foreign_depth:
+            self._foreign_depth -= 1
 
     def close(self) -> None:
         super().close()
-        self._finish_link()
-        self._finish_pre()
+        if self._open:
+            raise ValueError(f"unterminated {self._open[-1]} element")
 
-    def _finish_pre(self) -> None:
-        if self._pre_parts:
-            self.text_parts.append("".join(self._pre_parts))
-            self._pre_parts.clear()
 
-    def _link_target(self, href: str | None) -> str:
-        if not href or not href.strip():
+class _WebMarkdownConverter(MarkdownConverter):
+    """Project-specific presentation on top of markdownify's public API."""
+
+    def convert_a(self, el, text, parent_tags):
+        href = el.get("href")
+        if not href or not text.strip():
+            return text
+        if "_noformat" in parent_tags:
+            return f"{text} ({href})"
+        if el.find("pre") is not None:
+            return f"{text.rstrip(chr(10))}\n\nLink: {href}\n\n"
+        return super().convert_a(el, text, parent_tags)
+
+    def convert_img(self, el, text, parent_tags):
+        alt = el.get("alt") or ""
+        return alt if "_noformat" in parent_tags else self.escape(alt, parent_tags)
+
+    def convert_pre(self, el, text, parent_tags):
+        if not text:
             return ""
+        longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+        fence = "`" * max(3, longest + 1)
+        return f"\n\n{fence}\n{text}\n{fence}\n\n"
+
+
+def _validate_html_closure(body: str) -> None:
+    validator = _HTMLClosureValidator()
+    validator.feed(body)
+    validator.close()
+
+
+def _prepare_html(body: str, final_url: str) -> tuple[BeautifulSoup, str]:
+    _validate_html_closure(body)
+    soup = BeautifulSoup(body, "html.parser")
+    titles = [
+        title.get_text(" ", strip=True)
+        for title in soup.find_all("title")
+        if title.find_parent(["svg", "math", "noscript", "template"]) is None
+    ]
+    title = " ".join(part for part in titles if part).strip()
+    for node in soup.find_all(["script", "style", "noscript", "template", "title"]):
+        node.decompose()
+    for link in soup.find_all("a"):
+        href = link.get("href")
+        if not isinstance(href, str) or not href.strip():
+            link.attrs.pop("href", None)
+            continue
         href = href.strip()
         if any(character.isspace() or ord(character) < 32 or ord(character) == 127
                for character in href):
-            return ""
+            link.attrs.pop("href", None)
+            continue
         try:
             parsed = urlparse(href)
             if href.startswith("//") and not parsed.netloc:
-                return ""
+                raise WebFetchError("invalid link", error_type="invalid_url")
             if parsed.scheme:
                 _validate_url(href)
-            target = urljoin(self._base_url, href)
+            target = urljoin(final_url, href)
             _validate_url(target)
         except (ValueError, WebFetchError):
-            return ""
-        return target
+            link.attrs.pop("href", None)
+        else:
+            link["href"] = target
+    for br in soup.find_all("br"):
+        if br.find_parent("pre") is not None:
+            br.replace_with("\n")
+    for inner in reversed(soup.find_all("pre")):
+        if inner.find_parent("pre") is not None:
+            inner.insert_before("\n")
+            inner.insert_after("\n")
+            inner.unwrap()
+    return soup, title
 
-    def _finish_link(self) -> None:
-        label = "".join(self._link_label_parts)
-        if not self._pre_depth:
-            label = " ".join(label.split())
-        if label.strip():
-            parts = self._pre_parts if self._pre_depth else self.text_parts
-            parts.append(f"{label} ({self._link_url})")
-        elif self._pre_depth and label:
-            self._pre_parts.append(label)
-        self._link_url = ""
-        self._link_label_parts.clear()
+
+def _render_html(body: str, final_url: str) -> tuple[str, str]:
+    soup, title = _prepare_html(body, final_url)
+    text = _WebMarkdownConverter(
+        heading_style="ATX", code_block_style="fenced",
+        strip_pre=None, strip_document="strip",
+    ).convert_soup(soup)
+    return text, title
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,15 +370,11 @@ class WebPageFetcher:
         if content_type == "text/plain":
             title, text, parser = "", body, "plain"
         else:
-            parser_obj = _HTMLTextParser(final_url)
             try:
-                parser_obj.feed(body)
-                parser_obj.close()
+                text, title = _render_html(body, final_url)
             except Exception as error:
                 raise WebFetchError("webpage HTML could not be parsed", error_type="parse_failed") from error
-            title = " ".join(parser_obj.title_parts).strip()
-            text = "\n".join(parser_obj.text_parts)
-            parser = "html.parser"
+            parser = "markdownify/html.parser"
         if not text.strip():
             raise WebFetchError(
                 "webpage has no extractable text", error_type="parse_failed",

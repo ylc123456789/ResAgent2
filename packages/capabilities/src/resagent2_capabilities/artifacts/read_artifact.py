@@ -37,7 +37,11 @@ class ReadArtifactTool:
         "next_start_char=None means the selected lines are exhausted, not "
         "necessarily the whole artifact. truncated=False means the requested "
         "window fit the tool output limit, not that the selected lines are exhausted. "
-        "Do not repeat an unbounded read. The full frozen file is integrity-checked "
+        "total_lines is the physical line count of the whole artifact; "
+        "selected_chars is the character count of the selected lines before the "
+        "character window. Use these counts to distinguish empty sources from "
+        "line or character ranges beyond the end. Do not repeat an unbounded "
+        "read. The full frozen file is integrity-checked "
         "before any range is returned."
     )
 

@@ -75,12 +75,41 @@ def test_workspace_and_artifact_share_line_range_semantics(tmp_path, start, end,
     for result in (file_result, artifact_result):
         assert result.value["start_line"] == start
         assert result.value["end_line"] == end
+        assert result.value["total_lines"] == 4
+        assert result.value["selected_chars"] == len(expected)
         assert result.value["content"] == expected
         assert result.value["truncated"] is False
     assert artifact_result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if expected else [])
     assert artifact_result.value["provenance"] == {
         "producer": "experiment", "task_id": "task_reader", "attempt_number": 1,
     }
+
+
+@pytest.mark.parametrize("registered", [False, True])
+@pytest.mark.parametrize("body,options,total_lines,selected_chars", [
+    ("", {}, 0, 0),
+    ("one\ntwo\n", {"start_line": 8, "end_line": 10}, 2, 0),
+    ("one\ntwo\n", {"start_char": 8}, 2, 8),
+    ("one\ntwo\n", {"start_char": 20}, 2, 8),
+])
+def test_text_tools_distinguish_empty_source_and_ranges_beyond_end(
+    tmp_path, registered, body, options, total_lines, selected_chars,
+):
+    path = tmp_path / "text.txt"
+    path.write_bytes(body.encode("utf-8"))
+    if registered:
+        ref = _artifact(path)
+        tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+        source = {"artifact_id": ref.id}
+    else:
+        tool = ReadFileTool(_boundary(tmp_path))
+        source = {"path": path.name}
+    result = tool.execute(_state(), tool.input_model(**source, **options)).value
+    assert result["content"] == ""
+    assert result["total_lines"] == total_lines
+    assert result["selected_chars"] == selected_chars
+    assert result["truncated"] is False
+    assert result["next_start_char"] is None
 
 
 def test_artifact_range_can_recover_text_after_default_character_limit(tmp_path):
@@ -387,7 +416,10 @@ def test_workspace_and_artifact_share_character_windows_and_newlines(
         _state(), file_tool.input_model(path=path.name, **options),
     ).value
     artifact_value = artifact_tool.reader.read_text(ref.id, max_chars=5, **options)
-    for key in ("start_line", "end_line", "start_char", "end_char", "next_start_char", "content", "truncated"):
+    for key in (
+        "start_line", "end_line", "start_char", "end_char", "total_lines",
+        "selected_chars", "next_start_char", "content", "truncated",
+    ):
         assert file_value[key] == artifact_value[key]
     assert path.read_bytes() == body.encode("utf-8")
 
@@ -436,6 +468,8 @@ def test_text_tools_continuation_recovers_every_source_character(tmp_path, regis
 def test_text_tools_explain_continuation_and_requested_window_scope(tool_type):
     guidance = tool_type.model_guidance
     assert "next_start_char" in guidance
+    assert "total_lines" in guidance
+    assert "selected_chars" in guidance
     assert "Keep the line range fixed" in guidance
     assert "truncated=False" in guidance
     assert "selected lines are exhausted" in guidance

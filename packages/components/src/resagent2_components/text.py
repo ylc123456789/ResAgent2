@@ -100,6 +100,9 @@ def slice_text_lines(
 
     Request coordinates remain unchanged. ``next_start_char`` identifies the
     next source character in the same line selection, regardless of truncation.
+    ``total_lines`` counts all physical lines in the source and
+    ``selected_chars`` counts characters in the selected line range before
+    applying the character window.
     """
     validate_text_window(
         start_line=start_line, end_line=end_line,
@@ -115,6 +118,8 @@ def slice_text_lines(
         "end_line": end_line,
         "start_char": start_char,
         "end_char": end_char,
+        "total_lines": len(lines),
+        "selected_chars": len(selected_lines),
         "content": content,
         "truncated": len(selected) > max_chars,
         "next_start_char": returned_end if returned_end < len(selected_lines) else None,

@@ -96,6 +96,7 @@ def test_read_file_character_offsets_count_unicode_after_selecting_lines(tmp_pat
     assert result.value == {
         "path": "unicode.txt", "start_line": 2, "end_line": 2,
         "start_char": 1, "end_char": 4, "content": "\u6587\U0001f600a",
+        "total_lines": 3, "selected_chars": 8,
         "truncated": False, "next_start_char": 4,
     }
 
@@ -265,14 +266,18 @@ def test_search_skip_details_are_bounded_and_do_not_expose_denied_files(tmp_path
     assert all(not item["path"].startswith("denied") for item in result.value["skipped_files"])
 
 
-def test_search_result_limit_explicitly_marks_search_incomplete(tmp_path):
-    (tmp_path / "text.txt").write_text("match\nmatch\n", encoding="utf-8")
+@pytest.mark.parametrize("match_count", [1, 2])
+def test_search_result_limit_explicitly_marks_search_incomplete(tmp_path, match_count):
+    (tmp_path / "text.txt").write_text("match\n" * match_count, encoding="utf-8")
     tool = SearchTextTool(_boundary(tmp_path))
     result = tool.execute(_state(), tool.input_model(query="match", max_results=1))
     assert result.value["matches"] == [{"path": "text.txt", "line": 1, "text": "match"}]
     assert result.value["truncated"] is True
     assert result.value["incomplete"] is True
     assert result.value["skipped_count"] == 0
+    assert "result limit reached" in result.summary
+    assert "further matches not checked" in result.summary
+    assert "total match count unknown" in result.summary
 
 
 def test_search_does_not_swallow_changed_path_authorization(tmp_path, monkeypatch):

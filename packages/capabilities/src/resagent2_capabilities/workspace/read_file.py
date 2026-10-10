@@ -53,7 +53,11 @@ class ReadFileTool:
         "end_char as the continuation offset. next_start_char=None means the "
         "selected lines are exhausted, not necessarily the whole file. "
         "truncated=False means the requested window fit the tool output limit, "
-        "not that the selected lines are exhausted. Do not repeat the same unbounded read."
+        "not that the selected lines are exhausted. total_lines is the physical "
+        "line count of the whole file; selected_chars is the character count of "
+        "the selected lines before the character window. Use these counts to "
+        "distinguish empty sources from line or character ranges beyond the end. "
+        "Do not repeat the same unbounded read."
     )
 
     def __init__(

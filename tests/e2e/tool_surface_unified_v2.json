@@ -15,10 +15,10 @@
   "shared/list_files": "daf940b971ffc38c9a4bba848188609756e8ca38b7cfd674455d8580c84f1bec",
   "shared/literature_search": "3cb33c530fe66b749999d75fd12201fdf8ffa636f5a0101946f9796703d7bf38",
   "shared/prepare_environment": "a2945cda91a55f9e9e2a8f01d922424e206360fa53d971aad3e716bb4ac6b75b",
-  "shared/read_artifact": "b8bc5ad9a5ef4701a3005e774cf537131ecbafe5dfdf810343024a921dde2048",
-  "shared/read_file": "b1b7f13813b1b3a36922e5f0e4e17ed15ba9d85d00f94c4bce929247d3e62b1f",
+  "shared/read_artifact": "90c42f9cc528e09261a237074aab472baf6240c2b2fd6dcfab900ad96fa1decc",
+  "shared/read_file": "aa6be8b1424f657128cd3f5388f0a398a97e26eab2172106bc0d8bf3f88b7293",
   "shared/replace_text": "81ad390efb57eb24a84c2f8afac4a50941b669065ef0cf4bc508f6d1375b5c44",
   "shared/run_setup": "5d799d7b58019f3688cdd55a74fdd5bdb3cf2bc980c30ebac8dec1897f758880",
   "shared/run_shell": "ae33b4a4efdf53648a6c75162e19914e62015a4d25a0e04ad3e0181425aff6f8",
-  "shared/search_text": "8291d8799dbb38f6a5eb8cb9fbadbcad689271bdc6f1e89112ba4ab2fc402084"
+  "shared/search_text": "81dd657c241bd51025b638aa8389b003024919819a41616ce6ed41ff0d081be1"
 }

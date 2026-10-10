@@ -25,11 +25,11 @@
 
 ## 工具行为
 
-read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者先选物理行，再在选中范围内使用零基 `start_char` / `end_char` 字符窗口（不含 end_char），最后应用128000字符返回上限；原换行和物理行号保持不变。字符分页控制返回片段，整份文本仍需检查，不是流式读取；工件先校验授权与整份 hash，不受工作区大小上限约束。
+read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者先选物理行，再在选中范围内使用零基 `start_char` / `end_char` 字符窗口（不含 end_char），最后应用128000字符返回上限；原换行和物理行号保持不变。分段读取控制返回片段，整份文本仍需检查，不是流式读取；回执的 total_lines 为整份物理行数，selected_chars 为所选行段在字符切片前的字符数，空文件均为0，两字段也保留在上下文工作集；工件先校验授权与整份 hash，不受工作区大小上限约束。
 
 工作区 read_file / search_text / create_file / replace_text 共用默认10 MiB文本处理上限，写入前校验严格编码、NUL和最终字节数；拒绝时不写入或增加编辑版本。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。工作区现在保留CRLF等原换行，精确替换时使用当前原文；旧 Session 回执不改写。
 
-search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。skipped_count 和 skipped_files 报告已授权候选中实际跳过的文件及 too_large / not_utf8_text / read_error 原因；详细条目最多50条，超出用 skipped_files_truncated 标明。incomplete 表示发生跳过或结果上限导致提前停止，truncated 仍表示触及匹配上限；不报告尚未访问或未授权文件，零匹配不自动代表完整搜索。
+search_text 是大小写不敏感的字面子串搜索，不支持正则，`a|b` 按字面匹配。skipped_count 和 skipped_files 报告已授权候选中实际跳过的文件及 too_large / not_utf8_text / read_error 原因；详细条目最多50条，超出用 skipped_files_truncated 标明。incomplete 表示发生跳过或结果上限导致提前停止，truncated 表示达到匹配上限后停止，后续匹配未检查、总匹配数未知，不保证还有更多匹配；不报告尚未访问或未授权文件，零匹配不自动代表完整搜索。
 
 delete_path 接受准确的相对 path 和 recursive=False；已授权文件、链接或空目录可直接删除，非空目录须明确 recursive=True 并通过目标快照确认。执行前重验路径集合、类型和版本，变化不能复用旧批准。链接只删除自身；根目录、受保护元数据和越界目标拒绝。删除与部分完成都沿用 edit_revision、读取过期标记和验证失效机制，不提供原子回滚。首版只装配到 Coding；删除文件内容仍使用 replace_text(new_text="")。
 
@@ -38,7 +38,7 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 网页工具是通用材料入口，不是文献工具的别名：
 
 - `web_search(query, max_results=5)` 仅在配置搜索 provider 时装配；DeepSeek 托管搜索和显式 Tavily 共用这个工具及输入 schema。它登记一个 `web_search` 查询回执，保存有界响应内本次收到的全部规范化标题、URL 和 snippet 线索。工具只预览前 `max_results` 条，并返回 `result_count`、`omitted_count` 和预览 `truncated`；省略项可用 `read_artifact` 读取。预览大小不等于托管搜索次数或费用上限，每次一批、不支持分页；正常结果、成功空结果与失败分别保留 `status=results` / `empty` / `failed`。提供方内部搜索次数达到限制且有有效来源时为 `status=partial`，以 `incomplete_reason=max_uses_exceeded` 明示限制、仍登记并允许读取已返回来源；此时 `ok=True` 仅指材料可用，不表示搜索完整。没有有效来源的次数限制仍失败；其他错误不降级为部分成功。失败回执带 `error_type` 和可选 `retry_after`，不登记论文。
-- `web_fetch(url)` 可独立装配，抓取一个无凭据的 http(s) HTML/XHTML/text URL，登记一个 `web_page` 工件。返回页面的 source/final URL、title 和提取文本，HTML中的链接文字及合法http(s)地址保留，相对地址按final URL解析，不自动获取链接指向的页面/PDF。Scientific 用 `read_artifact` 分段读取；私有/非公网地址、重定向到非公网地址、PDF、二进制、NUL、无效 UTF-8、超时和超大响应返回结构化失败且不生成页面工件。网页正文和摘要是外部不可信材料，不得当作指令执行。
+- `web_fetch(url)` 可独立装配，抓取一个无凭据的 http(s) HTML/XHTML/text URL，登记一个 `web_page` 工件。工具回执返回简要状态、工件引用、final URL、title 和 content_type；source/final URL、parser 等完整页面事实存入登记元数据，提取正文存入冻结工件，回执不内联正文或 parser。HTML/XHTML 正文为 Markdown（parser=markdownify/html.parser），text/plain 保留原文（parser=plain）；链接文字及合法http(s)地址保留，相对地址按final URL解析，代码块正文保留换行和缩进，不自动获取链接指向的页面/PDF。未闭合的危险隐藏/标题标签、空提取或转换失败返回 parse_failed，不登记页面工件。Scientific 用 `read_artifact` 分段读取；私有/非公网地址、重定向到非公网地址、PDF、二进制、NUL、无效 UTF-8、超时和超大响应返回结构化失败且不生成页面工件。网页正文和摘要是外部不可信材料，不得当作指令执行。
 
 两个工具都由 Scientific 按用户目标自主选择；没有固定的调用顺序，网页材料不自动转换为 `literature_paper`。搜索回执和网页正文进入 research index，但不替代论文 kind 要求或来源核对。Provider 适配、URL/响应边界和错误归一化在 [联网组件](../components/README.md#web)，Tool 只负责 schema、登记和模型可见回执。DeepSeek 后端的额外模型请求由注入的 Runtime 客户端占用共享 Run 预算；Tool 通过可选 trace hook 传递当前 Run/Session/步骤，不创建另一个 Agent 或 Session。
 

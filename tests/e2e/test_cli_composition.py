@@ -1,14 +1,10 @@
 """Real E2E scenarios use the production CLI composition without networking."""
 
-from pathlib import Path
-from urllib.parse import unquote, urlparse
-
 import pytest
 
 from e2e import real_e2e
 from e2e.native_fixtures import tool_turn
 from resagent2_cli import composition
-from resagent2_components import RegisteredArtifactReader, read_artifact_json
 from resagent2_contracts import (
     AgentOwner,
     AgentResult,
@@ -214,11 +210,7 @@ def test_single_agent_stage_invokes_its_production_binding(tmp_path, monkeypatch
     assert request.workspace.root == str(repo)
     assert request.workspace_id == "ws_main"
     assert request.output_dir == str(tmp_path / "out")
-    assert len(request.input_artifacts) == 1
-    ref = request.input_artifacts[0]
-    assert ref.kind == "dataset_catalog" and ref.run_id == request.run_id
-    frozen = Path(unquote(urlparse(ref.uri).path))
-    assert frozen.is_relative_to(app.controller.scheduler.artifact_registry.root)
-    data = read_artifact_json(RegisteredArtifactReader([ref], run_id=request.run_id), ref.id)
-    assert data["datasets"][0]["dataset_id"] == "demo"
+    assert request.task_context["dataset_refs"][0]["dataset_id"] == "demo"
+    assert request.input_artifacts == []
+    assert not app.run_store.exists(request.run_id)
     assert not (tmp_path / "artifacts").exists()

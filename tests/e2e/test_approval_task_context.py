@@ -23,7 +23,6 @@ from resagent2_orchestrator import (
     CompilationResult, DeterministicWorkInterpreter, JsonRunStore, ModuleBinding,
     ResearchController, WorkflowScheduler,
 )
-from resagent2_orchestrator.handoffs import read_json
 from resagent2_runtime import JsonSessionStore, ScriptedLLMClient
 from resagent2_scientific import ScientificAgent
 
@@ -80,7 +79,7 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
         {"tool": "ask_user", "arguments": {
             "text": business_text, "requested_fields": ["approve"],
         }},
-        command, command,
+        command,
         {"tool": "finish", "arguments": {"report": "Executed the approved command once"}},
     ]))
     scientific_client = ScriptedLLMClient(tool_turns([
@@ -170,27 +169,25 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     assert len(run.answers) == 2
     assert run.answers[0].action is None and run.answers[1].action == action
 
-    answer_refs = [ref for ref in run.artifacts.values() if ref.kind == "answer"]
-    assert len(answer_refs) == 2
-    bodies = [read_json(ref) for ref in answer_refs]
-    assert {body["question_id"] for body in bodies} == {answer.question_id for answer in run.answers}
-    assert next(body for body in bodies if body["action"] is not None)["action"] == action.model_dump(mode="json")
+    assert not any(ref.kind in {"question", "answer", "work_request", "work_feedback", "work_record", "research_index"}
+                   for ref in run.artifacts.values())
+    assert {answer.question_id for answer in run.answers} <= set(run.received_controls.values())
     # Inspect the task section actually sent before execution and before finish.
     # The operation remains in durable control/history, not in task requirements.
     for context in worker_client.contexts[1:]:
-        task_text = context.text.split("## task\n", 1)[1].split("\n\n## ", 1)[0]
+        task_text = context.task_context.split("\n", 1)[1]
         dialogue = json.loads(task_text)["user_answers"]
         assert len(dialogue) == 1
-        assert dialogue[0]["question"] == business_text
+        assert dialogue[0]["question_text"] == business_text
         assert dialogue[0]["values"] == {"approve": "yes"}
         assert dialogue[0]["question_id"] == run.answers[0].question_id
 
     state = sessions.load(session_id)
     assert state.pending_action is None
-    assert len(state.tool_turns) == 4
+    assert len(state.tool_turns) == 3
     assert all(set(turn.tool_results) == {call.id for call in turn.tool_calls}
                and turn.executing_call_id is None for turn in state.tool_turns)
     receipts = [json.loads(next(iter(turn.tool_results.values()))) for turn in state.tool_turns]
     assert sum(receipt.get("value", {}).get("exit_code") == 0 for receipt in receipts
                if isinstance(receipt.get("value"), dict)) == 1
-    assert run.llm_calls_used == len(worker_client.contexts) + len(scientific_client.contexts) == 6
+    assert run.llm_calls_used == len(worker_client.contexts) + len(scientific_client.contexts) == 5

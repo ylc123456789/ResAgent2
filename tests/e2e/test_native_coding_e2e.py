@@ -135,6 +135,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
 
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert {artifact.kind for artifact in run.artifacts.values()} == {
+        "module_report",
         "code_patch",
         "code_change",
         "verification_result",
@@ -197,9 +198,18 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
     first = coding.invoke(request)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
 
-    resume_request = request.model_copy(
-        update={"parent_session_id": first.session.id}
+    from resagent2_contracts import RecordedAnswer
+    question = first.control.question
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
+        options=question.options, values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=question.run_id, session_id=question.session_id,
+        task_id=question.task_id, attempt_number=question.attempt_number,
     )
+    resume_request = request.model_copy(update={
+        "parent_session_id": first.session.id, "control_ack": first.control.origin,
+        "user_answers": [answer], "resume_answers": [answer],
+    })
     second = coding.invoke(resume_request)
 
     assert second.status == ModuleStatus.COMPLETED

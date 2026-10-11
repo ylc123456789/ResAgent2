@@ -9,6 +9,7 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "contracts" / "src"
 ALLOWED_IMPORT_ROOTS = {
     "collections",
     "hashlib",
+    "uuid",
     "__future__",
     "datetime",
     "enum",

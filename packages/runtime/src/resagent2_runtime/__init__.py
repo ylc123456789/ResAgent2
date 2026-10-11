@@ -10,11 +10,8 @@ process, repository, environment, dataset, hardware) live in
 
 from .context import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
-    ContextMaterial,
     ContextBudgetExceeded,
     ContextComposer,
-    recent_tool_listing,
-    recent_tool_snippets,
 )
 from .llm import (
     LLMClient,
@@ -60,7 +57,6 @@ from .tools import (
 
 __all__ = [
     "DEFAULT_AGENT_CONTEXT_TOKENS",
-    "ContextMaterial",
     "AgentAction",
     "AgentDefinition",
     "AgentEvent",
@@ -92,8 +88,6 @@ __all__ = [
     "PermissionDecision",
     "PermissionPolicy",
     "PromptLLMClient",
-    "recent_tool_listing",
-    "recent_tool_snippets",
     "ScriptedLLMClient",
     "StructuredLLMClient",
     "SessionStore",

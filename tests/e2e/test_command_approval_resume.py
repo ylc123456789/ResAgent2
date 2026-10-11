@@ -14,7 +14,7 @@ from resagent2_coding import NativeCodingAgent
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_components import PreparedEnvironment, ResourceLayout
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, ArtifactCandidate, QuestionDraft,
+    AgentOwner, AgentPermissions, AgentRequest,
     RecordedAnswer, TaskBudget, WorkspaceAccess, WorkspaceGrant,
 )
 from resagent2_orchestrator.artifacts import ArtifactRegistry
@@ -122,27 +122,19 @@ def invoke(case, req, actions):
 
 
 def approve(case, req, result):
-    artifact = next(item for item in result.artifacts if item.kind == "question")
-    question = QuestionDraft.model_validate_json(artifact.content)
+    question = result.control.question
     answer = RecordedAnswer(
-        question_id=f"question_{question.action.action_id}", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
-        run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
+        run_id=req.run_id, session_id=result.session.id, task_id=req.task_id, attempt_number=req.attempt_number,
         action=question.action,
-    )
-    ref = ArtifactRegistry(case.root / "artifacts").register_system_artifact(
-        ArtifactCandidate(
-            kind="answer", path="answer.json", media_type="application/json",
-            summary="Approve the exact pending command", content=answer.model_dump_json(),
-        ),
-        run_id=req.run_id, source_type="controller_answer",
-        task_id=req.task_id, attempt_number=req.attempt_number,
     )
     return req.model_copy(update={
         "parent_session_id": result.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
+        "resume_answers": [answer], "control_ack": result.control.origin,
     })
+
 
 
 @pytest.mark.parametrize("second_tag", ["first", "second"])
@@ -153,17 +145,17 @@ def test_native_commands_resume_with_fresh_audit_and_single_use_approval(case, s
     assert list(case.repo.glob("*.marker")) == []
 
     resumed = approve(case, case.request, first)
-    second = invoke(case, resumed, [command(case, "first"), command(case, second_tag)])
+    second = invoke(case, resumed, [command(case, second_tag)])
     assert second.status == "needs_user_input"
     assert len(case.manager.audits) == 1
     assert (case.repo / "first.marker").read_text() == "executed\n"
     assert not (case.repo / "second.marker").exists()
-    first_action = QuestionDraft.model_validate_json(first.artifacts[0].content).action
+    first_action = first.control.question.action
     pending = JsonSessionStore(case.root / "sessions").load(second.session.id).pending_action
     assert pending.action_id != first_action.action_id
 
     final = invoke(
-        case, approve(case, resumed, second), [command(case, second_tag), FINISH],
+        case, approve(case, resumed, second), [FINISH],
     )
     assert final.status == "completed"
     assert len(case.manager.audits) == 2
@@ -203,7 +195,7 @@ def test_pipeline_module_runs_once_after_approval(case, mode):
     assert case.manager.audits == []
     assert not (case.repo / f"{mode}.marker").exists()
 
-    result = invoke(case, approve(case, case.request, first), [action, FINISH])
+    result = invoke(case, approve(case, case.request, first), [FINISH])
     assert result.status == "completed", result.report
     assert len(case.manager.audits) == 1
     assert (case.repo / f"{mode}.marker").read_text() == "executed\n"
@@ -217,7 +209,7 @@ def test_pipeline_module_runs_once_after_approval(case, mode):
 def test_failed_audit_after_approval_blocks_actual_command(case):
     first = invoke(case, case.request, [command(case, "first")])
     case.manager.success = False
-    result = invoke(case, approve(case, case.request, first), [command(case, "first"), FINISH])
+    result = invoke(case, approve(case, case.request, first), [FINISH])
     assert len(case.manager.audits) == 1
     assert not (case.repo / "first.marker").exists()
     state = JsonSessionStore(case.root / "sessions").load(result.session.id)
@@ -234,7 +226,7 @@ def test_deadline_expiring_during_audit_prevents_command(case):
     now = [0.0]
     case.manager.after_audit = lambda: now.__setitem__(0, 61.0)
     with execution_budget(max_llm_calls=30, timeout_seconds=60, clock=lambda: now[0]):
-        result = invoke(case, approve(case, case.request, first), [command(case, "first"), FINISH])
+        result = invoke(case, approve(case, case.request, first), [FINISH])
     assert result.status == "failed"
     assert result.error.code == "timeout"
     assert len(case.manager.audits) == 1
@@ -254,27 +246,23 @@ def test_process_permission_denies_audit_and_command_before_effects(case, tool):
 
 def test_stale_first_answer_cannot_change_second_command_or_session(case):
     from resagent2_contracts import (
-        PendingQuestion, ResearchRequest, RunBudget, RunPermissions, UserAnswer,
+        ResearchRequest, RunBudget, RunPermissions, UserAnswer,
         WorkflowAgentRegistry,
     )
     from resagent2_orchestrator import (
-    DeterministicWorkInterpreter,
+        DeterministicWorkInterpreter,
         JsonRunStore, OrchestrationError, ResearchController, ResearchRun,
     )
 
     first = invoke(case, case.request, [command(case, "first")])
     resumed = approve(case, case.request, first)
-    second = invoke(case, resumed, [command(case, "first"), command(case, "second")])
+    second = invoke(case, resumed, [command(case, "second")])
     assert second.status == "needs_user_input"
-    old_question = QuestionDraft.model_validate_json(first.artifacts[0].content)
-    draft = QuestionDraft.model_validate_json(second.artifacts[0].content)
+    old_question = first.control.question
+    draft = second.control.question
     assert draft.action.arguments == command(case, "second")["arguments"]
     now = datetime.now(UTC)
-    pending = PendingQuestion(
-        id="question_second", run_id=case.request.run_id,
-        task_id=case.request.task_id, attempt_number=1, created_at=now,
-        **draft.model_dump(exclude={"schema_version"}),
-    )
+    pending = draft
     run_store = JsonRunStore(case.root / "runs")
     run_store.save(ResearchRun(
         run_id=case.request.run_id, status="paused", pending_question=pending,
@@ -305,7 +293,7 @@ def test_stale_first_answer_cannot_change_second_command_or_session(case):
         controller.answer_question(
             case.request.run_id,
             UserAnswer(
-                question_id=f"question_{old_question.action.action_id}",
+                question_id=old_question.id,
                 values={"approve": "yes"}, answered_at=now,
             ),
         )

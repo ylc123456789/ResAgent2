@@ -1,12 +1,14 @@
 """Expose verification outcomes and freshness without deciding task completion."""
 
 from datetime import UTC, datetime
+import hashlib
 from types import SimpleNamespace
 
 from resagent2_contracts import AgentOwner
 from resagent2_runtime import AgentState
 
 from resagent2_coding.completion import derive_control_state
+from resagent2_capabilities import GitDiffTool
 
 
 def _state(memory: dict) -> AgentState:
@@ -84,6 +86,33 @@ def test_stored_revision_does_not_imply_verification_results() -> None:
     assert control["verification_stale"] is False
     assert control["verification_passed"] is None
     assert control["verification_issue"] == "No verification executed"
+
+
+def test_git_diff_rechecks_current_patch_without_changing_recorded_test_outcome():
+    patch = {"value": "original patch"}
+    repository = SimpleNamespace(diff_since=lambda baseline: patch["value"])
+    binding = _binding(True)
+    state = _state({
+        "edit_revision": 1, "verification_revision": 1,
+        "verification_environment_generation": "generation_test",
+        "verification_workspace_unchanged": True,
+        "verification_diff_sha256": hashlib.sha256(patch["value"].encode()).hexdigest(),
+        "verification_results": [{
+            "command": "python -m pytest", "exit_code": 0, "timed_out": False,
+            "stdout_path": "test.stdout", "stderr_path": "test.stderr", "duration_seconds": 0,
+        }],
+    })
+    tool = GitDiffTool(repository, baseline=object(),
+                       verification_state=lambda state, diff: derive_control_state(state, binding, diff=diff))
+    before = tool.execute(state, tool.input_model(max_chars=1)).value
+    assert before["truncated"] is True
+    assert before["verification"]["verification_passed"] is True
+    assert before["verification"]["verification_stale"] is False
+    patch["value"] = "changed outside file tools"
+    after = tool.execute(state, tool.input_model(max_chars=1)).value
+    assert after["verification"]["verification_passed"] is True
+    assert after["verification"]["verification_stale"] is True
+    assert after["verification"]["verification_issue"] == "Workspace changed after verification"
 
 
 def test_failed_result_keeps_its_outcome_when_code_or_environment_changes():

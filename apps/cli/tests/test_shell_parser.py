@@ -12,6 +12,7 @@ from resagent2_contracts import PendingQuestion
 
 def _answer(tokens, requested_fields=None):
     question = None if requested_fields is None else PendingQuestion(
+        session_id="session_test",
         id="question_1", run_id="run_x", text="Choose a value",
         requested_fields=requested_fields, created_at=datetime.now(UTC),
     )

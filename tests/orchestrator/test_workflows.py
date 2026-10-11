@@ -1,4 +1,5 @@
 
+from control_fixtures import question_signal, ScopedScriptedModulePort
 from resagent2_contracts import RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 
@@ -76,7 +77,7 @@ def scheduler(scripts: dict[WorkflowAgentKind, list[AgentResult]]) -> WorkflowSc
     bindings = {
         agent_kind: ModuleBinding(
             owner=owners[agent_kind],
-            port=ScriptedModulePort(results),
+            port=ScopedScriptedModulePort(results),
         )
         for agent_kind, results in scripts.items()
     }
@@ -102,7 +103,7 @@ def _ask_result() -> AgentResult:
     return AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
         report="input required",
-        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='pick one', requested_fields=['x']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
+        artifacts=[], control=question_signal("session_child", 'pick one', ['x']),
         session=SessionRef(
             id="session_child",
             module=AgentOwner.EXPERIMENT,
@@ -119,7 +120,7 @@ def _pause_with_question(task_id: str, run_id: str) -> ResearchRun:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([_ask_result()]),
+                port=ScopedScriptedModulePort([_ask_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -197,7 +198,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     question_result = AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
         report="Dataset required",
-        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='Which dataset?', requested_fields=['dataset']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
+        artifacts=[], control=question_signal("session_child", 'Which dataset?', ['dataset']),
         session=SessionRef(
             id="session_child",
             module=AgentOwner.EXPERIMENT,
@@ -210,7 +211,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     resumed_result = completed().model_copy(update={
         "session": question_result.session.model_copy(update={"status": SessionStatus.COMPLETED}),
     })
-    port = ScriptedModulePort([question_result, resumed_result])
+    port = ScopedScriptedModulePort([question_result, resumed_result])
     engine = WorkflowScheduler(
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
@@ -239,7 +240,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
         question_id=paused.pending_question.id,
         question_text=paused.pending_question.text,
         requested_fields=paused.pending_question.requested_fields,
-        run_id=paused.run_id, task_id="task_experiment", attempt_number=1,
+        run_id=paused.run_id, task_id="task_experiment", attempt_number=1, session_id="session_child",
         values={"dataset": "demo"},
         answered_at=NOW,
     )
@@ -247,7 +248,6 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     # task back into the ready set.
     run = engine.store.load("run_question")
     run.answers.append(answer)
-    system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
     run.pending_question = None
     run.status = RunStatus.RUNNING
     engine.resume_task_in_place(run, "task_experiment")
@@ -257,7 +257,7 @@ def test_question_pauses_and_answer_resumes_same_task_context() -> None:
     assert final.workflow.tasks[0].status == TaskStatus.COMPLETED
     # The same Attempt resumed, not a new one.
     assert [attempt.number for attempt in final.workflow.tasks[0].attempts] == [1]
-    assert [read_json(ref, RecordedAnswer) for ref in port.requests[1].input_artifacts if ref.kind == "answer"] == [answer]
+    assert port.requests[1].resume_answers == [answer]
     assert port.requests[1].parent_session_id == "session_child"
     assert port.requests[1].attempt_number == 1
 
@@ -282,7 +282,7 @@ def test_question_id_keeps_owning_task_scope() -> None:
 def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> None:
     from resagent2_orchestrator.scheduler import _validate_answer
 
-    port = ScriptedModulePort([_ask_result(), _ask_result()])
+    port = ScopedScriptedModulePort([_ask_result(), _ask_result()])
     engine = WorkflowScheduler(
         bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
             owner=AgentOwner.EXPERIMENT, port=port,
@@ -299,12 +299,11 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
         question_id=first.pending_question.id, values={"x": "first"},
         question_text=first.pending_question.text,
         requested_fields=first.pending_question.requested_fields,
-        run_id=first.run_id, task_id="task_experiment", attempt_number=1,
+        run_id=first.run_id, task_id="task_experiment", attempt_number=1, session_id="session_child",
         answered_at=NOW,
     )
     run = engine.store.load(first.run_id)
     run.answers.append(answer)
-    system_artifact(engine.artifact_registry, run, "answer", answer, task_id="task_experiment", attempt_number=1)
     run.pending_question = None
     run.status = RunStatus.RUNNING
     engine.resume_task_in_place(run, "task_experiment")
@@ -325,14 +324,19 @@ def test_successive_questions_in_one_attempt_reject_the_previous_answer() -> Non
     ))
 
 
-def test_question_id_is_strictly_bounded() -> None:
+def test_scheduler_preserves_the_tool_allocated_question_identity() -> None:
     from pydantic import TypeAdapter
 
-    from resagent2_contracts import (QuestionId, ArtifactCandidate, ControlSignal)
-    from resagent2_orchestrator.scheduler import _question_id
-
-    qid = _question_id()
-    assert TypeAdapter(QuestionId).validate_python(qid) == qid
+    from resagent2_contracts import QuestionId
+    signal = question_signal("session_child", "Choose metric", ["metric"])
+    result = _ask_result().model_copy(update={"control": signal})
+    engine = scheduler({WorkflowAgentKind.EXPERIMENT: [result]})
+    _create_run(engine, "run_question_identity", research_request(), WorkflowProposal(
+        work_request_id="work_legacy_initial", tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],
+    ))
+    paused = engine.run_until_stable("run_question_identity")
+    assert paused.pending_question.id == signal.question.id
+    assert TypeAdapter(QuestionId).validate_python(paused.pending_question.id) == signal.question.id
 
 
 def test_failed_attempt_cannot_be_promoted_to_completed() -> None:
@@ -475,7 +479,7 @@ def test_task_request_work_is_a_contract_failure_not_a_question() -> None:
         status=ModuleStatus.REQUEST_WORK,
         report="invalid task result",
         artifacts=[ArtifactCandidate(kind="work_request", path="work.json", media_type="application/json", summary="Invalid control", content="{}")],
-        control=ControlSignal(action="request_work", candidate_index=0),
+        control=ControlSignal.model_construct(action="request_work", source_session_id="session_invalid_task", source_turn=1, source_call_id="call_invalid"),
         session=SessionRef(
             id="session_invalid_task",
             module=AgentOwner.EXPERIMENT,
@@ -605,7 +609,7 @@ def test_empty_candidate_is_rejected_without_mutation(tmp_path, kind) -> None:
 def test_patch_rejects_prior_round_dependency_without_mutation(tmp_path, old_status) -> None:
     engine = WorkflowScheduler(
         bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-            owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([]),
+            owner=AgentOwner.EXPERIMENT, port=ScopedScriptedModulePort([]),
         )},
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
         data_root=tmp_path / "data",

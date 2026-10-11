@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "24.0"
+SCHEMA_VERSION = "25.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["24.0"] = SCHEMA_VERSION
+    schema_version: Literal["25.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -241,24 +241,20 @@ SYSTEM_ARTIFACT_PROVENANCE = {
     "acceptance_requirements": ("task_requirement", frozenset({"task"})),
     "conclusion_requirements": ("conclusion_requirement", frozenset({"run"})),
     "dataset_catalog": ("dataset_catalog", frozenset({"run"})),
-    "work_feedback": ("controller_feedback", frozenset({"session"})),
-    "work_record": ("controller_work_record", frozenset({"session"})),
-    "research_index": ("research_index", frozenset({"run"})),
-    "work_request": ("controller_work_request", frozenset({"session"})),
-    "answer": ("controller_answer", frozenset({"session", "attempt"})),
-    "question": ("controller_question", frozenset({"session", "attempt"})),
+    "module_report": ("task_report", frozenset({"attempt"})),
+
 }
-SYSTEM_ARTIFACT_KINDS = frozenset(SYSTEM_ARTIFACT_PROVENANCE)
+SYSTEM_ARTIFACT_KINDS = frozenset(SYSTEM_ARTIFACT_PROVENANCE) - {"module_report"}
 SCIENTIFIC_ARTIFACT_KINDS = frozenset({
-    "literature_search", "literature_paper", "literature_pdf", "literature_fulltext",
-    "web_search", "web_page",
+    "literature_paper", "literature_pdf", "literature_fulltext",
+    "web_page",
     "scientific_opinion", "scientific_assessment",
     "observation_trace", "module_report",
 })
 SYSTEM_GENERATED_ARTIFACT_KINDS = SYSTEM_ARTIFACT_KINDS | frozenset({
     "code_patch", "verification_result", "execution_record", "observation_trace",
-    "web_search", "web_page",
-    "literature_search", "literature_paper", "literature_pdf", "literature_fulltext", "final_report",
+    "web_page",
+    "literature_paper", "literature_pdf", "literature_fulltext", "final_report",
 })
 
 
@@ -501,6 +497,7 @@ class PendingQuestion(ContractModel):
 
     id: QuestionId
     run_id: RunId
+    session_id: SessionId
     task_id: TaskId | None = None
     attempt_number: int | None = Field(default=None, ge=1)
     text: NonEmptyStr
@@ -608,6 +605,10 @@ class Attempt(ContractModel):
     error: ModuleError | None = None
     report: str = ""
     acceptance_ref: ArtifactRef | None = None
+    report_artifact_id: ArtifactId | None = None
+    agent_started: bool = False
+    warnings: list[WarningRecord] = Field(default_factory=list)
+    reception_error: ModuleError | None = None
 
     @model_validator(mode="after")
     def validate_outcome(self) -> Attempt:
@@ -901,7 +902,11 @@ class AgentRequest(ContractModel):
     environment_spec: EnvironmentSpec = Field(default_factory=EnvironmentSpec)
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
-    resume_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    task_context: dict[str, JsonValue] = Field(default_factory=dict)
+    user_answers: list[RecordedAnswer] = Field(default_factory=list)
+    resume_answers: list[RecordedAnswer] = Field(default_factory=list)
+    work_results: list[WorkResult] = Field(default_factory=list)
+    control_ack: ControlOrigin | None = None
 
     @model_validator(mode="after")
     def validate_invocation(self) -> AgentRequest:
@@ -917,20 +922,29 @@ class AgentRequest(ContractModel):
             raise ValueError("input_artifacts must have unique ids")
         if any(artifact.run_id != self.run_id for artifact in self.input_artifacts):
             raise ValueError("input_artifacts must belong to the same run")
-        if self.resume_artifact_ids and self.parent_session_id is None:
-            raise ValueError("resume_artifact_ids require a parent session")
-        if len(self.resume_artifact_ids) != len(set(self.resume_artifact_ids)):
-            raise ValueError("resume_artifact_ids must have unique ids")
-        if not set(self.resume_artifact_ids) <= set(ids):
-            raise ValueError("resume_artifact_ids must reference input_artifacts")
-        resume_kinds = {
-            artifact.kind for artifact in self.input_artifacts
-            if artifact.id in self.resume_artifact_ids
-        }
-        if not resume_kinds <= {"answer", "work_feedback"}:
-            raise ValueError("resume materials must be answer or work_feedback")
-        if len(resume_kinds) > 1:
-            raise ValueError("answer and work_feedback cannot resume the same invocation")
+        if (self.resume_answers or self.control_ack) and self.parent_session_id is None:
+            raise ValueError("resume control data requires a parent session")
+        if self.control_ack and self.control_ack.session_id != self.parent_session_id:
+            raise ValueError("control acknowledgment belongs to another session")
+        for answers in (self.user_answers, self.resume_answers):
+            if len({answer.question_id for answer in answers}) != len(answers):
+                raise ValueError("answer question ids must be unique")
+            for answer in answers:
+                if (answer.run_id, answer.task_id, answer.attempt_number) != (
+                    self.run_id, self.task_id, self.attempt_number
+                ):
+                    raise ValueError("answer does not belong to this invocation")
+                if self.parent_session_id and answer.session_id != self.parent_session_id:
+                    raise ValueError("answer belongs to another session")
+        if any(answer.action is not None for answer in self.user_answers):
+            raise ValueError("operation approvals are not business answers")
+        if self.work_results and self.agent != AgentOwner.SCIENTIFIC:
+            raise ValueError("work results are Scientific scoped")
+        for result in self.work_results:
+            if result.run_id != self.run_id or result.session_id != self.parent_session_id:
+                raise ValueError("work result belongs to another run or session")
+            if not {ref.id for ref in result.artifacts} <= set(ids):
+                raise ValueError("work result artifacts require explicit input authorization")
         return self
 
     @model_validator(mode="after")
@@ -954,17 +968,41 @@ class AgentRequest(ContractModel):
 ArtifactOutput = ArtifactCandidate | ArtifactRef
 
 
+class ControlOrigin(ContractModel):
+    """Identity of the original native control call, stable across recovery."""
+
+    session_id: SessionId
+    turn: int = Field(ge=0)
+    call_id: NonEmptyStr
+
+
 class ControlSignal(ContractModel):
-    """A control action referring to one result artifact, never task content."""
+    """Persisted control handoff; never an artifact or a model body projection."""
 
     action: Literal["ask_user", "request_work"]
-    artifact_id: ArtifactId | None = None
-    candidate_index: int | None = Field(default=None, ge=0)
+    source_session_id: SessionId
+    source_turn: int = Field(ge=0)
+    source_call_id: NonEmptyStr
+    question: PendingQuestion | None = None
+    work_request: WorkRequest | None = None
+    assessment: ScientificAssessment | None = None
+
+    @property
+    def origin(self) -> ControlOrigin:
+        return ControlOrigin(session_id=self.source_session_id,
+                             turn=self.source_turn, call_id=self.source_call_id)
 
     @model_validator(mode="after")
-    def validate_reference(self) -> ControlSignal:
-        if (self.artifact_id is None) == (self.candidate_index is None):
-            raise ValueError("control requires exactly one artifact_id or candidate_index")
+    def validate_payload(self) -> ControlSignal:
+        if self.action == "ask_user":
+            if self.question is None or self.work_request is not None:
+                raise ValueError("ask_user requires only question")
+            if self.question.session_id != self.source_session_id:
+                raise ValueError("question belongs to another session")
+        elif self.work_request is None or self.question is not None:
+            raise ValueError("request_work requires only work_request")
+        elif self.work_request.scientific_session_id != self.source_session_id:
+            raise ValueError("work request belongs to another session")
         return self
 
 
@@ -972,7 +1010,7 @@ class AgentResult(ContractModel):
     """Common result; report and artifacts are the only business outputs."""
 
     status: ModuleStatus
-    report: NonEmptyStr
+    report: Annotated[str, StringConstraints(min_length=1)]
     artifacts: list[ArtifactOutput] = Field(default_factory=list)
     session: SessionRef | None = None
     control: ControlSignal | None = None
@@ -1008,22 +1046,8 @@ class AgentResult(ContractModel):
         }[self.status]
         if self.session is not None and self.session.status != expected_session_status:
             raise ValueError("result status and session status disagree")
-        if self.control is not None:
-            control = self.control
-            if control.candidate_index is not None:
-                if control.candidate_index >= len(self.artifacts):
-                    raise ValueError("control candidate_index is outside artifacts")
-                artifact = self.artifacts[control.candidate_index]
-                if not isinstance(artifact, ArtifactCandidate):
-                    raise ValueError("control candidate_index must identify a candidate")
-            else:
-                matches = [a for a in self.artifacts if isinstance(a, ArtifactRef) and a.id == control.artifact_id]
-                if len(matches) != 1:
-                    raise ValueError("control artifact_id must identify one returned ArtifactRef")
-                artifact = matches[0]
-            expected_kind = "question" if control.action == "ask_user" else "work_request"
-            if artifact.kind != expected_kind:
-                raise ValueError(f"{control.action} control requires a {expected_kind} artifact")
+        if self.control is not None and self.session.id != self.control.source_session_id:
+            raise ValueError("control belongs to another session")
         if (
             self.status == ModuleStatus.COMPLETED_WITH_WARNINGS
             and not self.warnings
@@ -1102,13 +1126,20 @@ class WorkRequest(ContractModel):
     request: WorkRequestDraft
     status: WorkRequestStatus = WorkRequestStatus.REQUESTED
     workflow_revision: int | None = None
-    outcome: WorkOutcome | None = None
+    outcome: WorkResult | None = None
     error: ModuleError | None = None
     created_at: datetime
     updated_at: datetime
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> WorkRequest:
+        if self.outcome is not None and (
+            self.outcome.run_id != self.run_id
+            or self.outcome.session_id != self.scientific_session_id
+            or self.outcome.work_request_id != self.id
+            or self.outcome.workflow_revision != self.workflow_revision
+        ):
+            raise ValueError("work outcome does not match its request identity")
         if self.status in {
             WorkRequestStatus.REQUESTED,
             WorkRequestStatus.COMPILING,
@@ -1142,39 +1173,57 @@ class WorkRequest(ContractModel):
         return self
 
 
-class WorkTaskOutcome(ContractModel):
-    """Factual summary of one task's outcome within a completed work request."""
+class WorkAttemptResult(ContractModel):
+    """Navigation facts for one original terminal Agent report and its outputs."""
 
-    task_id: TaskId
-    status: Literal["completed", "failed", "blocked"]
-    summary: NonEmptyStr
+    number: int = Field(ge=1)
+    status: AttemptStatus
+    report_artifact_id: ArtifactId | None = None
     artifact_ids: list[ArtifactId] = Field(default_factory=list)
     error: ModuleError | None = None
     warnings: list[WarningRecord] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_status_fields(self) -> WorkTaskOutcome:
-        if self.status in {"failed", "blocked"}:
-            if self.error is None:
-                raise ValueError(f"{self.status} task outcome requires error")
-        elif self.error is not None:
-            raise ValueError(f"{self.status} task outcome cannot have error")
-        return self
+    reception_error: ModuleError | None = None
 
 
-class WorkOutcome(ContractModel):
-    """Execution fact summary returned to the Scientific Agent."""
+class WorkTaskResult(ContractModel):
+    """Task navigation, without reprocessing the Agent's report body."""
 
+    task_id: TaskId
+    workflow_agent_kind: WorkflowAgentKind
+    instruction: NonEmptyStr
+    status: TaskStatus
+    attempts: list[WorkAttemptResult] = Field(default_factory=list)
+    error: ModuleError | None = None
+    warnings: list[WarningRecord] = Field(default_factory=list)
+
+
+class WorkResult(ContractModel):
+    """Terminal WorkRequest facts and the actual authorization increment."""
+
+    run_id: RunId
+    session_id: SessionId
     work_request_id: WorkRequestId
-    workflow_revision: int = Field(ge=1)
-    summary: NonEmptyStr
-    tasks: list[WorkTaskOutcome] = Field(min_length=1)
+    objective: NonEmptyStr
+    status: WorkRequestStatus
+    workflow_revision: int | None = Field(default=None, ge=1)
+    error: ModuleError | None = None
+    tasks: list[WorkTaskResult] = Field(default_factory=list)
+    artifacts: list[ArtifactRef] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_tasks(self) -> WorkOutcome:
-        ids = [task.task_id for task in self.tasks]
-        if len(ids) != len(set(ids)):
-            raise ValueError("duplicate task id in work outcome")
+    def validate_result(self) -> WorkResult:
+        if self.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
+            raise ValueError("work result must describe a terminal outcome")
+        if self.status == WorkRequestStatus.FAILED and self.error is None:
+            raise ValueError("failed work result requires error")
+        if self.status == WorkRequestStatus.STABLE and self.error is not None:
+            raise ValueError("stable work result cannot carry error")
+        if len({task.task_id for task in self.tasks}) != len(self.tasks):
+            raise ValueError("work result task ids must be unique")
+        if len({ref.id for ref in self.artifacts}) != len(self.artifacts):
+            raise ValueError("work result artifact ids must be unique")
+        if any(ref.run_id != self.run_id for ref in self.artifacts):
+            raise ValueError("work result artifacts belong to another run")
         return self
 
 
@@ -1198,85 +1247,36 @@ class ScientificOpinion(ContractModel):
         return self
 
 
-class WorkAttemptRecord(ContractModel):
-    """Public execution facts from one attempt, including failed retry history."""
-
-    task_id: TaskId
-    attempt_number: int = Field(ge=1)
-    status: AttemptStatus
-    summary: str
-    artifact_ids: list[ArtifactId] = Field(default_factory=list)
-    error: ModuleError | None = None
-
-
-class WorkRecord(ContractModel):
-    """One system-paired work request and outcome, stored as artifact content."""
-
-    run_id: RunId
-    work_request_id: WorkRequestId
-    session_id: SessionId
-    previous_work_request: WorkRequestDraft
-    work_outcome: WorkOutcome
-    unresolved_task_outcomes: list[WorkTaskOutcome] = Field(default_factory=list)
-    attempts: list[WorkAttemptRecord] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_pair(self) -> WorkRecord:
-        if self.work_request_id != self.work_outcome.work_request_id:
-            raise ValueError("work_record work_request_id must match work_outcome")
-        return self
-
-
-class ResearchArtifactEntry(ContractModel):
-    """Navigation to an original artifact, never a second storage/authority record."""
+class ArtifactIndexEntry(ContractModel):
+    """Safe direct navigation projected from one authoritative ArtifactRef."""
 
     artifact_id: ArtifactId
     kind: NonEmptyStr
+    media_type: NonEmptyStr
     summary: NonEmptyStr
+    producer: AgentOwner
     output_name: OutputName | None = None
+    task_id: TaskId | None = None
     attempt_number: int | None = Field(default=None, ge=1)
-    execution_status: AttemptStatus | None = None
+    session_id: SessionId | None = None
     source_artifact_id: ArtifactId | None = None
+    source_type: str | None = None
+    agent_started: bool | None = None
+    source_url: str | None = None
+    final_url: str | None = None
+    paper_id: str | None = None
 
     @classmethod
-    def from_ref(cls, ref: ArtifactRef, **source):
-        return cls(artifact_id=ref.id, kind=ref.kind, summary=ref.summary,
-                   output_name=ref.output_name, attempt_number=ref.attempt_number,
-                   source_artifact_id=ref.metadata.get("source_artifact_id"), **source)
-
-
-class ResearchIndexGroup(ContractModel):
-    """Materials organized by an existing work request or by input origin."""
-
-    key: NonEmptyStr
-    title: NonEmptyStr
-    artifacts: list[ResearchArtifactEntry] = Field(default_factory=list)
-
-
-class ResearchIndex(ContractModel):
-    """Complete, rebuildable Scientific view over the original registered materials."""
-
-    run_id: RunId
-    groups: list[ResearchIndexGroup] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_entries(self):
-        keys = [group.key for group in self.groups]
-        ids = [entry.artifact_id for group in self.groups for entry in group.artifacts]
-        if len(keys) != len(set(keys)) or len(ids) != len(set(ids)):
-            raise ValueError("research index has duplicate groups or artifact ids")
-        return self
-
-
-class WorkFeedback(ContractModel):
-    """Frozen reverse handoff; raw execution facts remain in the referenced record."""
-
-    run_id: RunId
-    work_request_id: WorkRequestId
-    session_id: SessionId
-    work_record_artifact_id: ArtifactId
-    index_artifact_id: ArtifactId
-    report: NonEmptyStr
+    def from_ref(cls, ref: ArtifactRef):
+        return cls(artifact_id=ref.id, kind=ref.kind, media_type=ref.media_type,
+                   summary=ref.summary, producer=ref.producer,
+                   output_name=ref.output_name, task_id=ref.task_id,
+                   attempt_number=ref.attempt_number, session_id=ref.session_id,
+                   source_artifact_id=ref.metadata.get("source_artifact_id"),
+                   source_type=ref.metadata.get("source_type"),
+                   agent_started=ref.metadata.get("agent_started"),
+                   source_url=ref.metadata.get("source_url"),
+                   final_url=ref.metadata.get("final_url"), paper_id=ref.metadata.get("paper_id"))
 
 
 class ConclusionRequirements(ContractModel):
@@ -1291,3 +1291,8 @@ class ObservationTrace(ContractModel):
     """Observed evidence IDs projected from persisted tool events."""
 
     observed_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
+AgentRequest.model_rebuild()
+ControlSignal.model_rebuild()
+WorkRequest.model_rebuild()

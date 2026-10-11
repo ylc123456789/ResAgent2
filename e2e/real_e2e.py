@@ -30,7 +30,6 @@ from resagent2_contracts import (
     ExecutionLimits,
     AgentOwner,
     AttemptStatus,
-    ArtifactCandidate,
     WorkflowAgentKind,
     AgentResult,
     ModuleStatus,
@@ -55,7 +54,6 @@ from resagent2_components import (
     RegisteredArtifactReader,
     read_artifact_json,
 )
-from resagent2_orchestrator import ArtifactRegistry
 
 UTIL_PY = 'def add(a, b):\n    return a + b\n'
 
@@ -448,17 +446,10 @@ def _training_metrics(run):
                 yield metrics
 
 
-def _dataset_materials(registry: ArtifactRegistry, layout: ResourceLayout, run_id: str):
-    """Give direct invocations the same frozen dataset catalog as Controller calls."""
+def _dataset_context(layout: ResourceLayout):
+    """Pass initial dataset facts through the common direct Agent request."""
     refs = DatasetCatalog(layout.dataset_root).references()
-    return [registry.register_system_artifact(
-        ArtifactCandidate(
-            kind="dataset_catalog", path="dataset_catalog.json", media_type="application/json",
-            summary="Available dataset references",
-            content=json.dumps({"datasets": [ref.model_dump(mode="json") for ref in refs]}),
-        ),
-        run_id=run_id, source_type="dataset_catalog",
-    )]
+    return {"dataset_refs": [ref.model_dump(mode="json") for ref in refs]}
 
 
 def run_code(workdir: Path) -> AgentResult:
@@ -470,9 +461,7 @@ def run_code(workdir: Path) -> AgentResult:
         task_id="task_code",
         attempt_number=1,
         agent=AgentOwner.CODING,
-        input_artifacts=_dataset_materials(
-            app.controller.scheduler.artifact_registry, agent.resource_layout, "run_real",
-        ),
+        task_context=_dataset_context(agent.resource_layout),
         instruction=(
             "Goal:\nImplement the Squeeze-and-Excitation forward pass in train.py\n\n"
             "Task:\nImplement SELayer.forward in train.py (it raises NotImplementedError)"
@@ -495,9 +484,7 @@ def run_experiment(workdir: Path) -> AgentResult:
         task_id="task_experiment",
         attempt_number=1,
         agent=AgentOwner.EXPERIMENT,
-        input_artifacts=_dataset_materials(
-            app.controller.scheduler.artifact_registry, agent.resource_layout, "run_real",
-        ),
+        task_context=_dataset_context(agent.resource_layout),
         instruction=(
             "Goal:\nRun train.py and record baseline and candidate accuracy\n\n"
             "Task:\nRun train.py (it trains both the baseline and the SE candidate "

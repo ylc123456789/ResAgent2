@@ -30,8 +30,8 @@ from .environment import (
 )
 from .execution import RunShellInput, RunShellTool
 from .literature import (
-    FetchLiteratureFulltextInput,
-    FetchLiteratureFulltextTool,
+    FetchLiteratureInput,
+    FetchLiteratureTool,
     LiteratureSearchToolInput,
     LiteratureSearchTool,
 )
@@ -43,8 +43,8 @@ from .web import (
 )
 
 __all__ = [
-    'FetchLiteratureFulltextInput',
-    'FetchLiteratureFulltextTool',
+    'FetchLiteratureInput',
+    'FetchLiteratureTool',
     'AuditEnvInput',
     'AuditEnvTool',
     'CreateFileInput',

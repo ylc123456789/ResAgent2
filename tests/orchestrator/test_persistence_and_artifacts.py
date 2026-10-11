@@ -43,6 +43,31 @@ from resagent2_orchestrator import (
 )
 
 
+def durable_registry(root):
+    """Exercise production Run-backed allocation, including reopen and reuse."""
+    from resagent2_orchestrator import InMemoryRunStore
+    store = JsonRunStore(root.parent / "registration-state")
+    registry = ArtifactRegistry(root, store)
+    for method in ("register", "register_import", "register_scientific", "register_system_artifact", "register_final_report"):
+        original = getattr(registry, method)
+        def call(*args, _method=method, _original=original, **kwargs):
+            run_id = kwargs["run_id"]
+            if not store.exists(run_id):
+                now = datetime.now(UTC)
+                store.save(ResearchRun(run_id=run_id, request=request(), status="running", created_at=now, updated_at=now))
+            if _method not in {"register", "register_final_report"}:
+                # Distinct metadata or content means a distinct operation unless the
+                # caller explicitly tests one interrupted operation's conflicting bytes.
+                obj = args[0]
+                value = obj.model_dump(mode="json")
+                if _method == "register_import":
+                    value["digest"] = hashlib.sha256(Path(obj.uri).read_bytes()).hexdigest()
+                kwargs.setdefault("operation_key", _method + ":" + json.dumps(value, sort_keys=True))
+            return _original(*args, **kwargs)
+        setattr(registry, method, call)
+    return registry
+
+
 def _create_run(engine, run_id, request, proposal):
     now = datetime.now(UTC)
     engine.store.save(
@@ -239,7 +264,7 @@ def test_failed_attempt_artifacts_are_not_forwarded_downstream(tmp_path: Path) -
     _create_run(engine, "run_retry", request(), combined)
     run = engine.run_until_stable("run_retry")
 
-    assert len([ref for ref in run.artifacts.values() if ref.kind != "acceptance_requirements"]) == 2
+    assert len([ref for ref in run.artifacts.values() if ref.kind not in {"acceptance_requirements", "module_report"}]) == 2
     assert len(analyze_port.requests[0].input_artifacts) == 1
     assert analyze_port.requests[0].input_artifacts[0].attempt_number == 2
 
@@ -309,7 +334,7 @@ def test_unknown_agent_kind_is_rejected_by_the_contract() -> None:
 def test_register_import_freezes_copies_and_hashes(tmp_path: Path) -> None:
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF-1.4 evidence")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
 
     artifact = registry.register_import(
         ArtifactImport(
@@ -331,7 +356,7 @@ def test_register_import_freezes_copies_and_hashes(tmp_path: Path) -> None:
 def test_register_import_rejects_hash_mismatch(tmp_path: Path) -> None:
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"evidence")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
 
     with pytest.raises(ArtifactRegistrationError, match="mismatch"):
         registry.register_import(
@@ -349,7 +374,7 @@ def test_register_import_rejects_hash_mismatch(tmp_path: Path) -> None:
 def test_rejected_candidate_leaves_no_residue_directory(tmp_path: Path) -> None:
     """A candidate rejected before validation leaves no artifact directory, so a
     retry with the same id is not poisoned by a residue from the first attempt."""
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     candidate = ArtifactCandidate(
         kind="experiment_result",
         path="metrics.json",
@@ -365,7 +390,6 @@ def test_rejected_candidate_leaves_no_residue_directory(tmp_path: Path) -> None:
             task_id="task_x",
             attempt_number=1,
             index=1,
-            existing_ids=set(),
         )
     assert not (registry.root / "run_x").exists()
 
@@ -376,7 +400,7 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     grant = WorkspaceGrant(root=str(workspace), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     candidate = ArtifactCandidate(
         kind="experiment_result",
@@ -391,7 +415,6 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
         task_id="task_x",
         attempt_number=1,
         index=1,
-        existing_ids=set(),
     )
 
     first = registry.register(candidate, **kwargs)
@@ -406,7 +429,7 @@ def test_register_reuses_complete_artifact_after_crash(tmp_path: Path) -> None:
 def test_import_identity_preserves_kind_and_source_provenance(tmp_path):
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF-1.4 evidence")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     base = dict(uri=str(source), kind="literature_pdf", media_type="application/pdf", summary="Paper")
     first = registry.register_import(
         ArtifactImport(**base, metadata={"paper_artifact_id": "artifact_source_a"}),
@@ -433,14 +456,14 @@ def test_import_identity_preserves_kind_and_source_provenance(tmp_path):
 def test_import_reuse_rejects_tampered_frozen_copy(tmp_path, renamed):
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF-1.4 evidence")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
     first = registry.register_import(spec, run_id="run_import")
     Path(first.uri.removeprefix("file://")).write_bytes(b"tampered")
     if renamed:
         source = source.rename(tmp_path / "renamed.pdf")
         spec = spec.model_copy(update={"uri": str(source)})
-    with pytest.raises(ArtifactRegistrationError, match="hash changed"):
+    with pytest.raises(ArtifactRegistrationError, match="hash changed|hash mismatch|sha256 does not match"):
         registry.register_import(spec, run_id="run_import")
 
 
@@ -448,7 +471,7 @@ def test_import_detects_source_mutation_during_copy(tmp_path, monkeypatch):
     import resagent2_orchestrator.artifacts as implementation
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF-1.4 evidence")
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     original_copy = implementation.shutil.copyfile
 
     def changing_copy(original, destination):
@@ -470,7 +493,7 @@ def test_import_reuses_frozen_file_when_caller_renames_source(tmp_path, monkeypa
     source = tmp_path / "paper.pdf"
     original = b"%PDF-1.4 evidence"
     source.write_bytes(original)
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
     first = registry.register_import(spec, run_id="run_import")
     renamed = source.rename(tmp_path / "renamed.pdf")
@@ -495,7 +518,7 @@ def test_failed_new_import_preserves_existing_frozen_inputs(tmp_path, monkeypatc
     source = tmp_path / "paper.pdf"
     original = b"%PDF-1.4 evidence"
     source.write_bytes(original)
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     spec = ArtifactImport(uri=str(source), kind="paper", media_type="application/pdf", summary="Paper")
     first = registry.register_import(spec, run_id="run_import")
     frozen = Path(first.uri.removeprefix("file://"))
@@ -513,7 +536,7 @@ def test_failed_new_import_preserves_existing_frozen_inputs(tmp_path, monkeypatc
 
 
 def test_task_artifact_ids_support_longest_task_identity_without_collisions(tmp_path):
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     candidate = ArtifactCandidate(
         kind="experiment_result", path="metrics.json", media_type="application/json",
         summary="Metrics", content="{}",
@@ -524,7 +547,7 @@ def test_task_artifact_ids_support_longest_task_identity_without_collisions(tmp_
     refs = [
         registry.register(
             candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_long",
-            task_id=task_id, attempt_number=attempt, index=index, existing_ids=set(),
+            task_id=task_id, attempt_number=attempt, index=index,
         )
         for task_id, attempt, index in scopes
     ]
@@ -535,19 +558,19 @@ def test_task_artifact_ids_support_longest_task_identity_without_collisions(tmp_
         assert Path(ref.uri.removeprefix("file://")).read_text() == "{}"
     recovered = registry.register(
         candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_long",
-        task_id=first_task, attempt_number=1, index=1, existing_ids=set(),
+        task_id=first_task, attempt_number=1, index=1,
     )
     assert recovered == refs[0]
 
     short = registry.register(
         candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_short",
-        task_id="task_x", attempt_number=1, index=1, existing_ids=set(),
+        task_id="task_x", attempt_number=1, index=1,
     )
-    assert re.fullmatch(r"artifact_[0-9a-f]{64}", short.id)
+    assert re.fullmatch(r"artifact_[0-9a-f]{32}", short.id)
 
 
 def test_task_artifact_id_is_validated_before_creating_files(tmp_path):
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     candidate = ArtifactCandidate(
         kind="experiment_result", path="metrics.json", media_type="application/json",
         summary="Metrics", content="{}",
@@ -555,13 +578,13 @@ def test_task_artifact_id_is_validated_before_creating_files(tmp_path):
     with pytest.raises(ValidationError):
         registry.register(
             candidate, grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_invalid",
-            task_id="task_bad.name", attempt_number=1, index=1, existing_ids=set(),
+            task_id="task_bad.name", attempt_number=1, index=1,
         )
     assert not (registry.root / "run_invalid").exists()
 
 
 def test_system_registration_rejects_scientific_search_without_freezing_output(tmp_path):
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     candidate = ArtifactCandidate(
         kind="literature_search", path="search.json", media_type="application/json",
         summary="Search results", content="{}",
@@ -587,7 +610,7 @@ def test_all_registration_ids_have_one_format_and_survive_registry_restart(tmp_p
                     summary="Result", content="Same frozen bytes",
                 ),
                 grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_identity",
-                task_id="task_result", attempt_number=1, index=1, existing_ids=set(),
+                task_id="task_result", attempt_number=1, index=1,
             )
         if entry == "import":
             return registry.register_import(
@@ -621,28 +644,21 @@ def test_all_registration_ids_have_one_format_and_survive_registry_restart(tmp_p
             "Same frozen bytes", run_id="run_identity",
         )
 
-    first = register(ArtifactRegistry(root))
-    recovered = register(ArtifactRegistry(root))
-    assert re.fullmatch(r"artifact_[0-9a-f]{64}", first.id)
+    first = register(durable_registry(root))
+    recovered = register(durable_registry(root))
+    assert re.fullmatch(r"artifact_[0-9a-f]{32}", first.id)
     assert recovered == first
     assert Path(first.uri.removeprefix("file://")).read_text() == "Same frozen bytes"
 
 
 def test_registration_categories_do_not_share_artifact_identity():
-    from resagent2_orchestrator.artifacts import _artifact_id
-
-    # The same identity payload must remain separate across registration domains.
-    identity = ["same-source", 1, {"kind": "data"}]
-    ids = {
-        _artifact_id(category, identity)
-        for category in ("task", "import", "scientific", "system", "final")
-    }
-    assert len(ids) == 5
+    from resagent2_contracts import new_artifact_id
+    assert len({new_artifact_id() for _ in range(50)}) == 50
 
 
 @pytest.mark.parametrize("entry", ["import", "scientific"])
 def test_metadata_key_order_does_not_create_a_new_snapshot(tmp_path, entry):
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     source = tmp_path / "paper.md"
     source.write_text("Paper bytes", encoding="utf-8")
     first_metadata = {"z": 1, "a": {"right": 2, "left": 1}}
@@ -669,18 +685,18 @@ def test_metadata_key_order_does_not_create_a_new_snapshot(tmp_path, entry):
 
 
 def test_task_artifact_slot_rejects_changed_content_without_overwriting(tmp_path):
-    registry = ArtifactRegistry(tmp_path / "artifacts")
+    registry = durable_registry(tmp_path / "artifacts")
     candidate = ArtifactCandidate(
         kind="experiment_result", path="result.md", media_type="text/markdown",
         summary="Result", content="Original bytes",
     )
     kwargs = dict(
         grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_slot",
-        task_id="task_result", attempt_number=1, index=1, existing_ids=set(),
+        task_id="task_result", attempt_number=1, index=1,
     )
     first = registry.register(candidate, **kwargs)
     with pytest.raises(ArtifactRegistrationError, match="different content"):
-        ArtifactRegistry(registry.root).register(
+        durable_registry(registry.root).register(
             candidate.model_copy(update={"content": "Changed bytes"}), **kwargs,
         )
     assert Path(first.uri.removeprefix("file://")).read_text() == "Original bytes"

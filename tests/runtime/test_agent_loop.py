@@ -54,13 +54,10 @@ def build_context(request, state, max_context_tokens) -> list[ContextSection]:
         ContextSection(
             name="task",
             content=f"Instruction: {request.instruction}",
-            priority=100,
-            required=True,
         ),
         ContextSection(
             name="memory",
             content=str(state.memory),
-            priority=50,
         ),
     ]
 
@@ -227,8 +224,8 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
 
     assert result.status == ModuleStatus.NEEDS_USER_INPUT
     assert result.control is not None and result.control.action == "ask_user"
-    assert result.artifacts[result.control.candidate_index].kind == "question"
-    question = QuestionDraft.model_validate_json(result.artifacts[result.control.candidate_index].content)
+    assert result.artifacts == []
+    question = result.control.question
     assert question.requested_fields == ["dataset"]
     assert result.session is not None
     assert result.session.status.value == "paused"
@@ -275,7 +272,7 @@ def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> No
     assert store.load("session_recover_finish").memory["ready"] is True
 
 
-def test_runtime_feedback_survives_an_intervening_observation() -> None:
+def test_rejection_receipt_survives_an_intervening_observation() -> None:
     """A rejection must remain visible even after an ordinary observation
     (read_value) overwrites last_observation; the durable slot is separate."""
     store = InMemorySessionStore()
@@ -303,16 +300,14 @@ def test_runtime_feedback_survives_an_intervening_observation() -> None:
     )
 
     assert result.status == ModuleStatus.COMPLETED
-    assert "runtime_feedback" in llm.contexts[1].included_sections
-    assert "runtime_feedback" in llm.contexts[2].included_sections
-    assert "runtime_feedback" in llm.contexts[3].included_sections
-    assert "Run the write_value tool before finishing" in llm.contexts[2].text
-    assert store.load("session_feedback_persists").runtime_feedback is None
+    assert all("runtime_feedback" not in context.included_sections for context in llm.contexts)
+    assert "Run the write_value tool before finishing" in json.dumps(llm.histories[2][0].tool_results)
+    assert store.load("session_feedback_persists").last_observation.ok
 
 
 def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     """A Tool that raises (recoverable) must not kill the session immediately:
-    it becomes runtime_feedback and the next scripted action still runs."""
+    it becomes a historical rejection receipt and the next scripted action still runs."""
     from resagent2_runtime import ToolObservation
 
     class FailingOnceTool:
@@ -353,7 +348,7 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     assert result.status == ModuleStatus.COMPLETED
     assert flaky.calls == 2
     # The first failure was recorded as durable feedback before the recovery.
-    assert store.load("session_recover_tool").runtime_feedback is None
+    assert store.load("session_recover_tool").last_observation.ok
 
 
 def test_consecutive_failures_stop_before_budget() -> None:
@@ -442,7 +437,7 @@ def test_completion_rejection_counts_as_failure() -> None:
     # Every rejection was persisted as a failed observation, not ok=True.
     rejections = [
         event.data for event in state.events
-        if event.type == "observation" and event.tool == "completion_check"
+        if event.type == "observation" and event.tool == "finish"
     ]
     assert rejections
     assert all(not data.get("ok") for data in rejections if isinstance(data, dict))
@@ -551,40 +546,17 @@ def test_deterministic_failure_exit_returns_failed() -> None:
     assert store.load("session_verified_failure").status.value == "failed"
 
 
-def test_failure_details_keep_both_feedback_and_observation() -> None:
-    """An older completion rejection must not mask the newest command failure."""
+def test_failure_details_preserve_latest_observation_and_historical_receipt():
+    from resagent2_runtime import AgentState, ToolObservation
     from datetime import UTC, datetime
-
-    from resagent2_runtime import ToolObservation
-    from resagent2_runtime.models import AgentState
-
     now = datetime.now(UTC)
-    state = AgentState(
-        session_id="session_details",
-        agent_name="test",
-        owner=AgentOwner.CODING,
-        run_id="run_details",
-        created_at=now,
-        updated_at=now,
-    )
-    state.runtime_feedback = ToolObservation(
-        summary="Run a successful experiment command before finishing", ok=False
-    )
-    state.last_observation = ToolObservation(
-        summary="Command exited with code 1",
-        ok=False,
-        value={
-            "command": "python train.py",
-            "exit_code": 1,
-            "stderr_tail": "NameError: totla",
-        },
-    )
+    state = AgentState(session_id="session_failure", agent_name="coding", owner=AgentOwner.CODING,
+                       run_id="run_runtime", created_at=now, updated_at=now,
+                       last_observation=ToolObservation(summary="command failed", ok=False, value={"stderr":"failure"}))
+    assert AgentLoop._failure_details(state)["last_observation"]["value"] == {"stderr":"failure"}
+    assert "runtime_feedback" not in AgentLoop._failure_details(state)
 
-    details = AgentLoop._failure_details(state)
 
-    assert "runtime_feedback" in details
-    assert "last_observation" in details
-    assert details["last_observation"]["value"]["stderr_tail"] == "NameError: totla"
 
 
 def test_malformed_action_is_recoverable() -> None:

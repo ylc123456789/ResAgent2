@@ -5,19 +5,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from graphlib import TopologicalSorter
 from pathlib import Path
-from uuid import uuid4
 from pydantic import BaseModel
 from resagent2_runtime.budget import execution_budget
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
-    ErrorCode, ModuleError, ModuleStatus, PendingQuestion, QuestionDraft, RunStatus,
+    ErrorCode, ModuleError, ModuleStatus, RunStatus, ArtifactCandidate,
     TaskAcceptanceSpec, TaskBudget, TaskStatus, Workflow, WorkflowAgentKind,
-    WorkflowPatch, WorkflowProposal, WorkflowTask, WorkOutcome, WorkRequestStatus,
-    WorkTaskOutcome, WorkspaceGrant, WorkspaceRecord, WorkspaceSourceKind,
+    WorkflowPatch, WorkflowProposal, WorkflowTask, WorkRequestStatus,
+    ControlOrigin, WorkspaceGrant, WorkspaceRecord, WorkspaceSourceKind,
 )
 from .artifacts import ArtifactRegistrationError, ArtifactRegistry
-from .handoffs import check_acceptance, read_json, receive_artifacts, system_artifact
+from .handoffs import check_acceptance, read_json, receive_artifacts, receive_control, system_artifact
 from .layout import RunLayout
+from .models import PendingModuleResult
 from .store import InMemoryRunStore
 from .usage import RunUsagePort
 from .workflow_validation import validate_workflow_candidate
@@ -32,10 +32,6 @@ def _validate_answer(question, answer):
         raise OrchestrationError("answer does not match pending question")
     if set(question.requested_fields) != set(answer.values):
         raise OrchestrationError("answer is missing requested fields")
-
-
-def _question_id():
-    return f"question_{uuid4().hex}"
 
 
 _WORK_REQUEST_TRANSITIONS = {
@@ -65,7 +61,7 @@ class WorkflowScheduler:
     def __init__(self, *, bindings, store=None, artifact_root=".resagent2/artifacts", data_root=None, workspaces=None):
         self.bindings = dict(bindings)
         self.store = store or InMemoryRunStore()
-        self.artifact_registry = ArtifactRegistry(artifact_root)
+        self.artifact_registry = ArtifactRegistry(artifact_root, self.store)
         self.run_layout = RunLayout(data_root) if data_root else RunLayout.from_env()
         self.workspace_specs = dict(workspaces or {})
 
@@ -80,7 +76,16 @@ class WorkflowScheduler:
         tasks = self._tasks_from_proposal(run, proposal.tasks)
         run.workflow = Workflow(run_id=run_id, revision=1, tasks=tasks, created_from=proposal.work_request_id)
         self._save(run)
+        self._acknowledge_acceptance_registrations(run)
         return run.model_copy(deep=True)
+
+    def _acknowledge_acceptance_registrations(self, run):
+        accepted = {task.acceptance_ref.id for task in run.workflow.tasks if task.acceptance_ref} if run.workflow else set()
+        keys = [key for key, pending in run.pending_registrations.items()
+                if pending.ref.kind == "acceptance_requirements" and pending.ref.id in accepted]
+        for key in keys:
+            self.artifact_registry.acknowledge_registration(key, run_id=run.run_id, run=run)
+        return bool(keys)
 
     def _tasks_from_proposal(self, run, proposals):
         self._require_bindings(item.workflow_agent_kind for item in proposals)
@@ -196,6 +201,7 @@ class WorkflowScheduler:
             attempt.error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False)
             attempt.report = message
             task.status = TaskStatus.FAILED
+            self._persist_attempt_report(run, task, attempt)
             self._evaluate_run(run)
             self._save(run)
             return run
@@ -208,11 +214,14 @@ class WorkflowScheduler:
             refs.append(task.acceptance_ref)
         if run.dataset_catalog_ref:
             refs.append(run.dataset_catalog_ref)
-        answers = [ref for ref in run.artifacts.values() if ref.kind == "answer"
-                   and ref.task_id == task.id and ref.attempt_number == attempt_number]
-        refs.extend(answers)
-        fresh_answers = [ref for ref in answers
-                         if read_json(ref)["question_id"] not in run.delivered_answer_ids]
+        answers = [answer for answer in run.answers
+                   if answer.task_id == task.id and answer.attempt_number == attempt_number]
+        fresh_answers = [answer for answer in answers if answer.question_id not in run.delivered_answer_ids]
+        controls = [key for key in run.received_controls if parent_session_id and key.startswith(f"session:{parent_session_id}:")]
+        origin = None
+        if controls:
+            _, sid, _, turn, _, call_id = controls[-1].split(":", 5)
+            origin = ControlOrigin(session_id=sid, turn=int(turn), call_id=call_id)
         return AgentRequest(
             run_id=run.run_id, task_id=task.id, attempt_number=attempt_number,
             agent=AgentOwner(task.workflow_agent_kind.value), instruction=task.instruction,
@@ -226,7 +235,10 @@ class WorkflowScheduler:
             permissions=AgentPermissions(**run.request.permissions.model_dump(exclude={"schema_version"})),
             confirm_commands=run.request.confirm_commands,
             parent_session_id=parent_session_id,
-            resume_artifact_ids=[ref.id for ref in fresh_answers] if parent_session_id else [],
+            user_answers=[answer for answer in answers if answer.action is None],
+            resume_answers=fresh_answers if parent_session_id else [], control_ack=origin,
+            task_context={"dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs],
+                          "acceptance_requirements": read_json(task.acceptance_ref) if task.acceptance_ref else {}},
         )
 
     def _invoke(self, run, task, attempt, request):
@@ -237,6 +249,8 @@ class WorkflowScheduler:
             with execution_budget(max_llm_calls=request.budget.max_llm_calls,
                                   timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
                                   usage=RunUsagePort(run, self.store)):
+                attempt.agent_started = True
+                self._save(run)
                 raw = binding.port.invoke(request)
             value = raw.model_dump() if isinstance(raw, BaseModel) else raw
             claimed = value.get("llm_calls", 0) if isinstance(value, dict) else 0
@@ -247,22 +261,36 @@ class WorkflowScheduler:
             message = str(error).strip() or type(error).__name__
             result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {message}",
                                  llm_calls=calls, error=ModuleError(code=ErrorCode.CONTRACT_ERROR, message=message, retryable=False))
+        key = f"task:{task.id}:attempt:{attempt.number}"
+        # Tools may have durably registered material through an injected port.
+        # Continue from that authoritative Run rather than overwriting it.
+        run = self.store.load(run.run_id)
+        task = self._task(run, task.id)
+        attempt = task.attempts[request.attempt_number - 1]
+        run.pending_module_results[key] = PendingModuleResult(
+            request=request, result=result, previous_artifact_ids=list(attempt.artifact_ids),
+        )
+        self._save(run)
+        return self._apply_module_result(run, task, attempt, request, result, before=before)
+
+    def _apply_module_result(self, run, task, attempt, request, result, *, before=None):
+        before = set(run.artifacts) if before is None else before
         attempt.report = result.report
         attempt.session = result.session
-        task.warnings.extend(result.warnings)
-        control_ref = None
+        attempt.warnings = list(result.warnings)
+        task.warnings.extend(warning for warning in result.warnings if warning not in task.warnings)
         try:
-            if result.session is not None and result.session.module != binding.owner:
+            if result.session is not None and result.session.module != request.agent:
                 raise OrchestrationError("result session owner mismatch")
             if request.parent_session_id and (result.session is None or result.session.id != request.parent_session_id):
                 raise OrchestrationError("result does not resume the bound session")
             if result.status == ModuleStatus.REQUEST_WORK:
                 raise OrchestrationError("task Agent cannot request work")
-            refs, control_ref = receive_artifacts(self.artifact_registry, run, request, result, previous_ids=attempt.artifact_ids)
+            pending = run.pending_module_results[f"task:{task.id}:attempt:{attempt.number}"]
+            refs = receive_artifacts(self.artifact_registry, run, request, result,
+                                     previous_ids=pending.previous_artifact_ids)
             run.delivered_answer_ids = list(dict.fromkeys([
-                *run.delivered_answer_ids,
-                *[read_json(ref)["question_id"] for ref in request.input_artifacts
-                  if ref.id in request.resume_artifact_ids and ref.kind == "answer"],
+                *run.delivered_answer_ids, *[answer.question_id for answer in request.resume_answers],
             ]))
             attempt.artifact_ids = list(dict.fromkeys([*attempt.artifact_ids, *[ref.id for ref in refs]]))
             if run.llm_calls_used > run.request.budget.max_llm_calls:
@@ -270,9 +298,11 @@ class WorkflowScheduler:
             if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
                 check_acceptance(run, task, attempt, [run.artifacts[key] for key in attempt.artifact_ids])
             if result.status == ModuleStatus.NEEDS_USER_INPUT:
-                draft = read_json(control_ref, QuestionDraft)
+                receive_control(run, request, result)
         except Exception as error:
-            attempt.artifact_ids = list(dict.fromkeys([*attempt.artifact_ids, *(set(run.artifacts)-before)]))
+            attempt.artifact_ids = list(dict.fromkeys([
+                *attempt.artifact_ids, *(key for key in run.artifacts if key not in before),
+            ]))
             message = str(error).strip() or type(error).__name__
             failure = (result.error.model_copy(update={
                 "retryable": False,
@@ -281,18 +311,12 @@ class WorkflowScheduler:
                 code=ErrorCode.ARTIFACT_MISSING if isinstance(error, (ArtifactRegistrationError, OSError)) else ErrorCode.CONTRACT_ERROR,
                 message=message, retryable=False,
             ))
-            result = AgentResult(status=ModuleStatus.FAILED, report=f"{attempt.report}; reception failed: {message}",
+            attempt.reception_error = failure
+            result = AgentResult(status=ModuleStatus.FAILED, report=attempt.report,
                                  error=failure)
-        attempt.report = result.report
         if result.status == ModuleStatus.NEEDS_USER_INPUT:
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
-            run.pending_question = PendingQuestion(
-                id=_question_id(), run_id=run.run_id, task_id=task.id, attempt_number=attempt.number,
-                text=draft.text, requested_fields=draft.requested_fields,
-                options=draft.options, created_at=datetime.now(UTC), action=draft.action,
-            )
-            run.pending_question_ref = control_ref
         else:
             attempt.finished_at = datetime.now(UTC)
             attempt.status = AttemptStatus(result.status.value)
@@ -304,9 +328,53 @@ class WorkflowScheduler:
             else:
                 retry = result.error and result.error.retryable and attempt.number < run.request.execution_limits.max_attempts_per_task
                 task.status = TaskStatus.PENDING if retry else TaskStatus.FAILED
+        self._save(run)
+        if attempt.status not in {AttemptStatus.RUNNING, AttemptStatus.NEEDS_USER_INPUT}:
+            self._persist_attempt_report(run, task, attempt)
+        run.pending_module_results.pop(f"task:{task.id}:attempt:{attempt.number}", None)
         self._evaluate_run(run)
         self._save(run)
         return run.model_copy(deep=True)
+
+    def _persist_attempt_report(self, run, task, attempt):
+        """Preserve original report characters after the final receiving gate has decided."""
+        if attempt.report_artifact_id is not None:
+            self._acknowledge_attempt_result(run, task, attempt)
+            return run.artifacts[attempt.report_artifact_id]
+        facts = {
+            "task_id": task.id, "attempt_number": attempt.number, "status": attempt.status.value,
+            "agent_started": attempt.agent_started,
+            "error": attempt.error.model_dump(mode="json") if attempt.error else None,
+            "agent_error": (run.pending_module_results[f"task:{task.id}:attempt:{attempt.number}"].result.error.model_dump(mode="json")
+                            if f"task:{task.id}:attempt:{attempt.number}" in run.pending_module_results
+                            and run.pending_module_results[f"task:{task.id}:attempt:{attempt.number}"].result.error else None),
+            "reception_error": attempt.reception_error.model_dump(mode="json") if attempt.reception_error else None,
+            "warnings": [warning.model_dump(mode="json") for warning in attempt.warnings],
+            "output_artifact_ids": attempt.artifact_ids,
+        }
+        candidate = ArtifactCandidate(kind="module_report", path="module_report.md", media_type="text/markdown",
+                                      summary=(f"Original {task.workflow_agent_kind.value} report for {task.id}, Attempt {attempt.number}; {attempt.status.value}"
+                                               if attempt.agent_started else f"Runtime pre-execution failure for {task.id}, Attempt {attempt.number}; Agent not started"),
+                                      content=attempt.report, metadata=facts)
+        key = f"task:{task.id}:attempt:{attempt.number}:report"
+        ref = self.artifact_registry.register_system_artifact(
+            candidate, run_id=run.run_id, source_type="task_report", task_id=task.id,
+            attempt_number=attempt.number, operation_key=key, run=run,
+        )
+        attempt.report_artifact_id = ref.id
+        self._save(run)
+        self._acknowledge_attempt_result(run, task, attempt)
+        return ref
+
+    def _acknowledge_attempt_result(self, run, task, attempt):
+        # The report binding is the final receiving decision. Persist that the
+        # returned result was consumed before dropping its allocation records.
+        run.pending_module_results.pop(f"task:{task.id}:attempt:{attempt.number}", None)
+        self._save(run)
+        prefix = f"task:{task.id}:attempt:{attempt.number}:"
+        for pending_key, pending in list(run.pending_registrations.items()):
+            if pending_key.startswith(prefix):
+                self.artifact_registry.acknowledge_registration(pending_key, run_id=run.run_id, run=run)
 
     def run_until_stable(self, run_id):
         while True:
@@ -329,8 +397,25 @@ class WorkflowScheduler:
         task.status = TaskStatus.PENDING
 
     def _recover_interrupted_attempts_in_place(self, run):
-        changed = False
+        changed = self._acknowledge_acceptance_registrations(run)
         for task in run.workflow.tasks if run.workflow else []:
+            for prior in task.attempts:
+                pending = run.pending_module_results.get(f"task:{task.id}:attempt:{prior.number}")
+                if pending is not None:
+                    if prior.report_artifact_id is not None:
+                        self._acknowledge_attempt_result(run, task, prior)
+                    else:
+                        self._apply_module_result(run, task, prior, pending.request, pending.result)
+                    changed = True
+                    continue
+                if prior.status not in {AttemptStatus.RUNNING, AttemptStatus.NEEDS_USER_INPUT} and prior.report_artifact_id is None:
+                    self._persist_attempt_report(run, task, prior)
+                    changed = True
+                elif prior.report_artifact_id is not None and any(
+                    key.startswith(f"task:{task.id}:attempt:{prior.number}:") for key in run.pending_registrations
+                ):
+                    self._acknowledge_attempt_result(run, task, prior)
+                    changed = True
             if task.status != TaskStatus.RUNNING:
                 continue
             attempt = task.attempts[-1]
@@ -338,6 +423,8 @@ class WorkflowScheduler:
             attempt.finished_at = datetime.now(UTC)
             attempt.error = ModuleError(code=ErrorCode.INTERRUPTED, message="attempt interrupted before result persistence", retryable=True)
             task.status = TaskStatus.PENDING if attempt.number < run.request.execution_limits.max_attempts_per_task else TaskStatus.FAILED
+            self._save(run)
+            self._persist_attempt_report(run, task, attempt)
             changed = True
         if changed:
             self._evaluate_run(run)
@@ -359,6 +446,7 @@ class WorkflowScheduler:
         run.workflow = revised
         self._evaluate_run(run)
         self._save(run)
+        self._acknowledge_acceptance_registrations(run)
         return run.model_copy(deep=True)
 
     def _evaluate_run(self, run):
@@ -387,18 +475,16 @@ class WorkflowScheduler:
 
     @staticmethod
     def _build_work_outcome(run, work_request_id):
-        tasks = []
-        for task in run.workflow.tasks:
-            if task.work_request_id != work_request_id:
-                continue
-            last = task.attempts[-1] if task.attempts else None
-            status = task.status.value
-            error = last.error if last else None
-            if status != "completed" and error is None:
-                error = ModuleError(code=ErrorCode.CONTRACT_ERROR, message="dependency did not complete", retryable=False)
-            tasks.append(WorkTaskOutcome(task_id=task.id, status=status, summary=last.report if last and last.report else task.instruction,
-                                         artifact_ids=last.artifact_ids if last else [], error=error, warnings=task.warnings))
-        return WorkOutcome(work_request_id=work_request_id, workflow_revision=run.workflow.revision, summary="execution stable", tasks=tasks)
+        from .interpreter import DeterministicWorkInterpreter
+        work = next(item for item in run.work_requests if item.id == work_request_id)
+        # Build from already adjudicated Attempts, never summarize their report bodies.
+        previous = work.status
+        work.status = WorkRequestStatus.STABLE
+        work.workflow_revision = run.workflow.revision
+        try:
+            return DeterministicWorkInterpreter().interpret(work, tasks=run.workflow.tasks, artifacts=run.artifacts)
+        finally:
+            work.status = previous
 
     def _save(self, run):
         run.updated_at = datetime.now(UTC)

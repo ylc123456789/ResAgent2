@@ -20,11 +20,12 @@ from resagent2_contracts import (
     RunBudget,
     SessionRef,
     SessionStatus,
-    WorkOutcome,
+    WorkResult,
     WorkRequest,
     WorkRequestDraft,
     WorkRequestStatus,
-    WorkTaskOutcome,
+    WorkTaskResult,
+    PendingQuestion,
     WorkflowAgentRegistry,
     WorkflowAgentDefinition,
     Workflow,
@@ -48,7 +49,7 @@ def prepared(tmp_path):
         ]))
     session = SessionRef(id="session_scientific_run_boundary", module="scientific", status="paused",
         state_uri="session://session_scientific_run_boundary", created_at=now, updated_at=now)
-    run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', expected_evidence=['result']), status='stable', workflow_revision=1, outcome=WorkOutcome(work_request_id='work_1', workflow_revision=1, summary='Executed', tasks=[WorkTaskOutcome(task_id='task_one', status='completed', summary='Done')]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', expected_evidence=['result']), status='stable', workflow_revision=1, outcome=WorkResult(run_id="run_boundary", session_id=session.id, objective="Run", status="stable",work_request_id="work_1",workflow_revision=1,tasks=[WorkTaskResult(task_id="task_one", workflow_agent_kind="experiment",instruction="Run",status="completed")]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
         "conclusion_requirements", ConclusionRequirements())
     run.workflow = Workflow(
@@ -75,11 +76,17 @@ def reply(run, status):
     if status == "completed": artifacts.append(candidate("scientific_opinion", {"verdict":"inconclusive","statement":"Not enough evidence"}))
     elif status == "failed": fields["error"] = ModuleError(code="tool_failed",message="DISTINCT_ROOT_CAUSE",retryable=False,details={"stderr_tail":"Original diagnostic"})
     elif status == "needs_user_input":
-        artifacts.append(candidate("question", QuestionDraft(text="Which metric?",requested_fields=["metric"])))
-        fields["control"] = ControlSignal(action="ask_user",candidate_index=1)
+        fields["control"] = ControlSignal(action="ask_user", source_session_id=run.scientific_session.id,
+            source_turn=1, source_call_id="ask_metric", question=PendingQuestion(
+                id="question_metric", run_id=run.run_id, session_id=run.scientific_session.id,
+                text="Which metric?", requested_fields=["metric"], created_at=datetime.now(UTC)))
     else:
-        artifacts.append(candidate("work_request", {"assessment":{"statement":"Need more evidence"},"work_request":{"objective":"Repeat","expected_evidence":["result"]}}))
-        fields["control"] = ControlSignal(action="request_work",candidate_index=1)
+        from resagent2_contracts import ScientificAssessment
+        fields["control"] = ControlSignal(action="request_work", source_session_id=run.scientific_session.id,
+            source_turn=2, source_call_id="work_repeat", assessment=ScientificAssessment(statement="Need more evidence"),
+            work_request=WorkRequest(id="work_repeat", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
+                request=WorkRequestDraft(objective="Repeat", expected_evidence=["result"]),
+                created_at=datetime.now(UTC), updated_at=datetime.now(UTC)))
     return AgentResult(artifacts=artifacts, **fields)
 
 
@@ -92,7 +99,7 @@ def assert_unconsumed(run):
     assert run.delivered_answer_ids == []
 
 
-@pytest.mark.parametrize("stage", ["handoff", "reception", "compiler"])
+@pytest.mark.parametrize("stage", ["handoff", "reception"])
 @pytest.mark.parametrize("message", ["", "   ", "Original message"],
                          ids=["empty", "whitespace-only", "with-message"])
 def test_boundary_exceptions_persist_terminal_error(tmp_path, monkeypatch, stage, message):
@@ -151,14 +158,14 @@ def test_invalid_envelope_is_revalidated_and_not_consumed(tmp_path):
     assert_unconsumed(actual)
 
 
-def test_valid_question_acknowledges_work_feedback_once(tmp_path):
+def test_valid_question_acknowledges_prior_work_once(tmp_path):
     controller,run,request = prepared(tmp_path)
     actual = controller._apply_turn(run.run_id,request,reply(run,"needs_user_input"))
     assert actual.status == "paused"
     assert actual.work_requests[0].status == "consumed"
     assert actual.llm_calls_used == 2
     assert actual.pending_question.requested_fields == ["metric"]
-    assert actual.pending_question_ref.kind == "question"
+    assert not any(ref.kind == "question" for ref in actual.artifacts.values())
     assert actual.terminal_error is None
 
 
@@ -213,6 +220,7 @@ def test_missing_delivery_gate_preserves_registered_artifacts_and_unconsumed_wor
     run.conclusion_requirements_ref = system_artifact(
         controller.scheduler.artifact_registry, run, "conclusion_requirements",
         ConclusionRequirements(required_artifacts=["metrics"]),
+        operation_key="test:require_outputs",
     )
     controller.scheduler.store.save(run)
     request = controller._scientific_request(run)

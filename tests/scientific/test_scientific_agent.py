@@ -11,17 +11,15 @@ from pydantic import ValidationError
 
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ArtifactRef, ErrorCode,
-    ScientificOpinion, TaskBudget, WorkFeedback, WorkRecord, WorkOutcome, WorkRequestDraft,
-    ResearchArtifactEntry, ResearchIndex, ResearchIndexGroup,
-    WorkTaskOutcome, scientific_session_id,
+    ScientificOpinion, TaskBudget, RecordedAnswer, WorkResult, WorkTaskResult, scientific_session_id,
 )
 from resagent2_scientific import ScientificAgent
 from resagent2_scientific.tools import RequestWorkTool
 from resagent2_runtime import AgentState, ScriptedLLMClient, ToolRegistry
 
 
-def request(*, artifacts=(), parent=None, resume=(), budget=10, request_work=True):
-    return AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=list(artifacts), parent_session_id=parent, resume_artifact_ids=list(resume), budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60), permissions=AgentPermissions(request_work=request_work, execute_commands=True, prepare_environment=True))
+def request(*, artifacts=(), parent=None, budget=10, request_work=True, **extra):
+    return AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=list(artifacts), parent_session_id=parent, budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60), permissions=AgentPermissions(request_work=request_work, execute_commands=True, prepare_environment=True), **extra)
 
 
 def artifact(root, artifact_id="artifact_1", *, kind="experiment_result", content=None, session=None):
@@ -35,10 +33,7 @@ def artifact(root, artifact_id="artifact_1", *, kind="experiment_result", conten
     if kind == "experiment_result":
         kwargs.update(producer=AgentOwner.EXPERIMENT, task_id="task_exp", attempt_number=1)
     else:
-        sources = {"conclusion_requirements": "conclusion_requirement",
-                   "work_feedback": "controller_feedback", "answer": "controller_answer",
-                   "work_record": "controller_work_record", "research_index": "research_index"}
-        kwargs.update(producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": sources.get(kind, "import")})
+        kwargs.update(producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": "import"})
         if session:
             kwargs["session_id"] = session
     return ArtifactRef(**kwargs)
@@ -74,45 +69,6 @@ def ask():
     }}
 
 
-def feedback(root, session, *, unresolved=()):
-    draft = WorkRequestDraft(objective="Run experiment", expected_evidence=["accuracy"])
-    record = WorkRecord(
-        run_id="run_example", work_request_id="work_round1", session_id=session,
-        previous_work_request=draft,
-        work_outcome=WorkOutcome(
-            work_request_id="work_round1", workflow_revision=1, summary="Experiment finished",
-            tasks=[WorkTaskOutcome(task_id="task_exp", status="completed", summary="Ran")],
-        ),
-        unresolved_task_outcomes=list(unresolved),
-    )
-    record_ref = artifact(root, "artifact_record", kind="work_record", session=session,
-                          content=record.model_dump(mode="json"))
-    index = ResearchIndex(run_id="run_example", groups=[ResearchIndexGroup(
-        key="work_round1", title="Run experiment",
-        artifacts=[ResearchArtifactEntry.from_ref(record_ref)],
-    )])
-    index_ref = artifact(root, "artifact_index", kind="research_index",
-                         content=index.model_dump(mode="json"))
-    value = WorkFeedback(
-        run_id="run_example", work_request_id="work_round1", session_id=session,
-        work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-        report="The work record describes the outcome.",
-    )
-    feedback_ref = artifact(root, "artifact_feedback", kind="work_feedback", session=session,
-                            content=value.model_dump(mode="json"))
-    return [record_ref, index_ref, feedback_ref]
-
-
-def test_work_record_requires_paired_request():
-    with pytest.raises(ValidationError):
-        WorkRecord.model_validate({
-            "run_id": "run_example", "work_request_id": "work_one",
-            "session_id": "session_one",
-            "work_outcome": {"work_request_id": "work_one", "workflow_revision": 1,
-                             "summary": "Done", "tasks": []},
-        })
-
-
 def test_finish_with_existing_evidence_completes(tmp_path):
     ref = artifact(tmp_path)
     agent = ScientificAgent(ScriptedLLMClient(tool_turns([
@@ -125,13 +81,68 @@ def test_finish_with_existing_evidence_completes(tmp_path):
     assert content(result, "observation_trace")["observed_artifact_ids"] == [ref.id]
 
 
-def test_request_work_has_only_artifact_control_content():
+def test_request_work_has_direct_stable_control_without_artifact():
     result = ScientificAgent(ScriptedLLMClient(tool_turns([work()]))).invoke(request())
     assert result.status == "request_work", result.report
     assert result.control.action == "request_work"
-    assert result.control.candidate_index == 0
-    assert content(result, "work_request")["work_request"]["expected_evidence"] == ["accuracy"]
-    assert result.report == "Need more evidence"
+    assert result.control.work_request.request.expected_evidence == ["accuracy"]
+    assert result.artifacts == []
+    assert result.control.work_request.id
+
+
+def test_cached_control_does_not_bypass_fixed_tool_contract_validation():
+    client = ScriptedLLMClient(tool_turns([work()]))
+    agent = ScientificAgent(client)
+    first = agent.invoke(request())
+    agent.web_search_backend = object()
+    changed = agent.invoke(request())
+    assert first.status == "request_work"
+    assert changed.status == "failed"
+    assert "different fixed contract" in changed.report
+    assert len(client.contexts) == 1
+
+
+def test_unanswered_resume_does_not_cache_away_a_later_business_answer():
+    client = ScriptedLLMClient(tool_turns([ask(), finish()]))
+    agent = ScientificAgent(client)
+    first = agent.invoke(request())
+    still_waiting = agent.invoke(request(parent=first.session.id))
+    assert still_waiting.control == first.control
+    question = first.control.question
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
+        options=question.options, values={"dataset": "CIFAR-10"}, answered_at=datetime.now(UTC),
+        run_id=question.run_id, session_id=question.session_id,
+    )
+    final = agent.invoke(request(parent=first.session.id, user_answers=[answer], resume_answers=[answer]))
+    assert final.status == "completed", final.report
+    assert len(client.contexts) == 2
+
+
+def test_failed_work_without_tasks_requires_limitations_and_corrects_in_same_session():
+    from resagent2_contracts import ModuleError
+    client = ScriptedLLMClient(tool_turns([
+        work(), finish(), finish(limitations=["Requested implementation could not be compiled"]),
+    ]))
+    agent = ScientificAgent(client)
+    first = agent.invoke(request())
+    result = WorkResult(
+        run_id="run_example", session_id=first.session.id,
+        work_request_id=first.control.work_request.id, objective="Run the experiment", status="failed",
+        error=ModuleError(code="contract_error", message="Compilation failed before tasks existed", retryable=False),
+    )
+    final = agent.invoke(request(parent=first.session.id, control_ack=first.control.origin, work_results=[result]))
+    assert final.status == "completed", final.report
+    state = agent.store.load(first.session.id)
+    rejected = state.tool_turns[1]
+    receipt = json.loads(rejected.tool_results[rejected.tool_calls[0].id])
+    assert receipt["ok"] is False
+    assert "at least one limitation" in receipt["summary"]
+    assert final.llm_calls == 2
+    assert len(state.tool_turns) == 3
+    assert content(final, "scientific_opinion")["limitations"] == ["Requested implementation could not be compiled"]
+
+
 
 
 def test_request_work_permission_is_enforced():
@@ -153,68 +164,42 @@ def test_empty_expected_evidence_rejected_before_tool_execution(monkeypatch):
 
 def test_imported_literature_can_satisfy_requirements_after_reading(tmp_path):
     ref = artifact(tmp_path, kind="literature_paper")
-    requirements = artifact(tmp_path, "artifact_requirements", kind="conclusion_requirements",
-                            content={"required_evidence_kinds": ["literature_paper"]})
     client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
         finish(evidence=[ref.id], verdict="supports"),
     ]))
-    result = ScientificAgent(client).invoke(request(artifacts=[ref, requirements]))
+    result = ScientificAgent(client).invoke(request(artifacts=[ref], task_context={
+        "conclusion_requirements": {"required_evidence_kinds": ["literature_paper"]},
+    }))
     assert result.status == "completed", result.report
     assert content(result, "observation_trace")["observed_artifact_ids"] == [ref.id]
     assert result.llm_calls == 2
-    assert "required_evidence_kinds" in client.contexts[0].text
+    assert "conclusion_requirements" in client.contexts[0].task_context
 
 
-def test_literature_search_ref_is_returned_without_duplicate_registration(tmp_path):
+def test_literature_search_returns_temporary_candidates_without_registration(tmp_path):
     from resagent2_components import LiteraturePaper
-
     class Backend:
-        def search(self, query, *, max_results, start_year=None, end_year=None, source="auto", scope="topic", page=1):
-            return _search_result([LiteraturePaper(paper_id="123", title="Paper", authors=["Author"],
-                                    abstract="Result", source_url="https://example.com/paper")])
-
-    class Register:
-        def __init__(self):
-            self.calls = 0
-            self.refs = {}
-
-        def register_scientific(self, candidate, *, run_id, session_id):
-            self.calls += 1
-            path = tmp_path / candidate.path
-            path.write_text(candidate.content)
-            ref = ArtifactRef(
-                id=f"artifact_{candidate.kind}", kind=candidate.kind, producer=AgentOwner.SCIENTIFIC,
-                run_id=run_id, session_id=session_id, uri=path.as_uri(),
-                sha256=hashlib.sha256(candidate.content.encode()).hexdigest(),
-                media_type=candidate.media_type, summary=candidate.summary, metadata=candidate.metadata,
-            )
-            self.refs[ref.id] = ref
-            return ref
-
-        def resolve(self, artifact_id, *, run_id):
-            return self.refs.get(artifact_id)
-
-        def list_artifacts(self, *, run_id):
-            return list(self.refs.values())
-
-    register = Register()
-    result = ScientificAgent(ScriptedLLMClient(tool_turns([
-        {"tool": "literature_search", "arguments": {"query": "method"}},
-        finish(evidence=["artifact_literature_paper"]),
-    ])), literature_backend=Backend(), registration_port=register).invoke(request())
+        def search(self, query, **kwargs):
+            return _search_result([LiteraturePaper(paper_id="arxiv:1234.5678", title="Paper", authors=["Author"],abstract="Result",source_url="https://arxiv.org/abs/1234.5678")])
+    client = ScriptedLLMClient(tool_turns([
+        {"tool":"literature_search","arguments":{"query":"method"}}, finish(),
+    ]))
+    result = ScientificAgent(client,literature_backend=Backend()).invoke(request())
     assert result.status == "completed", result.report
-    assert register.calls == 2
-    assert all(ref in result.artifacts for ref in register.refs.values())
-    assert content(result, "observation_trace")["observed_artifact_ids"] == []
+    assert not any(item.kind.startswith("literature_") for item in result.artifacts)
+    assert "Paper" in str(client.histories[1][0].tool_results)
+    assert "Paper" not in client.contexts[1].artifact_index
+
+
 
 
 def test_question_pauses_with_content_reference():
     result = ScientificAgent(ScriptedLLMClient(tool_turns([ask()]))).invoke(request())
     assert result.status == "needs_user_input"
     assert result.control.action == "ask_user"
-    assert content(result, "question")["requested_fields"] == ["dataset"]
-    assert result.report == "Need a dataset choice"
+    assert result.control.question.requested_fields == ["dataset"]
+    assert result.artifacts == []
 
 
 def test_question_schema_retains_visible_background_guidance():
@@ -224,33 +209,35 @@ def test_question_schema_retains_visible_background_guidance():
     assert "background" in AskUserInput.model_fields["text"].description
 
 
-def test_feedback_resume_reuses_session_and_is_idempotent(tmp_path):
-    client = ScriptedLLMClient(tool_turns([work(), finish(), finish(verdict="supports", evidence=["artifact_wrong"])]))
-    agent = ScientificAgent(client)
-    first = agent.invoke(request())
-    refs = feedback(tmp_path, first.session.id)
-    resumed = request(artifacts=refs, parent=first.session.id, resume=[refs[-1].id])
-    result = agent.invoke(resumed)
-    duplicate = agent.invoke(resumed)
+def test_work_result_resume_reuses_session_and_is_idempotent(tmp_path):
+    client = ScriptedLLMClient(tool_turns([work(),finish()]))
+    agent=ScientificAgent(client)
+    first=agent.invoke(request())
+    outcome=WorkResult(run_id="run_example",session_id=first.session.id,
+                       work_request_id=first.control.work_request.id,objective="Run the experiment",status="stable")
+    resumed=request(parent=first.session.id,work_results=[outcome],control_ack=first.control.origin)
+    result=agent.invoke(resumed)
+    duplicate=agent.invoke(resumed)
     assert result.status == duplicate.status == "completed"
-    assert result.session.id == first.session.id
-    assert content(result, "scientific_opinion") == content(duplicate, "scientific_opinion")
-    assert duplicate.llm_calls == 0
-    assert len(client.contexts) == 2
+    assert duplicate.llm_calls == 0 and len(client.contexts)==2
+    assert first.control.work_request.id in client.contexts[1].artifact_index
 
 
-def test_answer_resume_projects_registered_content(tmp_path):
-    client = ScriptedLLMClient(tool_turns([ask(), finish()]))
-    agent = ScientificAgent(client)
-    first = agent.invoke(request())
-    answer = artifact(tmp_path, "artifact_answer", kind="answer", session=first.session.id,
-                      content={"question_id": "question_one", "values": {"dataset": "CIFAR-10"},
-                               "question_text": "Which dataset?", "requested_fields": ["dataset"],
-                               "run_id": "run_example", "session_id": first.session.id,
-                               "answered_at": datetime.now(UTC).isoformat()})
-    result = agent.invoke(request(artifacts=[answer], parent=first.session.id, resume=[answer.id]))
-    assert result.status == "completed", result.report
-    assert "CIFAR-10" in client.contexts[-1].text
+
+
+def test_answer_resume_projects_full_question_answer_without_artifacts(tmp_path):
+    client=ScriptedLLMClient(tool_turns([ask(),finish()]))
+    agent=ScientificAgent(client);first=agent.invoke(request());q=first.control.question
+    answer=RecordedAnswer(question_id=q.id,question_text=q.text,requested_fields=q.requested_fields,
+                          options=q.options,values={"dataset":"CIFAR-10"},answered_at=datetime.now(UTC),
+                          run_id="run_example",session_id=first.session.id)
+    result=agent.invoke(request(parent=first.session.id,user_answers=[answer],resume_answers=[answer],control_ack=first.control.origin))
+    assert result.status=="completed",result.report
+    assert "CIFAR-10" in client.contexts[-1].task_context
+    assert q.text in client.contexts[-1].task_context
+    assert not any(item.kind in {"question","answer"} for item in result.artifacts)
+
+
 
 
 def test_unread_citation_is_rejected(tmp_path):
@@ -273,16 +260,17 @@ def test_unread_citation_can_be_recovered_by_reading(tmp_path):
 
 
 def test_failed_work_requires_limitation_in_opinion(tmp_path):
-    agent = ScientificAgent(ScriptedLLMClient(tool_turns([work(), finish()])))
-    first = agent.invoke(request())
     from resagent2_contracts import ModuleError
-    unresolved = WorkTaskOutcome(
-        task_id="task_failed", status="failed", summary="Crashed",
-        error=ModuleError(code=ErrorCode.TOOL_FAILED, message="Crashed", retryable=False),
-    )
-    refs = feedback(tmp_path, first.session.id, unresolved=[unresolved])
-    result = agent.invoke(request(artifacts=refs, parent=first.session.id, resume=[refs[-1].id]))
+    agent=ScientificAgent(ScriptedLLMClient(tool_turns([work(),finish()])))
+    first=agent.invoke(request())
+    failed=WorkTaskResult(task_id="task_failed",workflow_agent_kind="experiment",instruction="Measure",status="failed",
+                          error=ModuleError(code=ErrorCode.TOOL_FAILED,message="Crashed",retryable=False))
+    outcome=WorkResult(run_id="run_example",session_id=first.session.id,work_request_id=first.control.work_request.id,
+                       objective="Run the experiment",status="stable",tasks=[failed])
+    result=agent.invoke(request(parent=first.session.id,work_results=[outcome],control_ack=first.control.origin))
     assert result.status == "failed"
+
+
 
 
 def test_budget_exhaustion_counts_real_calls(tmp_path):
@@ -309,7 +297,7 @@ def test_repeated_first_request_uses_persisted_result():
     first = agent.invoke(request())
     duplicate = agent.invoke(request())
     assert first.status == duplicate.status == "request_work"
-    assert content(first, "work_request") == content(duplicate, "work_request")
+    assert first.control == duplicate.control
     assert duplicate.llm_calls == 0
     assert len(client.contexts) == 1
 
@@ -323,7 +311,8 @@ def test_earlier_reads_remain_in_context(tmp_path):
     ]))
     result = ScientificAgent(client).invoke(request(artifacts=[a, b]))
     assert result.status == "completed"
-    assert "artifact_reads" in client.contexts[-1].included_sections
+    assert "artifact_reads" not in client.contexts[-1].included_sections
+    assert all(ref.id in str(client.histories[-1]) for ref in (a,b))
     assert content(result, "observation_trace")["observed_artifact_ids"] == [a.id, b.id]
 
 

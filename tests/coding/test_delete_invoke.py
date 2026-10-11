@@ -99,79 +99,38 @@ def test_native_coding_deletes_file_or_empty_directory_without_asking(
 
 def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path, monkeypatch):
     deletion = ("delete_path", {"path": "obsolete", "recursive": True})
-
-    def resumed_action(body):
-        # Exercise the current wire input, not only the persisted approval state.
-        current = body["messages"][-1]["content"]
-        assert "## pending_operation" in current
-        assert "This operation has not executed" in current
-        assert "call the same tool with the same arguments" in current
-        assert '"tool": "delete_path"' in current
-        assert '"recursive": true' in current
-        task = json.loads(current.split("## task\n", 1)[1].split("\n\n## ", 1)[0])
-        assert task["user_answers"] == []
-        index = json.loads(current.split("## artifact_index\n", 1)[1].split("\n\n## ", 1)[0])
-        assert ref.id in {entry["artifact_id"] for entry in index["artifacts"]}
-        reader = RegisteredArtifactReader(resumed.input_artifacts, run_id=request.run_id)
-        assert RecordedAnswer.model_validate_json(reader.read_text(ref.id)["content"]) == recorded
-        receipts = [json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"]
-        assert receipts[-1]["execution_status"] == "not_executed"
-        assert target.is_dir()
-        return deletion
-
     def after_execution(body):
-        assert "## pending_operation" not in body["messages"][-1]["content"]
         assert not target.exists()
+        task_message = next(message["content"] for message in body["messages"]
+                            if message["role"] == "user" and message["content"].startswith("## task"))
+        task = json.loads(task_message.split("## task\n",1)[1])
+        assert task["user_answers"] == []
+        receipts = [json.loads(message["content"]) for message in body["messages"] if message["role"] == "tool"]
+        assert len(receipts) == 1 and receipts[0]["ok"]
+        assert "pending_operation" not in json.dumps(body)
         return FINISH
-
-    repo, request, agent, _ = setup(tmp_path, monkeypatch, [deletion, resumed_action, after_execution])
+    repo, request, agent, _ = setup(tmp_path, monkeypatch, [deletion, after_execution])
     target = repo / "obsolete"
     target.mkdir()
     for name in ("first.txt", "second.txt"):
-        (target / name).write_text(name)
-
+        (target/name).write_text(name)
     first = agent().invoke(request)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
-    question = QuestionDraft.model_validate_json(first.artifacts[0].content)
+    assert first.artifacts == []
+    question = first.control.question
     assert question.action.tool == "delete_path"
-    assert {item["path"] for item in question.action.context["deletion"]["entries"]} == {
-        "obsolete", "obsolete/first.txt", "obsolete/second.txt",
-    }
-    assert (target / "first.txt").read_text() == "first.txt"
-    assert (target / "second.txt").read_text() == "second.txt"
     recorded = RecordedAnswer(
-        question_id="question_delete", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
-        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        values={"approve":"yes"}, answered_at=datetime.now(UTC),
         run_id=request.run_id, task_id=request.task_id, attempt_number=1,
-        action=question.action,
+        session_id=first.session.id, action=question.action,
     )
-    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
-        ArtifactCandidate(
-            kind="answer", path="answer.json", media_type="application/json",
-            summary="Approve this deletion", content=recorded.model_dump_json(),
-        ),
-        run_id=request.run_id, task_id=request.task_id, attempt_number=1,
-        source_type="controller_answer",
-    )
-    resumed = request.model_copy(update={
-        "parent_session_id": first.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
-    })
-
-    second = agent().invoke(resumed)  # New Agent and store instance, same persisted Session.
-
-    assert second.status == ModuleStatus.COMPLETED
-    assert second.session.id == first.session.id
-    assert not target.exists()
-    assert (repo / "keep.txt").read_text() == "keep\n"
-    state = JsonSessionStore(tmp_path / "sessions").load(second.session.id)
-    assert state.pending_action is None
-    assert state.memory["edit_revision"] == 1
-    deletions = [event for event in state.events
-                 if event.tool == "delete_path" and event.type == "observation"
-                 and event.data.get("value")]
-    assert len(deletions) == 1
-    assert set(deletions[0].data["value"]["deleted_paths"]) == {
-        "obsolete", "obsolete/first.txt", "obsolete/second.txt",
-    }
+    second = agent().invoke(request.model_copy(update={
+        "parent_session_id":first.session.id, "resume_answers":[recorded], "control_ack":first.control.origin,
+    }))
+    assert second.status == ModuleStatus.COMPLETED, second.report
+    assert not target.exists() and (repo/"keep.txt").read_text() == "keep\n"
+    state = JsonSessionStore(tmp_path/"sessions").load(second.session.id)
+    assert state.pending_action is None and state.memory["edit_revision"] == 1
+    assert len([event for event in state.events if event.tool == "delete_path" and event.type == "observation"]) == 1

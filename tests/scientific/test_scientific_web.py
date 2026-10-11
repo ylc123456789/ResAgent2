@@ -13,7 +13,6 @@ from resagent2_contracts import (
     AgentPermissions, AgentRequest, ArtifactCandidate, ArtifactRef, TaskBudget,
 )
 from resagent2_orchestrator import ArtifactRegistry
-from resagent2_orchestrator.interpreter import build_research_index
 from resagent2_runtime import NativeToolCall, ToolCallTurn
 from resagent2_scientific import ScientificAgent
 
@@ -28,16 +27,24 @@ class Registration:
         self.refs = {}
 
     def register_scientific(self, candidate, **kwargs):
+        kwargs.pop("operation_key", None)
+        kwargs.pop("output_position", None)
         ref = self.registry.register_scientific(candidate, **kwargs)
         self.refs[ref.id] = ref
         return ref
 
-    def resolve(self, artifact_id, *, run_id):
+    def resolve(self, artifact_id, *, run_id, session_id):
         ref = self.refs.get(artifact_id)
-        return ref if ref and ref.run_id == run_id else None
+        return ref if ref and ref.run_id == run_id and ref.session_id == session_id else None
 
-    def list_artifacts(self, *, run_id):
-        return [ref for ref in self.refs.values() if ref.run_id == run_id]
+    def list_artifacts(self, *, run_id, session_id):
+        return [ref for ref in self.refs.values() if ref.run_id == run_id and ref.session_id == session_id]
+
+    def acknowledge_registration(self, **kwargs):
+        pass
+
+    def recover_registration(self, **kwargs):
+        return []
 
     def of_kind(self, kind):
         return next(ref for ref in self.refs.values() if ref.kind == kind)
@@ -51,8 +58,8 @@ class SearchBackend:
         self.incomplete_reason = incomplete_reason
         self.calls = []
 
-    def search(self, query, *, max_results):
-        self.calls.append((query, max_results))
+    def search(self, query):
+        self.calls.append(query)
         if self.error:
             raise self.error
         return WebSearchResult(
@@ -142,7 +149,7 @@ def test_scientific_exposes_only_injected_web_tools(tmp_path, search, fetch, reg
 
     assert result.status == "completed", result.report
     names = {schema["function"]["name"] for schema in client.schemas[0]}
-    assert ("web_search" in names) == (search and registration)
+    assert ("web_search" in names) == search
     assert ("web_fetch" in names) == (fetch and registration)
     assert {"run_shell", "run_verification", "create_file"}.isdisjoint(names)
 
@@ -151,10 +158,10 @@ def test_web_artifacts_are_live_readable_citable_and_returned_without_copying(tm
     register = Registration(tmp_path)
     backend, fetcher = SearchBackend(), PageFetcher()
     client = NativePlanClient([
-        {"tool": "web_search", "arguments": {"query": "a source", "max_results": 2}},
+        {"tool": "web_search", "arguments": {"query": "a source"}},
         {"tool": "web_fetch", "arguments": {"url": URL}},
         lambda: read(register.of_kind("web_page")),
-        lambda: finish(register.of_kind("web_search"), register.of_kind("web_page")),
+        lambda: finish(register.of_kind("web_page")),
     ])
     result = ScientificAgent(
         client, web_search_backend=backend, web_page_fetcher=fetcher,
@@ -162,18 +169,16 @@ def test_web_artifacts_are_live_readable_citable_and_returned_without_copying(tm
     ).invoke(request())
 
     assert result.status == "completed", result.report
-    assert backend.calls == [("a source", 2)]
+    assert backend.calls == ["a source"]
     assert fetcher.calls == [URL]
     refs = [ref for ref in result.artifacts if isinstance(ref, ArtifactRef)]
     assert {ref.id for ref in refs} == set(register.refs)
-    assert len(refs) == 2
-    index = build_research_index(run_id=RUN_ID, artifacts=refs, work_requests=[])
-    assert {item.kind for group in index.groups for item in group.artifacts} == {"web_search", "web_page"}
+    assert len(refs) == 1 and refs[0].kind == "web_page"
     reader = RegisteredArtifactReader(refs, run_id=RUN_ID)
     page = reader.read_text(register.of_kind("web_page").id)["content"]
     assert "Original page detail" in page
     assert hashlib.sha256(page.encode()).hexdigest() == register.of_kind("web_page").sha256
-    receipt = json.loads(reader.read_text(register.of_kind("web_search").id)["content"])
+    receipt = json.loads(client.turns[-1][0].tool_results["call_1"])["value"]
     assert receipt["provider"] == "test-search" and receipt["results"][0]["url"] == URL
     trace = next(item for item in result.artifacts if item.kind == "observation_trace")
     assert json.loads(trace.content)["observed_artifact_ids"] == [register.of_kind("web_page").id]
@@ -214,7 +219,7 @@ def test_empty_or_failed_search_receipt_cannot_supply_required_paper_evidence(tm
     )
     client = NativePlanClient([
         {"tool": "web_search", "arguments": {"query": "paper"}},
-        lambda: finish(register.of_kind("web_search")),
+        finish(),
         {"tool": "ask_user", "arguments": {
             "assessment": {"statement": "No required paper evidence is available"},
             "text": "The search supplied no paper. Please provide one or restore the service.",
@@ -223,18 +228,18 @@ def test_empty_or_failed_search_receipt_cannot_supply_required_paper_evidence(tm
     ])
     result = ScientificAgent(
         client, web_search_backend=backend, registration_port=register,
-    ).invoke(request(artifacts=[requirements]))
+    ).invoke(request(artifacts=[requirements]).model_copy(update={
+        "task_context": {"conclusion_requirements": {"required_evidence_kinds": ["literature_paper"]}},
+    }))
 
     assert result.status == "needs_user_input", result.report
     assert "literature_paper" in client.contexts[-1].text
-    assert {ref.kind for ref in register.refs.values()} == {"web_search"}
-    receipt = json.loads(RegisteredArtifactReader(
-        list(register.refs.values()), run_id=RUN_ID,
-    ).read_text(register.of_kind("web_search").id)["content"])
+    assert register.refs == {}
+    receipt = json.loads(client.turns[-1][0].tool_results["call_1"])["value"]
     assert receipt["status"] == ("failed" if failure else "empty")
     if failure:
         assert receipt["error_type"] == "rate_limited" and receipt["retry_after"] == 3
-    assert register.of_kind("web_search") in result.artifacts
+    assert all(ref.kind != "web_search" for ref in result.artifacts)
 
 
 def test_failed_page_fetch_does_not_create_page_or_observation_record(tmp_path):
@@ -282,11 +287,12 @@ def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, m
     )
     client = NativePlanClient([
         {"tool": "web_search", "arguments": {"query": "find source"}},
-        lambda: finish(register.of_kind("web_search")),
+        finish(),
     ])
-    result = ScientificAgent(
+    agent = ScientificAgent(
         client, web_search_backend=DeepSeekWebSearchBackend(hosted), registration_port=register,
-    ).invoke(request(budget=budget))
+    )
+    result = agent.invoke(request(budget=budget))
 
     assert result.llm_calls == budget
     if budget == 1:
@@ -303,27 +309,27 @@ def test_hosted_search_shares_scientific_budget_and_correlates_trace(tmp_path, m
         messages = json.loads(trace["request_text"])["messages"]
         assert len(messages) == 1 and messages[0]["role"] == "user"
         assert messages[0]["content"][0]["text"] == "Perform a web search for the query: find source"
-        receipt = json.loads(RegisteredArtifactReader(
-            list(register.refs.values()), run_id=RUN_ID,
-        ).read_text(register.of_kind("web_search").id)["content"])
+        receipt = json.loads(client.turns[-1][0].tool_results["call_1"])["value"] if client.turns[-1] else None
+        if receipt is None:
+            session = agent.store.load(result.session.id)
+            receipt = json.loads(session.tool_turns[0].tool_results["call_1"])["value"]
         assert receipt["provider"] == "deepseek"
         assert receipt["results"][0]["url"] == URL
     assert (result.status == "completed") == (budget == 3)
 
 
 @pytest.mark.parametrize("incomplete_reason", [None, "max_uses_exceeded"])
-def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp_path, incomplete_reason):
+def test_scientific_follows_later_source_directly_from_search_receipt(tmp_path, incomplete_reason):
     register, fetcher = Registration(tmp_path), PageFetcher()
     backend = SearchBackend(results=[
         WebSearchItem("First lead", "https://example.test/first", ""),
         WebSearchItem("Later source", URL, ""),
     ], incomplete_reason=incomplete_reason)
     client = NativePlanClient([
-        {"tool": "web_search", "arguments": {"query": "sources", "max_results": 1}},
-        lambda: read(register.of_kind("web_search")),
+        {"tool": "web_search", "arguments": {"query": "sources"}},
         {"tool": "web_fetch", "arguments": {"url": URL}},
         lambda: read(register.of_kind("web_page")),
-        lambda: finish(register.of_kind("web_search"), register.of_kind("web_page")),
+        lambda: finish(register.of_kind("web_page")),
     ])
     result = ScientificAgent(
         client, web_search_backend=backend, web_page_fetcher=fetcher,
@@ -331,13 +337,12 @@ def test_scientific_can_read_and_follow_a_source_omitted_from_search_preview(tmp
     ).invoke(request())
     assert result.status == "completed", result.report
     first = json.loads(client.turns[1][0].tool_results["call_1"])["value"]
-    assert first["result_count"] == 2 and first["omitted_count"] == 1
-    assert first["truncated"] is True
+    assert first["result_count"] == 2 and "omitted_count" not in first
     assert first["incomplete_reason"] == incomplete_reason
     assert first["status"] == ("partial" if incomplete_reason else "results")
-    assert [item["url"] for item in first["results"]] == ["https://example.test/first"]
-    assert URL in json.dumps(client.turns[2], default=lambda x: x.model_dump())
-    assert backend.calls == [("sources", 1)] and fetcher.calls == [URL]
-    refs = [ref for ref in result.artifacts if isinstance(ref, ArtifactRef)]
-    index = build_research_index(run_id=RUN_ID, artifacts=refs, work_requests=[])
-    assert {item.kind for group in index.groups for item in group.artifacts} == {"web_search", "web_page"}
+    assert [item["url"] for item in first["results"]] == ["https://example.test/first", URL]
+    assert backend.calls == ["sources"] and fetcher.calls == [URL]
+    assert {ref.kind for ref in register.refs.values()} == {"web_page"}
+    assert "Original page detail" not in client.contexts[-1].artifact_index
+    assert "artifact_reads" not in client.contexts[-1].included_sections
+    assert "Original page detail" in json.dumps(client.turns[-1], default=lambda x: x.model_dump())

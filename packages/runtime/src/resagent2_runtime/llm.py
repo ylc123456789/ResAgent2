@@ -148,7 +148,7 @@ class PromptLLMClient:
         context = self._composer.compose(
             self._system_prompt,
             [ContextSection(
-                name=self._section_name, content=prompt, required=True,
+                name=self._section_name, content=prompt,
             )],
             max_tokens=max_tokens,
         )
@@ -290,8 +290,8 @@ class OpenAICompatibleClient:
     ) -> ToolCallTurn:
         """Request native calls; serial execution remains the Runtime's policy."""
         self.last_attempts = 0
-        wire_input = native_input(context.text, schemas, turns)
-        message = native_input_text(context.text, schemas, turns)
+        wire_input = native_input(context, schemas, turns)
+        message = native_input_text(context, schemas, turns)
         estimated = ContextComposer.estimate_tokens(message)
         if estimated > self.tool_input_limit(max_input_tokens):
             raise ContextBudgetExceeded("native request exceeds the total input budget")

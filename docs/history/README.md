@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-11：工具、上下文与完整工件目录实施
+
+用户确认后在 `fix/native-agent-receipts`、`ecaede9` 基线上实施，schema 升为 25.0：仅第三部分工具历史可压缩；搜索不登记工件，显式 fetch 才持久保存；问答直接记录，批准恢复原调用；第四部分完整展开授权材料与 WorkRequest → Task → 原报告及实际产物，没有总体工作报告或索引工件。所有工件统一使用 UUID，hash 独立校验；登记、结果接收和初始化导入补齐中断恢复。四份 current 文档随代码同步，不保留旧接口兼容层。本轮不合并，服务器与 L3 尚未执行。取舍见 [ADR-0028](decisions/0028-tool-history-and-complete-artifact-directory.md)，方案与依据见[完整修改方案](reviews/TOOL_CONTEXT_REDESIGN_AGREED_2026-10-11.md)及[源码调研](reviews/ARTIFACT_INDEX_RESEARCH_2026-10-11.md)，开发验证及服务器复核步骤见[实施测试计划](reviews/TOOL_CONTEXT_IMPLEMENTATION_TEST_PLAN_2026-10-11.md)。
+
 ## 2026-10-11：操作批准不再累计为任务需求
 
 三个 Agent 共用的任务投影在原件及作用域校验后，只保留业务问答；操作批准或拒绝继续持久保存、在授权目录中可读，由原有待执行动作与权限策略处理。CLI 区分 `User question` / `Operation approval`，未改权限范围或确认频率，schema 24.0 不变。本地验证、服务器复核命令，以及上下文与工件接入尚未落实原设计的偏差见[实现与复核记录](reviews/APPROVAL_CONTEXT_AND_ARTIFACT_REVIEW_2026-10-11.md)。本轮没有调整 ResearchIndex 定位或 WorkRequest 的最终结果接入。

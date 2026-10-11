@@ -144,7 +144,7 @@ def test_failed_call_retains_diagnostic_patch(tmp_path):
     assert result.error.retryable is False
 
 
-@pytest.mark.parametrize("kind", ["verification_result", "execution_record", "observation_trace", "literature_search"])
+@pytest.mark.parametrize("kind", ["verification_result", "execution_record", "observation_trace", "code_patch"])
 def test_model_cannot_fabricate_system_record(tmp_path, kind):
     init_repo(tmp_path)
     result = NativeCodingAgent(ScriptedLLMClient(tool_turns([finish(artifacts=[{

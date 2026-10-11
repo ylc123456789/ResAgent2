@@ -23,6 +23,9 @@ tool schemas remain unchanged. Later web_search guidance describes bounded previ
 with full received results retained in its artifact and no hosted-cost guarantee.
 Known search-use limits retain valid partial results with an explicit incomplete reason.
 Schema 24 only updates embedded versions for the unified context/session memory format.
+Schema 25 removes search artifacts, replaces the fulltext entry with exact-source
+fetch_literature, adds direct accepted control receipts and preserves report whitespace.
+git_diff exposes current verification freshness after removing the repeated workset.
 """
 
 import hashlib
@@ -34,7 +37,7 @@ from resagent2_capabilities import (
     CreateFileTool,
     DeletePathTool,
     GitDiffTool,
-    FetchLiteratureFulltextTool,
+    FetchLiteratureTool,
     ListFilesTool,
     LiteratureSearchTool,
     PrepareEnvironmentTool,
@@ -60,7 +63,7 @@ from resagent2_scientific.tools import (
 def tool_surface_fingerprints() -> dict[str, str]:
     groups = {
         "shared": (AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
-                   LiteratureSearchTool, FetchLiteratureFulltextTool, PrepareEnvironmentTool, ReadArtifactTool,
+                   LiteratureSearchTool, FetchLiteratureTool, PrepareEnvironmentTool, ReadArtifactTool,
                    ReadFileTool, ReplaceTextTool, RunSetupTool, RunShellTool, SearchTextTool),
         "coding": (RunVerificationTool, DeletePathTool),
         "runtime": (AskUserTool, FinishTool),

@@ -1,33 +1,7 @@
 # contracts
 
-跨模块稳定类型和接口。当前 wire schema 为 `24.0`；不支持恢复旧版本 Run 或 Session，不提供迁移或兼容读取，不修改旧记录。
+跨模块稳定数据契约，当前 wire schema **25.0**；旧 Run/Session 明确拒绝恢复，不迁移、不留兼容别名。
 
-三个 Agent 共同使用 `invoke(AgentRequest) -> AgentResult`。任务内容只有 `instruction` 和 `input_artifacts`；预算、权限、工作区和恢复定位保留明确控制字段。结果业务内容只有 `report + artifacts`，状态、控制动作、Session、错误和实际调用计量独立保存。
+三个 Agent 共用 AgentRequest → AgentResult：一个自然语言 instruction/report，加身份、权限、预算、输入/输出工件及直接控制字段。业务问答累计保存在 user_answers，当前恢复使用 resume_answers/control_ack。WorkResult 只组织任务状态与实际 Ref，不拼接总体报告。
 
-主要契约：
-
-- `AgentRequest`、`AgentResult`、`ControlSignal`；
-- `RunBudget`、`ExecutionLimits`、`RunPermissions`、`AgentPermissions`、`WorkspaceAccess`；
-- `WorkflowAgentKind`、`WorkflowAgentRegistry`、`WorkflowTask`、`TaskProposal`、`WorkflowPatch`；
-- `ArtifactCandidate`、`ArtifactRef`、`Attempt`；
-- `TaskAcceptanceSpec`、`ConclusionRequirements`；
-- `QuestionDraft`、`PendingQuestion`、`UserAnswer`、`RecordedAnswer`、`ActionSnapshot`；
-- `WorkRecord`、`WorkFeedback`、`ResearchIndex`、`ScientificOpinion`、`ObservationTrace` 等结构化 artifact 内容。
-
-`WorkFeedback.report` 是固定代码按已保存任务报告组织的展示正文，保留原 `work_record_artifact_id` 和 `index_artifact_id`；执行事实仍以原记录为准。schema 19 删除 `WorkBrief` 和 `CitedStatement`，不保留新旧反馈两种读取路径。
-
-图节点只允许 Coding 和 Experiment，Scientific 由 Controller 调用。任务提交阶段的验收要求及逻辑输出名称登记为一份 `acceptance_requirements`，已接受任务和 Attempt 只保存同一正式引用。
-
-`ResearchRequest.required_artifacts` 和冻结的 `ConclusionRequirements.required_artifacts` 均为默认空的 `list[OutputName]`，只要求当前 Run 登记的精确 `output_name` 存在；与已观察、已引用的 `required_evidence_kinds` 分开。它不是 Task/WorkRequest 字段，也不从自然语言推断。
-
-问题和工作请求以 artifact 传递，`control` 仅引用正式 artifact ID 或本次结果中的候选下标。回答内容保存问题快照、请求字段、可选选项和准确的 Run/Task/Attempt/Session 归属。回答键使用 `AnswerFieldName`：ASCII 字母开头，后续为字母、数字或下划线，总长 1-64。
-
-本包只定义数据形状与不变量，不执行 LLM、文件、进程、Git 或工作流，也不依赖其他项目包。
-
-```bash
-conda activate ResAgent2
-python -m pip install -e 'packages/contracts[test]'
-python -m pytest tests/contracts
-```
-
-稳定导入路径为 `resagent2_contracts`。完整规则见[模块接口与契约](../../docs/current/CONTRACTS.md)。
+Artifact ID 由唯一 new_artifact_id() 分配 UUID，sha256 校验冻结字节；目录从授权和实际来源投影。问题、答案、搜索结果及目录不再作为控制工件保存。完整字段和不变量见 [CONTRACTS](../../docs/current/CONTRACTS.md)。本包不依赖其他项目包，不执行模型、IO、命令或调度。

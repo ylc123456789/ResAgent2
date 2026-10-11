@@ -17,7 +17,7 @@ from resagent2_runtime.models import (
     NativeToolCall,
     ToolCallTurn,
 )
-from resagent2_runtime.tool_calling import native_input_text, native_tool_schemas
+from resagent2_runtime.tool_calling import contract_fingerprint, native_input_text, native_tool_schemas
 from tests.runtime.test_native_tool_calls import (
     _call,
     _reply,
@@ -56,6 +56,7 @@ def _seed_state(definition, store, turns, *, checkpoint=None) -> AgentState:
         attempt_number=1,
         status=SessionStatus.PAUSED,
         tool_protocol_key=definition.llm_client.tool_session_key,
+        contract_fingerprint=contract_fingerprint(definition.system_prompt, native_tool_schemas(definition.tools)),
         tool_turns=turns,
         history_checkpoint=checkpoint,
         created_at=now,
@@ -91,7 +92,7 @@ def _exact_limit(definition, request, state) -> int:
     )
     start = state.history_checkpoint.history_start if state.history_checkpoint else 0
     return ContextComposer.estimate_tokens(
-        native_input_text(context.text, schemas, state.tool_turns[start:])
+        native_input_text(context, schemas, state.tool_turns[start:])
     )
 
 
@@ -130,10 +131,10 @@ def test_success_keeps_raw_turns_and_sends_checkpoint_with_complete_suffix(setup
         assert f"history_{index}" not in action_wire
     for index in range(checkpoint.history_start, len(turns)):
         assert f"history_{index}" in action_wire
-    current = action_body["messages"][-1]["content"]
-    assert "## history_checkpoint" in current
+    current = json.dumps(action_body["messages"])
+    assert "Lossy recap" in current
     assert "checkpoint summary" in current
-    assert "not evidence" in current
+    assert "not exact evidence" in current
 
     rows = _rows(definition)
     assert rows[0]["included_sections"] == ["compaction"]
@@ -169,9 +170,9 @@ def test_summary_above_writing_target_fits_complete_request_without_truncation(s
     assert saved.history_checkpoint.summary == summary
     assert saved.tool_turns[:len(turns)] == turns
     assert result.llm_calls == saved.llm_calls_used == len(requests) == 2
-    current = requests[-1]["messages"][-1]["content"]
+    current = json.dumps(requests[-1]["messages"], ensure_ascii=False)
     assert summary in current and goal in current
-    assert current.count("## history_checkpoint") == 1
+    assert current.count("Lossy recap") == 1
     row = _rows(definition)[-1]
     assert row["estimated_tokens"] == ContextComposer.estimate_tokens(row["request_text"])
     assert row["estimated_tokens"] <= 8192
@@ -207,7 +208,7 @@ def test_required_current_context_still_too_large_does_not_commit_summary(setup)
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
     assert saved.history_checkpoint is None
     assert saved.tool_turns == turns
-    assert result.llm_calls == len(requests) == 1
+    assert result.llm_calls == len(requests) == 0
     assert not any(event.type == "compaction" for event in saved.events)
 
 
@@ -251,7 +252,7 @@ def test_checkpoint_survives_pause_and_disk_resume(setup, tmp_path):
     install([_reply()])
     second = AgentLoop(store=JsonSessionStore(disk.root)).run(
         resumed_definition,
-        _request(parent="session_native", calls=3, goal="mode=fast"),
+        _request(parent="session_native", calls=3, goal="mode=fast").model_copy(update={"resume_answers": [_answer(first.control.question)], "control_ack": first.control.origin}),
         session_id="ignored_again",
     )
 
@@ -262,7 +263,7 @@ def test_checkpoint_survives_pause_and_disk_resume(setup, tmp_path):
     assert resumed.llm_calls_used == 3
     wire = json.dumps(requests[-1], ensure_ascii=False)
     assert "durable checkpoint" in wire and "call_pause" in wire
-    assert "mode=fast" in requests[-1]["messages"][-1]["content"]
+    assert "mode=fast" in json.dumps(requests[-1]["messages"])
     assert all(f"history_{index}" not in wire for index in range(boundary))
 
 
@@ -386,3 +387,8 @@ def test_single_giant_latest_turn_fails_without_lossy_compaction(setup):
     assert saved.tool_turns[0] == latest
     assert saved.llm_calls_used == result.llm_calls == 0
     assert requests == []
+
+
+def _answer(question):
+    from tests.runtime.test_resume import _answer as answer
+    return answer(question)

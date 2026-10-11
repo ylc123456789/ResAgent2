@@ -1,239 +1,133 @@
-"""Exercise native Agent assembly and real Runtime composition at read-pool capacity."""
+"""Real execution Agent assembly preserves reads in paired history at capacity."""
 
-from e2e.native_fixtures import tool_turns
-
-from resagent2_contracts import AgentPermissions
-
-from copy import deepcopy
 import hashlib
 import json
 import subprocess
-from datetime import UTC, datetime
 
 import pytest
 
-from resagent2_components import (
-    GitWorkspace,
-    ResourceLayout,
-    WorkspaceBoundary,
+from e2e.native_fixtures import tool_turns
+from resagent2_components import ResourceLayout
+from resagent2_contracts import (
+    AgentPermissions, AgentRequest, ArtifactRef, ErrorCode, TaskBudget, WorkspaceAccess, WorkspaceGrant,
 )
 from resagent2_coding import NativeCodingAgent
-from resagent2_contracts import (
-    AgentOwner, ArtifactRef, WorkflowAgentKind, ErrorCode,
-    ModuleStatus, AgentRequest, SessionStatus,
-    TaskBudget, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind, task_session_id,
-)
 from resagent2_experiment import NativeExperimentAgent
-from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS, AgentEvent, AgentState, ContextComposer,
-    InMemorySessionStore, ToolObservation,
-)
-
-from resagent2_runtime.tool_calling import native_input_text
+from resagent2_runtime import ContextComposer, ScriptedLLMClient
+from resagent2_runtime.tool_calling import native_input, native_input_text
 
 
-def _body(label: str) -> str:
+def _body(label, character):
     prefix, suffix = f"{label}_BEGIN\n", f"\n{label}_END"
-    return prefix + "x" * (128_000 - len(prefix) - len(suffix)) + suffix
+    return prefix + character * (128_000 - len(prefix) - len(suffix)) + suffix
 
 
-FILE_BODY = _body("FILE")
-ARTIFACT_BODY = _body("ARTIFACT")
+FILE_BODY = _body("FILE", "x")
+ARTIFACT_BODY = _body("ARTIFACT", "y")
 
 
-class _CaptureClient:
-    tool_session_key = "test-native-tools/v1"
-
-    def __init__(self):
-        self.contexts = []
-        self.schemas = []
-        self.histories = []
-        self.input_limits = []
-
-    def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
-        self.contexts.append(context)
-        self.schemas.append(deepcopy(schemas))
-        self.histories.append([turn.model_copy(deep=True) for turn in turns])
-        self.input_limits.append(max_input_tokens)
-        # Pause after observing the prompt; no environment installation, code
-        # execution, or fabricated success is needed for this composition test.
-        return tool_turns([{
-            "tool": "ask_user",
-            "arguments": {
-                "text": "Confirm the next evaluation?",
-                "requested_fields": ["approval"],
-            },
-        }])[0]
-
-
-def _native_with_full_read_history(tmp_path, monkeypatch, capability, *, max_tokens=None, artifact_first=False):
+def _agent_with_reads(tmp_path, kind, *, limit=256_000, artifact_first=False):
     root = tmp_path / "repo"
     root.mkdir()
-    (root / "train.py").write_text(FILE_BODY, encoding="utf-8")
+    (root / "train.py").write_text(FILE_BODY)
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "add", "train.py"], cwd=root, check=True)
-    subprocess.run([
-        "git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
-        "commit", "-qm", "context fixture",
-    ], cwd=root, check=True)
-    frozen = tmp_path / "artifact.patch"
-    frozen.write_text(ARTIFACT_BODY, encoding="utf-8")
-    artifact = ArtifactRef(
-        id="artifact_context", kind="code_patch", producer=AgentOwner.CODING,
-        run_id="run_capacity", task_id="task_prior", attempt_number=1,
-        uri=frozen.as_uri(), sha256=hashlib.sha256(frozen.read_bytes()).hexdigest(),
-        media_type="text/plain", summary="Previous code patch",
+    subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+                    "commit", "-qm", "baseline"], cwd=root, check=True)
+    frozen = tmp_path / "source.txt"
+    frozen.write_text(ARTIFACT_BODY)
+    ref = ArtifactRef(
+        id="artifact_context", kind="code_patch", producer="coding", run_id="run_capacity",
+        task_id="task_prior", attempt_number=1, uri=frozen.as_uri(),
+        sha256=hashlib.sha256(frozen.read_bytes()).hexdigest(), media_type="text/plain", summary="Prior patch",
     )
-    grant = WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
-    baseline = GitWorkspace(WorkspaceBoundary(grant)).snapshot()
-    coding = capability == WorkflowAgentKind.CODING
-    session_id = task_session_id("run_capacity", "task_capacity", 1)
-    request = AgentRequest(run_id='run_capacity', task_id='task_capacity', attempt_number=1, parent_session_id=session_id, agent=AgentOwner(capability.value), instruction='Review source and patch before modifying' if coding else 'Review source and patch before evaluating', input_artifacts=[artifact], workspace=grant, workspace_id='ws_capacity', output_dir=str(tmp_path / 'outputs'), budget=TaskBudget(max_llm_calls=2, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
-    now = datetime.now(UTC)
-    state = AgentState(
-        session_id=session_id, agent_name="coding" if coding else "experiment",
-        owner=AgentOwner.CODING if coding else AgentOwner.EXPERIMENT,
-        run_id=request.run_id, task_id=request.task_id, attempt_number=1,
-        status=SessionStatus.PAUSED, created_at=now, updated_at=now,
-        tool_protocol_key=_CaptureClient.tool_session_key,
-        memory={
-            "workspace_snapshot": baseline.to_memory(),
-            "read_paths": ["train.py"], "read_artifact_ids": [artifact.id],
-            "hardware": "OS: test\nCPU cores: 4\nGPU: none visible",
-            "repo": {"repo_url": str(root), "commit": "fixture"},
-            "edit_revision": 0,
-        },
-    )
-    read_observations = [
-        ("read_file", {"path": "train.py", "start_line": 1, "end_line": 3,
-                       "content": FILE_BODY, "truncated": False}),
-        ("read_artifact", {"artifact_id": artifact.id, "start_line": 1, "end_line": 3,
-                           "content": ARTIFACT_BODY, "truncated": False}),
+    reads = [
+        {"tool": "read_file", "arguments": {"path": "train.py"}},
+        {"tool": "read_artifact", "arguments": {"artifact_id": ref.id}},
     ]
     if artifact_first:
-        read_observations.reverse()
-    # Synthetic source events isolate reconstruction of the read working set;
-    # they are not a claimed native tool transcript. Real paired histories are
-    # exercised in the Scientific capacity and workspace read-history tests.
-    # Old reads must survive later listings without a second source cache.
-    observations = [*read_observations, *[
-        ("list_files", {"path": ".", "paths": [f"package/module_{i:02d}.py" for i in range(80)],
-                        "truncated": False})
-        for _ in range(8)
-    ]]
-    for index, (tool, value) in enumerate(observations, start=1):
-        state.events.append(AgentEvent(
-            sequence=index, step=index, type="observation", tool=tool,
-            data={"ok": True, "summary": "Observed " + "entry " * 30, "value": value},
-            created_at=now,
-        ))
-    state.runtime_feedback = ToolObservation(
-        ok=False, summary="Resolve the previous rejection before trying to finish",
-        value={"reason": "RECOVERABLE_FEEDBACK " + "details " * 180},
+        reads.reverse()
+    client = ScriptedLLMClient(tool_turns([
+        *reads, *[{"tool": "list_files", "arguments": {"path": "."}} for _ in range(8)],
+        {"tool": "ask_user", "arguments": {"text": "Proceed?", "requested_fields": ["choice"]}},
+    ]))
+    agent = (NativeCodingAgent if kind == "coding" else NativeExperimentAgent)(
+        client, max_context_tokens=limit,
+        resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
     )
-    state.runtime_feedback_source = "completion_check"
-    state.step = len(state.events)
-    store = InMemorySessionStore()
-    store.save(state)
-    client = _CaptureClient()
-    # Real AgentDefinition, tools, prompts, context builder, permission policy
-    # and AgentLoop remain unmodified.
-    options = {} if max_tokens is None else {"max_context_tokens": max_tokens}
-    agent_class = NativeCodingAgent if coding else NativeExperimentAgent
-    agent = agent_class(
-        client, store=store, resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
-        **options,
+    request = AgentRequest(
+        run_id="run_capacity", task_id="task_capacity", attempt_number=1, agent=kind,
+        instruction="Review source and evidence", input_artifacts=[ref],
+        workspace=WorkspaceGrant(root=str(root), source="local", access=WorkspaceAccess(read_paths=["."], write_paths=[])),
+        workspace_id="ws_capacity", permissions=AgentPermissions(),
+        budget=TaskBudget(max_llm_calls=12, timeout_seconds=60),
     )
     return agent, client, request
 
 
-def _assert_native_capacity(client, limit):
-    context = client.contexts[0]
-    measured = ContextComposer.estimate_tokens(native_input_text(
-        context.text, client.schemas[0], client.histories[0],
-    ))
+def _wire(client, index=-1, limit=256_000):
+    context, schemas, history = client.contexts[index], client.schemas[index], client.histories[index]
+    assert context.included_sections == ["system", "task", "artifact_index"]
+    assert FILE_BODY not in context.text and ARTIFACT_BODY not in context.text
+    for turn in history:
+        assert set(turn.tool_results) == {call.id for call in turn.tool_calls}
+    measured = ContextComposer.estimate_tokens(native_input_text(context, schemas, history))
     assert measured == context.estimated_tokens
-    assert measured > ContextComposer.estimate_tokens(context.text)
-    assert measured <= client.input_limits[0] == limit
+    assert measured <= limit
+    wire = native_input(context, schemas, history)
+    assert wire["messages"][0]["role"] == "system"
+    assert wire["messages"][1]["role"] == wire["messages"][-1]["role"] == "user"
+    assert "artifact_context" in wire["messages"][-1]["content"]
+    return wire
 
 
-@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
+@pytest.mark.parametrize("kind", ["coding", "experiment"])
 @pytest.mark.parametrize("artifact_first", [False, True])
-def test_native_default_context_keeps_both_full_read_pools(tmp_path, monkeypatch, capability, artifact_first):
-    agent, client, request = _native_with_full_read_history(
-        tmp_path, monkeypatch, capability, artifact_first=artifact_first,
-    )
-    assert agent.max_context_tokens == 256_000
+def test_native_default_context_keeps_both_full_read_histories(tmp_path, kind, artifact_first):
+    agent, client, request = _agent_with_reads(tmp_path, kind, artifact_first=artifact_first)
     result = agent.invoke(request)
-    assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
-    assert len(client.contexts) == 1
-    context = client.contexts[0]
-    assert {"file_reads", "artifact_reads", "environment", "runtime_feedback"} <= set(context.included_sections)
-    assert "tool_contracts" not in context.included_sections
-    assert "recent_observations" not in context.included_sections
-    schemas = {schema["function"]["name"]: schema["function"] for schema in client.schemas[0]}
-    assert {"read_file", "read_artifact", "ask_user"} <= schemas.keys()
-    assert "path" in schemas["read_file"]["parameters"]["required"]
-    assert "artifact_id" in schemas["read_artifact"]["parameters"]["required"]
-    _assert_native_capacity(client, 256_000)
-    assert "RECOVERABLE_FEEDBACK" in context.text
-    # Parse the actual client input, not the context-builder's intermediate
-    # sections: runtime contracts/history/feedback and budgeting ran already.
-    reads = {}
-    for name, key in (("file_reads", "file_snippets"), ("artifact_reads", "artifact_snippets")):
-        section = context.text.split(f"## {name}\n", 1)[1].split("\n\n## ", 1)[0]
-        reads[key] = json.loads(section.split("\n", 1)[1])["snippets"]
-    assert sum(len(item["content"]) for item in reads["file_snippets"]) == 128_000
-    assert sum(len(item["content"]) for item in reads["artifact_snippets"]) == 128_000
-    assert reads["file_snippets"][0]["content"] == FILE_BODY
-    assert reads["artifact_snippets"][0]["content"] == ARTIFACT_BODY
-    assert not reads["file_snippets"][0]["truncated"]
-    assert not reads["artifact_snippets"][0]["truncated"]
+    assert result.status == "needs_user_input", result.report
+    assert len(client.contexts) == 11
+    wire = _wire(client)
+    receipts = [json.loads(message["content"]) for message in wire["messages"] if message["role"] == "tool"]
+    reads = [receipt["value"] for receipt in receipts
+             if isinstance(receipt.get("value"), dict) and "content" in receipt["value"]]
+    assert sorted(read["content"] for read in reads) == sorted([FILE_BODY, ARTIFACT_BODY])
+    assert all(read["truncated"] is False for read in reads)
+    assert len(reads) == 2
 
 
-@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
-@pytest.mark.parametrize("explicit_limit", [1, DEFAULT_AGENT_CONTEXT_TOKENS // 4])
-def test_native_explicit_context_limit_is_not_silently_expanded(tmp_path, monkeypatch, capability, explicit_limit):
-    agent, client, request = _native_with_full_read_history(
-        tmp_path, monkeypatch, capability, max_tokens=explicit_limit,
-    )
-    assert agent.max_context_tokens == explicit_limit
+@pytest.mark.parametrize("kind", ["coding", "experiment"])
+@pytest.mark.parametrize("limit", [1, 64_000])
+def test_explicit_capacity_never_silently_shrinks_reads_or_expands_the_limit(tmp_path, kind, limit):
+    agent, client, request = _agent_with_reads(tmp_path, kind, limit=limit)
     result = agent.invoke(request)
-    if explicit_limit > 1:
-        # A quarter of the default budget fits the fixed input. Material
-        # bodies must shrink within the requested limit; the limit is never
-        # silently replaced with the default budget.
-        assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
-        assert result.llm_calls == 1
-        assert len(client.contexts) == 1
-        _assert_native_capacity(client, explicit_limit)
-        return
-    # One token cannot fit the required context. The agent must fail explicitly
-    # instead of expanding the caller's requested limit.
-    assert result.status == ModuleStatus.FAILED, result.model_dump(mode="json")
+    assert result.status == "failed", result.report
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert result.error.retryable is False
-    assert result.llm_calls == 0
-    assert client.contexts == []
+    assert agent.max_context_tokens == limit
+    assert result.llm_calls == len(client.contexts) == (0 if limit == 1 else 2)
+    if client.contexts:
+        _wire(client, limit=limit)
+        read = client.histories[-1][0]
+        assert json.loads(read.tool_results[read.tool_calls[0].id])["value"]["content"] == FILE_BODY
 
 
-@pytest.mark.parametrize("capability", [WorkflowAgentKind.CODING, WorkflowAgentKind.EXPERIMENT])
-def test_model_capacity_reduces_read_pools_before_they_are_built(tmp_path, monkeypatch, capability):
-    agent, client, request = _native_with_full_read_history(tmp_path, monkeypatch, capability)
-    budgets = []
+@pytest.mark.parametrize("kind", ["coding", "experiment"])
+def test_model_capacity_is_checked_before_sending_an_oversized_read_history(tmp_path, kind):
+    agent, client, request = _agent_with_reads(tmp_path, kind)
+    limits = []
+
     def tool_input_limit(limit):
-        budgets.append(limit)
+        limits.append(limit)
         return 32_000
+
     client.tool_input_limit = tool_input_limit
     result = agent.invoke(request)
-    assert result.status == ModuleStatus.NEEDS_USER_INPUT, result.model_dump(mode="json")
-    assert budgets == [256_000]
-    context = client.contexts[0]
-    _assert_native_capacity(client, 32_000)
-    reads = {}
-    for name, key in (("file_reads", "file_snippets"), ("artifact_reads", "artifact_snippets")):
-        section = context.text.split(f"## {name}\n", 1)[1].split("\n\n## ", 1)[0]
-        reads[key] = json.loads(section.split("\n", 1)[1])["snippets"]
-    for name in ("file_snippets", "artifact_snippets"):
-        assert 0 < sum(len(s["content"]) for s in reads[name]) < 128_000
-        assert reads[name][0]["context_truncated"]
+    assert result.status == "failed", result.report
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert result.llm_calls == len(client.contexts) == 1
+    assert all(limit == 256_000 for limit in limits)
+    state = agent.loop.store.load(result.session.id)
+    read = state.tool_turns[0]
+    assert json.loads(read.tool_results[read.tool_calls[0].id])["value"]["content"] == FILE_BODY
+    _wire(client, limit=32_000)

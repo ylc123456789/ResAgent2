@@ -24,28 +24,31 @@ def read_json(ref: ArtifactRef, model=None):
     return model.model_validate(data) if model else data
 
 
-def system_artifact(registry, run, kind, data, *, session_id=None, task_id=None, attempt_number=None):
+def system_artifact(registry, run, kind, data, *, session_id=None, task_id=None, attempt_number=None,
+                    operation_key=None):
     source = SYSTEM_ARTIFACT_PROVENANCE[kind][0]
     content = data.model_dump(mode="json") if hasattr(data, "model_dump") else data
-    ref = registry.register_system_artifact(
-        ArtifactCandidate(kind=kind, path=f"{kind}.json", media_type="application/json",
-                          summary=kind.replace("_", " "), content=json.dumps(content, ensure_ascii=False, sort_keys=True,
-                                             indent=2 if kind in {"research_index", "work_record", "work_feedback"} else None)),
-        run_id=run.run_id, source_type=source, session_id=session_id,
-        task_id=task_id, attempt_number=attempt_number,
-    )
+    key = operation_key or f"system:{kind}:{session_id or task_id or run.run_id}:{attempt_number or 0}"
+    candidate = ArtifactCandidate(kind=kind, path=f"{kind}.json", media_type="application/json",
+                                  summary=kind.replace("_", " "),
+                                  content=json.dumps(content, ensure_ascii=False, sort_keys=True))
+    ref = registry.register_system_artifact(candidate, run_id=run.run_id, source_type=source,
+                                           session_id=session_id, task_id=task_id,
+                                           attempt_number=attempt_number, operation_key=key, run=run)
     run.artifacts[ref.id] = ref
     return ref
 
 
 def receive_artifacts(registry, run, request, result, *, previous_ids=()):
-    """Register incrementally; callers persist partial results even on rejection."""
+    """Receive material refs without converting control payloads into artifacts."""
     registered = []
     returned_ids = set()
     offset = len(previous_ids)
     names = {run.artifacts[key].output_name for key in previous_ids
              if key in run.artifacts and run.artifacts[key].output_name is not None}
     for index, output in enumerate(result.artifacts):
+        key = (f"task:{request.task_id}:attempt:{request.attempt_number}:output:{offset + index + 1}"
+               if request.task_id is not None else f"session:{result.session.id}:result:{index}")
         if isinstance(output, ArtifactRef):
             ref = run.artifacts.get(output.id)
             if ref is None or ref != output or ref.run_id != run.run_id:
@@ -54,9 +57,7 @@ def receive_artifacts(registry, run, request, result, *, previous_ids=()):
                 owned = ref.task_id == request.task_id and ref.attempt_number == request.attempt_number
             else:
                 owned = result.session is not None and ref.session_id == result.session.id
-            owned = owned and (ref.producer == request.agent or (
-                ref.producer == AgentOwner.ORCHESTRATOR and ref.kind in {"question", "work_request"}))
-            if not owned or output.id in {a.id for a in request.input_artifacts}:
+            if not owned or ref.producer != request.agent or output.id in {a.id for a in request.input_artifacts}:
                 raise ArtifactRegistrationError("input or foreign artifact cannot be returned as a new output")
             parsed = urlparse(ref.uri)
             if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
@@ -64,27 +65,17 @@ def receive_artifacts(registry, run, request, result, *, previous_ids=()):
             read_path = Path(url2pathname(parsed.path))
             if not read_path.is_file() or _sha256(read_path) != ref.sha256:
                 raise ArtifactRegistrationError("returned Ref content is missing or corrupt")
-        elif output.kind in {"question", "work_request"}:
-            if output.content is None:
-                raise ArtifactRegistrationError("control artifact must provide UTF-8 JSON content")
-            if output.kind == "work_request" and request.agent != AgentOwner.SCIENTIFIC:
-                raise ArtifactRegistrationError("only Scientific may request work")
-            ref = system_artifact(
-                registry, run, output.kind, json.loads(output.content),
-                session_id=result.session.id if request.task_id is None and result.session else None,
-                task_id=request.task_id, attempt_number=request.attempt_number,
-            )
         elif request.task_id is None:
             if result.session is None:
                 raise ArtifactRegistrationError("Scientific output requires its owning session")
-            ref = registry.register_scientific(output, run_id=run.run_id, session_id=result.session.id)
+            ref = registry.register_scientific(output, run_id=run.run_id, session_id=result.session.id,
+                                               operation_key=key, run=run)
         else:
-            ref = registry.register(
-                output, grant=request.workspace, producer=request.agent, run_id=run.run_id,
-                task_id=request.task_id, attempt_number=request.attempt_number,
-                index=offset + index + 1, existing_ids=set(run.artifacts),
-                output_dir=request.output_dir,
-            )
+            ref = registry.register(output, grant=request.workspace, producer=request.agent,
+                                    run_id=run.run_id, task_id=request.task_id,
+                                    attempt_number=request.attempt_number, index=offset + index + 1,
+                                    output_dir=request.output_dir,
+                                    operation_key=key, run=run)
         if ref.id in returned_ids:
             raise ArtifactRegistrationError("duplicate returned artifact reference")
         returned_ids.add(ref.id)
@@ -94,12 +85,48 @@ def receive_artifacts(registry, run, request, result, *, previous_ids=()):
             names.add(ref.output_name)
         run.artifacts[ref.id] = ref
         registered.append(ref)
-    control_ref = None
-    if result.control is not None:
-        signal = result.control
-        control_ref = (registered[signal.candidate_index] if signal.candidate_index is not None
-                       else next(ref for ref in registered if ref.id == signal.artifact_id))
-    return registered, control_ref
+    return registered
+
+
+def control_key(control):
+    """Provider IDs are unique only within their original native response."""
+    return f"session:{control.source_session_id}:turn:{control.source_turn}:call:{control.source_call_id}"
+
+
+def receive_control(run, request, result):
+    """Commit the already allocated Session payload, idempotently, before acting."""
+    signal = result.control
+    if signal is None:
+        return None
+    if result.session is None or signal.source_session_id != result.session.id:
+        raise ArtifactRegistrationError("control source session mismatch")
+    if request.parent_session_id and signal.source_session_id != request.parent_session_id:
+        raise ArtifactRegistrationError("control does not belong to resumed session")
+    key = control_key(signal)
+    payload = signal.question if signal.action == "ask_user" else signal.work_request
+    existing = run.received_controls.get(key)
+    if existing is not None and existing != payload.id:
+        raise ArtifactRegistrationError("control identity conflicts with previously received call")
+    if signal.action == "ask_user":
+        question = signal.question
+        if (question.run_id, question.task_id, question.attempt_number) != (
+                request.run_id, request.task_id, request.attempt_number):
+            raise ArtifactRegistrationError("question control scope mismatch")
+        if question.session_id != signal.source_session_id:
+            raise ArtifactRegistrationError("question session mismatch")
+        if existing is None:
+            run.pending_question = question
+    else:
+        work = signal.work_request
+        if request.agent != AgentOwner.SCIENTIFIC:
+            raise ArtifactRegistrationError("only Scientific may request work")
+        if (work.run_id, work.scientific_session_id) != (run.run_id, signal.source_session_id):
+            raise ArtifactRegistrationError("work control scope mismatch")
+        if existing is None:
+            run.work_requests.append(work)
+        run.latest_scientific_assessment = signal.assessment
+    run.received_controls[key] = payload.id
+    return payload
 
 
 def check_acceptance(run, task, attempt, refs):

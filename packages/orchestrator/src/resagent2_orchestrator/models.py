@@ -7,10 +7,14 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from resagent2_components.literature import PreparedLiteratureImport
 
 from resagent2_contracts import (
     ArtifactId,
+    ArtifactImport,
     ArtifactRef,
+    AgentResult,
+    AgentRequest,
     DatasetRef,
     ModuleError,
     PendingQuestion,
@@ -23,9 +27,12 @@ from resagent2_contracts import (
     ScientificOpinion,
     SessionRef,
     Workflow,
+    WorkflowProposal,
+    WorkflowPatch,
     WorkRequest,
     WorkRequestStatus,
     WorkspaceRecord,
+    WorkResult,
 )
 
 
@@ -71,6 +78,33 @@ class RunUsage(OrchestratorModel):
                 for outcome in ("succeeded", "failed", "unknown")}
 
 
+class PendingRegistration(OrchestratorModel):
+    """Allocated identity and expected frozen facts until registration commits."""
+
+    ref: ArtifactRef
+    candidate_path: str
+    source_path: str | None = None
+    await_receipt: bool = False
+
+
+class RunInitialization(OrchestratorModel):
+    """Original inputs and progress saved before the first file is frozen."""
+
+    imports: list[ArtifactImport] = Field(default_factory=list)
+    literature: list[PreparedLiteratureImport] = Field(default_factory=list)
+    next_import: int = Field(default=0, ge=0)
+    next_literature: int = Field(default=0, ge=0)
+    complete: bool = False
+
+
+class PendingModuleResult(OrchestratorModel):
+    """Result already returned by a port, awaiting its receiving gate and registration."""
+
+    request: AgentRequest
+    result: AgentResult
+    previous_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
 class ResearchRun(OrchestratorModel):
     """Complete persisted state owned by the Research Orchestrator."""
 
@@ -83,11 +117,14 @@ class ResearchRun(OrchestratorModel):
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
-    pending_question_ref: ArtifactRef | None = None
     conclusion_requirements_ref: ArtifactRef | None = None
     dataset_catalog_ref: ArtifactRef | None = None
-    research_index_ref: ArtifactRef | None = None
-    feedback_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
+    initialization: RunInitialization = Field(default_factory=RunInitialization)
+    pending_registrations: dict[str, PendingRegistration] = Field(default_factory=dict)
+    pending_module_results: dict[str, PendingModuleResult] = Field(default_factory=dict)
+    pending_compilation: WorkflowProposal | WorkflowPatch | None = None
+    received_controls: dict[str, str] = Field(default_factory=dict)
+    scientific_artifact_ids: list[ArtifactId] = Field(default_factory=list)
     scientific_report: str = ""
     answers: list[RecordedAnswer] = Field(default_factory=list)
     workflow_history: list[Workflow] = Field(default_factory=list)

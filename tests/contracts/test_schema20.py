@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from resagent2_contracts import (AgentOwner, ArtifactId, ArtifactRef, ModuleError, ModuleStatus, ErrorCode, ResearchRequest, RunBudget, RunId, ScientificAssessment, ScientificOpinion, ScientificVerdict, SessionRef, SessionStatus, TaskBudget, WorkOutcome, WorkRequest, WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, QuestionDraft, RecordedAnswer)
+from resagent2_contracts import (AgentOwner, ArtifactId, ArtifactRef, ModuleError, ModuleStatus, ErrorCode, ResearchRequest, RunBudget, RunId, ScientificAssessment, ScientificOpinion, ScientificVerdict, SessionRef, SessionStatus, TaskBudget, WorkResult, WorkRequest, WorkRequestDraft, WorkRequestStatus, WorkTaskResult, QuestionDraft, RecordedAnswer)
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
@@ -47,15 +47,15 @@ def work_request(status: WorkRequestStatus = WorkRequestStatus.REQUESTED) -> Wor
     }:
         fields["workflow_revision"] = 1
     if status in {WorkRequestStatus.STABLE, WorkRequestStatus.CONSUMED}:
-        fields["outcome"] = WorkOutcome(
+        fields["outcome"] = WorkResult(
+            run_id="run_example", session_id="session_sci", objective="Measure the method", status="stable",
             work_request_id="work_round1",
             workflow_revision=1,
-            summary="experiment completed",
             tasks=[
-                WorkTaskOutcome(
+                WorkTaskResult(
                     task_id="task_experiment",
                     status="completed",
-                    summary="ran experiment",
+                    instruction="Run experiment", workflow_agent_kind="experiment",
                 )
             ],
         )
@@ -167,7 +167,7 @@ def test_artifact_ref_rejects_half_task_attempt() -> None:
 def test_artifact_ref_accepts_scientific_session_provenance() -> None:
     artifact = ArtifactRef(
         id="artifact_lit",
-        kind="literature_search",
+        kind="literature_paper",
         producer=AgentOwner.SCIENTIFIC,
         run_id="run_example",
         session_id="session_sci",
@@ -184,7 +184,7 @@ def test_artifact_ref_rejects_session_with_task() -> None:
     with pytest.raises(ValidationError, match="session-bound"):
         ArtifactRef(
             id="artifact_lit",
-            kind="literature_search",
+            kind="literature_paper",
             producer=AgentOwner.SCIENTIFIC,
             run_id="run_example",
             session_id="session_sci",
@@ -226,26 +226,11 @@ def test_artifact_ref_rejects_orchestrator_without_source_type() -> None:
         )
 
 
-def test_work_task_outcome_requires_error_for_failed() -> None:
-    with pytest.raises(ValidationError, match="requires error"):
-        WorkTaskOutcome(
-            task_id="task_experiment",
-            status="failed",
-            summary="crashed",
-        )
-
-
-def test_work_outcome_rejects_duplicate_task_ids() -> None:
-    with pytest.raises(ValidationError, match="duplicate task"):
-        WorkOutcome(
-            work_request_id="work_round1",
-            workflow_revision=1,
-            summary="done",
-            tasks=[
-                WorkTaskOutcome(task_id="task_x", status="completed", summary="a"),
-                WorkTaskOutcome(task_id="task_x", status="completed", summary="b"),
-            ],
-        )
+def test_work_result_rejects_duplicate_task_ids() -> None:
+    task=WorkTaskResult(task_id="task_x", status="completed", instruction="Measure", workflow_agent_kind="experiment")
+    with pytest.raises(ValidationError, match="task ids must be unique"):
+        WorkResult(run_id="run_example", session_id="session_sci", objective="Measure", status="stable",
+                   work_request_id="work_round1", workflow_revision=1, tasks=[task,task])
 
 
 def test_schema_1_1_object_is_rejected_as_2_0() -> None:

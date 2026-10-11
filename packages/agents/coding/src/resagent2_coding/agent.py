@@ -121,7 +121,8 @@ class NativeCodingAgent:
         tools = (
             ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
-            GitDiffTool(repository, baseline=baseline),
+            GitDiffTool(repository, baseline=baseline,
+                        verification_state=lambda state, diff: derive_control_state(state, binding, diff=diff)),
             CreateFileTool(boundary), ReplaceTextTool(boundary), DeletePathTool(boundary),
             PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
             RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
@@ -148,8 +149,7 @@ class NativeCodingAgent:
             name="coding", owner=AgentOwner.CODING, system_prompt=CODING_PROMPT,
             tools=tools, llm_client=self.llm_client,
             context_builder=lambda request, state, limit: build_context(
-                request, state, binding=binding, datasets=datasets,
-                control_state=derive_control_state(state, binding), max_context_tokens=limit,
+                request, state, datasets=datasets,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=CodingCompletionCheck(

@@ -10,17 +10,11 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId, WorkspaceGrant, SYSTEM_ARTIFACT_KINDS
+from resagent2_contracts import ArtifactCandidate, ArtifactRef, RunId, SessionId, WorkspaceGrant
 
 from .workspace import WorkspaceBoundary, WorkspacePermissionError
 
-from .text import MAX_READ_CHARS, decode_text, slice_text_lines, validate_text_window, wrap_text_lines
-
-
-def research_artifacts(artifacts: list[ArtifactRef]) -> list[ArtifactRef]:
-    """Select research materials once for directory construction and its readers."""
-    excluded = (SYSTEM_ARTIFACT_KINDS - {"work_record", "answer"}) | {"observation_trace"}
-    return [ref for ref in artifacts if ref.kind not in excluded]
+from .text import MAX_READ_CHARS, decode_text, slice_text_lines, validate_text_window
 
 
 class ArtifactCandidateError(ValueError):
@@ -204,43 +198,6 @@ def missing_required_artifacts(
     return [name for name in required if name not in present]
 
 
-REPORT_LINE_CHARS = 1_000
-
-
-def _wrap_lines(text: str) -> str:
-    """Insert line breaks without dropping existing content or whitespace."""
-    return wrap_text_lines(text, max_chars=REPORT_LINE_CHARS)
-
-
-def build_module_report(details: dict[str, str | list[str]]) -> ArtifactCandidate:
-    """Package caller-selected prose, never a full result or execution state.
-
-    The caller selects the relevant answer, source paths or residual risks.
-    This is a readable projection; the original payload keeps exact values.
-    Bounded physical lines make long prose reachable through read_artifact's
-    existing line ranges. Registration supplies identity and provenance.
-    """
-    sections = [
-        "# Module report",
-        "Module-provided explanation, not independently verified or measured "
-        "evidence. Consult original evidence for factual claims.",
-    ]
-    for name, value in details.items():
-        body = (
-            _wrap_lines(value)
-            if isinstance(value, str)
-            else "\n".join("- " + _wrap_lines(item).replace("\n", "\n  ") for item in value)
-        )
-        sections.append(f"## {name}\n\n{body}")
-    return ArtifactCandidate(
-        kind="module_report",
-        path="module_report.md",
-        media_type="text/markdown",
-        summary="Module-provided explanation and limitations, not measured evidence",
-        content="\n\n".join(sections) + "\n",
-    )
-
-
 def media_type_for(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
@@ -259,16 +216,21 @@ class ArtifactRegistrationPort(Protocol):
         run_id: RunId,
         session_id: SessionId,
         content_bytes: bytes | None = None,
+        operation_key: str,
+        output_position: int,
     ) -> ArtifactRef:
         """Freeze trusted tool output; binary content is never an LLM parameter."""
 
-    def list_artifacts(self, *, run_id: RunId) -> list[ArtifactRef]:
-        """List Scientific outputs in this Run, not private control artifacts."""
+    def list_artifacts(self, *, run_id: RunId, session_id: SessionId) -> list[ArtifactRef]:
+        """List only material produced by this Scientific Session in this Run."""
 
-    def resolve(self, artifact_id: str, *, run_id: RunId) -> ArtifactRef | None:
+    def resolve(self, artifact_id: str, *, run_id: RunId, session_id: SessionId) -> ArtifactRef | None:
         """Return a live-authorized artifact of this Run, or ``None``.
 
         This lets the Scientific Agent's ``read_artifact`` see an artifact
         (e.g. a literature search) registered earlier in the same turn.
         An artifact registered for another Run must never be returned.
         """
+
+    def acknowledge_registration(self, *, run_id: RunId, operation_key: str) -> None:
+        """Clear recovery records after the Session durably saves its receipt."""

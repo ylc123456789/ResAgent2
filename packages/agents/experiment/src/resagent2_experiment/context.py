@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 
 from resagent2_components import (
-    DatasetAvailability, EnvironmentBinding, dataset_context,
-    request_materials_context, workspace_context, request_task_context, artifact_index_context,
+    DatasetAvailability, RegisteredArtifactReader, dataset_context,
+    request_task_context, artifact_index_context,
 )
 from resagent2_capabilities.environment.guidance import ENVIRONMENT_DECISION_GUIDANCE
 from resagent2_contracts import AgentRequest
-from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection
-
+from resagent2_runtime import AgentState, ContextSection
 
 EXPERIMENT_PROMPT = f"""### Role and scope
 You are the Experiment Agent. Analyze existing results or run formal training,
@@ -21,8 +20,7 @@ execution, environment preparation or writable source.
 
 ### Inputs and evidence
 Read the repository's instructions, entry scripts and relevant registered
-materials before running commands or interpreting results. Use current checked
-facts and user answers; earlier receipts describe earlier conditions.
+materials before running commands or interpreting results. Check current facts through tools and use the complete business user answers; earlier receipts describe earlier conditions.
 Use only datasets in dataset_catalog via RESAGENT2_DATASET_ROOT and
 RESAGENT2_DATASETS_JSON; never download or substitute an undeclared dataset.
 Ask for necessary information or decisions that cannot be inferred from the
@@ -74,34 +72,12 @@ follow the artifact fields and path rules of finish. Do not fabricate system rec
 
 def build_context(
     request: AgentRequest, state: AgentState, *,
-    binding: EnvironmentBinding | None = None,
     datasets: DatasetAvailability | None = None,
-    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
-) -> list[ContextSection | ContextMaterial]:
-    sections = [
-        ContextSection(
-            name="task",
-            content=json.dumps(request_task_context(request), ensure_ascii=False),
-            priority=100, required=True,
-        ),
-        ContextSection(
-            name="execution_context",
-            content=json.dumps({
-                "workspace_access": request.workspace.access.model_dump(mode="json") if request.workspace else None,
-                "output_dir": request.output_dir,
-                "permissions": request.permissions.model_dump(mode="json"),
-                "confirm_commands": request.confirm_commands,
-            }, ensure_ascii=False), priority=100, required=True,
-        ),
-        ContextSection(
-            name="dataset_catalog",
-            content=json.dumps(dataset_context(datasets or DatasetAvailability())),
-            priority=90, required=True,
-        ),
-        artifact_index_context(request, state),
-        *request_materials_context(request),
+    reader: RegisteredArtifactReader | None = None,
+) -> list[ContextSection]:
+    task = request_task_context(request)
+    task["dataset_catalog"] = dataset_context(datasets or DatasetAvailability())
+    return [
+        ContextSection(name="task", content=json.dumps(task, ensure_ascii=False)),
+        artifact_index_context(request, state, reader=reader),
     ]
-    sections.extend(workspace_context(
-        state, binding=binding, max_context_tokens=max_context_tokens,
-    ))
-    return sections

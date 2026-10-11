@@ -80,8 +80,8 @@ def test_imported_pdf_is_read_offline_and_can_complete(tmp_path, monkeypatch):
                       if r.kind == "literature_paper"]
             assert len(papers) == 1
             if self.step == 1:
-                return tool_turns([{"tool": "fetch_literature_fulltext",
-                        "arguments": {"paper_artifact_id": papers[0].id}}])[0]
+                return tool_turns([{"tool": "fetch_literature",
+                        "arguments": {"source": f"artifact:{papers[0].id}"}}])[0]
             texts = [r for r in self.store.load("run_imported").artifacts.values()
                      if r.kind == "literature_fulltext"]
             if self.step == 2:
@@ -152,15 +152,10 @@ def test_paused_run_import_refreshes_index_without_resuming(tmp_path):
     assert updated.llm_calls_used == run.llm_calls_used
     assert updated.pending_question.id == run.pending_question.id
     paper = next(ref for ref in updated.artifacts.values() if ref.kind == "literature_paper")
-    index = updated.artifacts[updated.research_index_ref.id]
-    from resagent2_orchestrator.handoffs import read_json
-    index_body = read_json(index)
-    indexed_ids = {
-        item["artifact_id"]
-        for group in index_body["groups"]
-        for item in group["artifacts"]
-    }
-    assert paper.id in indexed_ids
+    assert paper.metadata["source_type"] == "import"
+    assert paper in controller._authorized_artifacts(updated)
+    assert not any(ref.kind in {"research_index", "question", "answer"} for ref in updated.artifacts.values())
+
 
 
 def test_paused_import_then_answer_continues_same_scientific_session(tmp_path, monkeypatch):
@@ -194,8 +189,8 @@ def test_paused_import_then_answer_continues_same_scientific_session(tmp_path, m
             # The resumed prompt contains the refreshed index and imported title.
             assert "Imported paper" in context.text
             if step == 2:
-                return tool_turns([{"tool": "fetch_literature_fulltext",
-                        "arguments": {"paper_artifact_id": papers[0].id}}])[0]
+                return tool_turns([{"tool": "fetch_literature",
+                        "arguments": {"source": f"artifact:{papers[0].id}"}}])[0]
             if step == 3:
                 assert len(texts) == 1
                 return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": texts[0].id}}])[0]
@@ -261,11 +256,9 @@ def test_repeated_import_reuses_snapshot_and_replaced_pdf_creates_new_chain(tmp_
     paper = next(ref for ref in imported.artifacts.values() if ref.kind == "literature_paper")
     pdf = next(ref for ref in imported.artifacts.values() if ref.kind == "literature_pdf")
     ids_before = set(imported.artifacts)
-    index_before = imported.research_index_ref
 
     repeated = controller.import_literature(run.run_id, load_literature_manifest(manifest))
     assert set(repeated.artifacts) == ids_before
-    assert repeated.research_index_ref == index_before
     assert repeated.artifacts[paper.id] == paper
     assert repeated.artifacts[pdf.id] == pdf
 
@@ -277,7 +270,6 @@ def test_repeated_import_reuses_snapshot_and_replaced_pdf_creates_new_chain(tmp_
     assert set(same_source.artifacts) == ids_before
     assert same_source.artifacts[paper.id] == paper
     assert same_source.artifacts[pdf.id] == pdf
-    assert same_source.research_index_ref == index_before
 
     renamed.write_bytes(b"%PDF-1.7\nreplacement source")
     replaced = controller.import_literature(run.run_id, load_literature_manifest(manifest))

@@ -1,4 +1,4 @@
-"""Scientific control tools; the runtime packages their content as artifacts."""
+"""Scientific control tools; the runtime persists stable request identities."""
 
 from __future__ import annotations
 

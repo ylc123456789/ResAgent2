@@ -1,3 +1,4 @@
+from resagent2_runtime.tool_calling import contract_fingerprint, native_tool_schemas
 import json
 from datetime import UTC, datetime
 
@@ -39,11 +40,11 @@ def test_json_session_round_trip_records_current_schema(tmp_path):
     store = JsonSessionStore(tmp_path)
     store.save(state)
     value = json.loads((tmp_path / "session_schema.json").read_text(encoding="utf-8"))
-    assert value["schema_version"] == SCHEMA_VERSION == "24.0"
+    assert value["schema_version"] == SCHEMA_VERSION == "25.0"
     assert store.load(state.session_id) == state
 
 
-@pytest.mark.parametrize("version", [None, "23.0", "25.0"])
+@pytest.mark.parametrize("version", [None, "24.0", "26.0"])
 def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_path, version):
     now = datetime.now(UTC)
     state = AgentState(
@@ -59,14 +60,14 @@ def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_pa
     path.write_text(json.dumps(value), encoding="utf-8")
     before = path.read_bytes()
     store = JsonSessionStore(tmp_path)
-    with pytest.raises(ValueError, match="Session schema_version must be 24.0"):
+    with pytest.raises(ValueError, match="Session schema_version must be 25.0"):
         store.load(state.session_id)
     assert path.read_bytes() == before
 
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
-        ContextSection(name="task", content=request.instruction, priority=100, required=True)
+        ContextSection(name="task", content=request.instruction)
     ]
 
 
@@ -114,7 +115,7 @@ def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
 
     resumed = loop.run(
         definition,
-        _request(attempt=1, parent="session_child"),
+        _request(attempt=1, parent="session_child").model_copy(update={"resume_answers": [_answer(first.control.question)], "control_ack": first.control.origin}),
         session_id="session_child",
     )
 
@@ -220,6 +221,7 @@ def test_resume_recovers_active_session_after_interruption() -> None:
         AgentState(
             session_id="session_interrupted",
             tool_protocol_key=ScriptedLLMClient.tool_session_key,
+            contract_fingerprint=contract_fingerprint("finish only", native_tool_schemas((FinishTool(),))),
             agent_name="finisher",
             owner=AgentOwner.SCIENTIFIC,
             run_id="run_resume",
@@ -327,7 +329,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     if damage == "old_schema":
         value["schema_version"] = "23.0"
     elif damage == "future_schema":
-        value["schema_version"] = "25.0"
+        value["schema_version"] = "26.0"
     elif damage == "missing_schema":
         value.pop("schema_version")
     elif damage == "invalid_state":
@@ -353,7 +355,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     assert result.report == result.error.message
     assert "cannot resume session" in result.report
     if damage in {"old_schema", "future_schema", "missing_schema", "non_object"}:
-        assert "schema_version must be 24.0" in result.report
+        assert "schema_version must be 25.0" in result.report
     assert result.llm_calls == 0
     assert result.session is None
     assert definition.llm_client.contexts == []
@@ -404,3 +406,8 @@ def test_resume_does_not_hide_custom_store_programming_errors(error_type):
     with pytest.raises(error_type, match="custom store bug"):
         AgentLoop(store=store).run(definition, request, session_id=state.session_id)
     assert definition.llm_client.contexts == []
+
+
+def _answer(question):
+    from resagent2_contracts import RecordedAnswer
+    return RecordedAnswer(question_id=question.id, question_text=question.text, requested_fields=question.requested_fields, options=question.options, values={field:"demo" for field in question.requested_fields}, answered_at=datetime.now(UTC), run_id=question.run_id, session_id=question.session_id, task_id=question.task_id, attempt_number=question.attempt_number)

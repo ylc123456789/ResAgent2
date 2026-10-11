@@ -35,7 +35,6 @@ ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间
 
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 
-workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环境状态；材料按 Runtime 的统一权重/优先级分配，旧读取保留时序和后续内置修改标记。规则与预算只在 [CONTEXT](../../docs/current/CONTEXT.md) 维护；调用语义见 [CONTRACTS](../../docs/current/CONTRACTS.md#components)。
 
 `missing_required_artifacts` 共用 `RegisteredArtifactReader` 的 Run 授权与冻结 hash 检查，精确比较已登记 Ref 的 `output_name`；存在检查通过 `verify` 分块计算文件 hash，不解码文本或全量载入二进制产物；不扫描工作区、不按文件名猜测，也不把存在检查写成 Scientific 的观察记录。Scientific 和 Registry 复用此事实规则，登记权威仍在 Orchestrator。
 
@@ -86,3 +85,5 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 `WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML/XHTML 使用 BeautifulSoup 的 html.parser 和 Markdownify 转为 Markdown，parser 为 markdownify/html.parser；text/plain 原文保持不变，parser 为 plain。普通链接保留为 Markdown 链接，相对href按最终响应URL解析，空或非法目标只保留可见文字；pre 正文保留换行、缩进和空白，输出代码围栏，嵌套 pre 加分隔，链接包住代码块时另列地址。图片只保留 alt 文字，不保留图片源地址或解析图像。SVG/MathML/noscript/template 内 title 不污染页面标题；script/style/noscript/template/title 未闭合、空提取或转换失败沿现有 parse_failed 路径报告，不生成残缺正文。依赖由本包 pyproject.toml 声明，editable 安装时一并解析，不新增 Node 运行时。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
 
 网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。
+
+当前接入规则：文献和网页搜索只返回临时线索；fetch_literature(source)/web_fetch 显式保存材料，read_artifact 按需读取。工具回执只进原生历史，实际 Ref 增量由共享 Loop 摄入完整目录。工作结果按 WorkRequest → Task → 原报告和实际产物展开，不生成总体报告。业务问答直接保存并累计，操作批准续执行原调用。规则以 [CONTEXT](../../docs/current/CONTEXT.md) 和 [CONTRACTS](../../docs/current/CONTRACTS.md) 为准。

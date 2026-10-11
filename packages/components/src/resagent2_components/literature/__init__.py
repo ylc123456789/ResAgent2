@@ -13,6 +13,6 @@ from .backends import (
     LiteratureSearchResult,
 )
 
-from .records import render_paper
+from .records import parse_literature_source, render_paper
 
 from .imports import PreparedLiteratureImport, load_literature_manifest

@@ -55,7 +55,7 @@ class _AcceptFinish:
 
 def _context(request, state, max_context_tokens) -> list[ContextSection]:
     return [
-        ContextSection(name="task", content=request.instruction, priority=100, required=True)
+        ContextSection(name="task", content=request.instruction)
     ]
 
 
@@ -101,7 +101,7 @@ def test_bad_json_stops_at_existing_limits(
     assert result.error.retryable is False
     assert result.llm_calls == calls
     assert client.last_attempts == 1
-    assert "not valid JSON" in result.error.details["runtime_feedback"]["summary"]
+    assert "not valid JSON" in result.error.details["last_observation"]["summary"]
 
     trace_file = tmp_path / "traces" / "llm_traces.jsonl"
     record = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[-1])
@@ -222,7 +222,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
     assert records[-1]["parsed_action"]["tool"] == "finish"
     if not network_failure:
         assert len({record["session_id"] for record in records}) == 1
-        assert "runtime_feedback" in records[-1]["included_sections"]
+        assert "not valid JSON" in records[-1]["request_text"]
 
 
 @pytest.fixture
@@ -284,7 +284,7 @@ def test_bad_json_feedback_preserves_state_and_never_executes_prefix(recovery, b
     assert state.step == 2
     assert state.memory["kept"] == 7
     assert [e.tool for e in state.events if e.type == "action"] == ["write_value", "finish"]
-    assert state.runtime_feedback is None
+    assert state.last_observation.ok
     assert all(len(turn.tool_results) == len(turn.tool_calls) for turn in state.tool_turns)
     assert not json.loads(state.tool_turns[0].tool_results[state.tool_turns[0].tool_calls[0].id])["ok"]
     records = [json.loads(line) for line in
@@ -294,7 +294,7 @@ def test_bad_json_feedback_preserves_state_and_never_executes_prefix(recovery, b
     assert records[0]["action_valid"] is False
     assert records[0]["finish_reason"] == "stop"
     assert records[0]["usage"] == {"completion_tokens": 20}
-    assert records[1]["included_sections"].count("runtime_feedback") == 1
+    assert "runtime_feedback" not in records[1]["included_sections"]
     assert "Return native tool calls with JSON objects of arguments" in records[1]["request_text"]
     assert "No tool was executed" in records[1]["request_text"]
     assert "runtime_feedback" not in records[2]["included_sections"]
@@ -380,7 +380,8 @@ def test_json_feedback_is_provider_neutral(recovery):
     )
     assert result.status == ModuleStatus.COMPLETED
     assert result.llm_calls == 2
-    assert "runtime_feedback" in client.contexts[1].included_sections
+    assert "runtime_feedback" not in client.contexts[1].included_sections
+    assert "not valid JSON" in json.dumps(store.load("session_r").tool_turns[0].tool_results)
 
 
 def test_correction_keeps_previously_completed_work(recovery):
@@ -412,8 +413,8 @@ def test_trace_storage_failure_does_not_interrupt_schema_recovery(recovery, capl
     assert result.llm_calls == state.llm_calls_used == provider.call_count == 2
     # The schema-validation trace also fails; feedback still reaches the next request.
     request_body = json.loads(provider.call_args_list[1].args[0].content)
-    assert "runtime_feedback" in request_body["messages"][-1]["content"]
-    assert "No tool was executed" not in state.model_dump_json()
-    assert state.runtime_feedback is None
+    assert "Field required" in json.dumps(request_body["messages"])
+    assert "runtime_feedback" not in state.model_dump()
+    assert state.last_observation.ok
     assert caplog.text.count("Could not write optional LLM trace") == 2
     assert "PRIVATE_REASONING" not in caplog.text

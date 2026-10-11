@@ -84,10 +84,18 @@ class DeterministicWorkflowCompiler:
 
     def compile(self, request, *, current, registry, limits, workspaces=None):
         if current is None:
-            return CompilationResult(self._proposal)
+            proposal = self._proposal.model_copy(deep=True)
+            proposal.work_request_id = request.id
+            for task in proposal.tasks:
+                task.work_request_id = request.id
+            return CompilationResult(proposal)
         if self._patch is None:
             raise CompilationError("no patch configured for an existing workflow")
-        return CompilationResult(self._patch)
+        patch = self._patch.model_copy(deep=True)
+        patch.work_request_id = request.id
+        for task in patch.add_tasks:
+            task.work_request_id = request.id
+        return CompilationResult(patch)
 
 
 def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=None):
@@ -117,8 +125,8 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "Use output_names only when an explicit cross-task handoff needs named outputs. "
         "Do not guess artifact IDs. Existing input_artifacts must already be supplied materials.",
         "Preserve the work request's constraints on effects. A confirmation request is "
-        "not execution: one approved operation may require calling the same tool again "
-        "after approval. Do not turn a single intended operation into a one-tool-call limit.",
+        "not execution: the original operation waits for approval and then returns its "
+        "final result. Do not turn a single intended operation into a one-tool-call limit.",
         "",
         "### Output",
         "Return CompilationDraft using the supplied output schema. Use instruction as "

@@ -9,8 +9,8 @@ import resagent2_contracts as contracts
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ArtifactCandidate,
     ArtifactRef, ControlSignal, ModuleError, QuestionDraft, RecordedAnswer,
-    SessionRef, TaskBudget, TaskProposal, WorkFeedback, WorkRecord, WorkOutcome,
-    WorkRequestDraft, WorkTaskOutcome, WorkflowProposal,
+    SessionRef, TaskBudget, TaskProposal, PendingQuestion, ControlOrigin, WorkResult,
+    WorkRequestDraft, WorkTaskResult, WorkflowProposal,
 )
 
 NOW = datetime.now(UTC)
@@ -28,9 +28,9 @@ def request(**changes):
 
 def artifact(**changes):
     data = dict(
-        id="artifact_answer", kind="answer", producer="orchestrator", run_id="run_test",
+        id="artifact_data", kind="data", producer="coding", run_id="run_test",
         task_id="task_test", attempt_number=1, uri="file:///tmp/answer.json", sha256="0" * 64,
-        media_type="application/json", summary="Reply", metadata={"source_type": "controller_answer"},
+        media_type="application/json", summary="Reply", metadata={},
     )
     data.update(changes)
     return ArtifactRef(**data)
@@ -85,21 +85,20 @@ def test_run_and_agent_require_explicit_permissions():
     assert not AgentPermissions().prepare_environment
 
 
-def test_resume_ids_are_identity_only_and_must_resolve_to_input_artifacts():
-    ref = artifact()
-    request(input_artifacts=[ref])  # Historical answers are ordinary first-call material.
+def test_resume_data_requires_origin_session_and_exact_answer_scope():
+    answer = RecordedAnswer(question_id="question_test", question_text="Which data?",
+        requested_fields=["dataset"], values={"dataset":"demo"}, answered_at=NOW,
+        run_id="run_test", session_id="session_test", task_id="task_test", attempt_number=1)
     with pytest.raises(ValidationError, match="parent session"):
-        request(input_artifacts=[ref], resume_artifact_ids=[ref.id])
-    with pytest.raises(ValidationError, match="reference input_artifacts"):
-        request(parent_session_id="session_test", resume_artifact_ids=[ref.id])
-    request(parent_session_id="session_test", input_artifacts=[ref], resume_artifact_ids=[ref.id])
-    feedback = artifact(
-        id="artifact_feedback", kind="work_feedback", task_id=None, attempt_number=None,
-        session_id="session_test", metadata={"source_type": "controller_feedback"},
-    )
-    with pytest.raises(ValidationError, match="cannot resume"):
-        request(parent_session_id="session_test", input_artifacts=[ref, feedback],
-                resume_artifact_ids=[ref.id, feedback.id])
+        request(resume_answers=[answer])
+    request(parent_session_id="session_test", resume_answers=[answer], user_answers=[answer],
+            control_ack=ControlOrigin(session_id="session_test", turn=0, call_id="call_1"))
+    with pytest.raises(ValidationError, match="another session"):
+        request(parent_session_id="session_other", resume_answers=[answer])
+    with pytest.raises(ValidationError, match="this invocation"):
+        request(parent_session_id="session_test", user_answers=[answer.model_copy(update={"attempt_number":2})])
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        request(resume_artifact_ids=[])
 
 
 def test_input_materials_reject_cross_run_and_duplicate_identity():
@@ -110,27 +109,19 @@ def test_input_materials_reject_cross_run_and_duplicate_identity():
         request(input_artifacts=[artifact(run_id="run_other")])
 
 
-def test_pause_control_resolves_one_returned_candidate_with_correct_kind():
-    question = ArtifactCandidate(
-        kind="question", path="question.json", media_type="application/json", summary="Choose",
-        content=QuestionDraft(text="Which data?", requested_fields=["dataset"]).model_dump_json(),
-    )
-    result = AgentResult(
-        status="needs_user_input", report="Awaiting dataset", session=session(),
-        artifacts=[question], control=ControlSignal(action="ask_user", candidate_index=0),
-    )
+def test_pause_control_is_direct_and_matches_paused_session():
+    question = PendingQuestion(id="question_test", run_id="run_test", session_id="session_test",
+        task_id="task_test", attempt_number=1, text="Which data?", requested_fields=["dataset"], created_at=NOW)
+    control = ControlSignal(action="ask_user", source_session_id="session_test", source_turn=0,
+                            source_call_id="call_1", question=question)
+    result = AgentResult(status="needs_user_input", report="Awaiting dataset", session=session(), control=control)
+    assert result.artifacts == []
     assert AgentResult.model_validate_json(result.model_dump_json()) == result
-    for change in [dict(artifacts=[]), dict(session=None), dict(control=None)]:
+    for change in [dict(session=None), dict(control=None)]:
         with pytest.raises(ValidationError):
             AgentResult.model_validate(result.model_dump() | change)
-    with pytest.raises(ValidationError, match="question artifact"):
-        AgentResult.model_validate(result.model_dump() | {"artifacts": [question.model_copy(update={"kind": "metrics"})]})
-
-
-def test_control_has_one_reference_and_never_embedded_business_content():
-    for fields in [{}, {"artifact_id": "artifact_x", "candidate_index": 0}, {"data": {"text": "Question"}}]:
-        with pytest.raises(ValidationError):
-            ControlSignal(action="ask_user", **fields)
+    with pytest.raises(ValidationError):
+        ControlSignal(action="ask_user", source_session_id="session_test", source_turn=0, source_call_id="x")
 
 
 @pytest.mark.parametrize("field", ["payload", "question", "request_work", "opinion", "assessment"])
@@ -160,19 +151,15 @@ def test_recorded_answer_retains_question_snapshot_and_exact_scope():
             RecordedAnswer(**(data | changes))
 
 
-def test_work_record_requires_paired_request_and_matching_outcome():
-    data = dict(
-        run_id="run_test", session_id="session_test", work_request_id="work_test",
-        previous_work_request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]),
-        work_outcome=WorkOutcome(work_request_id="work_test", workflow_revision=1, summary="Done",
-            tasks=[WorkTaskOutcome(task_id="task_test", status="completed", summary="Measured")]),
-    )
-    assert WorkRecord(**data).work_outcome.work_request_id == "work_test"
-    for missing in ["previous_work_request", "work_outcome"]:
-        with pytest.raises(ValidationError):
-            WorkRecord(**{key: value for key, value in data.items() if key != missing})
-    with pytest.raises(ValidationError, match="must match"):
-        WorkRecord(**(data | {"work_request_id": "work_other"}))
+def test_work_result_allows_honest_zero_task_failure_without_report_body():
+    error=ModuleError(code="contract_error", message="Compiler could not form a workflow", retryable=False)
+    result=WorkResult(run_id="run_test", session_id="session_test", work_request_id="work_test",
+                      objective="Measure", status="failed", error=error)
+    assert result.tasks == [] and result.artifacts == []
+    with pytest.raises(ValidationError, match="requires error"):
+        WorkResult.model_validate(result.model_dump() | {"error":None})
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        WorkResult.model_validate(result.model_dump() | {"summary":"Invented aggregate"})
 
 
 def test_graph_rejects_scientific_and_unknown_named_output():
@@ -201,7 +188,7 @@ def test_contract_revalidation_rejects_unchecked_model_copy():
 
 def test_replaced_contracts_are_not_exported_or_aliased():
     for name in ["Capability", "CapabilityInput", "ModuleTaskRequest", "ModuleResult",
-                 "CodeUnderstandInput", "CodeModifyResult", "ExperimentResult", "ScientificTurnRequest", "ScientificTurnResult"]:
+                 "ResearchIndex", "WorkFeedback", "WorkRecord", "WorkOutcome", "CodeUnderstandInput", "CodeModifyResult", "ExperimentResult", "ScientificTurnRequest", "ScientificTurnResult"]:
         assert not hasattr(contracts, name)
 
 
@@ -214,7 +201,7 @@ def test_system_kind_policy_rejects_wrong_producer_and_source(kind):
             "attempt": {"task_id": "task_test", "attempt_number": 1},
             "session": {"session_id": "session_test"},
         }[scope]
-        data = {"kind": kind, "task_id": None, "attempt_number": None,
+        data = {"producer": "orchestrator", "kind": kind, "task_id": None, "attempt_number": None,
                 "metadata": {"source_type": source}} | fields
         ref = artifact(**data)
         assert ref.producer == AgentOwner.ORCHESTRATOR

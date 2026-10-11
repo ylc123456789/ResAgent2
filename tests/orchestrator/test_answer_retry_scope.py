@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from control_fixtures import question_signal, ScopedScriptedModulePort
 from e2e.native_fixtures import tool_turns
 from resagent2_contracts import (
     AgentOwner, AgentResult, ArtifactCandidate, AttemptStatus, ControlSignal,
@@ -37,11 +38,7 @@ def question_result(attempt_number):
     draft = QuestionDraft(text="Which dataset?", requested_fields=["dataset"])
     return AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT, report=draft.text,
-        artifacts=[ArtifactCandidate(
-            kind="question", path="question.json", media_type="application/json",
-            summary="Dataset question", content=draft.model_dump_json(),
-        )],
-        control=ControlSignal(action="ask_user", candidate_index=0),
+        artifacts=[], control=question_signal(f"session_attempt_{attempt_number}", draft.text, draft.requested_fields),
         session=session(attempt_number, SessionStatus.PAUSED),
     )
 
@@ -52,7 +49,7 @@ def test_answer_resumes_original_attempt_and_is_not_inherited_by_retry(tmp_path,
         status=ModuleStatus.COMPLETED, report="Retry complete",
         session=session(2, SessionStatus.COMPLETED),
     )
-    port = ScriptedModulePort([
+    port = ScopedScriptedModulePort([
         question_result(1),
         AgentResult(
             status=ModuleStatus.FAILED, report="Retryable execution failure after the answer",
@@ -114,19 +111,14 @@ def test_answer_resumes_original_attempt_and_is_not_inherited_by_retry(tmp_path,
     resumed, retried = port.requests[1:]
     assert resumed.attempt_number == 1
     assert resumed.parent_session_id == "session_attempt_1"
-    answer_ref, = [ref for ref in resumed.input_artifacts if ref.kind == "answer"]
-    recorded = read_json(answer_ref, RecordedAnswer)
+    recorded, = resumed.resume_answers
     assert recorded.question_id == question.id and recorded.values == {"dataset": "demo"}
     assert recorded.task_id == first.task_id and recorded.attempt_number == 1
-    assert resumed.resume_artifact_ids == [answer_ref.id]
-
+    assert resumed.user_answers == [recorded]
     assert retried.attempt_number == 2 and retried.task_id == first.task_id
-    assert retried.parent_session_id is None and retried.resume_artifact_ids == []
-    assert not any(ref.kind == "answer" for ref in retried.input_artifacts)
-    assert answer_ref.id not in [ref.id for ref in retried.input_artifacts]
-    assert run.artifacts[answer_ref.id] == answer_ref
+    assert retried.parent_session_id is None and retried.resume_answers == [] and retried.user_answers == []
+    assert not any(ref.kind in {"question", "answer"} for ref in run.artifacts.values())
     assert run.answers == [recorded]
-    assert read_json(run.artifacts[answer_ref.id], RecordedAnswer) == recorded
     assert question.id in run.delivered_answer_ids
     attempts = run.workflow.tasks[0].attempts
     assert [attempt.number for attempt in attempts] == [1, 2]

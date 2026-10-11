@@ -88,9 +88,9 @@ Scientific 的 Session 跨研究回合复用；Coding、Experiment 的 Session �
 反向：执行报告与工件 → Interpreter 固定组织 → Scientific 阅读并作科学判断
 ```
 
-Compiler 使用 LLM 翻译需求，固定代码分配身份、检查结构；Interpreter 不再调用 LLM 二次改写报告，而是按已有任务和尝试组织最新已记录的报告原文、状态、错误和工件入口。
+Compiler 使用 LLM 翻译需求，固定代码分配身份、检查结构；Interpreter 不调用 LLM，不拼接总体报告，只按已有任务和尝试组织真实状态、错误及原报告与交付物入口。
 
-Controller 冻结工作记录和反馈；Scientific 先看到完整目录、必要事实与按容量展示的报告。原报告、历史尝试和原始产物仍可读取。这里保证交接减少转述损失，不承诺所有正文始终完整出现在模型输入中，也不把专业报告当成无误的测量。取舍见 [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)。
+Scheduler 在接收结论确定后按原字符冻结每个真实终态 Attempt 的报告；Controller 交付实际 Ref，Scientific 从完整目录按需读取。WorkRequest 没有总体报告，失败历史和原始产物仍可读取。这里保证交接减少转述损失，不承诺所有正文始终完整出现在模型输入中，也不把专业报告当成无误的测量。当前取舍见 [ADR-0028](../history/decisions/0028-tool-history-and-complete-artifact-directory.md)，固定 Interpreter 的历史理由见 [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)。
 
 **修改时问自己：新增交接步骤是否必要，是否改变了目标或结果的原意，原件是否仍能追溯？**
 
@@ -131,9 +131,9 @@ Coding 可以分析现有代码，也可以修改和验证；Experiment 可以�
 1. **固定契约**：职责、系统规则、工具说明与 schema。
 2. **任务需求**：当前指令与本作用域累计的业务问答；操作批准不作为任务需求累计。
 3. **原生协议历史**：成对保存的 assistant/tool 调用与回执。
-4. **当前任务上下文与完整工件索引**：当前事实、反馈、可见材料片段和导航目录。
+4. **完整工件索引**：当前 Agent 已授权的全部登记材料，按内容和真实任务归属展开；不复制正文。
 
-每轮从当前事实重建业务上下文，协议历史保留完整回合。必要时压缩较早历史在模型输入中的投影，原始事件保留。这样既支持原生 function call 的连续性，也让当前任务和材料不依赖旧摘要恢复。Compiler 是无状态编译，Interpreter 不调用模型，不强行套用 Agent 的 Session 框架。细节见 [CONTEXT](CONTEXT.md#basics)。
+固定契约在同一 Session 保持稳定；任务需求和完整目录每轮从权威事实重建并保持完整。只有第三部分允许压缩较早完整回合的模型投影，原始事件保留。工具正文与失败反馈只进入原生回执，不再复制成第四部分工作集。这样既支持原生 function call 的连续性，也让当前任务和材料不依赖旧摘要恢复。Compiler 是无状态编译，Interpreter 不调用模型，不强行套用 Agent 的 Session 框架。细节见 [CONTEXT](CONTEXT.md#basics)。
 
 **修改时问自己：新动作能否进入已有工具与上下文框架，调用回执与后续真实结果是否分清？**
 
@@ -151,9 +151,9 @@ Coding 可以分析现有代码，也可以修改和验证；Experiment 可以�
 
 本轮授权输入与 Session 中已登记工具产物合并为唯一、完整的 `artifact_index`；索引保留 ID、类型、说明和必要来源关系。这里的完整范围是当前 Agent 可用的材料，不是整个 Run 的所有内部记录。
 
-文献搜索返回论文元信息和摘要预览，网页搜索返回来源预览；完整结果保存为工件。获取论文全文或网页正文是另外的工具调用，会登记新工件并更新索引。`read_artifact` 按范围返回内容，不创建新的正文工件；文件和工件的已读片段形成有界工作集。
+文献和网页搜索返回临时线索，只进入可压缩的工具历史。模型通过 fetch 选择值得持久保存的材料，再登记工件并更新完整目录；工具说明明确搜索线索可能随历史压缩从模型输入消失。`read_artifact` 按范围返回原文，不产生工件或重复正文工作集。
 
-完整目录和必需输入不静默截断，放不下时明确报告容量问题。正文可按需分段读取，当前工作集可选择片段，原件和读取事件仍保留。具体接入方式见[文献与网页上下文](CONTEXT.md#literature)。
+完整目录和必需输入不静默截断，放不下时明确报告容量问题。正文可按需分段读取；较早回执可摘要，但原件、目录和原始读取事件保留。具体接入方式见[文献与网页上下文](CONTEXT.md#literature)。
 
 **修改时问自己：模型是否知道材料在哪里，能否按需读到原文，是否把不必要的大段正文提前塞入了上下文？**
 
@@ -172,7 +172,7 @@ Coding 可以分析现有代码，也可以修改和验证；Experiment 可以�
 
 ### 在 ResAgent2 中
 
-Controller 管 Run 与研究往返，Scheduler 管 Task/Attempt，Agent 与 Runtime 管 Session。Registry 校验并冻结候选材料，`Run.artifacts` 保存登记结果；ResearchIndex 和模型索引是派生导航，不另存路径、hash 或权限权威。
+Controller 管 Run 与研究往返，Scheduler 管 Task/Attempt，Agent 与 Runtime 管 Session。Registry 校验并冻结候选材料，`Run.artifacts` 保存登记结果；模型目录从授权身份和原始 Ref 派生，不再持久保存 ResearchIndex、WorkRecord 或 WorkFeedback 作为第二套导航与报告链。UUID 表示工件身份，SHA256 校验内容；来源和快照规则决定复用。
 
 Agent 的领域完成检查、接收端的来源冻结和 Run 最终交付检查分别承担不同责任；同一事实规则复用已有 helper。科学观点由 Scientific 判断，`inconclusive` 或负结果也可以合法完成研究。
 

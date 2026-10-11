@@ -205,6 +205,7 @@ def test_goal_file_is_read_explicitly(tmp_path: Path):
 def test_answer_uses_persisted_question(tmp_path: Path, answer: str):
     run = _run(RunStatus.PAUSED)
     run.pending_question = PendingQuestion(
+        session_id="session_test",
         id="question_metric",
         run_id=run.run_id,
         text="Choose the primary metric",
@@ -237,6 +238,7 @@ def test_answer_uses_persisted_question(tmp_path: Path, answer: str):
 def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
     run = _run(RunStatus.PAUSED)
     run.pending_question = PendingQuestion(
+        session_id="session_test",
         id="question_mode", run_id=run.run_id, text="Which mode?",
         requested_fields=["mode"], created_at=datetime.now(UTC),
     )
@@ -272,6 +274,7 @@ def test_show_reads_store_without_building_application(
         task_id="task_train", attempt_number=1,
     ) if is_approval else None
     run.pending_question = PendingQuestion(
+        session_id="session_test",
         id="question_next", run_id=run.run_id, text="Choose the next step",
         requested_fields=[field], created_at=datetime.now(UTC), action=action,
     )

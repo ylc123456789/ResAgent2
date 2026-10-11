@@ -85,30 +85,23 @@ def test_shell_always_requires_approval_before_audit_or_execution(tmp_path, monk
     monkeypatch.setattr("resagent2_components.ProcessRunner.run_shell", run_shell)
     action = {"tool": "run_shell", "arguments": {"command": "ls | sort"}}
     agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
-        action, action, {"tool": "finish", "arguments": {"report": "Inspected the files."}},
+        action, {"tool": "finish", "arguments": {"report": "Inspected the files."}},
     ])))
     req = request(tmp_path, writable=True, confirm_commands=confirm_commands)
     first = agent.invoke(req)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT, first.report
     assert calls == []
-    question = QuestionDraft.model_validate_json(
-        next(item.content for item in first.artifacts if item.kind == "question"))
+    question = first.control.question
     answer = RecordedAnswer(
-        question_id=f"question_{question.action.action_id}", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
         run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
-        action=question.action,
-    )
-    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
-        ArtifactCandidate(kind="answer", path="answer.json", media_type="application/json",
-                          summary="Approve the exact shell command", content=answer.model_dump_json()),
-        run_id=req.run_id, source_type="controller_answer",
-        task_id=req.task_id, attempt_number=req.attempt_number,
+        session_id=first.session.id, action=question.action,
     )
     resumed = agent.invoke(req.model_copy(update={
         "parent_session_id": first.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
+        "resume_answers": [answer], "control_ack": first.control.origin,
     }))
     assert resumed.status == ModuleStatus.COMPLETED, resumed.report
     assert resumed.session.id == first.session.id

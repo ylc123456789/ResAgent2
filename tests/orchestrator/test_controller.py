@@ -1,4 +1,5 @@
 """Tests for the Phase 7.5 ResearchController (DEVELOPMENT_PLAN §7.5)."""
+from control_fixtures import question_signal, ScopedScriptedModulePort
 
 from e2e.native_fixtures import tool_turns
 
@@ -30,8 +31,6 @@ from resagent2_contracts import (
     SessionStatus,
     TaskProposal,
     UserAnswer,
-    WorkFeedback,
-    WorkRecord,
     WorkRequest,
     WorkRequestDraft,
     WorkRequestStatus,
@@ -61,21 +60,14 @@ from resagent2_orchestrator.handoffs import read_json, system_artifact
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
-def _context_answer(context, ref):
-    assert context.included_sections.count("research") == 1
-    assert f"material_{ref.id}" not in context.included_sections
-    lines = context.text.splitlines()
-    payload = json.loads(lines[lines.index("## research") + 1])
-    return next(answer for answer in payload["user_answers"] if answer["artifact_id"] == ref.id)
+def _context_answer(context, answer):
+    assert context.included_sections.count("task") == 1
+    return next(value for value in json.loads(context.task_context.split("\n", 1)[1])["user_answers"]
+                if value["question_id"] == answer.question_id)
 
 
-def _answer_projection(ref, answer):
-    value = answer.model_dump(mode="json")
-    return {
-        "artifact_id": ref.id, "question_id": answer.question_id,
-        "question": answer.question_text, "values": answer.values,
-        "answered_at": value["answered_at"],
-    }
+def _answer_projection(answer):
+    return answer.model_dump(mode="json", exclude_none=True)
 
 
 @pytest.fixture
@@ -97,6 +89,7 @@ def run_clock(monkeypatch):
 
     monkeypatch.setattr(controller_module, "datetime", Clock)
     monkeypatch.setattr(scheduler_module, "datetime", Clock)
+    monkeypatch.setattr("resagent2_runtime.loop.datetime", Clock)
     return Clock
 
 
@@ -181,7 +174,7 @@ def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
     controller = build_controller(
         actions=[request_work_action(), finish_action()], dataset_ref_source=source,
     )
-    port = ScriptedModulePort([_task_question_result(), completed_result()])
+    port = ScopedScriptedModulePort([_task_question_result(), completed_result()])
     controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT] = ModuleBinding(
         owner=AgentOwner.EXPERIMENT, port=port,
     )
@@ -280,7 +273,7 @@ def build_controller(
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=store or InMemoryRunStore(),
@@ -447,7 +440,9 @@ def test_single_work_cycle_completes() -> None:
     assert len(run.work_requests) == 1
     assert run.work_requests[0].status.value == "consumed"
     # The WorkOutcome must carry the real execution summary, not the task goal.
-    assert run.work_requests[0].outcome.tasks[0].summary == "done"
+    report_id = run.work_requests[0].outcome.tasks[0].attempts[0].report_artifact_id
+    from resagent2_components import RegisteredArtifactReader
+    assert RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id).read_text(report_id)["content"] == "done"
 
 
 def _cycle_compiler():
@@ -488,7 +483,7 @@ def test_multiple_serial_work_cycles(tmp_path) -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result(), completed_result()]),
+                port=ScopedScriptedModulePort([completed_result(), completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -523,7 +518,7 @@ def test_task_failure_then_request_alternative_work(tmp_path) -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([failed, completed_result()]),
+                port=ScopedScriptedModulePort([failed, completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -684,7 +679,7 @@ def _task_question_result() -> AgentResult:
     return AgentResult(
         status=ModuleStatus.NEEDS_USER_INPUT,
         report="Which dataset?",
-        artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='Which dataset?', requested_fields=['dataset']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
+        artifacts=[], control=question_signal("session_task_child", 'Which dataset?', ['dataset']),
         session=SessionRef(
             id="session_task_child",
             module=AgentOwner.EXPERIMENT,
@@ -707,7 +702,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([_task_question_result(), completed_result()]),
+                port=ScopedScriptedModulePort([_task_question_result(), completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -749,7 +744,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
     assert run.work_requests[0].status.value == "consumed"
     resumed_request = scheduler.bindings[WorkflowAgentKind.EXPERIMENT].port.requests[-1]
     from resagent2_orchestrator.handoffs import read_json
-    answers = [read_json(ref, RecordedAnswer) for ref in resumed_request.input_artifacts if ref.kind == "answer"]
+    answers = resumed_request.user_answers
     assert answers == run.answers
     assert answers[0].question_text == paused.pending_question.text
     assert answers[0].values == answer.values
@@ -766,7 +761,7 @@ def test_task_question_resume_does_not_consume_attempt_budget() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([_task_question_result(), completed_result()]),
+                port=ScopedScriptedModulePort([_task_question_result(), completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -856,14 +851,11 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
 
     class _FinishingPort:
         def invoke(self, request):
-            feedback_ref = next(ref for ref in request.input_artifacts if ref.kind == "work_feedback")
-            feedback = read_json(feedback_ref, WorkFeedback)
+            feedback, = request.work_results
             assert feedback.work_request_id == "work_1"
             assert feedback.session_id == completed_session.id
-            record_ref = next(ref for ref in request.input_artifacts if ref.id == feedback.work_record_artifact_id)
-            record = read_json(record_ref, WorkRecord)
-            assert record.work_outcome.tasks[0].task_id == "task_experiment"
-            assert feedback_ref.id in request.resume_artifact_ids
+            assert feedback.tasks[0].task_id == "task_experiment"
+            assert feedback.tasks[0].attempts[0].report_artifact_id in {ref.id for ref in request.input_artifacts}
             return AgentResult(status='completed', session=completed_session, llm_calls=1, report="Scientific conclusion", artifacts=[ArtifactCandidate(kind="scientific_opinion", path="opinion.json", media_type="application/json", summary="Conclusion", content=ScientificOpinion(verdict=ScientificVerdict.INCONCLUSIVE, statement='Execution completed without decisive evidence.').model_dump_json()), ArtifactCandidate(kind="observation_trace", path="observations.json", media_type="application/json", summary="Observed", content=json.dumps({"observed_artifact_ids": []}))])
 
     store = InMemoryRunStore()
@@ -871,7 +863,7 @@ def test_compiling_restart_resumes_an_already_accepted_workflow(tmp_path, accept
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=store,
@@ -952,7 +944,7 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
     )
     scheduler = WorkflowScheduler(
         bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(
-            owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([first_result]),
+            owner=AgentOwner.EXPERIMENT, port=ScopedScriptedModulePort([first_result]),
         )},
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts",
         data_root=tmp_path / "data",
@@ -961,7 +953,8 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
     controller = ResearchController(
         interpreter=DeterministicWorkInterpreter(),
         scientific_port=ScientificAgent(
-            ScriptedLLMClient(tool_turns([request_work_action(), request_work_action()])),
+            ScriptedLLMClient(tool_turns([request_work_action(), request_work_action(),
+                                        finish_action(limitations=["The subsequent work request could not run because its task slots were exhausted"])])),
             store=InMemorySessionStore(),
         ),
         compiler=compiler, scheduler=scheduler, registry=registry(),
@@ -970,33 +963,20 @@ def test_zero_task_slots_fail_before_compiler_and_preserve_history(tmp_path, pre
     request.execution_limits.max_tasks = 1
     run = controller.create_run("run_task_slots", request)
 
-    assert run.status == RunStatus.FAILED
-    assert run.terminal_error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert "No remaining task slots" in run.terminal_error.message
+    assert run.status == RunStatus.COMPLETED
+    assert run.terminal_error is None
     assert run.work_requests[0].status == WorkRequestStatus.CONSUMED
     assert run.work_requests[-1].status == WorkRequestStatus.FAILED
-    assert run.work_requests[-1].error == run.terminal_error
+    assert run.work_requests[-1].error.code == ErrorCode.BUDGET_EXHAUSTED
     assert compiler.calls == 1
-    assert run.llm_calls_used == 2  # only the two Scientific turns
+    assert run.llm_calls_used == 3  # two requests plus the post-failure Scientific conclusion
     assert len(run.workflow.tasks) == 1
     assert run.workflow.tasks[0].status.value == ("failed" if previous_failed else "completed")
     history = run.workflow.model_dump_json()
 
-    # A restart from COMPILING before candidate acceptance must use the same
-    # preflight, not loop into a zero-slot compiler call or leave work active.
-    run.status = RunStatus.RUNNING
-    run.terminal_error = None
-    run.work_requests[-1].status = WorkRequestStatus.COMPILING
-    run.work_requests[-1].error = None
-    scheduler.store.save(run)
-    resumed = controller.run_until_stable(run.run_id)
-    assert resumed.status == RunStatus.FAILED
-    assert resumed.terminal_error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert resumed.work_requests[-1].status == WorkRequestStatus.FAILED
-    assert resumed.work_requests[-1].error == resumed.terminal_error
-    assert resumed.llm_calls_used == 2
-    assert compiler.calls == 1
-    assert resumed.workflow.model_dump_json() == history
+    assert run.work_requests[-1].outcome.tasks == []
+    assert run.work_requests[-1].outcome.error.message == "No remaining task slots"
+    assert controller.run_until_stable(run.run_id) == run
 
 
 def test_second_work_outcome_contains_only_second_round_tasks() -> None:
@@ -1009,7 +989,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result(), completed_result()]),
+                port=ScopedScriptedModulePort([completed_result(), completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1031,7 +1011,7 @@ def test_second_work_outcome_contains_only_second_round_tasks() -> None:
     assert first.outcome.work_request_id == first.id
     assert [t.task_id for t in first.outcome.tasks] == ["task_experiment"]
     assert second.outcome.work_request_id == second.id
-    assert [t.task_id for t in second.outcome.tasks] == ["task_work_2"]
+    assert [t.task_id for t in second.outcome.tasks] == [f"task_{second.id}"]
 
 
 def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
@@ -1046,7 +1026,7 @@ def test_failed_task_appears_in_unresolved_then_is_reported() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([failed, completed_result()]),
+                port=ScopedScriptedModulePort([failed, completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1097,7 +1077,7 @@ def test_untrusted_reading_log_does_not_control_run_completion() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1126,7 +1106,7 @@ def test_run_total_llm_budget_exhaustion() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result(), completed_result()]),
+                port=ScopedScriptedModulePort([completed_result(), completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1155,7 +1135,7 @@ def test_answer_then_request_work_then_outcome_completes() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1190,7 +1170,7 @@ def _build_recoverable_controller(
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=run_store,
@@ -1239,8 +1219,8 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
     assert restored.answers[0].values == answer.values
     assert restored.scientific_session.id == paused.scientific_session.id
     context = rebuilt.scientific_port.llm_client.contexts[0]
-    answer_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer")
-    assert _context_answer(context, answer_ref) == _answer_projection(answer_ref, restored.answers[0])
+    answer_ref = restored.answers[0]
+    assert _context_answer(context, answer_ref) == _answer_projection(restored.answers[0])
 
 
 def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path):
@@ -1272,8 +1252,8 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert again.pending_question.text == second_text
     assert again.pending_question.id != forged.question_id
     first_context = second.scientific_port.llm_client.contexts[0]
-    first_ref = next(ref for ref in again.artifacts.values() if ref.kind == "answer")
-    assert _context_answer(first_context, first_ref) == _answer_projection(first_ref, again.answers[0])
+    first_ref = again.answers[0]
+    assert _context_answer(first_context, first_ref) == _answer_projection(again.answers[0])
     assert "Forged question" not in first_context.text
 
     before = JsonRunStore(tmp_path / "runs").load(paused.run_id).model_dump_json()
@@ -1290,11 +1270,11 @@ def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path
     assert [answer.question_text for answer in restored.answers] == [first_text, second_text]
     assert [answer.values for answer in restored.answers] == [{"answer": "第二个"}] * 2
     last_context = third.scientific_port.llm_client.contexts[0]
-    last_ref = next(ref for ref in restored.artifacts.values() if ref.kind == "answer" and ref.id != first_ref.id)
-    assert _context_answer(last_context, last_ref) == _answer_projection(last_ref, restored.answers[1])
-    assert _context_answer(last_context, first_ref) == _answer_projection(first_ref, restored.answers[0])
+    last_ref = restored.answers[1]
+    assert _context_answer(last_context, last_ref) == _answer_projection(restored.answers[1])
+    assert _context_answer(last_context, first_ref) == _answer_projection(restored.answers[0])
     # Both verified answers remain task dialogue without separate material sections.
-    assert f"material_{first_ref.id}" not in last_context.included_sections
+    assert f"material_{first_ref.question_id}" not in last_context.included_sections
     assert restored.delivered_answer_ids == [answer.question_id for answer in restored.answers]
     final_session = JsonSessionStore(tmp_path / "sessions").load(restored.scientific_session.id)
     assert final_session.session_id == first_session.session_id
@@ -1306,38 +1286,19 @@ def test_paired_answers_keep_task_and_scientific_scopes():
     controller = build_controller(actions=[request_work_action(), finish_action()])
     completed = controller.create_run("run_answer_scopes", research_request())
     task = completed.workflow.tasks[0]
-    scopes = [
-        {"session_id": completed.scientific_session.id},
-        {"task_id": task.id, "attempt_number": 1},
-        {"task_id": "task_other", "attempt_number": 1},
-    ]
-    answers = [RecordedAnswer(
-        question_id=f"question_{name}", question_text=f"Question for {name}?",
-        requested_fields=["answer"], run_id=completed.run_id,
-        values={"answer": "second"}, answered_at=NOW, **scope,
-    ) for name, scope in zip(("scientific", "experiment", "other"), scopes)]
+    answers = [RecordedAnswer(question_id=f"question_{i}", question_text=f"Question {i}", requested_fields=["answer"],
+                              values={"answer":"yes"}, answered_at=NOW, run_id=completed.run_id,
+                              session_id=completed.scientific_session.id if i == 0 else "session_task_child",
+                              task_id=None if i == 0 else task.id, attempt_number=None if i == 0 else i)
+               for i in range(3)]
     completed.answers = answers
-    refs = [system_artifact(controller.scheduler.artifact_registry, completed, "answer", answer, **scope)
-            for answer, scope in zip(answers, scopes)]
     request = controller.scheduler._module_request(completed, task, 1, parent_session_id="session_task_child")
-    assert [read_json(ref, RecordedAnswer) for ref in request.input_artifacts if ref.kind == "answer"] == [answers[1]]
-    assert request.resume_artifact_ids == [refs[1].id]
-    assert controller._pending_answers(completed) == [answers[0]]
-    scientific_request = controller._scientific_request(completed)
-    assert scientific_request.resume_artifact_ids == [refs[0].id]
-    assert refs[1] in scientific_request.input_artifacts
-    assert refs[2] in scientific_request.input_artifacts
-    from resagent2_components import RegisteredArtifactReader, read_request_material, ArtifactReadError
-    reader = RegisteredArtifactReader(scientific_request.input_artifacts, run_id=completed.run_id)
-    for ref, answer in zip(refs[1:], answers[1:]):
-        assert json.loads(reader.read_text(ref.id)["content"])["question_text"] == answer.question_text
-        with pytest.raises(ArtifactReadError, match="resumed invocation"):
-            read_request_material(scientific_request, ref)
+    assert request.user_answers == request.resume_answers == [answers[1]]
+    scientific = controller._scientific_request(completed)
+    assert scientific.user_answers == [answers[0]]
+    assert not any(ref.kind == "answer" for ref in scientific.input_artifacts)
     completed.delivered_answer_ids = [answers[0].question_id]
-    assert controller._pending_answers(completed) == []
-    assert controller._scientific_request(completed).resume_artifact_ids == []
-    assert controller.scheduler._module_request(completed, task, 1, parent_session_id="session_task_child").resume_artifact_ids == [refs[1].id]
-    assert refs[2] not in request.input_artifacts
+    assert controller._scientific_request(completed).resume_answers == []
 
 
 def test_budget_overrun_does_not_complete(tmp_path) -> None:
@@ -1349,7 +1310,7 @@ def test_budget_overrun_does_not_complete(tmp_path) -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1378,7 +1339,7 @@ def test_compiling_restart_recompiles_without_workflow() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=store,
@@ -1451,7 +1412,7 @@ def test_compiler_llm_calls_enter_the_run_ledger() -> None:
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
                 owner=AgentOwner.EXPERIMENT,
-                port=ScriptedModulePort([completed_result()]),
+                port=ScopedScriptedModulePort([completed_result()]),
             )
         },
         store=InMemoryRunStore(),
@@ -1515,9 +1476,11 @@ def test_failed_compiler_usage_comes_from_reservations(tmp_path, usage_known) ->
     assert compiler.invocations == 1
     assert run.status == RunStatus.FAILED
     assert run.work_requests[0].status.value == "failed"
-    assert run.llm_calls_used == (4 if usage_known else 1)
+    assert run.llm_calls_used == (5 if usage_known else 2)
     assert run.terminal_error is not None
-    assert run.terminal_error.details["compiler_usage_known"] is usage_known
+    assert run.work_requests[0].error.details["compiler_usage_known"] is usage_known
+    assert run.work_requests[0].outcome.error == run.work_requests[0].error
+    assert run.work_requests[0].outcome.tasks == []
 
 
 def test_required_outputs_are_frozen_in_the_conclusion_requirement_artifact():
@@ -1543,6 +1506,8 @@ def test_required_outputs_are_frozen_in_the_conclusion_requirement_artifact():
     ]
     forwarded = controller._scientific_request(persisted)
     assert snapshot in forwarded.input_artifacts
+    assert forwarded.task_context["conclusion_requirements"] == read_json(snapshot)
+    assert "required_artifacts" not in forwarded.task_context
 
 
 def test_controller_registers_required_scientific_candidate_before_final_acceptance():
@@ -1576,7 +1541,7 @@ def test_missing_output_feedback_can_execute_work_and_resume_without_citation():
         ),
     ]})
     controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT] = ModuleBinding(
-        owner=AgentOwner.EXPERIMENT, port=ScriptedModulePort([produced]),
+        owner=AgentOwner.EXPERIMENT, port=ScopedScriptedModulePort([produced]),
     )
     request = research_request().model_copy(update={"required_artifacts": ["metrics"]})
     run = controller.create_run("run_required_work", request)
@@ -1589,8 +1554,8 @@ def test_missing_output_feedback_can_execute_work_and_resume_without_citation():
     assert run.final_opinion.evidence_artifact_ids == []
     contexts = controller.scientific_port.llm_client.contexts
     assert len(contexts) == 3
-    assert "required_artifact_missing" in contexts[1].text
-    assert "subject=metrics" in contexts[1].text
+    assert "required_artifact_missing" in json.dumps(controller.scientific_port.store.load(run.scientific_session.id).tool_turns[0].model_dump(mode="json"))
+    assert "metrics" in json.dumps(controller.scientific_port.store.load(run.scientific_session.id).tool_turns[0].model_dump(mode="json"))
     persisted = controller.scientific_port.store.load(run.scientific_session.id)
     assert persisted.session_id == run.scientific_session.id
     assert persisted.llm_calls_used == run.llm_calls_used == 3

@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 24.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 25.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -346,7 +346,7 @@ arXiv 和 OpenAlex 仍是平级来源。literature_search 的 source=auto 只用
 
 可选环境变量 `OPENALEX_API_KEY` 是 OpenAlex 服务密钥，与 LLM key 无关；未设置时使用匿名访问，是否可用及额度以服务端为准。通过现有安全方式加载，勿写入命令行、goal 或日志；后端只通过 Authorization header 发送，不放进 URL/工件/上下文。需要密钥或新费用时先由用户决定，不自动注册或付费。
 
-arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因及来源尝试可查看工具回执和 stdout/stderr 日志，实际来源也保存在回执以及论文工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与完整来源摘要按论文保存为 literature_paper，工具仅预览500字符并标明裁剪/复用；literature_search 是查询回执，不代表全文。没有 next_request 不必然代表搜尽：来源总数可能未知，OpenAlex 页号分页也只覆盖前10000条。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告。用户提供的离线资料可经 [外部论文导入](#literature-import) 进入同一 Run；这不算在线检索成功，也不改变服务限流规则。
+arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因及来源尝试可查看工具回执和 stdout/stderr 日志，实际来源也保存在回执以及论文工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。搜索结果只是临时线索，不创建工件；历史压缩后模型可能看不到它们。Scientific 通过 fetch_literature(source) 持久保存选择的材料，source 使用搜索给出的精确 arxiv:/doi:/openalex: 来源或授权 artifact: 论文。元信息、原 PDF 和提取全文分别登记；PyMuPDF4LLM OCR 关闭。同授权来源和相同快照可复用，失败保留真实部分材料与缺口。离线资料可经 [外部论文导入](#literature-import) 进入同一 Run，不伪装成联网成功。
 
 ### 通用联网搜索和网页获取
 

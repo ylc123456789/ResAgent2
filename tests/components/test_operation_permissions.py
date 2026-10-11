@@ -74,24 +74,16 @@ def execute(req, actions, tool, store, *, binding=None):
 
 
 def answer(tmp_path, req, result):
-    question = QuestionDraft.model_validate_json(result.artifacts[0].content)
+    question = result.control.question
     recorded = RecordedAnswer(
-        question_id="question_permissions", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
-        run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
-        action=question.action,
+        run_id=req.run_id, session_id=result.session.id,
+        task_id=req.task_id, attempt_number=req.attempt_number, action=question.action,
     )
-    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
-        ArtifactCandidate(kind="answer", path="answer.json", media_type="application/json",
-                          summary="Approval", content=recorded.model_dump_json()),
-        run_id=req.run_id, source_type="controller_answer",
-        task_id=req.task_id, attempt_number=req.attempt_number,
-    )
-    return req.model_copy(update={
-        "parent_session_id": result.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
-    })
+    return req.model_copy(update={"parent_session_id":result.session.id,
+        "resume_answers":[recorded], "control_ack":result.control.origin})
 
 
 def command(text):
@@ -112,12 +104,12 @@ def test_approval_is_consumed_once_and_never_authorizes_next_command(tmp_path, s
     assert first.status == "needs_user_input" and tool.calls == []
     first_action = store.load(first.session.id).pending_action
     resumed = answer(tmp_path, req, first)
-    next_result = execute(resumed, [command("python first.py"), command(second)], tool, store)
+    next_result = execute(resumed, [command(second)], tool, store)
     assert next_result.status == "needs_user_input"
     assert tool.calls == ["python first.py"]
     assert store.load(first.session.id).pending_action.action_id != first_action.action_id
     final_req = answer(tmp_path, resumed, next_result)
-    final = execute(final_req, [command(second), FINISH], tool, store)
+    final = execute(final_req, [FINISH], tool, store)
     assert final.status == "completed"
     assert tool.calls == ["python first.py", second]
     assert store.load(first.session.id).pending_action is None
@@ -154,7 +146,7 @@ def test_recursive_delete_requires_new_approval_if_target_changes(tmp_path):
     second = execute(resumed, [action], tool, store)
     assert second.status == "needs_user_input"
     assert sorted(path.name for path in target.iterdir()) == ["new.txt", "old.txt"]
-    final = execute(answer(tmp_path, resumed, second), [action, FINISH], tool, store)
+    final = execute(answer(tmp_path, resumed, second), [FINISH], tool, store)
     assert final.status == "completed" and not target.exists()
     assert store.load(first.session.id).memory["edit_revision"] == 1
 
@@ -187,12 +179,12 @@ def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
     script = "  printf 'one\n' | cat\n"
     first = execute(req, [command(script)], tool, store)
     assert first.status == "needs_user_input" and tool.calls == []
-    draft = QuestionDraft.model_validate_json(first.artifacts[0].content)
+    draft = first.control.question
     assert draft.action.arguments == {"command": script}
     assert draft.action.context["cwd"] == str(tmp_path)
     assert draft.action.context["shell"] == "/bin/bash"
     assert draft.action.context["pipefail"] is True
-    result = execute(answer(tmp_path, req, first), [command(script), FINISH], tool, store)
+    result = execute(answer(tmp_path, req, first), [FINISH], tool, store)
     assert result.status == "completed" and tool.calls == [script]
 
 
@@ -201,8 +193,8 @@ def test_changed_shell_script_requires_its_own_approval(tmp_path):
     store = JsonSessionStore(tmp_path / "sessions")
     first = execute(req, [command("printf first")], tool, store)
     result = execute(answer(tmp_path, req, first), [command("printf second")], tool, store)
-    assert result.status == "needs_user_input" and tool.calls == []
-    assert QuestionDraft.model_validate_json(result.artifacts[0].content).action.arguments == {
+    assert result.status == "needs_user_input" and tool.calls == ["printf first"]
+    assert result.control.question.action.arguments == {
         "command": "printf second",
     }
 
@@ -217,16 +209,16 @@ def test_shell_approval_does_not_follow_a_changed_environment_prefix(tmp_path):
     action = command("python measure.py")
     first = execute(req, [action], tool, store, binding=binding)
     resumed = answer(tmp_path, req, first)
-    original_action = QuestionDraft.model_validate_json(first.artifacts[0].content).action
+    original_action = first.control.question.action
     binding.current = SimpleNamespace(prefix=tmp_path / "env_second", python_version="3.12")
 
     second = execute(resumed, [action], tool, store, binding=binding)
     assert second.status == "needs_user_input" and tool.calls == []
-    next_action = QuestionDraft.model_validate_json(second.artifacts[0].content).action
+    next_action = second.control.question.action
     assert next_action.arguments == original_action.arguments
     assert next_action.action_id != original_action.action_id
     assert original_action.context["environment"] == str(tmp_path / "env_first")
     assert next_action.context["environment"] == str(tmp_path / "env_second")
 
-    final = execute(answer(tmp_path, resumed, second), [action, FINISH], tool, store, binding=binding)
+    final = execute(answer(tmp_path, resumed, second), [FINISH], tool, store, binding=binding)
     assert final.status == "completed" and tool.calls == ["python measure.py"]

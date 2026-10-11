@@ -128,7 +128,7 @@ def test_registry_derives_required_paths_and_ignores_claimed_metadata(tmp_path):
     workspace.mkdir()
     (workspace / "actual.json").write_text('{"accuracy":0.9}')
     registry = ArtifactRegistry(tmp_path / "registered")
-    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1, existing_ids=set())
+    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1)
     candidate = metrics(path="actual.json").model_copy(update={"content": None, "metadata": {"source_path": "fake.json"}})
     ref = registry.register(candidate, index=1, **common)
     assert ref.metadata["source_path"] == "actual.json"
@@ -145,7 +145,7 @@ def test_registry_accepts_controlled_output_files_but_rejects_escape_and_ambigui
     (output / "metrics.json").write_text('{"accuracy":0.9}')
     registry = ArtifactRegistry(tmp_path / "registered")
     candidate = metrics().model_copy(update={"content": None})
-    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), output_dir=str(output), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1, existing_ids=set())
+    common = dict(grant=WorkspaceGrant(root=str(workspace), source='local', access=WorkspaceAccess(read_paths=['.'])), output_dir=str(output), producer='experiment', run_id='run_test', task_id='task_test', attempt_number=1)
     ref = registry.register(candidate, index=1, **common)
     assert ref.metadata["source_root"] == "output_dir"
     (workspace / "metrics.json").write_text("{}")

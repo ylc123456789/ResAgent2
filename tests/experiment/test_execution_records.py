@@ -67,7 +67,6 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
         tools=tools, llm_client=ScriptedLLMClient(tool_turns([
             {"tool": "run_shell", "arguments": {"command": "python train.py"}},
-            {"tool": "run_shell", "arguments": {"command": "python train.py"}},
             {"tool": "finish", "arguments": {"status": status, "report": "Recorded the outcome"}},
         ])),
         context_builder=lambda *_: [],
@@ -80,23 +79,17 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
     first = loop.run(definition, req, session_id="session_records")
     assert first.status == "needs_user_input"
     assert not any(item.kind == "execution_record" for item in first.artifacts)
-    question = QuestionDraft.model_validate_json(first.artifacts[0].content)
+    question = first.control.question
     answer = RecordedAnswer(
-        question_id=f"question_{question.action.action_id}", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
         run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
-        action=question.action,
-    )
-    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
-        ArtifactCandidate(kind="answer", path="answer.json", media_type="application/json",
-                          summary="Approve the pending shell command", content=answer.model_dump_json()),
-        run_id=req.run_id, source_type="controller_answer",
-        task_id=req.task_id, attempt_number=req.attempt_number,
+        session_id=first.session.id, action=question.action,
     )
     resumed = req.model_copy(update={
         "parent_session_id": first.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
+        "resume_answers": [answer], "control_ack": first.control.origin,
     })
     definition = replace(definition, permission_policy=OperationPermissionPolicy(
         tools, boundary=boundary, binding=binding, request=resumed,

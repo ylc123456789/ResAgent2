@@ -110,9 +110,15 @@ def _verification_status(
     return results, None
 
 
-def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) -> dict:
-    """Expose execution facts without imposing a business mode or mandatory edit."""
+def derive_control_state(
+    state: AgentState, binding: EnvironmentBinding | None, *, diff: str | None = None,
+) -> dict:
+    """Expose recorded verification and its current validity through a tool."""
     results, issue = _verification_status(state, binding)
+    if results and issue is None and diff is not None:
+        digest = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+        if state.memory.get("verification_diff_sha256") != digest:
+            issue = "Workspace changed after verification"
     passed = (not state.memory.get("verification_unrecorded_commands")
               and all(item.exit_code == 0 and not item.timed_out for item in results)) if results else None
     return {

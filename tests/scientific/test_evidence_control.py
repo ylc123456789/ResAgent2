@@ -36,7 +36,7 @@ def _finish(artifact_id):
 def _source(tmp_path, *, run_id="run_s"):
     registry = ArtifactRegistry(tmp_path / "artifacts")
     ref = registry.register_scientific(ArtifactCandidate(
-        kind="module_report", path="evidence.txt", media_type="text/plain",
+        kind="web_page", path="evidence.txt", media_type="text/plain",
         summary="Source report", content="Source content",
     ), run_id=run_id, session_id="session_s")
     return ref, RegisteredArtifactReader([ref], run_id="run_s")

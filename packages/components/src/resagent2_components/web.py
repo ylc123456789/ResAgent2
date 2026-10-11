@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from importlib.metadata import version
 from typing import Protocol
 from urllib.parse import urljoin, urlparse
 
@@ -53,6 +54,7 @@ class WebSearchItem:
     snippet: str
     score: float | None = None
     published_at: str | None = None
+    snippet_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +70,8 @@ class WebSearchBackend(Protocol):
 
     name: str
 
-    def search(self, query: str, *, max_results: int) -> WebSearchResult:
-        """Return all received sources within response limits; max_results sets the tool preview size."""
+    def search(self, query: str) -> WebSearchResult:
+        """Return all received sources within the transport response limit."""
 
 
 MAX_WEB_SNIPPET_CHARS = 2000
@@ -220,6 +222,7 @@ class WebPage:
     content_type: str
     parser: str
     fetched_at: str
+    parser_version: str | None = None
 
 
 class WebPageFetcher:
@@ -291,6 +294,8 @@ class WebPageFetcher:
             source_url=url, final_url=final_url, title=title, text=text,
             content_type=content_type, parser=parser,
             fetched_at=datetime.now(UTC).isoformat(),
+            parser_version=(f"markdownify={version('markdownify')};beautifulsoup4={version('beautifulsoup4')}"
+                            if parser == "markdownify/html.parser" else None),
         )
 
     def _request(self, url: str) -> httpx.Response:

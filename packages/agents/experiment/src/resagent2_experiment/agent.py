@@ -125,7 +125,7 @@ class NativeExperimentAgent:
             name="experiment", owner=AgentOwner.EXPERIMENT,
             system_prompt=EXPERIMENT_PROMPT, tools=tools, llm_client=self.llm_client,
             context_builder=lambda request, state, limit: build_context(
-                request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
+                request, state, datasets=datasets,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),

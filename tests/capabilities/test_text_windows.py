@@ -370,7 +370,7 @@ def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, regi
             name="reader", owner=AgentOwner.CODING, system_prompt="Read the evidence.",
             tools=(tool, FinishTool()), llm_client=llm,
             context_builder=lambda request, state, limit: [
-                ContextSection(name="task", content=request.instruction, required=True),
+                ContextSection(name="task", content=request.instruction),
             ],
             permission_policy=AllowListPermissionPolicy({tool.name, "finish"}),
             completion_check=AcceptFinish(),
@@ -383,12 +383,13 @@ def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, regi
         session_id="session_reader",
     )
     assert result.status == ModuleStatus.COMPLETED
-    assert "runtime_feedback" in llm.contexts[1].included_sections
-    assert "Cannot read as UTF-8 text" in llm.contexts[1].text
-    assert "\ufffd" not in llm.contexts[1].text
+    from resagent2_runtime.tool_calling import native_input_text
+    wire = native_input_text(llm.contexts[1], llm.schemas[1], llm.histories[1])
+    assert "Cannot read as UTF-8 text" in wire
+    assert "\ufffd" not in wire
     state = store.load("session_reader")
     assert state.memory[memory_key] == expected
-    assert state.runtime_feedback is None
+    assert json.loads(state.tool_turns[0].tool_results[state.tool_turns[0].tool_calls[0].id])["ok"] is False
 
 
 @pytest.mark.parametrize("start_line,end_line,start_char,end_char", [

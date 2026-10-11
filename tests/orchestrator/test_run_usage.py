@@ -72,9 +72,9 @@ def test_usage_updates_preserve_artifacts_registered_during_invocation(tmp_path)
     port.charge("first", 0)
     bridge = ScientificArtifactRegistration(ArtifactRegistry(tmp_path / "artifacts"), store)
     ref = bridge.register_scientific(
-        ArtifactCandidate(kind="literature_search", path="papers.md", media_type="text/markdown",
+        ArtifactCandidate(kind="literature_paper", path="papers.md", media_type="text/markdown",
                           summary="Search result", content="A paper"),
-        run_id=run.run_id, session_id="session_usage",
+        run_id=run.run_id, session_id="session_usage", operation_key="session:session_usage:turn:1:call:fetch", output_position=0,
     )
     port.complete("first", 0, "succeeded")
     port.charge("second", 0)

@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .context import CONTEXT_TARGET_SHARE, ContextBudgetExceeded, ContextComposer
-from .models import ToolCallTurn
+from .models import ComposedContext, ToolCallTurn
 from .tool_calling import native_input_text, tool_messages
 
 
@@ -83,7 +83,7 @@ def _summary_prompt(
 
 def plan_compaction(
     *,
-    current_context: str,
+    current_context: str | ComposedContext,
     schemas: Sequence[dict],
     turns: Sequence[ToolCallTurn],
     history_start: int = 0,
@@ -91,6 +91,7 @@ def plan_compaction(
     max_input_tokens: int,
     summary_input_limit: int | None = None,
     force: bool = False,
+    fixed_input_tokens: int | None = None,
 ) -> CompactionPlan | None:
     """Plan one bounded summary without mutating or slicing a tool-call group.
 
@@ -130,7 +131,14 @@ def plan_compaction(
         # complete turn. The regular native budget check remains authoritative.
         return None
 
-    retain_target = max(1, int(max_input_tokens * COMPACTION_RETAIN_SHARE))
+    if fixed_input_tokens is None:
+        fixed_input_tokens = ContextComposer.estimate_tokens(
+            native_input_text(current_context, list(schemas), [])
+        )
+    history_allowance = max_input_tokens - fixed_input_tokens
+    if history_allowance < 1:
+        raise ContextBudgetExceeded("fixed contract, complete task and directory exhaust input capacity")
+    retain_target = max(1, int(history_allowance * COMPACTION_RETAIN_SHARE))
     first_kept = len(active_turns) - 1
     # Always keep the newest turn whole. Add older turns only when the resulting
     # suffix still fits the token target; an oversized turn is never split.
@@ -145,7 +153,8 @@ def plan_compaction(
 
     source = active_turns[:first_kept]
     # Writing target only; the composer checks the complete continuation request.
-    target_summary_chars = min(4096, max(1, max_input_tokens // 20)) * 4
+    summary_allowance = max(1, history_allowance - _history_tokens(active_turns[first_kept:]))
+    target_summary_chars = min(4096, max(1, min(summary_allowance, history_allowance // 4))) * 4
     prompt = _summary_prompt(
         previous_summary,
         source,

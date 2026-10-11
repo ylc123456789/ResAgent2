@@ -5,15 +5,12 @@ from __future__ import annotations
 import json
 
 from resagent2_components import (
-    DatasetAvailability, EnvironmentBinding, dataset_context, workspace_context,
-    request_materials_context, request_task_context, artifact_index_context,
+    DatasetAvailability, RegisteredArtifactReader, dataset_context,
+    request_task_context, artifact_index_context,
 )
 from resagent2_capabilities.environment.guidance import ENVIRONMENT_DECISION_GUIDANCE
 from resagent2_contracts import AgentRequest
-from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS, AgentState, ContextMaterial, ContextSection,
-)
-
+from resagent2_runtime import AgentState, ContextSection
 
 CODING_PROMPT = f"""### Role and scope
 You are the Coding Agent. Understand, implement and repair authorized code.
@@ -24,8 +21,8 @@ changes; code analysis can finish without editing or executing commands.
 
 ### Inputs and evidence
 Inspect authorized source, repository instructions and relevant registered
-materials before claims or edits. Use the current task, checked state and user
-answers; historical observations describe the state when they were recorded.
+materials before claims or edits. Use the complete task and business user
+answers; check current state with tools; historical observations describe the state when they were recorded.
 Verification pass/fail and freshness are separate facts. Never claim unexecuted
 or stale success. Re-read the needed source when exact details are missing.
 Use only declared, available datasets according to dataset_catalog.
@@ -43,6 +40,8 @@ deliverables only when the task or an observed requirement needs them.
 Prefer replace_text for edits, create_file for additions and delete_path for removal;
 nonempty directories require confirmation.
 Review the actual diff after edits.
+git_diff also exposes recorded verification results and their current freshness;
+check it when historical verification may no longer cover the current workspace.
 When execution is needed, inspect project Python and dependency requirements
 and the current binding. Prepare an environment or install dependencies only
 when needed, through prepare_environment and run_setup; reuse a suitable binding.
@@ -69,45 +68,13 @@ artifact output channel.
 
 
 def build_context(
-    request: AgentRequest,
-    state: AgentState,
-    *,
-    control_state: dict | None = None,
-    binding: EnvironmentBinding | None = None,
+    request: AgentRequest, state: AgentState, *,
     datasets: DatasetAvailability | None = None,
-    max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
-) -> list[ContextSection | ContextMaterial]:
-    sections = [
-        ContextSection(
-            name="task",
-            content=json.dumps(request_task_context(request), ensure_ascii=False),
-            priority=100, required=True,
-        ),
-        ContextSection(
-            name="execution_context",
-            content=json.dumps({
-                "workspace_access": request.workspace.access.model_dump(mode="json") if request.workspace else None,
-                "output_dir": request.output_dir,
-                "confirm_commands": request.confirm_commands,
-                "permissions": request.permissions.model_dump(mode="json"),
-            }, ensure_ascii=False),
-            priority=100, required=True,
-        ),
-        ContextSection(
-            name="dataset_catalog",
-            content=json.dumps(dataset_context(datasets or DatasetAvailability())),
-            priority=90, required=True,
-        ),
-        artifact_index_context(request, state),
-        *request_materials_context(request),
+    reader: RegisteredArtifactReader | None = None,
+) -> list[ContextSection]:
+    task = request_task_context(request)
+    task["dataset_catalog"] = dataset_context(datasets or DatasetAvailability())
+    return [
+        ContextSection(name="task", content=json.dumps(task, ensure_ascii=False)),
+        artifact_index_context(request, state, reader=reader),
     ]
-    if control_state is not None:
-        sections.append(ContextSection(
-            name="verification_state",
-            content=json.dumps(control_state),
-            priority=95, required=True,
-        ))
-    sections.extend(workspace_context(
-        state, binding=binding, max_context_tokens=max_context_tokens,
-    ))
-    return sections

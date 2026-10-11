@@ -67,8 +67,7 @@ def test_shell_answer_reaches_controller_and_resumes_same_session(
 ):
     from resagent2_cli import composition
     from resagent2_cli.shell import Shell
-    from resagent2_contracts import RecordedAnswer, RunStatus, SessionStatus
-    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_contracts import RunStatus, SessionStatus
     from resagent2_runtime import ScriptedLLMClient
 
     actions = [
@@ -114,9 +113,8 @@ def test_shell_answer_reaches_controller_and_resumes_same_session(
     assert saved.pending_question is None
     assert saved.workspaces == paused.workspaces
     assert builds[0]["workspaces"] == specs
-    answer_refs = [ref for ref in saved.artifacts.values() if ref.kind == "answer"]
-    assert len(answer_refs) == 1
-    assert read_json(answer_refs[0], RecordedAnswer).question_text == paused.pending_question.text
+    assert saved.answers[0].session_id == saved.scientific_session.id
+    assert not any(ref.kind in {"question", "answer"} for ref in saved.artifacts.values())
 
 
 def test_shell_run_passes_same_literature_option_as_one_shot_cli(tmp_path):

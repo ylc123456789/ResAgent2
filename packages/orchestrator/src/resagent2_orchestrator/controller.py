@@ -12,19 +12,19 @@ from resagent2_components.literature import PreparedLiteratureImport, render_pap
 from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, execution_budget
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, ArtifactImport, ConclusionRequirements,
-    DatasetRef, ErrorCode, ModuleError, ModuleStatus, PendingQuestion,
-    QuestionDraft, RecordedAnswer, ResearchRequest, ResearchIndex, RunStatus, ScientificAssessment,
-    SessionRef, SessionStatus, TaskBudget, UserAnswer, WorkFeedback, WorkRequest,
-    WorkRequestDraft, WorkRequestStatus, WorkTaskOutcome, WorkspaceDescriptor, WorkRecord, WorkAttemptRecord,
+    DatasetRef, ErrorCode, ModuleError, ModuleStatus,
+    RecordedAnswer, ResearchRequest, RunStatus, ControlOrigin,
+    SessionRef, SessionStatus, TaskBudget, UserAnswer,
+    WorkRequestStatus, WorkspaceDescriptor,
     scientific_session_id,
 )
 from .compiler import CompilationError
 from .completion import FinalReportRenderer, ScientificCompletionValidator
-from .handoffs import read_json, receive_artifacts, system_artifact
-from .interpreter import WorkInterpreter, build_research_index
-from .models import ResearchRun
+from .handoffs import read_json, receive_artifacts, receive_control, system_artifact
+from .interpreter import WorkInterpreter
+from .models import ResearchRun, RunInitialization, PendingModuleResult
 from .ports import ModulePort
-from .scheduler import _question_id, _transition_work_request, _validate_answer
+from .scheduler import _transition_work_request, _validate_answer
 from .usage import RunUsagePort
 
 
@@ -69,36 +69,51 @@ class ResearchController:
         run = ResearchRun(run_id=run_id, request=request, status=RunStatus.RUNNING,
                           workspaces=self.scheduler._resolve_workspaces(run_id),
                           created_at=now, updated_at=now)
-        for item in request.input_artifacts:
-            ref = self.scheduler.artifact_registry.register_import(item, run_id=run_id)
-            run.artifacts[ref.id] = ref
-        self._import_literature(run, literature)
-        run.conclusion_requirements_ref = system_artifact(
-            self.scheduler.artifact_registry, run, "conclusion_requirements",
-            ConclusionRequirements(
-                required_evidence_kinds=request.required_evidence_kinds,
-                required_artifacts=request.required_artifacts,
-            ),
-        )
+        run.initialization = RunInitialization(imports=request.input_artifacts,
+                                               literature=[PreparedLiteratureImport.model_validate(item) for item in literature])
         self._save(run)
+        self._complete_initialization(run)
         return self.run_until_stable(run_id)
 
+    def _complete_initialization(self, run):
+        """Recover original input positions before invoking any model."""
+        progress = run.initialization
+        for index in range(progress.next_import, len(progress.imports)):
+            key = f"initialization:input:{index}"
+            ref = self.scheduler.artifact_registry.register_import(progress.imports[index], run_id=run.run_id,
+                                                                   operation_key=key, run=run)
+            run.artifacts[ref.id] = ref
+            progress.next_import = index + 1
+            self._save(run)
+            self.scheduler.artifact_registry.acknowledge_registration(key, run_id=run.run_id, run=run)
+        self._import_literature(run)
+        if run.conclusion_requirements_ref is None:
+            run.conclusion_requirements_ref = system_artifact(
+                self.scheduler.artifact_registry, run, "conclusion_requirements",
+                ConclusionRequirements(required_evidence_kinds=run.request.required_evidence_kinds,
+                                       required_artifacts=run.request.required_artifacts),
+                operation_key="initialization:requirements",
+            )
+        progress.complete = True
+        self._save(run)
+        self.scheduler.artifact_registry.acknowledge_registration("initialization:requirements", run_id=run.run_id, run=run)
+
     def import_literature(self, run_id, literature):
-        """Add frozen caller-supplied papers without answering or resuming a Run."""
         run = self.scheduler.store.load(run_id)
         if run.status != RunStatus.PAUSED:
             raise ValueError("literature may only be appended to a paused Run")
-        self._import_literature(run, literature)
-        _, run.research_index_ref = self._research_index(run)
+        run.initialization.literature.extend(PreparedLiteratureImport.model_validate(item) for item in literature)
+        run.initialization.complete = False
         self._save(run)
+        self._complete_initialization(run)
         return run
 
-    def _import_literature(self, run, literature):
-        prepared = [PreparedLiteratureImport.model_validate(item) for item in literature]
-        additions = {}
+    def _import_literature(self, run):
+        progress = run.initialization
         with tempfile.TemporaryDirectory(prefix="resagent2-literature-") as temporary:
             paper_path = Path(temporary) / "paper.md"
-            for item in prepared:
+            for index in range(progress.next_literature, len(progress.literature)):
+                item = progress.literature[index]
                 metadata = {"paper_key": item.paper.key, "paper": item.paper.model_dump(mode="json")}
                 pdf_digest = None
                 if item.pdf_path is not None:
@@ -109,32 +124,35 @@ class ResearchController:
                         pdf_digest = hashlib.file_digest(handle, "sha256").hexdigest()
                     metadata["import_pdf_sha256"] = pdf_digest
                 paper_path.write_text(render_paper(item.paper), encoding="utf-8")
+                paper_key = f"initialization:paper:{index}"
                 paper_ref = self.scheduler.artifact_registry.register_import(
-                    ArtifactImport(uri=str(paper_path), kind="literature_paper",
-                                   media_type="text/markdown", summary=item.paper.title,
-                                   metadata=metadata), run_id=run.run_id,
+                    ArtifactImport(uri=str(paper_path), kind="literature_paper", media_type="text/markdown",
+                                   summary=item.paper.title, metadata=metadata), run_id=run.run_id,
+                    operation_key=paper_key, run=run,
                 )
-                additions[paper_ref.id] = paper_ref
+                run.artifacts[paper_ref.id] = paper_ref
                 if item.pdf_path is not None:
                     pdf_ref = self.scheduler.artifact_registry.register_import(
-                        ArtifactImport(
-                            uri=str(item.pdf_path), kind="literature_pdf",
-                            media_type="application/pdf", summary=item.paper.title + " — original PDF",
-                            expected_sha256=pdf_digest,
-                            metadata={"paper_artifact_id": paper_ref.id,
-                                      "source_artifact_id": paper_ref.id,
-                                      "source_url": item.paper.source_url},
-                        ), run_id=run.run_id,
+                        ArtifactImport(uri=str(item.pdf_path), kind="literature_pdf", media_type="application/pdf",
+                                       summary=item.paper.title + " — original PDF", expected_sha256=pdf_digest,
+                                       metadata={"paper_artifact_id": paper_ref.id, "source_artifact_id": paper_ref.id,
+                                                 "source_url": item.paper.source_url}),
+                        run_id=run.run_id, operation_key=f"initialization:pdf:{index}", run=run,
                     )
-                    additions[pdf_ref.id] = pdf_ref
-        run.artifacts.update(additions)
+                    run.artifacts[pdf_ref.id] = pdf_ref
+                progress.next_literature = index + 1
+                self._save(run)
+                for prefix in ("paper", "pdf"):
+                    self.scheduler.artifact_registry.acknowledge_registration(
+                        f"initialization:{prefix}:{index}", run_id=run.run_id, run=run,
+                    )
 
     def answer_question(self, run_id, answer: UserAnswer):
         run = self.scheduler.store.load(run_id)
         question = run.pending_question
         _validate_answer(question, answer)
         task_id = question.task_id
-        session_id = None if task_id else run.scientific_session.id
+        session_id = question.session_id
         paired = RecordedAnswer(
             question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
             options=question.options, values=answer.values, answered_at=answer.answered_at,
@@ -145,12 +163,9 @@ class ResearchController:
             task = self.scheduler._task(run, task_id)
             if not task.attempts or task.attempts[-1].number != question.attempt_number:
                 raise ValueError("answer does not match the paused Attempt")
-        system_artifact(self.scheduler.artifact_registry, run, "answer", paired,
-                        session_id=session_id, task_id=task_id, attempt_number=question.attempt_number)
         run.answers.append(paired)
         run.user_wait_seconds += max(0, (datetime.now(UTC)-question.created_at).total_seconds())
         run.pending_question = None
-        run.pending_question_ref = None
         run.status = RunStatus.RUNNING
         if task_id:
             self.scheduler.resume_task_in_place(run, task_id)
@@ -162,16 +177,24 @@ class ResearchController:
             run = self.scheduler.store.load(run_id)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
+            if not run.initialization.complete:
+                self._complete_initialization(run)
             self._merge_registered_datasets(run)
             if self.scheduler._recover_interrupted_attempts_in_place(run):
                 self._save(run)
                 continue
             if run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
                 return self._fail_run(run, ModuleError(code=ErrorCode.TIMEOUT, message="Run execution-time budget exhausted", retryable=False))
+            pending = run.pending_module_results.get("scientific")
+            if pending is not None:
+                recovered = self._apply_turn(run_id, pending.request, pending.result)
+                if recovered.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
+                    return recovered
+                continue
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
                 return self._fail_run(run, ModuleError(code=ErrorCode.BUDGET_EXHAUSTED, message="Run LLM-call budget exhausted", retryable=False))
             active = self._active_work_request(run)
-            if active and active.status != WorkRequestStatus.STABLE:
+            if active and active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
                 self._execute_work_request(run_id)
                 continue
             self._bind_initial_scientific_session(run)
@@ -209,71 +232,39 @@ class ResearchController:
             run.dataset_catalog_ref = system_artifact(self.scheduler.artifact_registry, run, "dataset_catalog",
                                                      {"datasets": [ref.model_dump(mode="json") for ref in run.dataset_refs]})
             self._save(run)
-
-    def _research_index(self, run):
-        index = build_research_index(
-            run_id=run.run_id, artifacts=self._authorized_artifacts(run),
-            work_requests=run.work_requests, tasks=run.workflow.tasks if run.workflow else (),
-        )
-        if run.research_index_ref and read_json(run.research_index_ref, ResearchIndex) == index:
-            return index, run.research_index_ref
-        return index, system_artifact(self.scheduler.artifact_registry, run, "research_index", index)
+            for key in list(run.pending_registrations):
+                if key.startswith("system:dataset_catalog:"):
+                    self.scheduler.artifact_registry.acknowledge_registration(key, run_id=run.run_id, run=run)
 
     def _prepare_research_handoff(self, run):
-        """Persist one complete handoff; replay never regenerates an accepted report."""
         active = self._active_work_request(run)
-        if active is None or active.status != WorkRequestStatus.STABLE:
-            _, run.research_index_ref = self._research_index(run)
-            self._save(run)
+        if active is None or active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
             return
-        if active.id in run.feedback_refs:
-            # An interrupted Scientific turn may already have registered new materials.
-            # Refresh navigation while reusing the committed report and its original sources.
-            _, run.research_index_ref = self._research_index(run)
-            self._save(run)
-            return
-        record = WorkRecord(
-            run_id=run.run_id, work_request_id=active.id,
-            session_id=active.scientific_session_id, previous_work_request=active.request,
-            work_outcome=active.outcome, unresolved_task_outcomes=self._unresolved_tasks(run),
-            attempts=[WorkAttemptRecord(
-                task_id=task.id, attempt_number=attempt.number, status=attempt.status,
-                summary=attempt.report, artifact_ids=attempt.artifact_ids, error=attempt.error,
-            ) for task in run.workflow.tasks if task.work_request_id == active.id for attempt in task.attempts],
-        )
-        record_ref = system_artifact(self.scheduler.artifact_registry, run, "work_record", record,
-                                     session_id=active.scientific_session_id)
-        _, index_ref = self._research_index(run)
-        report = self.interpreter.interpret(read_json(record_ref, WorkRecord))
-        feedback = WorkFeedback(
-            run_id=run.run_id, work_request_id=active.id, session_id=active.scientific_session_id,
-            work_record_artifact_id=record_ref.id, index_artifact_id=index_ref.id,
-            report=report,
-        )
-        ref = system_artifact(self.scheduler.artifact_registry, run, "work_feedback", feedback,
-                              session_id=active.scientific_session_id)
-        run.feedback_refs[active.id] = ref
-        run.research_index_ref = index_ref
+        if active.outcome is None:
+            result = self.interpreter.interpret(active, tasks=run.workflow.tasks if run.workflow else [], artifacts=run.artifacts)
+            active.outcome = result
+        for ref in active.outcome.artifacts:
+            if ref.id not in run.scientific_artifact_ids:
+                run.scientific_artifact_ids.append(ref.id)
         self._save(run)
 
     def _scientific_request(self, run):
-        active = self._active_work_request(run)
-        resume_refs = []
-        if active and active.status == WorkRequestStatus.STABLE:
-            resume_refs.append(run.feedback_refs[active.id])
-        else:
-            pending = {answer.question_id for answer in self._pending_answers(run)}
-            for ref in run.artifacts.values():
-                if ref.kind == "answer" and ref.session_id == run.scientific_session.id:
-                    answer = read_json(ref, RecordedAnswer)
-                    if answer.question_id in pending:
-                        resume_refs.append(ref)
-        parent = run.scientific_session.id if run.scientific_session.status == SessionStatus.PAUSED or resume_refs else None
-        refs = self._authorized_artifacts(run)
+        answers = [answer for answer in run.answers if answer.task_id is None and answer.session_id == run.scientific_session.id]
+        fresh = [answer for answer in answers if answer.question_id not in run.delivered_answer_ids]
+        results = [work.outcome for work in run.work_requests if work.outcome is not None]
+        parent = run.scientific_session.id if run.scientific_session.status == SessionStatus.PAUSED or fresh or results else None
+        controls = [key for key in run.received_controls if key.startswith(f"session:{run.scientific_session.id}:")]
+        origin = None
+        if controls:
+            _, sid, _, turn, _, call_id = controls[-1].split(":", 5)
+            origin = ControlOrigin(session_id=sid, turn=int(turn), call_id=call_id)
         return AgentRequest(
             run_id=run.run_id, agent=AgentOwner.SCIENTIFIC, instruction=_scientific_instruction(run.request),
-            input_artifacts=refs, permissions=AgentPermissions(request_work=True),
-            parent_session_id=parent, resume_artifact_ids=[ref.id for ref in resume_refs],
+            input_artifacts=self._authorized_artifacts(run), permissions=AgentPermissions(request_work=True),
+            parent_session_id=parent, user_answers=[answer for answer in answers if answer.action is None],
+            resume_answers=fresh if parent else [], work_results=results, control_ack=origin if parent else None,
+            task_context={"conclusion_requirements": read_json(run.conclusion_requirements_ref),
+                          "dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs]},
             budget=TaskBudget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
                               timeout_seconds=max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))),
         )
@@ -292,20 +283,22 @@ class ResearchController:
         raw = raw_result.model_dump() if isinstance(raw_result, BaseModel) else raw_result
         try:
             result = AgentResult.model_validate(raw)
+            if "scientific" not in run.pending_module_results:
+                run.pending_module_results["scientific"] = PendingModuleResult(request=request, result=result)
+                self._save(run)
             run.scientific_report = result.report
             if run.llm_calls_used > run.request.budget.max_llm_calls:
                 raise ValueError("Run LLM-call budget exhausted")
             if result.session and (result.session.module != AgentOwner.SCIENTIFIC or result.session.id != run.scientific_session.id):
                 raise ValueError("Scientific result has a foreign session")
-            refs, control_ref = receive_artifacts(self.scheduler.artifact_registry, run, request, result)
+            refs = receive_artifacts(self.scheduler.artifact_registry, run, request, result)
             accepted = run.model_copy(deep=True)
             for work in accepted.work_requests:
                 if work.status == WorkRequestStatus.STABLE:
                     _transition_work_request(work, WorkRequestStatus.CONSUMED)
             accepted.delivered_answer_ids = list(dict.fromkeys([
                 *accepted.delivered_answer_ids,
-                *[read_json(ref)["question_id"] for ref in request.input_artifacts
-                  if ref.id in request.resume_artifact_ids and ref.kind == "answer"],
+                *[answer.question_id for answer in request.resume_answers],
             ]))
             if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
                 validation = self.gate.validate(accepted, result, refs)
@@ -313,39 +306,40 @@ class ResearchController:
                     run.completion_violations = list(validation.violations)
                     raise ValueError("Scientific completion was rejected")
                 rendered = self.report_renderer.render(validation.report)
-                report = self.scheduler.artifact_registry.register_final_report(rendered.candidate, rendered.content, run_id=run.run_id)
+                report = self.scheduler.artifact_registry.register_final_report(rendered.candidate, rendered.content, run_id=run.run_id, run=accepted)
                 accepted.artifacts[report.id] = report
                 accepted.final_opinion = validation.report.opinion
                 accepted.final_report_artifact_id = report.id
                 accepted.status = RunStatus.COMPLETED
             elif result.status == ModuleStatus.REQUEST_WORK:
-                data = read_json(control_ref)
-                draft = WorkRequestDraft.model_validate(data["work_request"])
+                draft = result.control.work_request.request
                 if not set(draft.input_artifact_ids) <= {ref.id for ref in request.input_artifacts} | {ref.id for ref in refs}:
                     raise ValueError("work request references unauthorized materials")
-                accepted.latest_scientific_assessment = ScientificAssessment.model_validate(data["assessment"])
-                now = datetime.now(UTC)
-                accepted.work_requests.append(WorkRequest(id=f"work_{len(accepted.work_requests)+1}", run_id=run.run_id,
-                                                         scientific_session_id=result.session.id, request=draft,
-                                                         created_at=now, updated_at=now))
+                receive_control(accepted, request, result)
             elif result.status == ModuleStatus.NEEDS_USER_INPUT:
-                draft = read_json(control_ref, QuestionDraft)
-                assessments = [ref for ref in refs if ref.kind == "scientific_assessment"]
-                if len(assessments) == 1:
-                    accepted.latest_scientific_assessment = read_json(assessments[0], ScientificAssessment)
-                accepted.pending_question = PendingQuestion(id=_question_id(), run_id=run.run_id, text=draft.text,
-                                                           requested_fields=draft.requested_fields, options=draft.options, created_at=datetime.now(UTC), action=draft.action)
-                accepted.pending_question_ref = control_ref
+                receive_control(accepted, request, result)
                 accepted.status = RunStatus.PAUSED
             else:
                 return self._fail_run(run, result.error)
             accepted.scientific_session = result.session or accepted.scientific_session
-            if accepted.status == RunStatus.COMPLETED:
-                _, accepted.research_index_ref = self._research_index(accepted)
+            for ref in refs:
+                if ref.id not in accepted.scientific_artifact_ids:
+                    accepted.scientific_artifact_ids.append(ref.id)
+            accepted.pending_module_results.pop("scientific", None)
             self._save(accepted)
+            for key in list(accepted.pending_registrations):
+                if key.startswith(f"session:{result.session.id}:result:"):
+                    self.scheduler.artifact_registry.acknowledge_registration(key, run_id=run.run_id, run=accepted)
+            if accepted.status == RunStatus.COMPLETED:
+                self.scheduler.artifact_registry.acknowledge_registration("final_report", run_id=run.run_id, run=accepted)
             return accepted
         except Exception as error:
-            return self._fail_run(run, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error).strip() or type(error).__name__, retryable=False))
+            # Registration may already have saved an allocated/frozen snapshot
+            # from the accepted copy. Keep those durable facts on failure.
+            latest = self.scheduler.store.load(run_id)
+            latest.scientific_report = run.scientific_report
+            latest.completion_violations = run.completion_violations
+            return self._fail_run(latest, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error).strip() or type(error).__name__, retryable=False))
 
     def _fail_run(self, run, error):
         run.status = RunStatus.FAILED
@@ -364,32 +358,38 @@ class ResearchController:
             return self.scheduler.run_until_stable(run_id)
         if active.status == WorkRequestStatus.COMPILING and run.workflow and any(t.work_request_id == active.id for t in run.workflow.tasks):
             _transition_work_request(active, WorkRequestStatus.EXECUTING, workflow_revision=run.workflow.revision)
+            run.pending_compilation = None
             self._save(run)
             return self.scheduler.run_until_stable(run_id)
         try:
             if (len(run.workflow.tasks) if run.workflow else 0) >= run.request.execution_limits.max_tasks:
                 failure = ModuleError(code=ErrorCode.BUDGET_EXHAUSTED, message="No remaining task slots", retryable=False)
                 _transition_work_request(active, WorkRequestStatus.FAILED, error=failure)
-                return self._fail_run(run, failure)
+                run.pending_compilation = None
+                self._save(run)
+                return run
             if active.status == WorkRequestStatus.REQUESTED:
                 _transition_work_request(active, WorkRequestStatus.COMPILING)
                 self._save(run)
-            with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
-                                  timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
-                                  usage=RunUsagePort(run, self.scheduler.store)):
-                compilation = self.compiler.compile(active, current=run.workflow, registry=self.registry,
-                                                    limits=run.request.execution_limits,
-                                                    workspaces=self._workspace_descriptors(run))
-            self._save(run)
+            if run.pending_compilation is None:
+                with execution_budget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
+                                      timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
+                                      usage=RunUsagePort(run, self.scheduler.store)):
+                    compilation = self.compiler.compile(active, current=run.workflow, registry=self.registry,
+                                                        limits=run.request.execution_limits,
+                                                        workspaces=self._workspace_descriptors(run))
+                run.pending_compilation = compilation.output
+                self._save(run)
             if run.llm_calls_used > run.request.budget.max_llm_calls:
                 raise ValueError("Compiler exceeded Run budget")
             if run.workflow is None:
-                self.scheduler.accept_proposal(run_id, compilation.output)
+                self.scheduler.accept_proposal(run_id, run.pending_compilation)
             else:
-                self.scheduler.apply_patch(run_id, compilation.output)
+                self.scheduler.apply_patch(run_id, run.pending_compilation)
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)
             _transition_work_request(active, WorkRequestStatus.EXECUTING, workflow_revision=run.workflow.revision)
+            run.pending_compilation = None
             self._save(run)
             return self.scheduler.run_until_stable(run_id)
         except Exception as error:
@@ -401,26 +401,23 @@ class ResearchController:
                                   details={"compiler_usage_known": isinstance(error, CompilationError)})
             if active:
                 _transition_work_request(active, WorkRequestStatus.FAILED, error=failure)
-            return self._fail_run(run, failure)
+            run.pending_compilation = None
+            if code in {ErrorCode.TIMEOUT, ErrorCode.BUDGET_EXHAUSTED}:
+                return self._fail_run(run, failure)
+            self._save(run)
+            return run
 
     @staticmethod
     def _active_work_request(run):
         return next((work for work in run.work_requests if work.status in {
             WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING, WorkRequestStatus.STABLE,
-        }), None)
-
-    def _pending_answers(self, run):
-        return [answer for answer in run.answers if answer.task_id is None and answer.question_id not in run.delivered_answer_ids]
+        } or (work.status == WorkRequestStatus.FAILED and work.outcome is None)), None)
 
     def _authorized_artifacts(self, run):
-        current = {ref.id for ref in run.feedback_refs.values()}
-        refs = [ref for ref in run.artifacts.values()
-                if ref.kind not in {"work_feedback", "dataset_catalog", "conclusion_requirements", "acceptance_requirements"}
-                or ref.id in current
-                or ref == run.dataset_catalog_ref or ref == run.conclusion_requirements_ref]
-        # Historical snapshots remain readable. The final index ref is the current
-        # reading entry, without adding a second domain field to AgentRequest.
-        return sorted(refs, key=lambda ref: ref == run.research_index_ref)
+        imports = [ref.id for ref in run.artifacts.values() if ref.metadata.get("source_type") == "import"]
+        system = [ref.id for ref in (run.conclusion_requirements_ref, run.dataset_catalog_ref) if ref is not None]
+        ids = list(dict.fromkeys([*imports, *system, *run.scientific_artifact_ids]))
+        return [run.artifacts[key] for key in ids]
 
     def _unresolved_tasks(self, run):
         if not run.workflow:

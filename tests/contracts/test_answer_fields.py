@@ -15,7 +15,7 @@ def _messages(name: str):
     return [
         (QuestionDraft, dict(text=text, requested_fields=[name])),
         (PendingQuestion, dict(
-            id="question_mode", run_id="run_test", text=text,
+            id="question_mode", run_id="run_test", session_id="session_test", text=text,
             requested_fields=[name], created_at=now,
         )),
         (UserAnswer, dict(

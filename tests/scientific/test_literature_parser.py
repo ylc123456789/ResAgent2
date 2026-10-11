@@ -24,16 +24,19 @@ def test_injected_parser_reads_frozen_pdf_and_registers_its_text(tmp_path):
             self.refs = {}
 
         def register_scientific(self, candidate, **kwargs):
+            position = kwargs.pop("output_position", None)
+            if position is not None and kwargs.get("operation_key") is not None:
+                kwargs["operation_key"] += f":output:{position}"
             ref = registry.register_scientific(candidate, **kwargs)
             self.refs[ref.id] = ref
             return ref
 
-        def list_artifacts(self, *, run_id):
-            return [ref for ref in self.refs.values() if ref.run_id == run_id]
+        def list_artifacts(self, *, run_id, session_id):
+            return [ref for ref in self.refs.values() if ref.run_id == run_id and ref.session_id == session_id]
 
-        def resolve(self, artifact_id, *, run_id):
+        def resolve(self, artifact_id, *, run_id, session_id):
             ref = self.refs.get(artifact_id)
-            return ref if ref and ref.run_id == run_id else None
+            return ref if ref and ref.run_id == run_id and ref.session_id == session_id else None
 
     register = Registration()
     paper = LiteraturePaper(
@@ -58,7 +61,7 @@ def test_injected_parser_reads_frozen_pdf_and_registers_its_text(tmp_path):
         return PdfText("## Page 1\nInjected parser text.", 1, [], "injected-test")
 
     client = ScriptedLLMClient(tool_turns([
-        {"tool": "fetch_literature_fulltext", "arguments": {"paper_artifact_id": paper_ref.id}},
+        {"tool": "fetch_literature", "arguments": {"source": f"artifact:{paper_ref.id}"}},
         {"tool": "finish", "arguments": {
             "report": "Parser injection checked",
             "artifacts": [{

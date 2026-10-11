@@ -2,6 +2,8 @@
 
 日期：2026-10-11。实现基线为 fix/native-agent-receipts @ ecaede9e80802cd1b6a269bfe91a46b9ae0ab4d7，公共 schema 从 24.0 升到 25.0。本轮未合并。设计以 [已确认方案](TOOL_CONTEXT_REDESIGN_AGREED_2026-10-11.md) 和 [当前上下文](../../current/CONTEXT.md) 为准。
 
+后续验收状态：冻结 `5d28f74` 已完成服务器 §1–§5 与 L3，结果及发现见[验收及问题记录](TOOL_CONTEXT_ACCEPTANCE_2026-10-11.md)。产品链路通过；研究按原规程评 9/10、有人协助完成，严格数值核对为 86/88，不能写成全部通过。下文保留本地开发结果与原测试步骤，不代表服务器目前仍待启动；本轮仍未合并。
+
 ## 1. 先确认版本和环境
 
 测试前记录分支、完整 SHA、git status。确认所有 editable 导入落在待验收源码，SCHEMA_VERSION 和 AgentState.schema_version 均为 25.0。按项目声明安装依赖，不另做供应商或模型装配；CLI 和真实 E2E 共用 build_application。旧 24.0 Run/Session 必须拒绝恢复，旧证据原样保留。

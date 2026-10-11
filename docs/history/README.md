@@ -2,9 +2,13 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-11：schema 25 服务器验收与 L3 问题记录
+
+`fix/native-agent-receipts@5d28f74` 完成服务器结构/材料/交接/压缩验收和真实校准 L3；服务器回归 2115 passed / 1 skipped、mock 8 工件。L3 completed、76/200 请求，产品链路 23/23、最后 Scientific 目录 50/50、独立前向重放字节一致。研究按原规程评 9/10、有人协助完成；数值检查 86/88，保留拟合收敛不足、最坏箱区间错误及四次被拒绝的非正式 test 冒烟请求。共享 conda 缓存故障、测试闸门退出/审计截断和 147 次重复历史统计单独分类，没有归为产品框架回归。服务器关闭后依已取回材料落盘，未重新测试或修写原件，分支仍未合并。问题、评分依据、证据与后续方向见[验收及问题记录](reviews/TOOL_CONTEXT_ACCEPTANCE_2026-10-11.md)。
+
 ## 2026-10-11：工具、上下文与完整工件目录实施
 
-用户确认后在 `fix/native-agent-receipts`、`ecaede9` 基线上实施，schema 升为 25.0：仅第三部分工具历史可压缩；搜索不登记工件，显式 fetch 才持久保存；问答直接记录，批准恢复原调用；第四部分完整展开授权材料与 WorkRequest → Task → 原报告及实际产物，没有总体工作报告或索引工件。所有工件统一使用 UUID，hash 独立校验；登记、结果接收和初始化导入补齐中断恢复。四份 current 文档随代码同步，不保留旧接口兼容层。本轮不合并，服务器与 L3 尚未执行。取舍见 [ADR-0028](decisions/0028-tool-history-and-complete-artifact-directory.md)，方案与依据见[完整修改方案](reviews/TOOL_CONTEXT_REDESIGN_AGREED_2026-10-11.md)及[源码调研](reviews/ARTIFACT_INDEX_RESEARCH_2026-10-11.md)，开发验证及服务器复核步骤见[实施测试计划](reviews/TOOL_CONTEXT_IMPLEMENTATION_TEST_PLAN_2026-10-11.md)。
+用户确认后在 `fix/native-agent-receipts`、`ecaede9` 基线上实施，schema 升为 25.0：仅第三部分工具历史可压缩；搜索不登记工件，显式 fetch 才持久保存；问答直接记录，批准恢复原调用；第四部分完整展开授权材料与 WorkRequest → Task → 原报告及实际产物，没有总体工作报告或索引工件。所有工件统一使用 UUID，hash 独立校验；登记、结果接收和初始化导入补齐中断恢复。四份 current 文档随代码同步，不保留旧接口兼容层。本地实施阶段未执行服务器与 L3；后续验收见上一节，本轮仍未合并。取舍见 [ADR-0028](decisions/0028-tool-history-and-complete-artifact-directory.md)，方案与依据见[完整修改方案](reviews/TOOL_CONTEXT_REDESIGN_AGREED_2026-10-11.md)及[源码调研](reviews/ARTIFACT_INDEX_RESEARCH_2026-10-11.md)，开发验证及服务器复核步骤见[实施测试计划](reviews/TOOL_CONTEXT_IMPLEMENTATION_TEST_PLAN_2026-10-11.md)。
 
 ## 2026-10-11：操作批准不再累计为任务需求
 

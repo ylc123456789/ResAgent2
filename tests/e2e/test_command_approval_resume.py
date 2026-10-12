@@ -3,6 +3,7 @@
 from e2e.native_fixtures import tool_turns
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -114,19 +115,20 @@ def command(case, tag):
 
 def invoke(case, req, actions):
     # Recreate both Agent and SessionStore on every invoke, as controller resume does.
+    case.last_client = ScriptedLLMClient(tool_turns(actions))
     agent = case.agent_type(
-        ScriptedLLMClient(tool_turns(actions)), store=JsonSessionStore(case.root / "sessions"),
+        case.last_client, store=JsonSessionStore(case.root / "sessions"),
         resource_layout=ResourceLayout(resource_root=case.root / "resources"),
     )
     return agent.invoke(req)
 
 
-def approve(case, req, result):
+def approve(case, req, result, *, value="yes", comment=None):
     question = result.control.question
     answer = RecordedAnswer(
         question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
-        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        values={"approve": value}, comment=comment, answered_at=datetime.now(UTC),
         run_id=req.run_id, session_id=result.session.id, task_id=req.task_id, attempt_number=req.attempt_number,
         action=question.action,
     )
@@ -134,6 +136,49 @@ def approve(case, req, result):
         "parent_session_id": result.session.id,
         "resume_answers": [answer], "control_ack": result.control.origin,
     })
+
+
+@pytest.mark.parametrize("decision", ["yes", "no"])
+@pytest.mark.parametrize("comment", [None, "", "  保留原文\nPlease follow the task boundary.  "])
+def test_operation_comment_reaches_model_once_without_becoming_task_requirements(
+    case, decision, comment,
+):
+    first = invoke(case, case.request, [command(case, "first")])
+    assert first.status == "needs_user_input"
+    assert not (case.repo / "first.marker").exists()
+    call_id = first.control.source_call_id
+    resumed = approve(case, case.request, first, value=decision, comment=comment)
+    result = invoke(case, resumed, [FINISH])
+    assert result.status == "completed", result.report
+
+    state = JsonSessionStore(case.root / "sessions").load(result.session.id)
+    assert state.pending_action is None
+    turns = [turn for turn in state.tool_turns if call_id in turn.tool_results]
+    assert len(turns) == 1
+    receipt_text = turns[0].tool_results[call_id]
+    receipt = json.loads(receipt_text)
+    history = case.last_client.histories[0]
+    assert sum(call_id in turn.tool_results for turn in history) == 1
+    assert next(turn.tool_results[call_id] for turn in history
+                if call_id in turn.tool_results) == receipt_text
+    if comment is None:
+        assert "user_comment" not in receipt
+    else:
+        assert receipt["user_comment"] == comment
+    if decision == "yes":
+        assert receipt["ok"] is True
+        assert (case.repo / "first.marker").read_text() == "executed\n"
+        assert len(case.manager.audits) == 1
+    else:
+        assert receipt["ok"] is False
+        assert receipt["value"]["execution_status"] == "not_executed"
+        assert not (case.repo / "first.marker").exists()
+        assert case.manager.audits == []
+    for context in case.last_client.contexts:
+        assert "user_comment" not in context.task_context
+        assert "user_comment" not in context.artifact_index
+        if comment:
+            assert "保留原文" not in context.task_context + context.artifact_index
 
 
 
@@ -209,7 +254,8 @@ def test_pipeline_module_runs_once_after_approval(case, mode):
 def test_failed_audit_after_approval_blocks_actual_command(case):
     first = invoke(case, case.request, [command(case, "first")])
     case.manager.success = False
-    result = invoke(case, approve(case, case.request, first), [FINISH])
+    comment = "批准这次操作；实际失败也需保留说明。"
+    result = invoke(case, approve(case, case.request, first, comment=comment), [FINISH])
     assert len(case.manager.audits) == 1
     assert not (case.repo / "first.marker").exists()
     state = JsonSessionStore(case.root / "sessions").load(result.session.id)
@@ -217,20 +263,31 @@ def test_failed_audit_after_approval_blocks_actual_command(case):
     assert any(
         event.type == "observation"
         and (event.data.get("value") or {}).get("reason") == "environment_audit_failed"
+        and event.data["user_comment"] == comment
         for event in state.events
     )
+    assert any(json.loads(raw).get("user_comment") == comment
+               for turn in case.last_client.histories[0] for raw in turn.tool_results.values())
 
 
 def test_deadline_expiring_during_audit_prevents_command(case):
     first = invoke(case, case.request, [command(case, "first")])
     now = [0.0]
     case.manager.after_audit = lambda: now.__setitem__(0, 61.0)
+    comment = "Approved this operation only; keep the actual timeout outcome."
     with execution_budget(max_llm_calls=30, timeout_seconds=60, clock=lambda: now[0]):
-        result = invoke(case, approve(case, case.request, first), [FINISH])
+        result = invoke(case, approve(case, case.request, first, comment=comment), [FINISH])
     assert result.status == "failed"
     assert result.error.code == "timeout"
     assert len(case.manager.audits) == 1
     assert not (case.repo / "first.marker").exists()
+    state = JsonSessionStore(case.root / "sessions").load(result.session.id)
+    call_id = first.control.source_call_id
+    receipts = [json.loads(turn.tool_results[call_id]) for turn in state.tool_turns
+                if call_id in turn.tool_results]
+    assert len(receipts) == 1
+    assert receipts[0]["user_comment"] == comment
+    assert receipts[0]["value"]["execution_status"] == "unknown"
 
 
 @pytest.mark.parametrize("tool", ["command", "audit"])

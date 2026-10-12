@@ -156,6 +156,7 @@ class ResearchController:
         paired = RecordedAnswer(
             question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
             options=question.options, values=answer.values, answered_at=answer.answered_at,
+            comment=answer.comment,
             run_id=run.run_id, session_id=session_id, task_id=task_id, attempt_number=question.attempt_number,
             action=question.action,
         )

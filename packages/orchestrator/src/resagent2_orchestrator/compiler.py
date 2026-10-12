@@ -111,7 +111,11 @@ def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=
         "where possible. Asking the user is part of a task, not a separate workflow phase. "
         "Route existing-results analysis to Experiment even when execution is forbidden. "
         "Scientific is never a graph node.",
-        "Preserve the work request's objective, evidence needs and constraints. "
+        "Refine the requested work without changing the upstream decisions. "
+        "Prefer original wording for explicit requirements; preserve the objective, "
+        "evidence needs, actions, objects, specified values, ordering, and constraints "
+        "with their conditions and scope. Do not broaden permissions or weaken "
+        "restrictions when assigning work to an Agent. "
         "Add task work only when requested or necessary for an identified prerequisite. "
         "Do not turn optional improvements into required deliverables or add speculative "
         "implementation, generalization or validation work. Let Agents inspect uncertain "

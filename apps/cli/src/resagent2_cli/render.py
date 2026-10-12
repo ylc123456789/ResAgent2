@@ -45,6 +45,35 @@ def _question_label(question: Any) -> str:
     return "User question" if question.action is None else "Operation approval"
 
 
+def _question_details(question: Any) -> list[str]:
+    lines = []
+    for field, options in (getattr(question, "options", None) or {}).items():
+        lines.append(f"  Options for {field}:")
+        lines.extend(f"    - {option}" for option in options)
+    if question.action is None:
+        lines.append("  Reply with an option or your own text in each requested field.")
+    else:
+        action = question.action
+        lines.append(f"  Tool: {action.tool}")
+        lines.append("  Arguments:")
+        lines.extend(f"    {line}" for line in json.dumps(action.arguments, ensure_ascii=False, indent=2).splitlines())
+        lines.append("  Execution context:")
+        lines.extend(f"    {line}" for line in json.dumps(action.context, ensure_ascii=False, indent=2).splitlines())
+        lines.append("  Reply yes or no; use --comment TEXT for an optional explanation.")
+    lines.append("  In the shell, /answer prompts for an answer; explicit values and --field NAME=VALUE also work.")
+    return lines
+
+
+def render_question(question: Any) -> list[str]:
+    """Show the full question and answer choices without restricting free text."""
+    return [
+        f"Pending {_question_label(question).lower()}:",
+        f"  {question.text}",
+        f"  Fields: {', '.join(question.requested_fields)}",
+        *_question_details(question),
+    ]
+
+
 def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
     """One compact, redrawable block for the in-progress view.
 
@@ -86,6 +115,7 @@ def render_live(run: Any, trace_records: list[dict] | None = None) -> list[str]:
         lines.append(f"? {_question_label(question)}: {question.text}")
         if question.requested_fields:
             lines.append(f"  answer: {', '.join(question.requested_fields)}")
+        lines.extend(_question_details(question))
     return lines
 
 
@@ -118,11 +148,7 @@ def render_final(run: Any) -> list[str]:
                         f"    {latest.error.code.value}: {latest.error.message}"
                     )
     if run.pending_question is not None:
-        lines.append(f"Pending {_question_label(run.pending_question).lower()}:")
-        lines.append(f"  {run.pending_question.text}")
-        if run.pending_question.requested_fields:
-            fields = ", ".join(run.pending_question.requested_fields)
-            lines.append(f"  Fields: {fields}")
+        lines.extend(render_question(run.pending_question))
     if run.artifacts:
         lines.append("Artifacts:")
         for artifact in run.artifacts.values():

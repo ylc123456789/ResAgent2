@@ -76,5 +76,6 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             approved = answer.values.get("approve", "").strip().lower() in {"yes", "true", "approve", "approved", "确认", "同意", "是"}
             return decision.model_copy(update={"outcome": "allow" if approved else "deny",
                                                "reason": "Operation approved" if approved else "User declined this operation",
-                                               "approval_id": pending.action_id})
+                                               "approval_id": pending.action_id,
+                                               "user_comment": answer.comment})
         return decision

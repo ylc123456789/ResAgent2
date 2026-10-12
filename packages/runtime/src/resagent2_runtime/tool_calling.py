@@ -178,6 +178,8 @@ def native_input_text(text: str | ComposedContext, schemas: list[dict], turns: S
 def tool_receipt(observation: ToolObservation, sequence: int | None = None) -> str:
     """Model-visible result only; internal memory/control payloads stay in runtime."""
     result = {"ok": observation.ok, "summary": observation.summary, "value": observation.value}
+    if observation.user_comment is not None:
+        result["user_comment"] = observation.user_comment
     if sequence is not None:
         result["observed_at"] = sequence
     if observation.question is not None:
@@ -196,6 +198,7 @@ def complete_pending_turn(turn: ToolCallTurn, receipt: str) -> None:
     for call in turn.tool_calls:
         turn.tool_results.setdefault(call.id, receipt)
     turn.executing_call_id = None
+    turn.executing_user_comment = None
 
 
 def record_tool_result(turn: ToolCallTurn, call_id: str, receipt: str) -> None:
@@ -207,6 +210,7 @@ def record_tool_result(turn: ToolCallTurn, call_id: str, receipt: str) -> None:
     turn.tool_results[call_id] = receipt
     if turn.executing_call_id == call_id:
         turn.executing_call_id = None
+        turn.executing_user_comment = None
 
 
 def recover_pending_turn(turn: ToolCallTurn) -> None:
@@ -217,6 +221,7 @@ def recover_pending_turn(turn: ToolCallTurn) -> None:
                 "Interrupted before a durable tool result was recorded. Execution outcome is unknown; "
                 "inspect current state before retrying. The runtime has not replayed this call."
             ),
+            user_comment=turn.executing_user_comment,
         )))
     complete_pending_turn(turn, tool_receipt(ToolObservation(
         ok=False, summary="Not executed: the interrupted batch was cancelled before this call started.",

@@ -384,6 +384,26 @@ def test_completed_tool_values_reach_history_without_preview_truncation(setup):
     assert json.loads(receipt["content"])["value"] == value
 
 
+@pytest.mark.parametrize("value", [None, 7, "raw text", [1, {"nested": "value"}]])
+def test_user_comment_preserves_arbitrary_tool_value_in_native_model_input(setup, value):
+    definition, store, requests, install = setup
+    comment = "  用户原文\nDo not reinterpret this as an execution result.  "
+
+    class CommentedTool(WriteValueTool):
+        def execute(self, state, arguments):
+            return ToolObservation(summary="Recorded result", value=value, user_comment=comment)
+
+    definition = replace(definition, tools=(CommentedTool(), *definition.tools[1:]))
+    install([_reply([_call("write_value", {"key": "x", "value": 7}, call_id="call_comment")]), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    receipts = [m for m in requests[1]["messages"] if m.get("tool_call_id") == "call_comment"]
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0]["content"])
+    assert receipt["value"] == value
+    assert receipt["user_comment"] == comment
+
+
 def test_request_work_pause_is_not_a_completed_execution(setup):
     definition, store, requests, install = setup
 

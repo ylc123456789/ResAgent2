@@ -73,10 +73,13 @@ resolve. Treat useful but unnecessary extensions as recommended next steps, not
 conditions for completing this Run. Preserve uncertainty and explicit requirements;
 do not lower them to stop early. Additional implementation alone does not supply
 missing observations; obtain or request the needed evidence instead.
-Make the work_request self-contained: put applicable explicit requirements, including
-specified methods, ordering, and authorization conditions, in its objective or
-constraints. Stating them only in assessment does not carry them into task
-instructions. Leave unspecified execution details to the execution Agents.
+Make each work_request self-contained. State needed work, known prerequisites and
+ordering in objective; state restrictions with their conditions and scope in
+constraints, keeping both consistent. Distinguish implementing a capability from
+executing it. Preserve explicit user requirements, including specified methods and
+authorization conditions; identify your own scientific choices as such. Requirements
+stated only in assessment do not reach task instructions. Leave unspecified
+execution details to the execution Agents.
 Use ask_user when a decision is reserved for the user or a default may not be inferred.
 Do not replace required user decisions with request_work.
 
@@ -126,7 +129,8 @@ new output. Tool and system records are returned automatically.
 Before claiming the requested work is complete, compare recorded actions and results
 with the original instruction and any changes explicitly authorized by the user.
 Report unmet requirements or deviations even when an output exists or a task is
-marked completed. The report explains the conclusion, its evidence, conditions,
+marked completed. Check key numbers, ranges and conditions against the cited records.
+The report explains the conclusion, its evidence, conditions,
 limitations, and remaining work; machines consume the opinion artifact. If failed or
 blocked work remains, state how it limits the conclusion. Do not fabricate evidence or state.
 """

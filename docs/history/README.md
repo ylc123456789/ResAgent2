@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-12：权限反馈、CLI 问答与通用提示词实施
+
+只读复核确认：四次冒烟拒绝均为操作批准，模型收到拒绝决定但没有具体说明；业务正式运行回答已经送达，61 次子 Agent 输入没有丢失 Task 指令。用户确认后在 `fix/native-agent-receipts` 实施：schema 26.0 保存可选操作 comment，并随原调用唯一回执交给模型；CLI 提供自由业务回答及操作说明入口。第二项先优化 Scientific / Compiler，第三、第四项同样只改通用执行、反馈和交接提示词，不增加继续/停止选项，不改 WorkRequest 任务接口。旧 25.0 Run/Session 明确拒绝，四份 current 与相关指南同步。最终本地全量 2168 passed / 1 skipped（61.11 秒），初轮专项 545 passed；补齐执行中崩溃的说明恢复边界后受影响复测 145 passed、最终 mock completed/8 工件、diff clean。首次全量指纹 fixture 未同步版本的失败与核对修复保留，pip check 仍有既有 cryptography 缺项。服务器真实场景与 L3 尚未执行，分支未合并。详见[完整修改方案](reviews/PERMISSION_FEEDBACK_AND_TASK_INSTRUCTIONS_PLAN_2026-10-12.md)、[官方指南和固定源码调研](reviews/PROMPT_GUIDANCE_RESEARCH_2026-10-12.md)及[实施测试计划](reviews/PERMISSION_FEEDBACK_TEST_PLAN_2026-10-12.md)。
+
 ## 2026-10-11：schema 25 服务器验收与 L3 问题记录
 
 `fix/native-agent-receipts@5d28f74` 完成服务器结构/材料/交接/压缩验收和真实校准 L3；服务器回归 2115 passed / 1 skipped、mock 8 工件。L3 completed、76/200 请求，产品链路 23/23、最后 Scientific 目录 50/50、独立前向重放字节一致。研究按原规程评 9/10、有人协助完成；数值检查 86/88，保留拟合收敛不足、最坏箱区间错误及四次被拒绝的非正式 test 冒烟请求。共享 conda 缓存故障、测试闸门退出/审计截断和 147 次重复历史统计单独分类，没有归为产品框架回归。服务器关闭后依已取回材料落盘，未重新测试或修写原件，分支仍未合并。问题、评分依据、证据与后续方向见[验收及问题记录](reviews/TOOL_CONTEXT_ACCEPTANCE_2026-10-11.md)。

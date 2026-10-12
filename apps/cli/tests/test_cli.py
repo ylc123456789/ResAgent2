@@ -24,7 +24,7 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_orchestrator import InMemoryRunStore, ResearchRun
+from resagent2_orchestrator import InMemoryRunStore, JsonRunStore, ResearchRun
 from resagent2_runtime import AgentAction
 from resagent2_cli.main import _parser, _specs_for_existing_run
 
@@ -255,6 +255,31 @@ def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
 
     assert controller.answered is None
     assert store.load(run.run_id).pending_question == run.pending_question
+
+
+@pytest.mark.parametrize("decision", ["yes", "no"])
+def test_operation_answer_loads_disk_snapshot_and_passes_separate_comment(tmp_path: Path, decision):
+    run = _run(RunStatus.PAUSED)
+    action = ActionSnapshot(action_id="action_train", tool="run_shell",
+        arguments={"command": "python train.py"}, context={"cwd": "/workspace", "environment": "/env"},
+        run_id=run.run_id, session_id="session_coding", task_id="task_train", attempt_number=1)
+    run.pending_question = PendingQuestion(id="question_operation", run_id=run.run_id,
+        session_id=action.session_id, task_id=action.task_id, attempt_number=1,
+        text="Confirm this command", requested_fields=["approve"], action=action, created_at=datetime.now(UTC))
+    data_root = tmp_path / "data"
+    store = JsonRunStore(data_root / "state")
+    store.save(run)
+    before = (data_root / "state" / f"{run.run_id}.json").read_bytes()
+    controller = _Controller(_run())
+    comment = "  使用原任务指定的顺序。\n不要提前评估。  "
+
+    assert cli(["answer", run.run_id, decision, "--comment", comment, "--data-root", str(data_root)],
+        application_builder=_Builder(controller)) == EXIT_COMPLETED
+
+    assert controller.answered[1].values == {"approve": decision}
+    assert controller.answered[1].comment == comment
+    assert controller.answered[1].question_id == run.pending_question.id
+    assert (data_root / "state" / f"{run.run_id}.json").read_bytes() == before
 
 
 @pytest.mark.parametrize("is_approval, field, heading", [

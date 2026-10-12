@@ -268,7 +268,8 @@ class Shell:
                 "/show <run_id>                  show a persisted Run\n"
                 "/attach <run_id>                watch a persisted Run (read-only)\n"
                 "/resume <run_id>                continue a paused/running Run\n"
-                "/answer <value|name=value>      answer the pending question\n"
+                "/answer [value|name=value]      answer the pending question; no value prompts\n"
+                "        [--comment TEXT]        optional operation approval explanation\n"
                 "/artifacts                      list the current Run's artifacts\n"
                 "/trace [run_id]                 show raw LLM trace (full level)\n"
                 "/quit                           exit the shell\n"
@@ -336,6 +337,8 @@ class Shell:
     def _cmd_answer(self, rest: list[str]) -> bool:
         run = self._require_current_run("/answer")
         args = _parser(_NoExitParser).parse_args(["answer", run.run_id] + rest)
+        if not args.values and not args.field:
+            self._prompt_answer(args, run)
         answer = _answer_from_args(args, run)
         application = self.application_builder(
             data_root=self.data_root,
@@ -362,6 +365,27 @@ class Shell:
         return False
 
     # -- helpers -------------------------------------------------------------
+
+    def _prompt_answer(self, args: argparse.Namespace, run) -> None:
+        question = run.pending_question
+        if question is None:
+            raise ValueError(f"Run {run.run_id} has no pending question")
+        for line in render.render_question(question):
+            self.stream.write(line + "\n")
+        if question.action is None and args.comment is not None:
+            raise ValueError("--comment is for operation approvals; answer user questions through their requested fields")
+        for field in question.requested_fields:
+            while True:
+                value = input(f"{field}> ")
+                if question.action is not None and value.strip().lower() not in {"yes", "no"}:
+                    self.stream.write("Enter yes or no; add any explanation in the next prompt.\n")
+                elif not value.strip():
+                    self.stream.write("Enter an option or your own text.\n")
+                else:
+                    args.field.append(f"{field}={value}")
+                    break
+        if question.action is not None and args.comment is None:
+            args.comment = input("Explanation (optional; Enter to skip)> ") or None
 
     def _require_run_id(self, rest: list[str], command: str) -> str:
         if len(rest) != 1:

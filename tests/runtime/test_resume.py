@@ -40,11 +40,11 @@ def test_json_session_round_trip_records_current_schema(tmp_path):
     store = JsonSessionStore(tmp_path)
     store.save(state)
     value = json.loads((tmp_path / "session_schema.json").read_text(encoding="utf-8"))
-    assert value["schema_version"] == SCHEMA_VERSION == "25.0"
+    assert value["schema_version"] == SCHEMA_VERSION == "26.0"
     assert store.load(state.session_id) == state
 
 
-@pytest.mark.parametrize("version", [None, "24.0", "26.0"])
+@pytest.mark.parametrize("version", [None, "24.0", "25.0", "27.0"])
 def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_path, version):
     now = datetime.now(UTC)
     state = AgentState(
@@ -60,7 +60,7 @@ def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_pa
     path.write_text(json.dumps(value), encoding="utf-8")
     before = path.read_bytes()
     store = JsonSessionStore(tmp_path)
-    with pytest.raises(ValueError, match="Session schema_version must be 25.0"):
+    with pytest.raises(ValueError, match="Session schema_version must be 26.0"):
         store.load(state.session_id)
     assert path.read_bytes() == before
 
@@ -329,7 +329,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     if damage == "old_schema":
         value["schema_version"] = "23.0"
     elif damage == "future_schema":
-        value["schema_version"] = "26.0"
+        value["schema_version"] = "27.0"
     elif damage == "missing_schema":
         value.pop("schema_version")
     elif damage == "invalid_state":
@@ -355,7 +355,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     assert result.report == result.error.message
     assert "cannot resume session" in result.report
     if damage in {"old_schema", "future_schema", "missing_schema", "non_object"}:
-        assert "schema_version must be 25.0" in result.report
+        assert "schema_version must be 26.0" in result.report
     assert result.llm_calls == 0
     assert result.session is None
     assert definition.llm_client.contexts == []

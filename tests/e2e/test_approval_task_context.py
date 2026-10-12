@@ -158,8 +158,10 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     assert not (repo / "executed.marker").exists()
     assert audits == []  # Ordinary yes does not authorize an external effect.
     action = run.pending_question.action
+    comment = "  只执行本次操作。\nKeep this explanation separate from task guidance.  "
     run = controller().answer_question(run.run_id, UserAnswer(
         question_id=run.pending_question.id, values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        comment=comment,
     ))
     assert run.status == "completed", run.terminal_error
     assert (repo / "executed.marker").read_text() == "executed\n"
@@ -168,6 +170,7 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     assert len(task.attempts) == 1 and task.attempts[0].session.id == session_id
     assert len(run.answers) == 2
     assert run.answers[0].action is None and run.answers[1].action == action
+    assert JsonRunStore(tmp_path / "runs").load(run.run_id).answers[1].comment == comment
 
     assert not any(ref.kind in {"question", "answer", "work_request", "work_feedback", "work_record", "research_index"}
                    for ref in run.artifacts.values())
@@ -181,6 +184,8 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
         assert dialogue[0]["question_text"] == business_text
         assert dialogue[0]["values"] == {"approve": "yes"}
         assert dialogue[0]["question_id"] == run.answers[0].question_id
+        assert "comment" not in dialogue[0]
+        assert "只执行本次操作" not in context.task_context + context.artifact_index
 
     state = sessions.load(session_id)
     assert state.pending_action is None
@@ -190,4 +195,9 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     receipts = [json.loads(next(iter(turn.tool_results.values()))) for turn in state.tool_turns]
     assert sum(receipt.get("value", {}).get("exit_code") == 0 for receipt in receipts
                if isinstance(receipt.get("value"), dict)) == 1
+    command_receipt = next(receipt for receipt in receipts if "user_comment" in receipt)
+    assert command_receipt["user_comment"] == comment
+    # It is in the actual paired native history sent to the model after restart.
+    assert any(json.loads(raw).get("user_comment") == comment
+               for turn in worker_client.histories[-1] for raw in turn.tool_results.values())
     assert run.llm_calls_used == len(worker_client.contexts) + len(scientific_client.contexts) == 5

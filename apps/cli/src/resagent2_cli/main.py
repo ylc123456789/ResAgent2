@@ -53,7 +53,7 @@ def _assignment(value: str, *, label: str) -> tuple[str, str]:
     name, assigned = value.split("=", 1)
     if not name.strip() or not assigned.strip():
         raise ValueError(f"{label} must contain a non-empty name and value")
-    return name.strip(), assigned.strip()
+    return name.strip(), assigned
 
 
 def _goal(args: argparse.Namespace) -> str:
@@ -161,10 +161,16 @@ def _answer_from_args(args: argparse.Namespace, run: ResearchRun) -> UserAnswer:
         values = {question.requested_fields[0]: fields[0]}
     else:
         values = dict(_assignment(value, label="answer field") for value in fields)
+    if question.action is None:
+        if args.comment is not None:
+            raise ValueError("--comment is for operation approvals; answer user questions through their requested fields")
+    elif values.get("approve", "").strip().lower() not in {"yes", "no"}:
+        raise ValueError("operation approval requires approve=yes or approve=no; put any explanation in --comment")
     return UserAnswer(
         question_id=question.id,
         values=values,
         answered_at=datetime.now(UTC),
+        comment=args.comment,
     )
 
 
@@ -257,6 +263,7 @@ def _parser(
     answer.add_argument("run_id")
     answer.add_argument("values", nargs="*", metavar="VALUE|NAME=VALUE")
     answer.add_argument("--field", action="append", default=[], metavar="NAME=VALUE")
+    answer.add_argument("--comment", help="optional explanation for an operation approval; does not grant permission")
     answer.add_argument("--data-root", default=_default_data_root())
     _workspace_args(answer)
 

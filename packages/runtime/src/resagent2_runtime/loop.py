@@ -336,6 +336,7 @@ class AgentLoop:
                             ok=False,
                             summary="Materials were registered before interruption; the original tool result was not saved",
                             value={"artifact_ids": [ref.id for ref in recovered], "execution_status": "interrupted"},
+                            user_comment=turn.executing_user_comment,
                         )))
                 recover_pending_turn(turn)
                 self._save(state)
@@ -434,7 +435,8 @@ class AgentLoop:
                 turn = ToolCallTurn.model_validate(reply)
                 used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
                 rejection = None
-                if turn.tool_results or turn.executing_call_id is not None or turn.protocol_error is not None:
+                if (turn.tool_results or turn.executing_call_id is not None
+                        or turn.executing_user_comment is not None or turn.protocol_error is not None):
                     rejection = "A model reply cannot provide tool execution receipts"
                 if any(call.id in used_ids for call in turn.tool_calls):
                     rejection = "Provider reused a historical tool call ID; no tool was executed"
@@ -871,6 +873,12 @@ class AgentLoop:
 
     def _cancel_pending_calls(self, state: AgentState, reason: str = "an earlier call stopped the batch") -> None:
         if state.tool_turns and len(state.tool_turns[-1].tool_results) < len(state.tool_turns[-1].tool_calls):
+            turn = state.tool_turns[-1]
+            if turn.executing_call_id is not None and turn.executing_user_comment is not None:
+                record_tool_result(turn, turn.executing_call_id, tool_receipt(ToolObservation(
+                    ok=False, summary=f"Execution interrupted: {reason}. Outcome is unknown.",
+                    user_comment=turn.executing_user_comment,
+                )))
             complete_pending_turn(state.tool_turns[-1], tool_receipt(ToolObservation(
                 ok=False, summary=f"Not executed: {reason}.",
             )))
@@ -1075,14 +1083,22 @@ class AgentLoop:
                                           value={"execution_status": "not_executed"})
         else:
             state.tool_turns[control.source_turn].executing_call_id = self._active_call_id
+            state.tool_turns[control.source_turn].executing_user_comment = permission.user_comment
             self._save(state)
             try:
                 current_budget().remaining_timeout()
                 observation = registry.dispatch(action.tool, action.arguments, state, prepared=permission.prepared)
             except DeadlineExceededError as error:
+                # Dispatch may have started; retain the matched feedback without
+                # claiming that an interrupted operation had no side effects.
+                self._record_observation(state, action.tool, ToolObservation(
+                    ok=False, summary="Approved operation timed out: " + str(error),
+                    value={"execution_status": "unknown"}, user_comment=permission.user_comment,
+                ))
                 return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
             except Exception as error:
                 observation = ToolObservation(ok=False, summary="Approved operation failed: " + str(error))
+        observation = observation.model_copy(update={"user_comment": permission.user_comment})
         state.memory.update(observation.memory_updates)
         for ref in observation.artifacts:
             if ref.run_id != state.run_id or ref.session_id != state.session_id:

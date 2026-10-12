@@ -2,6 +2,7 @@
 
 from e2e.native_fixtures import tool_turns
 from datetime import UTC, datetime
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -57,12 +58,12 @@ def request(root, **changes):
     return AgentRequest(**(fields | changes))
 
 
-def execute(req, actions, tool, store, *, binding=None):
+def execute(req, actions, tool, store, *, binding=None, client=None):
     boundary = WorkspaceBoundary(req.workspace)
     tools = (tool, FinishTool())
     definition = AgentDefinition(
         name="permissions", owner=AgentOwner.CODING, system_prompt="Test",
-        tools=tools, llm_client=ScriptedLLMClient(tool_turns(actions)),
+        tools=tools, llm_client=client or ScriptedLLMClient(tool_turns(actions)),
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary,
@@ -73,12 +74,13 @@ def execute(req, actions, tool, store, *, binding=None):
     return AgentLoop(store=store).run(definition, req, session_id="session_permissions")
 
 
-def answer(tmp_path, req, result):
+def answer(tmp_path, req, result, *, comment=None):
     question = result.control.question
     recorded = RecordedAnswer(
         question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        comment=comment,
         run_id=req.run_id, session_id=result.session.id,
         task_id=req.task_id, attempt_number=req.attempt_number, action=question.action,
     )
@@ -158,17 +160,29 @@ def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash
     req, tool = request(tmp_path), Command()
     store = JsonSessionStore(tmp_path / "sessions")
     first = execute(req, [command("python first.py")], tool, store)
-    resumed = answer(tmp_path, req, first)
+    comment = "  This approval applies to the interrupted operation only.\n原文保留  "
+    resumed = answer(tmp_path, req, first, comment=comment)
     attempts = []
     def interrupt():
-        assert store.load(first.session.id).pending_action is None
+        state = store.load(first.session.id)
+        assert state.pending_action is None
+        assert state.tool_turns[-1].executing_user_comment == comment
         attempts.append("started")
         raise Interrupted()
     tool.before_execute = interrupt
     with pytest.raises(Interrupted):
         execute(resumed, [command("python first.py")], tool, store)
-    result = execute(resumed, [FINISH], tool, JsonSessionStore(store.root))
+    client = ScriptedLLMClient(tool_turns([FINISH]))
+    result = execute(resumed.model_copy(update={"resume_answers": [], "control_ack": None}),
+                     [], tool, JsonSessionStore(store.root), client=client)
     assert result.status == "completed" and attempts == ["started"]
+    call_id = first.control.source_call_id
+    receipts = [json.loads(turn.tool_results[call_id]) for turn in client.histories[0]
+                if call_id in turn.tool_results]
+    assert len(receipts) == 1 and receipts[0]["user_comment"] == comment
+    assert "unknown" in receipts[0]["summary"]
+    restored = JsonSessionStore(store.root).load(first.session.id)
+    assert all(turn.executing_user_comment is None for turn in restored.tool_turns)
 
 
 @pytest.mark.parametrize("confirm", [False, True])
@@ -208,7 +222,7 @@ def test_shell_approval_does_not_follow_a_changed_environment_prefix(tmp_path):
     store = JsonSessionStore(tmp_path / "sessions")
     action = command("python measure.py")
     first = execute(req, [action], tool, store, binding=binding)
-    resumed = answer(tmp_path, req, first)
+    resumed = answer(tmp_path, req, first, comment="Only for the original environment")
     original_action = first.control.question.action
     binding.current = SimpleNamespace(prefix=tmp_path / "env_second", python_version="3.12")
 
@@ -220,5 +234,9 @@ def test_shell_approval_does_not_follow_a_changed_environment_prefix(tmp_path):
     assert original_action.context["environment"] == str(tmp_path / "env_first")
     assert next_action.context["environment"] == str(tmp_path / "env_second")
 
-    final = execute(answer(tmp_path, resumed, second), [FINISH], tool, store, binding=binding)
+    final = execute(answer(tmp_path, resumed, second, comment="New environment reviewed"),
+                    [FINISH], tool, store, binding=binding)
     assert final.status == "completed" and tool.calls == ["python measure.py"]
+    receipts = [json.loads(raw) for turn in store.load(first.session.id).tool_turns
+                for raw in turn.tool_results.values()]
+    assert [r["user_comment"] for r in receipts if "user_comment" in r] == ["New environment reviewed"]

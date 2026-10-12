@@ -39,7 +39,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "25.0"
+SCHEMA_VERSION = "26.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 AnswerFieldName = Annotated[
@@ -82,7 +82,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["25.0"] = SCHEMA_VERSION
+    schema_version: Literal["26.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +513,7 @@ class UserAnswer(ContractModel):
     question_id: QuestionId
     values: dict[AnswerFieldName, str] = Field(min_length=1)
     answered_at: datetime
+    comment: str | None = None
 
 
 class RecordedAnswer(UserAnswer):
@@ -529,6 +530,8 @@ class RecordedAnswer(UserAnswer):
 
     @model_validator(mode="after")
     def validate_scope(self) -> RecordedAnswer:
+        if self.comment is not None and self.action is None:
+            raise ValueError("operation comments require an approval question; business feedback belongs in values")
         if (self.task_id is None) != (self.attempt_number is None):
             raise ValueError("answer task_id and attempt_number must be paired")
         if self.task_id is None and self.session_id is None:

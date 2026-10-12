@@ -88,7 +88,7 @@ Scientific 的 Session 跨研究回合复用；Coding、Experiment 的 Session �
 反向：执行报告与工件 → Interpreter 固定组织 → Scientific 阅读并作科学判断
 ```
 
-Compiler 使用 LLM 翻译需求，固定代码分配身份、检查结构；Interpreter 不调用 LLM，不拼接总体报告，只按已有任务和尝试组织真实状态、错误及原报告与交付物入口。
+Compiler 使用 LLM 翻译需求，固定代码分配身份、检查结构。Scientific 应明确工作、顺序和约束；Compiler 在原意上细化，尽量保留关键原句，不把“实现某能力”变成“立即执行该操作”。当前通过通用提示词指导这些语义判断，不让代码按编号或关键词猜任务边界，也不承诺模型转述逐字无损。Interpreter 不调用 LLM，不拼接总体报告，只按已有任务和尝试组织真实状态、错误及原报告与交付物入口。
 
 Scheduler 在接收结论确定后按原字符冻结每个真实终态 Attempt 的报告；Controller 交付实际 Ref，Scientific 从完整目录按需读取。WorkRequest 没有总体报告，失败历史和原始产物仍可读取。这里保证交接减少转述损失，不承诺所有正文始终完整出现在模型输入中，也不把专业报告当成无误的测量。当前取舍见 [ADR-0028](../history/decisions/0028-tool-history-and-complete-artifact-directory.md)，固定 Interpreter 的历史理由见 [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)。
 
@@ -179,7 +179,7 @@ Agent 的领域完成检查、接收端的来源冻结和 Run 最终交付检查
 已有执行机制遵守以下规则，具体协议见[契约](CONTRACTS.md)：
 
 - 内部调用共享 Run 的用量、期限和授权，只能继承或收紧，暂停恢复不重置已有消耗。
-- 批准绑定准确操作并在执行前消费；问答继续原任务和会话，结果未知的副作用不自动重放。
+- 批准绑定准确操作并在执行前消费；可选用户说明原文进入该操作的回执，不扩权或自动变成长期需求。业务问答允许自由回答，继续原任务和会话；结果未知的副作用不自动重放。
 - 错误回执必须合法保存，正常失败与中断分清；可选 trace 失败不覆盖业务结果，权威状态保存失败不能吞掉。
 
 这些规则的通用经验是明确事实、控制和诊断的责任边界。当前单 Run 单写入者、应用层权限、跨文件保存等实现边界见[状态与恢复](ARCHITECTURE.md#state)，不能据此承诺 OS 沙箱、共同事务或所有副作用恰好执行一次。

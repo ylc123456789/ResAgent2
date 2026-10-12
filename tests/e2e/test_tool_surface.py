@@ -26,6 +26,8 @@ Schema 24 only updates embedded versions for the unified context/session memory 
 Schema 25 removes search artifacts, replaces the fulltext entry with exact-source
 fetch_literature, adds direct accepted control receipts and preserves report whitespace.
 git_diff exposes current verification freshness after removing the repeated workset.
+Schema 26 only updates embedded public schema constants; approval explanations
+are supplied by the user and returned in receipts, not added to tool inputs.
 """
 
 import hashlib

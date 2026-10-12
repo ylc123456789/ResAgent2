@@ -86,6 +86,7 @@ class ToolObservation(RuntimeModel):
 
     summary: NonEmptyStr
     value: JsonValue | None = None
+    user_comment: str | None = None
     ok: bool = True
     memory_updates: dict[str, JsonValue] = Field(default_factory=dict)
     finish_candidate: FinishCandidate | None = None
@@ -134,6 +135,7 @@ class PermissionDecision(RuntimeModel):
     context: dict[str, JsonValue] = Field(default_factory=dict)
     prepared: dict[str, JsonValue] | None = None
     approval_id: str | None = None
+    user_comment: str | None = None
 
 
 class AgentEvent(RuntimeModel):
@@ -170,6 +172,7 @@ class ToolCallTurn(RuntimeModel):
     # Checkpointed immediately before dispatch. Only this missing receipt has
     # an unknown outcome; other unreceipted calls have not started.
     executing_call_id: str | None = None
+    executing_user_comment: str | None = None
     protocol_error: str | None = None
 
     @model_validator(mode="after")
@@ -183,6 +186,8 @@ class ToolCallTurn(RuntimeModel):
             self.executing_call_id not in ids or self.executing_call_id in self.tool_results
         ):
             raise ValueError("executing call must be an unreceipted call in this reply")
+        if self.executing_user_comment is not None and self.executing_call_id is None:
+            raise ValueError("executing user comment requires an executing call")
         return self
 
 
@@ -196,7 +201,7 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
-    schema_version: Literal["25.0"] = SCHEMA_VERSION
+    schema_version: Literal["26.0"] = SCHEMA_VERSION
     session_id: SessionId
     agent_name: NonEmptyStr
     owner: AgentOwner

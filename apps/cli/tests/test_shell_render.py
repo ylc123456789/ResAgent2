@@ -160,6 +160,35 @@ def test_render_final_pending_question_fields():
 
 
 @pytest.mark.parametrize("renderer", [render_live, render_final])
+def test_question_options_and_free_text_entry_are_visible(renderer):
+    run = _run(status="paused")
+    run.pending_question = SimpleNamespace(text="Choose the measurement", requested_fields=["metric"],
+        action=None, options={"metric": ["accuracy", "negative log likelihood"]})
+
+    joined = "\n".join(renderer(run))
+
+    assert "Options for metric:" in joined
+    assert "negative log likelihood" in joined
+    assert "your own text" in joined
+    assert "/answer prompts" in joined
+
+
+@pytest.mark.parametrize("renderer", [render_live, render_final])
+def test_operation_renders_full_action_and_explanation_entry(renderer):
+    run = _run(status="paused")
+    command = "python train.py " + "--long-argument " * 40
+    action = ActionSnapshot(action_id="action_train", tool="run_shell", arguments={"command": command},
+        context={"cwd": "/workspace", "environment": "/bound/env"}, run_id=run.run_id, session_id="session_coding")
+    run.pending_question = SimpleNamespace(text="Confirm command", requested_fields=["approve"], action=action)
+
+    joined = "\n".join(renderer(run))
+
+    assert command in joined
+    assert "/workspace" in joined and "/bound/env" in joined
+    assert "yes or no" in joined and "--comment TEXT" in joined
+
+
+@pytest.mark.parametrize("renderer", [render_live, render_final])
 @pytest.mark.parametrize("is_approval, field, label", [
     (False, "metric", "User question"),
     (False, "approve", "User question"),

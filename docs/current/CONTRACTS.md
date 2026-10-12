@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 25.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 26.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -92,11 +92,11 @@ Controller 以 `source_type=import` 登记 `literature_paper` 和可选 `literat
 
 `QuestionDraft` 的 `text` 必须包含回答所需背景，`requested_fields` 非空；`options` 可选。字段键使用 AnswerFieldName：1–64 个 ASCII 字母、数字或下划线，以字母开头。正文和选项放在值中，不放进机器键。工具 schema 在暂停前校验这些规则。
 
-Agent 返回 `needs_user_input`、paused Session 和直接 `ControlSignal`。Runtime 在交接前分配并保存 PendingQuestion，包含 run_id、session_id、可选 Task/Attempt、完整 text、requested_fields、options、created_at 和可选 action。用户提交 `UserAnswer(question_id, values, answered_at)`；值键必须与原字段完全一致，options 是提示而非额外枚举限制。
+Agent 返回 `needs_user_input`、paused Session 和直接 `ControlSignal`。Runtime 在交接前分配并保存 PendingQuestion，包含 run_id、session_id、可选 Task/Attempt、完整 text、requested_fields、options、created_at 和可选 action。用户提交 `UserAnswer(question_id, values, answered_at, comment=None)`；值键必须与原字段完全一致，options 是提示而非额外枚举限制。业务问题没有 action，自由答案或补充写在对应 values 中，不接受 comment；操作批准允许附带可选 comment，批准和拒绝均可附说明，原文保留，不解析为授权。
 
-Controller 生成带完整题目快照和作用域的 `RecordedAnswer`，保存到 Run，不生成 question/answer 工件。`user_answers` 是同作用域累计业务问答，`resume_answers` 是本次恢复数据，`control_ack` 确认原控制调用。业务回答进入第二部分；操作批准不进入第二或第四部分。
+Controller 生成带完整题目快照和作用域的 `RecordedAnswer`，保存到 Run，包括原文 comment，不生成 question/answer 工件。`user_answers` 是同作用域累计业务问答，`resume_answers` 是本次恢复数据，`control_ack` 确认原控制调用。业务回答进入第二部分；操作批准、拒绝及说明不进入第二或第四部分。
 
-操作批准的 `ActionSnapshot` 绑定工具、校验参数、真实目录/环境/目标、Run/Task/Attempt/Session。原操作调用在批准前保持未完成回执；恢复时权限策略检查本次答案与准确快照，批准在副作用前持久消费，然后为原调用写唯一执行/拒绝回执。快照变化重新询问；拒绝、缺少权限或已消费批准不能执行。批次已完成项保留，后续未开始项 not_executed，只恢复当前待批准项。结果未知的副作用不重放。
+操作批准的 `ActionSnapshot` 绑定工具、校验参数、真实目录/环境/目标、Run/Task/Attempt/Session。原操作调用在批准前保持未完成回执；恢复时权限策略检查本次答案与准确快照，批准在副作用前持久消费，然后为原调用写唯一执行/拒绝回执。匹配答案的 comment 经 `PermissionDecision.user_comment` 传入 `ToolObservation.user_comment`，输出在原回执的顶层 `user_comment`；业务 value 保持原形，不要求是字典。拒绝回执 `ok=False`，value 含 `execution_status=not_executed`，批准说明随执行成功或失败回执保留。批准后派发期间期限中断也保存原调用的说明与失败回执，value 的 `execution_status=unknown` 保守表示不能保证没有部分执行，不重放。整个流程不另造反馈回执。说明不扩大许可、不替代命令，不增加继续/停止决策字段；下一步由模型结合任务及反馈判断。快照变化重新询问，旧说明不借给变化后的动作；拒绝、缺少权限或已消费批准不能执行。批次已完成项保留，后续未开始项 not_executed，只恢复当前待批准项。结果未知的副作用不重放。
 
 暂停继续原 Attempt/Session，真正 retry 新建尝试并保持问答隔离。控制来源身份是 Session、原始 turn 与 native call ID；不能只用供应商 call ID 作为全局幂等键。业务问答原 accepted 回执不在回答后改写，实际回答完整进入第二部分。
 
@@ -313,6 +313,7 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 |---|---|
 | `summary`、`value` | 非空简短说明和可选 JSON 内容 |
 | `ok` | 机器可读成功标志；非零退出、参数拒绝、缺文件等可恢复失败为 False，不能解析 summary 猜状态 |
+| `user_comment` | 可选操作批准说明，由运行时从匹配回答透传到原回执顶层；不改业务 value |
 | `memory_updates` | 由 Loop 合入 Session 的确定性更新，不是第二份外部结果信封 |
 | `question` / `request_work` / `finish_candidate` | 至多一个非空；普通工具可全为空，Loop 负责形成对应控制或完成结果 |
 
@@ -370,7 +371,7 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索直接返
 
 创建 Session 时写入 `AgentState.tool_protocol_key` 和固定身份 prompt/实际工具 schema 的 `contract_fingerprint`。OpenAICompatibleClient 的 `tool_session_key` 是协议、endpoint、model 的稳定 hash，不含 API key；其他原生客户端也须提供非空、稳定且能标识其协议配置的身份。恢复时身份须完全相同；旧正文 JSON Session、endpoint/model 变化均拒绝，不自动迁移。
 
-`AgentState.tool_turns` 按轮保存 assistant `content`、`reasoning_content`、原始 `tool_calls` 和按 call ID 配对的 `tool_results`。Loop 先保存整批 call，每次派发前保存 executing_call_id，随后按 observation/event 路径配对该调用的 receipt 并清除执行标记。重启保留已完成回执；正在执行且缺回执的项记为 unknown outcome，其余缺回执项记为未开始；不自动重放。它防止把未知结果误判为成功，但只保证进程重启 checkpoint，不保证掉电持久化，也不是外部副作用的 exactly-once 事务。
+`AgentState.tool_turns` 按轮保存 assistant `content`、`reasoning_content`、原始 `tool_calls` 和按 call ID 配对的 `tool_results`。Loop 先保存整批 call，每次派发前保存 executing_call_id；批准操作的匹配说明同时保存在 `ToolCallTurn.executing_user_comment`，随后按 observation/event 路径配对该调用的 receipt 并清除执行标记和临时说明。该字段仅是运行期恢复元数据，不形成另一套批准流程。重启保留已完成回执；正在执行且缺回执的项记为 unknown outcome，其说明附回原调用的未知回执，其余缺回执项记为未开始。未知恢复不重放、不重新授予许可或把说明借给后续动作。它防止把未知结果误判为成功，但只保证进程重启 checkpoint，不保证掉电持久化，也不是外部副作用的 exactly-once 事务。
 
 下一轮原生请求按固定 system、完整任务需求、摘要/近期成对历史、完整目录排列；不保存或重发此前每轮完整业务 prompt。输入压力下使用可选 summarize_history 生成旧完整交互摘要；history_checkpoint 同时保存摘要与绝对历史边界，近期完整回合继续原样发送。原始历史不删，摘要不替代当前领域状态、回答、证据或完成门禁；失败不推进边界。具体比例和失败边界见[上下文](CONTEXT.md#compaction)。`reasoning_content` 仅用于同一 Session 的供应商协议续传，不进入业务 memory、ToolObservation 或完成证据。
 
@@ -625,7 +626,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **25.0**，旧 24.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版移除控制/搜索/index 工件链及重复正文工作集，采用直接控制载荷和 WorkResult，统一 UUID 工件身份并补齐登记恢复。
+Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **26.0**，旧 25.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版保存可选操作 comment，并将它送入原调用回执；固定提示词变化也须使用新 Session。此前直接控制载荷、WorkResult、UUID 工件身份和完整目录继续沿用，不恢复旧控制/搜索/index 工件链或重复正文工作集。
 
 Run 顶层的嵌套公共 request 等带 schema；RunStore 重校验整个状态。SessionStore 先检查顶层 schema，再校验模型；缺版本不能靠默认值接受。恢复还检查协议、endpoint/model 和固定 prompt/tools 指纹。读取、解码、解析或状态校验失败返回明确 contract_error，不调用模型、不覆盖损坏记录，也不伪造 SessionRef。
 

@@ -2,7 +2,7 @@
 
 ResAgent2 把一次研究任务分成三件事：**Scientific 判断需要什么证据，Orchestrator 把执行工作组织起来，Coding 和 Experiment 完成专业工作。** 三个 Agent 都使用 LLM，但研究目标、任务状态、工具执行和证据登记分别有明确的负责人。
 
-本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **25.0**，旧 Run/Session 不迁移、不兼容恢复。
+本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **26.0**，旧 Run/Session（包括 25.0）不迁移、不兼容恢复。
 
 <a id="overview"></a>
 
@@ -56,7 +56,7 @@ Compiler 使用 LLM 把执行需求翻译为任务草图；Scheduler 用代码�
 
 所有 Agent 共用一种业务接口：`invoke(AgentRequest) → AgentResult`。需求主要是 `instruction + input_artifacts`，交付主要是 `report + artifacts`；身份、权限、预算、工作区和恢复由控制字段表达。`request_work` 是 Scientific 的普通工具调用；它返回执行需求后，由 Controller 接管跨 Agent 的过程，Scientific 不直接调用另一个 Agent。
 
-Compiler 按职责路由：实现代码和正确性验证交 Coding；为回答研究问题而进行的训练、拟合、评估和测量交 Experiment。同一 Agent 的准备、检查与执行尽量留在一个任务内。`depends_on` 表示上游成功，不表示失败修复；需要新的修复工作时，由 Scientific 提出新 WorkRequest，而不是在依赖图里隐藏第二套控制流程。
+Compiler 按职责路由：实现代码和正确性验证交 Coding；为回答研究问题而进行的训练、拟合、评估和测量交 Experiment。同一 Agent 的准备、检查与执行尽量留在一个任务内。Scientific 表达工作内容、必要顺序和约束，Compiler 基于这些意图细化而不另立研究目标；提示词要求尽量保留关键原句的动作、条件和限制。当前 WorkRequest 没有独立 Task 列表，代码不从编号步骤猜 Task 边界，也不把整轮需求重复拼给每个子 Agent。`depends_on` 表示上游成功，不表示失败修复；需要新的修复工作时，由 Scientific 提出新 WorkRequest，而不是在依赖图里隐藏第二套控制流程。
 
 ### 三个循环，不要混在一起
 
@@ -133,7 +133,7 @@ Runtime 的 `finish/ask_user` 和 Scientific 的控制工具留在职责所属�
 
 Scientific Session 属于整个 Run，跨工作回合复用；Coding/Experiment Session 属于 `Run + Task + Attempt`。上层保存 SessionRef，通过公共结果协作，不读 Agent 的私有 memory 来驱动调度。
 
-**问答续跑不是 retry。** Runtime 预分配问题身份，保存直接控制交接；Controller 从 PendingQuestion 配对完整 RecordedAnswer，不生成问答工件。业务问答累计进入同作用域的任务需求，操作批准只由权限策略消费。回答继续原 Attempt、Session、输出目录和基线；失败重试才创建新 Attempt/Session，不自动继承旧问答。批准绑定原生调用的准确动作和作用域，恢复执行原调用或形成拒绝回执，不要求模型重新发出命令。
+**问答续跑不是 retry。** Runtime 预分配问题身份，保存直接控制交接；Controller 从 PendingQuestion 配对完整 RecordedAnswer，不生成问答工件。业务问答可自行输入答案，累计进入同作用域的任务需求；操作批准的决定只由权限策略消费，可选说明按原文随原调用回执交给模型，不进入任务需求或工件目录。回答继续原 Attempt、Session、输出目录和基线；失败重试才创建新 Attempt/Session，不自动继承旧问答。批准绑定原生调用的准确动作和作用域，恢复执行原调用或形成含未执行事实的拒绝回执，不要求模型重新发出命令。CLI 提供同一回答链路的交互和命令入口，说明不扩大授权，后续业务判断仍由模型负责。
 
 
 Controller 是 Run 的业务入口：`create_run` 创建后推进到稳定状态，`answer_question` 保存回答再续跑，`run_until_stable` 不伪造答案或绕过 paused。外部论文可在创建时导入，或仅在 paused 时追加并刷新目录；导入不答题、不恢复、不重置预算，也不创建独立论文库。

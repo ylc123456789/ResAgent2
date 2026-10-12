@@ -1223,6 +1223,31 @@ def test_real_restart_recovers_paused_scientific_session(tmp_path) -> None:
     assert _context_answer(context, answer_ref) == _answer_projection(restored.answers[0])
 
 
+@pytest.mark.parametrize("comment", ["", " 业务反馈必须放在字段答案中\n "])
+def test_business_operation_comment_is_rejected_before_persisting_or_resuming(tmp_path, comment):
+    from resagent2_orchestrator import OrchestrationError
+
+    store = JsonRunStore(tmp_path / "runs")
+    sessions = JsonSessionStore(tmp_path / "sessions")
+    ask = {"tool": "ask_user", "arguments": {
+        "assessment": {"statement": "Need a user decision"},
+        "text": "Which dataset?", "requested_fields": ["dataset"],
+    }}
+    controller = _build_recoverable_controller(store, sessions, [ask])
+    run = controller.create_run("run_business_comment", research_request())
+    assert run.status == "paused" and run.pending_question.action is None
+    files = [*store.root.glob("*.json"), *(tmp_path / "sessions").glob("*.json")]
+    before = {path: path.read_bytes() for path in files}
+    rebuilt = _build_recoverable_controller(store, sessions, [finish_action()])
+    with pytest.raises(OrchestrationError, match="answer business questions in the requested fields"):
+        rebuilt.answer_question(run.run_id, UserAnswer(
+            question_id=run.pending_question.id, values={"dataset": "new user choice"},
+            answered_at=NOW, comment=comment,
+        ))
+    assert {path: path.read_bytes() for path in files} == before
+    assert rebuilt.scientific_port.llm_client.contexts == []
+
+
 def test_restarted_generic_answers_stay_paired_with_their_own_questions(tmp_path):
     from resagent2_orchestrator import OrchestrationError
 

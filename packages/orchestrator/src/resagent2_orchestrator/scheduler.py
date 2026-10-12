@@ -32,6 +32,8 @@ def _validate_answer(question, answer):
         raise OrchestrationError("answer does not match pending question")
     if set(question.requested_fields) != set(answer.values):
         raise OrchestrationError("answer is missing requested fields")
+    if answer.comment is not None and question.action is None:
+        raise OrchestrationError("operation comments require an approval question; answer business questions in the requested fields")
 
 
 _WORK_REQUEST_TRANSITIONS = {

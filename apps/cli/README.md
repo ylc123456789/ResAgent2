@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 25.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 26.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -59,8 +59,10 @@ resagent2> /quit
 | `/show <run_id>` | 显示已持久化 Run 的当前快照 |
 | `/attach <run_id>` | 只监看现状，不启动或恢复 Run |
 | `/resume <run_id>` | 继续一个已持久化且尚未稳定的 Run |
+| `/answer` | 显示原题与选项，逐字段输入；选项以外的自由文本也可直接填写 |
 | `/answer <value>` | 当前问题只有一个字段时的简写 |
 | `/answer name=value ...` | 显式回答一个或多个字段 |
+| `/answer no --comment "说明"` | 拒绝当前操作，并可选附带说明；批准使用 `yes` |
 | `/artifacts` | 列出当前 Run 的 Artifact |
 | `/trace [run_id]` | 查看 full trace 中的原始请求、响应、原生 tool calls 和可选 reasoning |
 | `/help` / `/quit` | 查看帮助 / 退出 shell |
@@ -117,6 +119,17 @@ resagent2 resume run_20260901_120000_ab12cd34
 
 Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下划线，以 ASCII 字母开头；问题与选项显示在正文，不放在键里。若实际字段是 mode，可用 `--field 'mode=第二个，mul=2*3'`，或在 shell 用 `/answer "mode=第二个，mul=2*3"`。命令仍按第一个 `=` 分隔，答案本身可以包含 `=` 和自然语言。shell 与一次性 CLI 共用参数解析和答案组装，也都接受单字段值或 `NAME=VALUE` 简写；答案放在工作区选项之前，或使用可重复的 `--field NAME=VALUE`。不要自行改名；无效提问键由共享工具契约在暂停前拒绝并反馈给模型，详见 [问答规则](../../docs/current/CONTRACTS.md#questions)。
 
+业务问答的选项只是建议，不限制答案。`show` 和 shell 都展示原题、字段及选项；可以输入选项文字，也可以填写自己的说明，例如 `--field 'strategy=复用已有环境，只执行正式方案'`。shell 中直接 `/answer` 会逐字段询问，输入中的空格、引号和 `=` 按回答内容处理，不作为 shell 命令解析。提交前按 Ctrl-C 或遇到 EOF 不会提交部分答案。
+
+操作批准只接受明确的 `yes` 或 `no`，说明单独填写：
+
+```bash
+resagent2 answer <Run ID> no --comment '这条操作不符合原任务边界，请调整。'
+resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作。'
+```
+
+对应的 shell 写法为 `/answer no --comment "说明"`；直接 `/answer` 会先询问决定，再询问可选说明，直接按 Enter 表示不附说明。不要把决定和说明混写成 `yes，因为……`，CLI 会拒绝这种输入。`--comment` 仅用于操作批准；业务补充应写入该问题的字段。显式传入的说明完整保留原文，包括空字符串、空白和换行；未传 `--comment` 表示无说明，不从说明文字推断任何授权。
+
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 
 常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint` / `--required-artifact`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
@@ -148,9 +161,9 @@ resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报�
 
 正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具确认目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/环境/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 git 探针和获准命令执行前的环境核验不另外提问；环境核验失败则不执行命令。显式调用 audit_env 等外部操作仍遵守确认设置，批准也不开放被拒绝的路径或命令。
 
-CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。业务问答补充任务信息，进入 Agent 的累计任务问答；操作确认批准或拒绝准确动作，不进入累计任务需求。两者的原题与答案仍保存为工件并保留授权目录入口；字段名为 `approve` 本身不表示操作批准。
+CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。操作确认显示完整工具参数及实际目录、绑定环境等执行上下文。业务问答补充任务信息，进入上下文第二部分；操作决定及可选说明进入原调用的第三部分工具回执，不进入累计任务需求或第四部分工件目录。两类问答直接保存为记录，不产生问答工件；字段名为 `approve` 本身不表示操作批准。
 
-回答同意后，同一个 Agent 恢复并再次提交原操作，经过复验才真正执行；确认问题不是成功执行记录。用户仍只需通过 answer 回答，最终以实际工具回执和产物判断结果。
+回答后，系统恢复暂停的原工具调用，复验准确动作并消费一次性决定，不需要模型再次提交该调用。批准后才可能执行；拒绝时不执行，并将决定、用户说明和 `not_executed` 事实放入原调用回执。批准后的实际工具回执也保留用户说明。模型根据任务和反馈决定下一步，CLI 不另设“继续／停止”回答字段。最终以实际工具回执和产物判断结果。
 
 三个 Agent、Compiler、历史压缩及模型重试共用 Run 用量；固定 Interpreter 不调用模型。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
 
@@ -324,9 +337,9 @@ Interpreter 使用固定代码，不创建模型客户端或读取独立上下�
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，限制单次模型 HTTP 请求总时长。实际取它与 Run 当前剩余时间的较小值，通过 httpx 与可取消的总超时执行；每次重试重新计算余量，同时消耗请求次数。取消本地请求不保证供应商停止计算或计费，未知结果保留预算占用。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。256K表示256000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
+三个 Agent 共享默认值与额度算法，但可分别覆盖。256K 表示 256000 tokens 的模块总输入上限，覆盖完整序列化 `{messages, tools}`：第一部分固定指令与工具契约、第二部分任务需求及累计业务回答、第三部分已配对的 assistant/tool 历史、第四部分完整授权工件目录。旧轮次的完整领域 prompt 不累积；工具结果及读取正文仅由第三部分承载，不再另建重复工作集。原始工具 IO 上限仍有效。
 
-Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
+完整请求超过 80% 软水位或实际装不下时，只压缩第三部分的旧历史，并保留近期完整配对；第一、第二、第四部分保持完整，原始工具记录不删。摘要也消耗同一 Run 调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是 Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
 实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
 

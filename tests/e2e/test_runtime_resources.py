@@ -105,7 +105,7 @@ def _probe(root, kind, phase):
                 RecordedAnswer.model_validate(value).model_dump(mode="json", exclude_none=True)
                 for value in answers
             ]
-            assert task["user_answers"] == expected_answers
+            assert [event["record"] for event in task["business_dialogue"] if event["type"] == "answer"] == expected_answers
             for previous in range(1, phase + 1):
                 assert f"reply_phase_{previous}" in context.task_context
             assert not any(name.startswith("material_") for name in context.included_sections)

@@ -47,7 +47,7 @@ def engine(tmp_path, scientific):
 def stable_run(controller):
     now = datetime.now(UTC)
     work = WorkRequest(id="work_handoff", run_id="run_handoff", scientific_session_id="session_handoff",
-                       request=WorkRequestDraft(objective="Measure accuracy", expected_evidence=["metrics"]),
+                       request=WorkRequestDraft(objective='Measure accuracy', tasks=[{'key': 'work', 'instruction': 'Measure accuracy'}]),
                        status="executing", workflow_revision=1, created_at=now, updated_at=now)
     run = ResearchRun(run_id="run_handoff", request=ResearchRequest(goal="Evaluate", permissions=RunPermissions(), budget=RunBudget(max_llm_calls=10, timeout_seconds=60)),
                       status="running", scientific_session=SessionRef(id="session_handoff", module="scientific", state_uri="session://session_handoff",
@@ -56,7 +56,7 @@ def stable_run(controller):
     run.initialization.complete = True
     controller.scheduler.store.save(run)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
-        "conclusion_requirements", {"schema_version": "26.0", "required_artifacts": [], "required_evidence_kinds": []})
+        "conclusion_requirements", {"schema_version": "27.0", "required_artifacts": [], "required_evidence_kinds": []})
     output = controller.scheduler.artifact_registry.register(
         ArtifactCandidate(kind="metrics", path="metrics.json", media_type="application/json", summary="Accuracy measurement", content='{"accuracy":0.8}'),
         grant=None, producer=AgentOwner.EXPERIMENT, run_id=run.run_id, task_id="task_measure", attempt_number=1,

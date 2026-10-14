@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 from threading import Lock
 import httpx
 from resagent2_runtime.budget import DeadlineExceededError, current_budget, remaining_timeout
+from resagent2_runtime.cancellation import check_cancelled, current_cancellation
 
 
 USER_AGENT = "ResAgent2/0.1 (+https://github.com/ylc123456789/ResAgent2)"
@@ -117,8 +118,19 @@ class LiteratureHTTP:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         budget = current_budget()
-        if not self._lock.acquire(timeout=budget.remaining_timeout() if budget else -1):
-            raise DeadlineExceededError("execution deadline exceeded waiting for literature access")
+        cancellation = current_cancellation()
+        check_cancelled()
+        if cancellation is None:
+            if not self._lock.acquire(timeout=budget.remaining_timeout() if budget else -1):
+                raise DeadlineExceededError("execution deadline exceeded waiting for literature access")
+        else:
+            # The shared source lock is a local wait, so it must be interruptible
+            # before an HTTP request starts, including without a Run deadline.
+            while True:
+                check_cancelled()
+                timeout = min(0.05, budget.remaining_timeout()) if budget else 0.05
+                if self._lock.acquire(timeout=timeout):
+                    break
         try:
             remaining = self._cooldown_until - time.monotonic()
             if remaining > 0:
@@ -131,7 +143,11 @@ class LiteratureHTTP:
             for attempt in range(max_attempts):
                 wait = self._next_request_at - time.monotonic()
                 if wait > 0:
-                    time.sleep(remaining_timeout(wait))
+                    if cancellation is not None:
+                        cancellation.wait(remaining_timeout(wait))
+                    else:
+                        time.sleep(remaining_timeout(wait))
+                check_cancelled()
                 if current_budget() is not None:
                     current_budget().remaining_timeout()
                 retry_after = 0.0

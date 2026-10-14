@@ -412,7 +412,7 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
 
         def execute(self, state, arguments):
             return ToolObservation(summary="Requested work", request_work={
-                "work_request": {"objective": "measure", "expected_evidence": ["metric"]},
+                "work_request": {'objective': 'measure', 'tasks': [{'key': 'work', 'instruction': 'measure'}]},
             })
 
     definition = replace(

@@ -15,6 +15,7 @@ from resagent2_contracts import (
     ArtifactRef,
     AgentResult,
     AgentRequest,
+    BusinessInput,
     DatasetRef,
     ModuleError,
     PendingQuestion,
@@ -117,6 +118,14 @@ class ResearchRun(OrchestratorModel):
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
+    child_questions: dict[str, PendingQuestion] = Field(default_factory=dict)
+    upstream_inputs: list[BusinessInput] = Field(default_factory=list)
+    task_inputs: dict[str, list[BusinessInput]] = Field(default_factory=dict)
+    consumed_control_ids: list[str] = Field(default_factory=list)
+    delivered_input_ids: list[str] = Field(default_factory=list)
+    runtime_notices: list[dict] = Field(default_factory=list)
+    parent_attention: bool = False
+    manually_paused_at: datetime | None = None
     conclusion_requirements_ref: ArtifactRef | None = None
     dataset_catalog_ref: ArtifactRef | None = None
     initialization: RunInitialization = Field(default_factory=RunInitialization)

@@ -73,9 +73,16 @@ resolve. Treat useful but unnecessary extensions as recommended next steps, not
 conditions for completing this Run. Preserve uncertainty and explicit requirements;
 do not lower them to stop early. Additional implementation alone does not supply
 missing observations; obtain or request the needed evidence instead.
-Make each work_request self-contained. State needed work, known prerequisites and
-ordering in objective; state restrictions with their conditions and scope in
-constraints, keeping both consistent. Distinguish implementing a capability from
+Make each work_request self-contained. Use objective for the shared scientific
+background and constraints for common restrictions with their conditions and scope.
+Provide explicit tasks, each with one natural instruction and necessary controls.
+Separate incompatible Agent responsibilities into tasks and express known ordering
+with depends_on local keys; future bindings select declared output_names from direct
+dependencies. Each task must state its actual required work and evidence clearly.
+The Compiler only matches each unchanged task to an Agent; it cannot infer missing
+tasks, rewrite your instructions, or repair ambiguities. Fixed code carries the
+original task instruction, objective and common constraints to execution Agents.
+Distinguish implementing a capability from
 executing it. Preserve explicit user requirements, including specified methods and
 authorization conditions; identify your own scientific choices as such. Requirements
 stated only in assessment do not reach task instructions. Leave unspecified
@@ -110,7 +117,7 @@ and optional required_artifacts. Read and cite registered evidence of the requir
 kinds; authorized imported evidence counts. required_artifacts names exact,
 case-sensitive output_name values that must be registered in this Run. These logical
 delivery names are not paths, artifact kinds, or citation requirements. Preserve each
-explicit name in request_work's objective or constraints and request submission with
+explicit name in the responsible task's instruction/output_names and request submission with
 that output_name; do not infer names from the goal. Request missing work or ask the
 user how to proceed. A filename alone does not satisfy delivery, and existence does
 not establish scientific correctness. Your own named finish outputs are checked

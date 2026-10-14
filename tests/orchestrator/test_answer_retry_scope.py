@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from control_fixtures import question_signal, ScopedScriptedModulePort
+from control_fixtures import question_signal, ScopedScriptedModulePort, ParentQuestionClient
 from e2e.native_fixtures import tool_turns
 from resagent2_contracts import (
     AgentOwner, AgentResult, ArtifactCandidate, AttemptStatus, ControlSignal,
@@ -68,10 +68,10 @@ def test_answer_resumes_original_attempt_and_is_not_inherited_by_retry(tmp_path,
             workflow_agent_kind=WorkflowAgentKind.EXPERIMENT, instruction="Run the experiment",
         )],
     )
-    scientific = ScientificAgent(ScriptedLLMClient(tool_turns([
+    scientific = ScientificAgent(ParentQuestionClient(tool_turns([
         {"tool": "request_work", "arguments": {
             "assessment": {"statement": "Need experiment results"},
-            "work_request": {"objective": "Run the experiment", "expected_evidence": ["Experiment report"]},
+            "work_request": {'objective': 'Run the experiment', 'tasks': [{'key': 'work', 'instruction': 'Run the experiment'}]},
         }},
         {"tool": "finish", "arguments": {
             "report": "Reviewed the task outcome", "artifacts": [ArtifactCandidate(
@@ -97,8 +97,10 @@ def test_answer_resumes_original_attempt_and_is_not_inherited_by_retry(tmp_path,
     assert paused.status == RunStatus.PAUSED
     assert len(paused.workflow.tasks[0].attempts) == 1
     question = paused.pending_question
-    assert question.attempt_number == 1
-    assert question.task_id == "task_experiment"
+    child_question, = paused.child_questions.values()
+    assert question.task_id is None and question.id != child_question.id
+    assert child_question.attempt_number == 1
+    assert child_question.task_id == "task_experiment"
     first = port.requests[0]
     assert first.attempt_number == 1 and first.parent_session_id is None
     assert not any(ref.kind == "answer" for ref in first.input_artifacts)
@@ -112,19 +114,22 @@ def test_answer_resumes_original_attempt_and_is_not_inherited_by_retry(tmp_path,
     assert resumed.attempt_number == 1
     assert resumed.parent_session_id == "session_attempt_1"
     recorded, = resumed.resume_answers
-    assert recorded.question_id == question.id and recorded.values == {"dataset": "demo"}
+    assert recorded.question_id == child_question.id and recorded.values == {"dataset": "demo"}
+    assert recorded.source == "parent"
     assert recorded.task_id == first.task_id and recorded.attempt_number == 1
     assert resumed.user_answers == [recorded]
     assert retried.attempt_number == 2 and retried.task_id == first.task_id
     assert retried.parent_session_id is None and retried.resume_answers == [] and retried.user_answers == []
     assert not any(ref.kind in {"question", "answer"} for ref in run.artifacts.values())
-    assert run.answers == [recorded]
-    assert question.id in run.delivered_answer_ids
+    assert len(run.answers) == 2 and run.answers[-1] == recorded
+    assert run.answers[0].source == "user"
+    assert child_question.id in run.delivered_answer_ids and question.id in run.delivered_answer_ids
     attempts = run.workflow.tasks[0].attempts
     assert [attempt.number for attempt in attempts] == [1, 2]
     assert attempts[0].status == AttemptStatus.FAILED and attempts[0].error.retryable
     assert attempts[0].session.id == "session_attempt_1"
     assert attempts[1].session.id == "session_attempt_2"
     if retry_pauses:
-        assert run.pending_question.attempt_number == 2
+        assert run.pending_question.task_id is None
+        assert next(iter(run.child_questions.values())).attempt_number == 2
         assert run.pending_question.id != question.id

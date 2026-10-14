@@ -24,7 +24,7 @@
 
 ## 工具行为
 
-read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者先选物理行，再在选中范围内使用零基 `start_char` / `end_char` 字符窗口（不含 end_char），最后应用128000字符返回上限；原换行和物理行号保持不变。分段读取控制返回片段，整份文本仍需检查，不是流式读取；回执的 total_lines 为整份物理行数，selected_chars 为所选行段在字符切片前的字符数，空文件均为0，两字段也保留在上下文工作集；工件先校验授权与整份 hash，不受工作区大小上限约束。
+read_file / read_artifact 只读取 UTF-8 文本，含 NUL 或无效 UTF-8 的文件返回错误，不替换乱码或更新成功读取记录；不自动解析 ZIP、图片等格式。两者先选物理行，再在选中范围内使用零基 `start_char` / `end_char` 字符窗口（不含 end_char），最后应用128000字符返回上限；原换行和物理行号保持不变。分段读取控制返回片段，整份文本仍需检查，不是流式读取；回执的 total_lines 为整份物理行数，selected_chars 为所选行段在字符切片前的字符数，空文件均为0，两字段保留在原工具回执；工件先校验授权与整份 hash，不受工作区大小上限约束。
 
 工作区 read_file / search_text / create_file / replace_text 共用默认10 MiB文本处理上限，写入前校验严格编码、NUL和最终字节数；拒绝时不写入或增加编辑版本。replace_text 的 old_text 须在**本次实际文件中**唯一匹配，不是每个任务只能编辑一次。工作区现在保留CRLF等原换行，精确替换时使用当前原文；旧 Session 回执不改写。
 
@@ -39,7 +39,7 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 
 
-测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 26.0，旧权限和确认字段不保留兼容解释。文献和网页工具登记的工件共同并入 Session 的 artifact_index；工具回执仍按原生协议保存，不把目录当成授权或正文。
+测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 27.0，旧权限和确认字段不保留兼容解释。文献和网页工具登记的工件共同并入 Session 的 artifact_index；工具回执仍按原生协议保存，不把目录当成授权或正文。
 
 `run_shell` 是 Coding/Experiment 共用的 Linux Bash 工具，取代 Experiment 的 `run_command`。
 执行能力与日志/超时在 Components，Tool 负责模型参数和回执；不新增运行循环。
@@ -50,4 +50,4 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 Coding 的实际变化进入 edit_revision 和读取过期提示，失败也保留变化。
 审批不是沙箱，不通过命令分类猜脚本含义，Shell 输出不冒充工件正文访问记录；阅读记录只用于追溯，不作为语义完成门槛。
 
-当前接入规则：文献和网页搜索只返回临时线索；fetch_literature(source)/web_fetch 显式保存材料，read_artifact 按需读取。工具回执只进原生历史，实际 Ref 增量由共享 Loop 摄入完整目录。工作结果按 WorkRequest → Task → 原报告和实际产物展开，不生成总体报告。业务问答直接保存并累计，操作批准续执行原调用。规则以 [CONTEXT](../../docs/current/CONTEXT.md) 和 [CONTRACTS](../../docs/current/CONTRACTS.md) 为准。
+当前接入规则：文献和网页搜索只返回临时线索；fetch_literature(source)/web_fetch 显式保存材料，read_artifact 按需读取。工具回执只进原生历史，实际 Ref 增量由共享 Loop 摄入完整目录。工作结果按 WorkRequest → Task → 原报告和实际产物展开，不生成总体报告。业务 ask_user 统一问直接父，根 Scientific 才问真实用户；子向上答复进入子第二部分、父收到下级问题进入父第三部分，不产生工件。操作批准续执行原调用，不进入需求/目录。工具通过共用取消上下文响应显式打断：未完成受管操作停止，准确回执保存；完成文件/结果保留，无自动回滚。规则以 [CONTEXT](../../docs/current/CONTEXT.md) 和 [CONTRACTS](../../docs/current/CONTRACTS.md) 为准。

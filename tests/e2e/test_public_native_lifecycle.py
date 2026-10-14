@@ -59,7 +59,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                 if event.type == "observation" and event.tool == "read_artifact" and event.data.get("ok")}
     def work(objective):
         return "request_work", {"assessment": {"statement": objective},
-                                "work_request": {"objective": objective, "expected_evidence": ["Recorded outcome"]}}
+                                "work_request": {'objective': objective, 'tasks': [{'key': 'work', 'instruction': objective}]}}
     def paired_receipt(body, call):
         return json.loads(next(message["content"] for message in body["messages"]
                                if message.get("tool_call_id") == call))
@@ -69,19 +69,19 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
         requests.append(body)
         names = {tool["function"]["name"] for tool in body.get("tools", [])}
         prompt = "\n".join(message.get("content") or "" for message in body["messages"])
-        role = ("compiler" if not names else "scientific" if "request_work" in names
+        role = ("compiler" if "route_tasks" in names else "scientific" if "request_work" in names
                 else "coding" if "delete_path" in names else "experiment")
         counts[role] += 1
         index = counts[role]
         if role == "compiler":
             assert index <= 2 and NativeCodingAgent.description in prompt and NativeExperimentAgent.description in prompt
-            assert "upper bound, not a target" in prompt and "not execution" in prompt
+            assert "not a task planner" in prompt
             kind = "coding" if index == 1 else "experiment"
-            message = {"content": json.dumps({"tasks": [{
-                "key": kind, "workflow_agent_kind": kind, "workspace_id": "ws_main",
-                "instruction": "Remove obsolete recursively" if index == 1 else "Analyze metrics.json; ask which metric",
-            }]})}
-            reason = "stop"
+            message = {"content": None, "tool_calls": [{"id": f"call_route_{index}", "type": "function",
+                "function": {"name": "route_tasks", "arguments": json.dumps({
+                    "routes": [{"task_key": "work", "workflow_agent_kind": kind}],
+                })}}]}
+            reason = "tool_calls"
         else:
             if role == "scientific":
                 current = body["messages"][-1]["content"]
@@ -101,7 +101,15 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                     assert ref.uri not in current and ref.sha256 not in current
                 assert all(ref.kind not in {"research_index", "work_record", "work_feedback", "question", "answer"}
                            for ref in by_id.values())
-                if index == 1:
+                if req.child_questions:
+                    child = req.child_questions[0]
+                    if not req.user_answers:
+                        tool, args = "ask_user", {"assessment": {"statement": "The child needs a user choice"},
+                            "text": child.text, "requested_fields": child.requested_fields}
+                    else:
+                        tool, args = "reply_to_task", {"task_id": child.task_id, "question_id": child.id,
+                                                      "values": req.user_answers[-1].values}
+                elif index == 1:
                     tool, args = work("Remove the obsolete source directory with approval")
                 elif index == 2:
                     group, = directory["work_requests"]
@@ -112,18 +120,19 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                 elif index == 3:
                     assert "Removed obsolete source" in paired_receipt(body, "call_scientific_2")["value"]["content"]
                     tool, args = work("Analyze existing baseline and candidate metrics; ask which metric")
-                elif index == 4:
+                elif index == 6:
                     assert len(directory["work_requests"]) == 2
                     assert "Accuracy difference is 0.07" not in current
                     assert evidence_id() not in read_ids()
-                    assert not req.user_answers  # Task business answers remain in the Task scope.
+                    assert len(req.user_answers) == 1 and req.user_answers[0].source == "user"
+                    assert req.user_answers[0].task_id is None
                     tool, args = "read_artifact", {"artifact_id": report_id("experiment")}
-                elif index == 5:
-                    assert "Accuracy difference is 0.07" in paired_receipt(body, "call_scientific_4")["value"]["content"]
+                elif index == 7:
+                    assert "Accuracy difference is 0.07" in paired_receipt(body, "call_scientific_6")["value"]["content"]
                     tool, args = "read_artifact", {"artifact_id": evidence_id()}
-                elif index in (6, 7):
-                    if index == 7:
-                        rejected = paired_receipt(body, "call_scientific_6")
+                elif index in (8, 9):
+                    if index == 9:
+                        rejected = paired_receipt(body, "call_scientific_8")
                         assert not rejected["ok"] and "data" in json.dumps(rejected)
                         assert run().status != "failed"
                     tool, args = "finish", {"report": "The recorded candidate exceeds baseline by 0.07", "artifacts": [{
@@ -133,7 +142,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                             "evidence_artifact_ids": [evidence_id()], "limitations": ["Existing results only; no new experiment executed"],
                         }),
                     }]}
-                    if index == 6:
+                    if index == 8:
                         args["artifacts"].insert(0, {"kind": "data", "path": evidence_id(),
                                                    "media_type": "application/json", "summary": "Existing input evidence"})
                 else:
@@ -148,7 +157,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
                     raise AssertionError(body)
                 task_payload = next(json.loads(message["content"].split("\n", 1)[1]) for message in body["messages"]
                                     if message.get("role") == "user" and message.get("content", "").startswith("## task\n"))
-                assert task_payload["user_answers"] == []
+                assert [event["record"] for event in task_payload["business_dialogue"] if event["type"] == "answer"] == []
             else:
                 if index == 1:
                     tool, args = "ask_user", {"text": "Which metric should be primary?", "requested_fields": ["metric"]}
@@ -198,9 +207,9 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
     assert all(work.status == "consumed" for work in final.work_requests)
     assert final.work_requests[0].outcome == first_outcome
     assert final.llm_calls_used == len(requests) == sum(counts.values()) > used_before_answer
-    assert counts == {"scientific": 7, "compiler": 2, "coding": 2, "experiment": 3}
-    assert len(scientific_requests) == 3 and final.usage.outcomes == {"succeeded": len(requests), "failed": 0, "unknown": 0}
-    assert len(final.answers) == 2 and len([answer for answer in final.answers if answer.action is not None]) == 1
+    assert counts == {"scientific": 9, "compiler": 2, "coding": 2, "experiment": 3}
+    assert len(scientific_requests) == 5 and final.usage.outcomes == {"succeeded": len(requests), "failed": 0, "unknown": 0}
+    assert len(final.answers) == 3 and len([answer for answer in final.answers if answer.action is not None]) == 1
     assert {answer.question_text for answer in final.answers} == {first.pending_question.text, second.pending_question.text}
     assert final.final_opinion.evidence_artifact_ids == [evidence_id()]
     assert {evidence_id(), report_id("coding"), report_id("experiment")} <= read_ids()

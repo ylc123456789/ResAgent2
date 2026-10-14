@@ -48,7 +48,8 @@ def receive_artifacts(registry, run, request, result, *, previous_ids=()):
              if key in run.artifacts and run.artifacts[key].output_name is not None}
     for index, output in enumerate(result.artifacts):
         key = (f"task:{request.task_id}:attempt:{request.attempt_number}:output:{offset + index + 1}"
-               if request.task_id is not None else f"session:{result.session.id}:result:{index}")
+               if request.task_id is not None else
+               f"session:{result.session.id}:result:{result.session.updated_at.isoformat()}:{index}")
         if isinstance(output, ArtifactRef):
             ref = run.artifacts.get(output.id)
             if ref is None or ref != output or ref.run_id != run.run_id:
@@ -115,7 +116,17 @@ def receive_control(run, request, result):
         if question.session_id != signal.source_session_id:
             raise ArtifactRegistrationError("question session mismatch")
         if existing is None:
-            run.pending_question = question
+            if question.action is None and request.upstream_session_id is not None:
+                if question.recipient_session_id != request.upstream_session_id:
+                    raise ArtifactRegistrationError("question recipient is not the direct parent")
+                run.child_questions[question.id] = question
+                run.runtime_notices.append({"event_id": "question:" + question.id,
+                    "type": "child_question", "source_session_id": question.session_id,
+                    "recipient_session_id": question.recipient_session_id,
+                    "question": question.model_dump(mode="json")})
+                run.parent_attention = True
+            else:
+                run.pending_question = question
     else:
         work = signal.work_request
         if request.agent != AgentOwner.SCIENTIFIC:

@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 26.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 27.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -63,13 +63,15 @@ resagent2> /quit
 | `/answer <value>` | 当前问题只有一个字段时的简写 |
 | `/answer name=value ...` | 显式回答一个或多个字段 |
 | `/answer no --comment "说明"` | 拒绝当前操作，并可选附带说明；批准使用 `yes` |
+| 普通文本 | 原样保存业务补充，不取消当前调用；不是待答问题的答案 |
+| `/interrupt [补充]` | 停止当前模型与受管工具；无补充时暂停等待，有补充时确认停止后处理并继续主会话 |
 | `/artifacts` | 列出当前 Run 的 Artifact |
 | `/trace [run_id]` | 查看 full trace 中的原始请求、响应、原生 tool calls 和可选 reasoning |
 | `/help` / `/quit` | 查看帮助 / 退出 shell |
 
 边界需要特别注意：
 
-- `Ctrl-C` 只停止当前监看并回到提示符，不取消 Run；
+- `Esc`、`Ctrl-C` 与 `/interrupt` 一样请求打断（Esc 需要 POSIX 交互终端；非交互输入使用 /interrupt）；运行中的工具及子进程确认停止后才显示暂停。打断保留已完成工作和文件，不自动回退；活动 WorkRequest 的未完成任务终止，继续时由 Scientific 按需新建委派；
 - `/attach` 只读，不会偷偷启动后台执行；没有执行者推进时应显式使用 `/resume`；
 - shell 启动时确定一个 data root，内部命令不能再切换，以免混用两个 Run store；
 - 默认实时视图只显示 Run 快照和 metadata trace 中的 Agent/Tool 名称，不读取 full trace 的敏感正文。
@@ -101,6 +103,17 @@ resagent2 run --workspace /path/to/repo \
 `NAME` 使用 `OutputName`：1–128 个 ASCII 字母、数字、下划线、点或连字符，以字母开头。它精确、区分大小写地匹配本 Run 登记工件的 `output_name`，不是磁盘路径、文件名、kind 或 metadata。比如源文件为 `results/metrics.json`，仍须提交 `output_name="metrics.json"` 才满足该要求。未传参数时列表为空，系统不会从目标文本推断文件名。重复相同名称只要求该名称存在一次。
 
 要求在创建 Run 时冻结为 `conclusion_requirements`。缺失时 Scientific 在原 Session 收到反馈，可请求补交工作或询问用户；最终 gate 只接受实际登记且通过冻结文件 hash 检查的产物。这是存在要求，不额外要求 Scientific 阅读或引用该产物，也不证明其内容正确；原有证据引用规则独立生效。
+
+运行中可以从另一个终端补充输入或请求打断，只发布控制记录，不启动第二个执行者：
+
+```bash
+resagent2 input <Run ID> --text '补充要求：先核对已有结果。'
+resagent2 input <Run ID> --file supplement.txt
+resagent2 interrupt <Run ID> --text '暂停后改用已有数据。'
+resagent2 show <Run ID>
+```
+
+普通输入让当前模型回复及已接受的工具批次完成，在下一次模型判断前由 Scientific 处理，不等整个 Task 或 WorkRequest。长命令要立即停止需明确打断。暂停中的 Run 保存输入后仍需显式 resume；普通文本不会被当成当前 ask_user 的答案。一次性 interrupt 返回“请求已保存”，实际是否停止以执行者保存的 paused 状态和中断记录为准；没有运行中的执行者时需 resume 消费控制记录。shell 继续监看到自己的执行者确认结束；活动执行者尚未停止时不允许 /quit。
 
 查看、回答和恢复：
 
@@ -341,7 +354,7 @@ Interpreter 使用固定代码，不创建模型客户端或读取独立上下�
 
 完整请求超过 80% 软水位或实际装不下时，只压缩第三部分的旧历史，并保留近期完整配对；第一、第二、第四部分保持完整，原始工具记录不删。摘要也消耗同一 Run 调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是 Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的单一路由工具也计入 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过单一原生路由工具返回 task key 与 Agent 的匹配，不改写 Scientific 的原任务；它不进入 AgentLoop。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 
@@ -375,7 +388,7 @@ CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 
 
 DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/messages`，发送 `anthropic-version: 2023-06-01`、`x-api-key` 和 `Authorization: Bearer`。它不读取 `RESAGENT2_API_BASE`，当前不提供另一个搜索 base URL 配置；主 Agent 使用兼容服务时也可单独使用官方 DeepSeek 搜索。密钥通过现有安全配置加载，不进入工件、目标文本或模型上下文。搜索不需要独立的搜索服务 key 或 SDK。
 
-`web_search` 默认预览5条、最多10条，每次一批，不支持分页。搜索工件保存本次收到的全部规范化结果；回执提供保存总数、预览省略数与截断标记，更多来源通过 `read_artifact` 读取。`max_results` 只控制预览数量，不保证降低 DeepSeek 内部搜索次数或费用。DeepSeek 独立请求沿用 DSH 简短查询提示，后端只使用原生来源，生成回答不作为网页证据或替代 Scientific 的研究判断；后端通过供应商托管的 `web_search` 工具获得来源，单次请求输出上限4096 tokens、托管工具设置 `max_uses=5`；链接及标题只取原生 `web_search_result`，snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，不把生成正文当网页证据。标题、URL和snippet仍是线索，不代表已读网页或已核对论文。本轮大陆服务器实测DeepSeek只返回标题/URL和不透明的`encrypted_content`，没有citation片段，因此snippet全空；不保证每次搜索提供可读摘要，需要正文时由Scientific按目标选择网页或论文全文工具。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源、抓取时间及HTML中的链接文字/合法http(s)地址，相对地址按最终页面URL解析；链接保留不等于已抓取链接目标，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
+`web_search` 默认预览5条、最多10条，每次一批，不支持分页。搜索返回本次规范化候选及预览信息，不登记工件；候选只保留在可压缩的第三部分。需要长期保留的网页须经 `web_fetch` 冻结并登记。`max_results` 只控制预览数量，不保证降低 DeepSeek 内部搜索次数或费用。DeepSeek 独立请求沿用 DSH 简短查询提示，后端只使用原生来源，生成回答不作为网页证据或替代 Scientific 的研究判断；后端通过供应商托管的 `web_search` 工具获得来源，单次请求输出上限4096 tokens、托管工具设置 `max_uses=5`；链接及标题只取原生 `web_search_result`，snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，不把生成正文当网页证据。标题、URL和snippet仍是线索，不代表已读网页或已核对论文。本轮大陆服务器实测DeepSeek只返回标题/URL和不透明的`encrypted_content`，没有citation片段，因此snippet全空；不保证每次搜索提供可读摘要，需要正文时由Scientific按目标选择网页或论文全文工具。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源、抓取时间及HTML中的链接文字/合法http(s)地址，相对地址按最终页面URL解析；链接保留不等于已抓取链接目标，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
 
 每次 DeepSeek 搜索会额外占用一次共享 Run `max_llm_calls`，与 Scientific、其他 Agent、Compiler、压缩和重试共用总账；托管搜索的 `max_uses` 不是新的模型请求钱包。搜索不创建另一套 Agent/Session，不自动续传、重试或换源。网页抓取不占模型请求次数，所有请求仍受 Run 剩余时间约束，超大响应拒绝而不是默默截断。失败回执保留实际错误和可用的 `retry_after`。DeepSeek 返回 `max_uses_exceeded` 且已有有效来源时，保留来源并明确给出 `status=partial` / `incomplete_reason`，不补发请求；没有有效来源则失败。部分结果不能当作完整搜索，`truncated` 只表示预览省略。服务端 usage 可能包括被次数限制拒绝的额外尝试，应记录实际值，不能从客户端一次请求推算内部次数或费用。
 
@@ -383,7 +396,7 @@ DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/message
 
 联网搜索会产生额外模型 token 费用，见[DeepSeek 官方 Web Search 说明](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code/#使用-claude-code-的-web-search-功能)和[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。公开文档未单列按次搜索费率；具体以实际usage和账单为准。
 
-网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿原登记表与 research index 交接，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
+网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿唯一登记表交接，第四部分从授权材料重建完整目录，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
 
 ### 退出码
 

@@ -59,7 +59,7 @@ class _Controller:
         self.answered = (run_id, answer)
         return self.result
 
-    def run_until_stable(self, run_id):
+    def resume_run(self, run_id):
         self.resumed = run_id
         return self.result
 
@@ -100,26 +100,25 @@ def test_agents_and_compiler_share_default_with_independent_overrides(monkeypatc
 
 
 def test_compiler_reuses_context_composer_without_agent_loop(monkeypatch):
+    from resagent2_orchestrator.compiler import RouteTasks
+    from e2e.native_fixtures import tool_turn
+
     class _Client:
         last_attempts = 1
 
-        def context_budget(self, action_type, component_limit):
-            return component_limit
-
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.context = context
-            return {"tool": "finish"}
+            assert [schema["function"]["name"] for schema in schemas] == ["route_tasks"]
+            assert not turns
+            return tool_turn("route_tasks", {"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]})
 
     runtime_client = _Client()
     monkeypatch.setattr(composition, "_client", lambda: runtime_client)
     compiler_client = composition._compiler_client(max_context_tokens=512)
 
-    compiler_client.next_action("Compile this objective", AgentAction)
+    compiler_client.next_action("Route these tasks", RouteTasks)
 
-    assert runtime_client.context.included_sections == [
-        "system",
-        "compiler_request",
-    ]
+    assert runtime_client.context.included_sections == ["system", "compiler_request"]
     assert runtime_client.context.estimated_tokens > 0
 
 

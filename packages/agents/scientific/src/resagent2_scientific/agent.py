@@ -27,6 +27,7 @@ from resagent2_runtime.tool_calling import contract_fingerprint, native_tool_sch
 from .completion import ScientificCompletionCheck, _observed_artifact_ids
 from .context import SCIENTIFIC_PROMPT, build_context
 from .tools import AskUserTool, FinishTool, RequestWorkTool
+from .parent_tools import ReplyToTaskTool, AbandonWorkTool
 
 
 class ScientificAgent:
@@ -63,6 +64,15 @@ class ScientificAgent:
             error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
         )
 
+    def cancel_question(self, session_id: str, question_id: str, reason: str) -> None:
+        self.loop.cancel_question(session_id, question_id, reason)
+
+    def defer_completion(self, session_id: str, reason: str) -> None:
+        self.loop.defer_completion(session_id, reason)
+
+    def terminate_session(self, session_id: str, reason: str) -> None:
+        self.loop.terminate_session(session_id, reason)
+
     def invoke(self, request: AgentRequest) -> AgentResult:
         try:
             request = AgentRequest.model_validate(request)
@@ -94,8 +104,8 @@ class ScientificAgent:
         key = self._idempotency_key(request)
         owned = self._owned_session(session_id, request.run_id)
         tools = [ReadArtifactTool(reader),
-                 RequestWorkTool(allowed=request.permissions.request_work, reader=reader),
-                 AskUserTool(reader), FinishTool()]
+                 RequestWorkTool(allowed=request.permissions.request_work and not request.task_context.get("active_work_request_id"), reader=reader),
+                 AskUserTool(reader), FinishTool(), ReplyToTaskTool(request), AbandonWorkTool(request)]
         if self.web_search_backend is not None:
             tools.append(WebSearchTool(self.web_search_backend))
         if self.web_page_fetcher is not None and self.registration_port is not None:
@@ -121,7 +131,7 @@ class ScientificAgent:
                 resolve_artifact=reader.resolve_ref, reader=reader,
                 input_artifact_ids=[item.id for item in request.input_artifacts],
                 registered_artifacts=(lambda: list_registered(run_id=request.run_id, session_id=session_id)) if list_registered else None,
-                failed_work=any(result.status == "failed" for result in request.work_results),
+                failed_work=any(result.status in {"failed", "cancelled"} for result in request.work_results),
             ),
             max_context_tokens=self.max_context_tokens,
             acknowledge_registration=getattr(self.registration_port, "acknowledge_registration", None),
@@ -167,6 +177,8 @@ class ScientificAgent:
 
     @staticmethod
     def _idempotency_key(request: AgentRequest) -> str | None:
+        if request.runtime_notices or request.upstream_inputs or request.child_questions or request.release_control:
+            return None
         if request.control_ack is not None:
             origin = request.control_ack
             return f"control:{origin.session_id}:{origin.turn}:{origin.call_id}"

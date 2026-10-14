@@ -31,6 +31,8 @@ from resagent2_contracts import (
     QuestionDraft, PendingQuestion, ScientificAssessment, WorkRequest, WorkRequestDraft,
 )
 
+from .cancellation import OperationCancelled, check_cancelled
+from .lifecycle import boundary_requested
 from .context import (
     DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer,
 )
@@ -166,6 +168,41 @@ class AgentLoop:
         self._run_llm_calls = 0
         self._active_call_id: str | None = None
 
+    def cancel_question(self, session_id: str, question_id: str, reason: str) -> None:
+        state = self.store.load(session_id)
+        control = state.pending_control
+        if control is not None and control.action == "ask_user" and control.question.id == question_id:
+            if control.question.action is not None:
+                raise ValueError("business escalation cannot cancel a permission request")
+            state.pending_control = None
+            state.tool_turns.append(ToolCallTurn(runtime_notice=reason + "; question_id=" + question_id))
+            self._save(state)
+
+    def defer_completion(self, session_id: str, reason: str) -> None:
+        """The owner received new input before committing Run completion."""
+        state = self.store.load(session_id)
+        if state.status not in {SessionStatus.COMPLETED, SessionStatus.PAUSED}:
+            raise ValueError("completion receiving does not match this Session")
+        state.status = SessionStatus.PAUSED
+        state.terminal_result = None
+        state.tool_turns.append(ToolCallTurn(runtime_notice=reason))
+        self._save(state)
+
+    def terminate_session(self, session_id: str, reason: str) -> None:
+        if not self.store.exists(session_id):
+            return
+        state = self.store.load(session_id)
+        if state.status in {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}:
+            return
+        for turn in state.tool_turns:
+            complete_pending_turn(turn, tool_receipt(ToolObservation(ok=False,
+                summary="Not executed: delegation ended", value={"execution_status": "not_executed"})))
+        state.pending_control = None
+        state.pending_action = None
+        state.tool_turns.append(ToolCallTurn(runtime_notice=reason + "; this child session is terminal and will not resume"))
+        state.status = SessionStatus.CANCELLED
+        self._save(state)
+
     def run(
         self,
         definition: AgentDefinition,
@@ -178,7 +215,22 @@ class AgentLoop:
 
         with execution_budget(max_llm_calls=request.budget.max_llm_calls,
                               timeout_seconds=request.budget.timeout_seconds, clock=self.clock):
-            return self._run(definition, request, session_id=session_id, initial_memory=initial_memory)
+            self._state = None
+            try:
+                return self._run(definition, request, session_id=session_id, initial_memory=initial_memory)
+            except OperationCancelled as error:
+                if self._state is None:
+                    raise
+                self._sync_usage(self._state)
+                if not error.stopped:
+                    if self._active_call_id is not None:
+                        self._record_observation(self._state, "runtime", ToolObservation(ok=False,
+                            summary="Execution stop could not be confirmed; no further dispatch permitted",
+                            value={"execution_status": "unknown", "stop_confirmed": False, **error.details}))
+                    return self._failure(self._state, ErrorCode.INTERRUPTED,
+                        "Cannot confirm managed execution stopped: " + str(error), retryable=False,
+                        details={**error.details, "stop_confirmed": False})
+                return self._suspend(self._state, interrupted=True, reason=str(error), details=error.details)
 
     def _run(self, definition, request, *, session_id, initial_memory):
 
@@ -209,6 +261,8 @@ class AgentLoop:
             )
         try:
             schemas = native_tool_schemas(definition.tools)
+        except OperationCancelled:
+            raise
         except Exception as error:
             return AgentResult(status=ModuleStatus.FAILED, report=str(error), error=ModuleError(
                 code=ErrorCode.CONTRACT_ERROR, message="tool schema construction failed: " + str(error), retryable=False,
@@ -246,6 +300,7 @@ class AgentLoop:
                 or state.task_id != request.task_id
                 or state.attempt_number != request.attempt_number
                 or state.owner != definition.owner
+                or state.upstream_session_id != request.upstream_session_id
                 or state.agent_name != definition.name
                 or state.tool_protocol_key != protocol_key
                 or state.contract_fingerprint != fingerprint
@@ -276,6 +331,7 @@ class AgentLoop:
                 session_id=session_id,
                 agent_name=definition.name,
                 owner=definition.owner,
+                upstream_session_id=request.upstream_session_id,
                 run_id=request.run_id,
                 task_id=request.task_id,
                 attempt_number=request.attempt_number,
@@ -307,6 +363,9 @@ class AgentLoop:
                 retryable=False,
             )
 
+        self._state = state
+        self._accept_notices(request, state)
+        check_cancelled()
         resumed = self._resume_control(definition, registry, request, state)
         if resumed is not None:
             return resumed
@@ -351,6 +410,9 @@ class AgentLoop:
 
         consecutive_failures = 0
         while self._run_llm_calls < request.budget.max_llm_calls:
+            check_cancelled()
+            if boundary_requested():
+                return self._suspend(state, interrupted=False, reason="New user input awaits the parent Agent at this model boundary")
             if current_budget().expired:
                 return self._failure(
                     state,
@@ -410,6 +472,8 @@ class AgentLoop:
                     str(error),
                     retryable=False,
                 )
+            except OperationCancelled:
+                raise
             except Exception as error:
                 return self._failure(
                     state,
@@ -425,6 +489,7 @@ class AgentLoop:
                 limiter(request.budget.max_llm_calls - self._run_llm_calls)
             charged = False
             try:
+                check_cancelled()
                 reply = invoke_model(definition.llm_client, "next_tool_call", context, schemas,
                                      self._active_turns(state), max_input_tokens=context_limit)
                 self._sync_usage(state)
@@ -432,11 +497,13 @@ class AgentLoop:
                 if self._run_llm_calls > request.budget.max_llm_calls:
                     return self._failure(state, ErrorCode.BUDGET_EXHAUSTED,
                                          "Client exceeded the allocated LLM-call budget", retryable=False)
+                check_cancelled()
                 turn = ToolCallTurn.model_validate(reply)
                 used_ids = {call.id for old in state.tool_turns for call in old.tool_calls}
                 rejection = None
                 if (turn.tool_results or turn.executing_call_id is not None
-                        or turn.executing_user_comment is not None or turn.protocol_error is not None):
+                        or turn.executing_user_comment is not None or turn.protocol_error is not None
+                        or turn.runtime_notice is not None):
                     rejection = "A model reply cannot provide tool execution receipts"
                 if any(call.id in used_ids for call in turn.tool_calls):
                     rejection = "Provider reused a historical tool call ID; no tool was executed"
@@ -511,6 +578,8 @@ class AgentLoop:
                     retryable=False,
                     details={"component": "llm"},
                 )
+            except OperationCancelled:
+                raise
             except Exception as error:
                 # The transport failed after one or more real HTTP attempts;
                 # those attempts still count toward the Run ledger.
@@ -525,6 +594,7 @@ class AgentLoop:
                 )
 
             for index, action in enumerate(actions):
+                check_cancelled()
                 self._active_call_id = turn.tool_calls[index].id
                 state.current_operation_key = (
                     f"session:{state.session_id}:turn:{len(state.tool_turns) - 1}:call:{self._active_call_id}"
@@ -559,6 +629,8 @@ class AgentLoop:
                         return failure
                     consecutive_failures += 1
                     break
+                except OperationCancelled:
+                    raise
                 except Exception as error:
                     return self._failure(
                         state,
@@ -566,6 +638,7 @@ class AgentLoop:
                         f"permission policy failed: {error}",
                         retryable=False,
                     )
+                check_cancelled()
                 if permission.outcome == "deny":
                     if permission.approval_id:
                         state.pending_action = None
@@ -626,6 +699,8 @@ class AgentLoop:
                         return failure
                     consecutive_failures += 1
                     break
+                except OperationCancelled:
+                    raise
                 except Exception as error:
                     self._feedback(
                         state,
@@ -647,13 +722,22 @@ class AgentLoop:
                         state.authorized_artifact_ids.append(ref.id)
                 state.last_observation = observation
 
-                if observation.question is not None or observation.request_work is not None:
+                if any(value is not None for value in (observation.question, observation.request_work, observation.task_reply, observation.abandon_work_id)):
                     if observation.request_work is not None and (
                         definition.owner != AgentOwner.SCIENTIFIC or not request.permissions.request_work
                     ):
                         return self._failure(state, ErrorCode.PERMISSION_DENIED,
                                              "This invocation may not request work", retryable=False)
-                    self._accept_control(state, request, observation)
+                    try:
+                        self._accept_control(state, request, observation)
+                    except (PermissionError, ValueError) as error:
+                        self._feedback(state, "Control request rejected: " + str(error), tool=action.tool)
+                        failure = self._note_failure(state, consecutive_failures)
+                        if failure is not None:
+                            return failure
+                        consecutive_failures += 1
+                        break
+                    check_cancelled()
                     return self._control_result(state)
 
                 is_finish = observation.finish_candidate is not None
@@ -678,6 +762,8 @@ class AgentLoop:
                     )
                 except DeadlineExceededError as error:
                     return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
+                except OperationCancelled:
+                    raise
                 except Exception as error:
                     return self._failure(
                         state,
@@ -708,6 +794,10 @@ class AgentLoop:
                         report=decision.report or decision.failure.message,
                     )
 
+                check_cancelled()
+                if decision.complete and definition.owner == AgentOwner.SCIENTIFIC and boundary_requested():
+                    self._feedback(state, "Completion deferred: new upstream input must be processed before ending this Run", tool="runtime")
+                    return self._suspend(state, interrupted=False, reason="New input arrived during the final call")
                 if decision.complete:
                     candidate = observation.finish_candidate
                     if candidate is not None and candidate.status == ModuleStatus.FAILED:
@@ -757,6 +847,41 @@ class AgentLoop:
         )
 
 
+    def _accept_notices(self, request, state):
+        if not request.runtime_notices:
+            return
+        seen = set(state.memory.get("_received_notice_ids", []))
+        for notice in request.runtime_notices:
+            key = notice["event_id"]
+            if key not in seen:
+                state.tool_turns.append(ToolCallTurn(runtime_notice=json.dumps(notice, ensure_ascii=False)))
+                seen.add(key)
+        state.memory["_received_notice_ids"] = sorted(seen)
+        self._save(state)
+
+    def _suspend(self, state, *, interrupted, reason, details=None):
+        if interrupted:
+            control = state.pending_control
+            control_ref = (f"; original {control.action} call={control.source_call_id} "
+                           + (f"question_id={control.question.id}" if control.question else
+                              f"work_request_id={control.work_request.id}" if control.work_request else "")) if control else ""
+            if state.tool_turns:
+                turn = state.tool_turns[-1]
+                if turn.executing_call_id is not None and turn.executing_call_id not in turn.tool_results:
+                    record_tool_result(turn, turn.executing_call_id, tool_receipt(ToolObservation(
+                        ok=False, summary="Operation interrupted; managed execution has stopped; existing files retained",
+                        value={"execution_status": "interrupted", "stop_confirmed": True, **(details or {})},
+                        user_comment=turn.executing_user_comment)))
+                complete_pending_turn(turn, tool_receipt(ToolObservation(ok=False,
+                    summary="Not executed: user interrupted this batch", value={"execution_status": "not_executed"})))
+            state.tool_turns.append(ToolCallTurn(runtime_notice=reason + control_ref + "; interrupted response will not dispatch tools; files and completed outcomes retained"))
+            state.pending_control = None
+            state.pending_action = None
+        state.status = SessionStatus.PAUSED
+        self._save(state)
+        return AgentResult(status=ModuleStatus.INTERRUPTED if interrupted else ModuleStatus.YIELDED,
+                           report=reason, session=self._session_ref(state), llm_calls=self._run_llm_calls)
+
     @staticmethod
     def _active_turns(state: AgentState) -> list[ToolCallTurn]:
         start = state.history_checkpoint.history_start if state.history_checkpoint else 0
@@ -764,7 +889,10 @@ class AgentLoop:
 
     def _fixed_context(self, definition, request, state, context_limit):
         sections = list(definition.context_builder(request, state, context_limit))
-        return self.context_composer.compose(definition.system_prompt, sections, max_tokens=context_limit)
+        context = self.context_composer.compose(definition.system_prompt, sections, max_tokens=context_limit)
+        return context.model_copy(update={"pending_notifications": json.dumps(
+            [q.model_dump(mode="json") for q in request.child_questions], ensure_ascii=False
+        ) if request.child_questions else ""})
 
     def _compose_context(self, definition, request, state, schemas, context_limit):
         context = self._fixed_context(definition, request, state, context_limit)
@@ -788,8 +916,12 @@ class AgentLoop:
         if limiter is not None:
             limiter(remaining - 1)
         try:
+            check_cancelled()
             summary = invoke_model(client, "summarize_history", plan.prompt, max_input_tokens=context_limit)
+            check_cancelled()
         except (BudgetExhaustedError, DeadlineExceededError):
+            raise
+        except OperationCancelled:
             raise
         except Exception as error:
             self._sync_usage(state)
@@ -862,9 +994,12 @@ class AgentLoop:
                 raise
             except (PermissionError, ValueError) as error:
                 raise PermissionError(str(error)) from error
+            except OperationCancelled:
+                raise
             except Exception as error:
                 return self._failure(state, ErrorCode.CONTRACT_ERROR,
                                      f"permission policy failed: {error}", retryable=False)
+            check_cancelled()
             if permission.outcome == "deny":
                 if permission.approval_id:
                     state.pending_action = None
@@ -926,8 +1061,8 @@ class AgentLoop:
         if control is None:
             raise ValueError("paused control is missing")
         return AgentResult(
-            status=(ModuleStatus.REQUEST_WORK if control.action == "request_work"
-                    else ModuleStatus.NEEDS_USER_INPUT),
+            status={"request_work": ModuleStatus.REQUEST_WORK, "ask_user": ModuleStatus.NEEDS_USER_INPUT,
+                    "reply_to_task": ModuleStatus.REPLY_TO_TASK, "abandon_work": ModuleStatus.ABANDON_WORK}[control.action],
             report=(state.last_observation.summary if state.last_observation else "Operation confirmation required"),
             control=control, session=self._session_ref(state), llm_calls=self._run_llm_calls,
         )
@@ -943,11 +1078,19 @@ class AgentLoop:
         assessment = observation.memory_updates.get("latest_assessment")
         if assessment is not None:
             payload["assessment"] = ScientificAssessment.model_validate(assessment)
-        if observation.question is not None:
+        if observation.task_reply is not None:
+            control = ControlSignal(action="reply_to_task", task_reply=observation.task_reply, **payload)
+        elif observation.abandon_work_id is not None:
+            control = ControlSignal(action="abandon_work", abandon_work_id=observation.abandon_work_id,
+                                    reason=observation.control_reason, **payload)
+        elif observation.question is not None:
+            if observation.question.related_question_id is not None and not any(
+                    q.id == observation.question.related_question_id and q.recipient_session_id == state.session_id for q in request.child_questions):
+                raise PermissionError("escalation must reference your actual pending child question")
             control = ControlSignal(action="ask_user", question=PendingQuestion(
                 id=f"question_{uuid4().hex}", run_id=request.run_id, session_id=state.session_id,
                 task_id=request.task_id, attempt_number=request.attempt_number, created_at=now,
-                **observation.question.model_dump(),
+                recipient_session_id=request.upstream_session_id, **observation.question.model_dump(),
             ), **payload)
         else:
             work = WorkRequestDraft.model_validate(observation.request_work["work_request"])
@@ -967,13 +1110,16 @@ class AgentLoop:
         self._active_call_id = control.source_call_id
         if self._active_call_id in turn.tool_results:
             return
-        if control.action == "request_work":
+        if control.action in {"reply_to_task", "abandon_work"}:
+            value = {"status": "accepted", "action": control.action}
+            summary = "Parent control accepted by the owner; no execution permission was granted"
+        elif control.action == "request_work":
             value = {"status": "accepted", "work_request_id": control.work_request.id}
             summary = "Work request accepted; results will appear under this work ID in the complete directory"
         else:
             value = {"status": "question_issued", "question_id": control.question.id}
             summary = "Question issued; the answer will be included in the complete task dialogue"
-        self._record_observation(state, "request_work" if control.action == "request_work" else "ask_user",
+        self._record_observation(state, control.action,
                                  ToolObservation(summary=summary, value=value))
 
     def _pause_approval(self, registry, request, state, action, permission) -> None:
@@ -1022,6 +1168,14 @@ class AgentLoop:
             control.source_session_id, control.source_turn, control.source_call_id
         ):
             return self._failure(state, ErrorCode.CONTRACT_ERROR, "Resume acknowledges a different control", retryable=False)
+        if control.action in {"reply_to_task", "abandon_work"} or request.release_control:
+            # The owner has applied this parent control, or temporarily woken the
+            # parent while its delegated work remains pending in the Run.
+            state.pending_control = None
+            state.status = SessionStatus.ACTIVE
+            self._active_call_id = None
+            self._save(state)
+            return None
         if control.action == "request_work":
             self._record_control_receipt(state)
             available = any(result.work_request_id == control.work_request.id for result in request.work_results)
@@ -1067,6 +1221,8 @@ class AgentLoop:
             permission = definition.permission_policy.check(action, state, request)
             if permission.outcome == "allow" and permission.approval_id != pending.action_id:
                 raise PermissionError("Permission policy did not consume the matching approval")
+        except OperationCancelled:
+            raise
         except Exception as error:
             return self._failure(state, ErrorCode.CONTRACT_ERROR,
                                  "Cannot recheck approved operation: " + str(error), retryable=False)
@@ -1096,6 +1252,8 @@ class AgentLoop:
                     value={"execution_status": "unknown"}, user_comment=permission.user_comment,
                 ))
                 return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
+            except OperationCancelled:
+                raise
             except Exception as error:
                 observation = ToolObservation(ok=False, summary="Approved operation failed: " + str(error))
         observation = observation.model_copy(update={"user_comment": permission.user_comment})

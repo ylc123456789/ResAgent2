@@ -46,7 +46,7 @@ def completed_result(kind):
 
 def request_work_action():
     return {"tool": "request_work", "arguments": {"assessment": {"statement": "need evidence"},
-            "work_request": {"objective": "Produce evidence for the method", "expected_evidence": ["accuracy"]}}}
+            "work_request": {'objective': 'Produce evidence for the method', 'tasks': [{'key': 'work', 'instruction': 'Produce evidence for the method'}]}}}
 
 
 def finish_action(artifact_id):

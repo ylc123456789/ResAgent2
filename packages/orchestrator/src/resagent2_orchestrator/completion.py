@@ -61,7 +61,7 @@ class ScientificCompletionValidator:
         if (session is None or session.module != AgentOwner.SCIENTIFIC or session.status != SessionStatus.COMPLETED
                 or run.scientific_session is None or session.id != run.scientific_session.id):
             reject(CompletionViolationCode.INVALID_SESSION, "completed result requires its bound Scientific session")
-        if run.pending_question or any(work.status not in {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED} for work in run.work_requests):
+        if run.pending_question or run.child_questions or any(work.status not in {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} for work in run.work_requests):
             reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "active control state prevents completion")
         if any(task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT} for task in (run.workflow.tasks if run.workflow else [])):
             reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "non-terminal tasks prevent completion")
@@ -115,7 +115,7 @@ class ScientificCompletionValidator:
                 reject(CompletionViolationCode.INCONSISTENT_TASK_RESULT, str(error), [task.id])
         issues = [item for work in run.work_requests if work.outcome for item in work.outcome.tasks if item.status != "completed"]
         work_errors = {work.id: work.error for work in run.work_requests
-                       if work.status == WorkRequestStatus.FAILED and work.error is not None}
+                       if work.status in {WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} and work.error is not None}
         if (issues or work_errors) and not opinion.limitations:
             reject(CompletionViolationCode.MISSING_LIMITATIONS, "failed execution work requires stated limitations")
         if violations:

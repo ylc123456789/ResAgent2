@@ -17,6 +17,8 @@ _TERMINAL_MARKS = {
     "completed": "✓",
     "failed": "✗",
     "blocked": "⊘",
+    "cancelled": "■",
+    "interrupted": "■",
     "needs_user_input": "?",
 }
 

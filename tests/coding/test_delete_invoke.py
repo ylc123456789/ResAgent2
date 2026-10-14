@@ -104,7 +104,7 @@ def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path,
         task_message = next(message["content"] for message in body["messages"]
                             if message["role"] == "user" and message["content"].startswith("## task"))
         task = json.loads(task_message.split("## task\n",1)[1])
-        assert task["user_answers"] == []
+        assert [event["record"] for event in task["business_dialogue"] if event["type"] == "answer"] == []
         receipts = [json.loads(message["content"]) for message in body["messages"] if message["role"] == "tool"]
         assert len(receipts) == 1 and receipts[0]["ok"]
         assert "pending_operation" not in json.dumps(body)

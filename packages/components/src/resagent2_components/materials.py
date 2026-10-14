@@ -23,8 +23,12 @@ def request_task_context(request: AgentRequest) -> dict:
         "permissions", "confirm_commands", "workspace", "workspace_id",
         "workspace_spec", "environment_spec", "output_dir", "budget",
     })
-    value["user_answers"] = [answer.model_dump(mode="json", exclude_none=True)
-                              for answer in request.user_answers]
+    value["business_dialogue"] = sorted(
+        [{"event_id": event.event_id, "created_at": event.created_at.isoformat(),
+          "type": "input", "record": event.model_dump(mode="json", exclude_none=True)} for event in request.upstream_inputs]
+        + [{"event_id": answer.question_id, "created_at": answer.answered_at.isoformat(),
+            "type": "answer", "record": answer.model_dump(mode="json", exclude_none=True)} for answer in request.user_answers],
+        key=lambda item: (item["created_at"], item["event_id"]))
     return value
 
 

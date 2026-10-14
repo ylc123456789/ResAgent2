@@ -7,6 +7,7 @@ import socket
 import httpx
 
 from .budget import remaining_timeout
+from .cancellation import OperationCancelled, check_cancelled, current_cancellation
 
 
 class ResponseTooLargeError(ValueError):
@@ -48,6 +49,8 @@ def send_request(
     """Bound time/bytes; optionally pin each request to a verified public address."""
     if max_response_bytes is not None and max_response_bytes < 1:
         raise ValueError("max_response_bytes must be positive")
+    check_cancelled()
+    cancellation = current_cancellation()
     timeout = remaining_timeout(timeout)
     logical_urls: dict[httpx.Request, httpx.URL] = {}
 
@@ -126,9 +129,29 @@ def send_request(
     # this per-request loop cancels the HTTP work without waiting for the resolver
     # thread; its eventual result cannot resume this request.
     loop = asyncio.new_event_loop()
+    task = loop.create_task(send())
+
+    def cancel_request() -> None:
+        # Cancellation may arrive from the CLI/control reader's thread.
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:
+            # The request already completed and its loop was closed.
+            pass
+
+    unregister = cancellation.on_cancel(cancel_request) if cancellation else lambda: None
     try:
-        return loop.run_until_complete(send())
+        return loop.run_until_complete(task)
+    except asyncio.CancelledError:
+        if cancellation is not None and cancellation.cancelled:
+            raise OperationCancelled(
+                cancellation.reason,
+                details={"operation": "http", "local_request_stopped": True,
+                         "provider_execution_may_continue": True},
+            ) from None
+        raise
     finally:
+        unregister()
         # Transport errors and cancellation do not reach the response hook.
         for pending, logical_url in logical_urls.items():
             pending.url = logical_url

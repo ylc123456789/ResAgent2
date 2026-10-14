@@ -24,15 +24,15 @@ def test_task_context_preserves_all_business_question_fields_and_initial_facts()
     value=request_task_context(req)
     assert value["instruction"]=="Original requirement"
     assert value["task_context"]["required_artifacts"]==["comparison_results"]
-    assert [item["question_id"] for item in value["user_answers"]]==["question_1","question_2"]
-    assert value["user_answers"][0]["requested_fields"]==["scope"]
-    assert value["user_answers"][0]["options"]=={"scope":["full","small"]}
+    assert [item["question_id"] for item in [event["record"] for event in value["business_dialogue"] if event["type"] == "answer"]]==["question_1","question_2"]
+    assert [event["record"] for event in value["business_dialogue"] if event["type"] == "answer"][0]["requested_fields"]==["scope"]
+    assert [event["record"] for event in value["business_dialogue"] if event["type"] == "answer"][0]["options"]=={"scope":["full","small"]}
     assert req.model_dump_json()==before
 
 
 def test_resume_answer_is_not_silently_presented_as_a_business_requirement():
     req=request(parent_session_id="session_scientific_run_test",resume_answers=[answer(1)])
-    assert request_task_context(req)["user_answers"]==[]
+    assert [e["record"] for e in request_task_context(req)["business_dialogue"] if e["type"] == "answer"]==[]
 
 
 def test_business_answers_reject_foreign_scope():

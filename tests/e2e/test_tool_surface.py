@@ -26,6 +26,8 @@ Schema 24 only updates embedded versions for the unified context/session memory 
 Schema 25 removes search artifacts, replaces the fulltext entry with exact-source
 fetch_literature, adds direct accepted control receipts and preserves report whitespace.
 git_diff exposes current verification freshness after removing the repeated workset.
+Schema 27 adds explicit Task requests and parent reply/abandon controls; ask_user
+uses direct-parent routing without adding model-filled routing fields.
 Schema 26 only updates embedded public schema constants; approval explanations
 are supplied by the user and returned in receipts, not added to tool inputs.
 """
@@ -55,6 +57,7 @@ from resagent2_coding.verification import RunVerificationTool
 from resagent2_capabilities import RunShellTool
 from resagent2_runtime import AskUserTool, FinishTool
 from resagent2_runtime.tool_calling import native_tool_schemas
+from resagent2_scientific.parent_tools import ReplyToTaskTool, AbandonWorkTool
 from resagent2_scientific.tools import (
     AskUserTool as ScientificAskUserTool,
     FinishTool as ScientificFinishTool,
@@ -70,7 +73,7 @@ def tool_surface_fingerprints() -> dict[str, str]:
         "coding": (RunVerificationTool, DeletePathTool),
         "runtime": (AskUserTool, FinishTool),
         "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool,
-                       WebFetchTool, WebSearchTool),
+                       WebFetchTool, WebSearchTool, ReplyToTaskTool, AbandonWorkTool),
     }
     result = {}
     for group, classes in groups.items():

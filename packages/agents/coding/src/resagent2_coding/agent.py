@@ -63,6 +63,9 @@ class NativeCodingAgent:
             error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
         )
 
+    def terminate_session(self, session_id: str, reason: str) -> None:
+        self.loop.terminate_session(session_id, reason)
+
     def invoke(self, request: AgentRequest) -> AgentResult:
         try:
             request = AgentRequest.model_validate(request)

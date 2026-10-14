@@ -49,7 +49,7 @@ def prepared(tmp_path):
         ]))
     session = SessionRef(id="session_scientific_run_boundary", module="scientific", status="paused",
         state_uri="session://session_scientific_run_boundary", created_at=now, updated_at=now)
-    run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', expected_evidence=['result']), status='stable', workflow_revision=1, outcome=WorkResult(run_id="run_boundary", session_id=session.id, objective="Run", status="stable",work_request_id="work_1",workflow_revision=1,tasks=[WorkTaskResult(task_id="task_one", workflow_agent_kind="experiment",instruction="Run",status="completed")]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_boundary', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2)), scientific_session=session, usage=RunUsage(requests={f'fixture_{i}:0': 'succeeded' for i in range(2)}), work_requests=[WorkRequest(id='work_1', run_id='run_boundary', scientific_session_id=session.id, request=WorkRequestDraft(objective='Run', tasks=[{'key': 'work', 'instruction': 'Run'}]), status='stable', workflow_revision=1, outcome=WorkResult(run_id="run_boundary", session_id=session.id, objective="Run", status="stable",work_request_id="work_1",workflow_revision=1,tasks=[WorkTaskResult(task_id="task_one", workflow_agent_kind="experiment",instruction="Run",status="completed")]), created_at=now, updated_at=now)], created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
         "conclusion_requirements", ConclusionRequirements())
     run.workflow = Workflow(
@@ -85,7 +85,7 @@ def reply(run, status):
         fields["control"] = ControlSignal(action="request_work", source_session_id=run.scientific_session.id,
             source_turn=2, source_call_id="work_repeat", assessment=ScientificAssessment(statement="Need more evidence"),
             work_request=WorkRequest(id="work_repeat", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-                request=WorkRequestDraft(objective="Repeat", expected_evidence=["result"]),
+                request=WorkRequestDraft(objective='Repeat', tasks=[{'key': 'work', 'instruction': 'Repeat'}]),
                 created_at=datetime.now(UTC), updated_at=datetime.now(UTC)))
     return AgentResult(artifacts=artifacts, **fields)
 

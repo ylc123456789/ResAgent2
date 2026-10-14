@@ -10,7 +10,7 @@ Agent 系统的核心价值，是更好地驾驭和拓展 LLM 的能力。ResAge
 | --- | --- |
 | [1. 围绕 LLM 构建系统，释放模型能力](#llm-first) | 让模型负责理解和判断，让固定代码提供能力、执行操作并检查确定性约束。 |
 | [2. 每个 Agent 专注一条主线任务](#layered-autonomy) | 通过分工和上下文隔离减少无关细节，让各层保留完成本职工作的自主性。 |
-| [3. 正向准确传递意图，反向尽量保真](#faithful-handoffs) | 正向需要翻译需求，反向尽量直接交还结果，减少多余处理造成的损失和扭曲。 |
+| [3. 正向准确传递意图，反向尽量保真](#faithful-handoffs) | 由主 Agent 明确任务，固定代码保留原文；反向直接交还结果，减少多余改述。 |
 | [4. 统一调用、输入输出和业务方式](#unified-agent-io) | 统一协作接口，具体怎样工作由任务输入和模型判断决定，不另设工作模式。 |
 | [5. 用工具调用统一模型动作和上下文](#tool-actions) | 读取、执行、问用户、委托工作都是能力调用，使用共同的交互和上下文框架。 |
 | [6. 渐进式披露，按需取得原始信息](#progressive-disclosure) | 先提供清晰完整的材料索引，再由模型通过工具读取需要的内容。 |
@@ -35,7 +35,7 @@ LLM 是 Agent 系统理解、推理和决策的核心。系统应为它提供清
 
 ### 在 ResAgent2 中
 
-Scientific 根据用户目标判断需要什么工作和证据，Coding 与 Experiment 处理各自领域的理解、实施和诊断，Compiler 将自然语言工作需求翻译成任务草图。Scheduler、Registry 等固定代码负责调度、登记和事实检查；Interpreter 固定组织已有结果。
+Scientific 根据用户目标判断需要什么工作和证据，Coding 与 Experiment 处理各自领域的理解、实施和诊断，Scientific 明确生成任务，Compiler 只给原任务匹配注册 Agent。Scheduler、Registry 等固定代码负责调度、登记和事实检查；Interpreter 固定组织已有结果。
 
 例如，文献检索、联网搜索、阅读材料和委托实验的顺序由 Scientific 决定，没有固定研究流水线。模型出现反复无效操作时，先检查指令、可见信息和工具反馈是否完整，再决定如何修正，避免靠不断追加特殊规则代替模型判断。
 
@@ -58,12 +58,12 @@ Scientific 根据用户目标判断需要什么工作和证据，Coding 与 Expe
 | 比喻 | 对应部分 | 主线职责 |
 | --- | --- | --- |
 | 大脑 | Scientific Agent | 围绕用户研究目标作科学判断，决定还需要什么材料和工作 |
-| 神经系统 | Compiler、Interpreter | Compiler 将研究意图传到执行层；Interpreter 将执行结果交回研究层 |
+| 神经系统 | Compiler、Interpreter | Compiler 匹配任务的执行 Agent；Interpreter 将真实结果交回研究层 |
 | 器官 | Coding、Experiment Agent | 分别完成代码工作和研究实验，交付专业结果 |
 
 Controller 管理整次研究往返，Scheduler 推进已接受的任务图；它们支持上述分工。这个比喻解释设计目的，具体职责仍以[架构](ARCHITECTURE.md#overview)为准。
 
-Scientific 的 Session 跨研究回合复用；Coding、Experiment 的 Session 按 Task/Attempt 隔离。Scientific 通过报告和工件取得下游结果，任务 Agent 的完整实施历史留在各自 Session 中。每个 Agent 得到完成自己任务所需的指令和材料，并在授权与预算内选择具体工具步骤。
+Scientific 的 Session 跨研究回合复用；Coding、Experiment 的 Session 按 Task/Attempt 隔离。子 Agent 用统一 ask_user 问直接父 Agent，只有根 Scientific 与真实用户业务交互；操作批准继续由权限系统和用户处理。Scientific 通过报告和工件取得下游结果，任务 Agent 的完整实施历史留在各自 Session 中。每个 Agent 得到完成自己任务所需的指令和材料，并在授权与预算内选择具体工具步骤。
 
 **修改时问自己：是否让某个 Agent 承担了偏离主线的职责，或接收了本不需要的实施细节？**
 
@@ -84,11 +84,11 @@ Scientific 的 Session 跨研究回合复用；Coding、Experiment 的 Session �
 ### 在 ResAgent2 中
 
 ```text
-正向：Scientific 提出目标与证据需求 → Compiler 翻译 → Coding / Experiment 执行
+正向：Scientific 明确任务和共同限制 → Compiler 只匹配 Agent → 固定代码原文交接 → 子 Agent 执行
 反向：执行报告与工件 → Interpreter 固定组织 → Scientific 阅读并作科学判断
 ```
 
-Compiler 使用 LLM 翻译需求，固定代码分配身份、检查结构。Scientific 应明确工作、顺序和约束；Compiler 在原意上细化，尽量保留关键原句，不把“实现某能力”变成“立即执行该操作”。当前通过通用提示词指导这些语义判断，不让代码按编号或关键词猜任务边界，也不承诺模型转述逐字无损。Interpreter 不调用 LLM，不拼接总体报告，只按已有任务和尝试组织真实状态、错误及原报告与交付物入口。
+Scientific 负责把需要的工作明确为 Tasks，每项是一条自然 instruction 加必要控制字段。Compiler 的 LLM 只输出原 task key 到注册 Agent 的匹配，不改写、增删或拆合任务。固定代码分配运行身份，校验依赖、工作区、输入授权与输出绑定，原样传递任务正文、共同目标和限制。不能匹配时明确交回 Scientific 修订。代码保证传输保真，不证明 Scientific 的原始任务或子 Agent 的语义理解必然正确。Interpreter 不调用 LLM，不拼接总体报告，只按已有任务和尝试组织真实状态、错误及原报告与交付物入口。
 
 Scheduler 在接收结论确定后按原字符冻结每个真实终态 Attempt 的报告；Controller 交付实际 Ref，Scientific 从完整目录按需读取。WorkRequest 没有总体报告，失败历史和原始产物仍可读取。这里保证交接减少转述损失，不承诺所有正文始终完整出现在模型输入中，也不把专业报告当成无误的测量。当前取舍见 [ADR-0028](../history/decisions/0028-tool-history-and-complete-artifact-directory.md)，固定 Interpreter 的历史理由见 [ADR-0020](../history/decisions/0020-deterministic-work-interpreter.md)。
 
@@ -108,7 +108,7 @@ Scheduler 在接收结论确定后按原字符冻结每个真实终态 Attempt �
 
 三个 Agent 都使用 `invoke(AgentRequest) → AgentResult`。业务输入为 `instruction + input_artifacts`，业务输出为 `report + artifacts`；其余字段承载必要控制。上游通过公共结果、SessionRef 和工件协作，不读取下游私有 memory 来驱动流程。
 
-Coding 可以分析现有代码，也可以修改和验证；Experiment 可以解释已有结果，也可以执行新实验。具体行为由任务决定，可写权限不要求必须修改。回答问题后仍沿同一调用继续原工作，失败重试才创建独立 Attempt；新尝试不自动继承旧问答，必要时重新询问。详见[统一调用契约](CONTRACTS.md#module)。
+Coding 可以分析现有代码，也可以修改和验证；Experiment 可以解释已有结果，也可以执行新实验。具体行为由任务决定，可写权限不要求必须修改。业务问答和普通输入澄清后仍沿同一调用继续原工作，失败重试才创建独立 Attempt；新尝试不自动继承旧问答。用户显式打断则停止整个当前执行链，结束活动 WorkRequest 及未完成子任务；继续只恢复主 Scientific 原 Session，由它按需新委派。文件、已完成产物、真实历史和预算保留，不自动回滚或重放。详见[统一调用契约](CONTRACTS.md#module)。
 
 **修改时问自己：是否可以沿统一接口表达需求，新增模式或专用输入输出是否真的必要？**
 
@@ -124,16 +124,18 @@ Coding 可以分析现有代码，也可以修改和验证；Experiment 可以�
 
 ### 在 ResAgent2 中
 
-三个 Agent 共用仅使用原生 function call 的 AgentLoop，模型可用工具由实际注册的 Tool 定义，不另维护动作名清单。`ask_user`、`finish` 和 Scientific 的 `request_work` 都通过工具协议表达；`request_work` 不另建一套模型动作格式，跨 Agent 执行由 Controller 接管。
+三个 Agent 共用仅使用原生 function call 的 AgentLoop，模型可用工具由实际注册的 Tool 定义，不另维护动作名清单。`ask_user`、`finish` 和 Scientific 的 `request_work`、定向答复、结束委派都通过工具协议表达；`request_work` 不另建一套模型动作格式，跨 Agent 执行由 Controller 接管。
 
 模型上下文也使用共同的四部分：
 
 1. **固定契约**：职责、系统规则、工具说明与 schema。
-2. **任务需求**：当前指令与本作用域累计的业务问答；操作批准不作为任务需求累计。
-3. **原生协议历史**：成对保存的 assistant/tool 调用与回执。
+2. **任务需求**：当前指令、共同限制、来自直接上级的有序补充和向上业务问答；保留原文、来源和时间。下级问题与操作批准不加入。
+3. **执行历史**：成对的 assistant/tool 调用与回执，以及带来源的下级问题、自己的答复和运行时通知。未答下级问题由持久状态重投影，不能因历史压缩遗忘。
 4. **完整工件索引**：当前 Agent 已授权的全部登记材料，按内容和真实任务归属展开；不复制正文。
 
-固定契约在同一 Session 保持稳定；任务需求和完整目录每轮从权威事实重建并保持完整。只有第三部分允许压缩较早完整回合的模型投影，原始事件保留。工具正文与失败反馈只进入原生回执，不再复制成第四部分工作集。这样既支持原生 function call 的连续性，也让当前任务和材料不依赖旧摘要恢复。Compiler 是无状态编译，Interpreter 不调用模型，不强行套用 Agent 的 Session 框架。细节见 [CONTEXT](CONTEXT.md#basics)。
+固定契约在同一 Session 保持稳定；任务需求和完整目录每轮从权威事实重建并保持完整。只有第三部分允许压缩较早完整回合的模型投影，原始事件保留。工具正文与失败反馈只进入原生回执，不再复制成第四部分工作集。这样既支持原生 function call 的连续性，也让当前任务和材料不依赖旧摘要恢复。Compiler 是无状态单工具路由，Interpreter 不调用模型，不强行套用 Agent 的 Session 框架。要求会演进：同范围的后续明确修订取代对应旧选择，其余要求继续有效；晚转交旧话不是新要求，下级消息不自行改变父目标，父判断不能擅自覆盖明确用户要求；有冲突或含义不明就问直接上级。细节见 [CONTEXT](CONTEXT.md#basics)。
+
+普通输入立即持久保存，不取消当前模型调用或已采纳工具批次；下一个模型判断前先交 Scientific 处理。显式打断共用取消信号，停止本 Run 的模型等待和受管工具/子进程，保存准确事实后才确认暂停。普通工具未回时用它的唯一中断回执；ask_user/request_work 已回 accepted 的，保留原回执并追加第三部分状态通知，不制造第二个 tool receipt。控制输入只追加小记录，Run/Session 仍由唯一 owner 写入。
 
 **修改时问自己：新动作能否进入已有工具与上下文框架，调用回执与后续真实结果是否分清？**
 

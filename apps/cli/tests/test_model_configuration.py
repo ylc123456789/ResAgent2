@@ -18,7 +18,7 @@ def model_config_scope():
     with execution_budget(max_llm_calls=10, timeout_seconds=900):
         yield
 from resagent2_orchestrator import DeterministicWorkInterpreter, LLMWorkflowCompiler
-from resagent2_orchestrator.compiler import CompilationDraft
+from resagent2_orchestrator.compiler import RouteTasks
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, ComposedContext, ScriptedLLMClient
 
 
@@ -46,7 +46,7 @@ def test_output_headroom_preserves_every_module_input_limit(defaults, component,
     assert client.model_profile.safety_margin_tokens == 1024
     assert client.timeout_seconds == 600
     assert composition._component_context_limit(component) == limit
-    assert (client.context_budget(CompilationDraft, limit) if component == "compiler"
+    assert (client.context_budget(RouteTasks, limit) if component == "compiler"
             else client.tool_input_limit(limit)) == limit
 
 
@@ -139,16 +139,18 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "full")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "trace"))
     replies = iter([
-        {"tasks": [{
-            "key": "measure", "workflow_agent_kind": "experiment", "instruction": "Measure the method",
-        }]},
+        {"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]},
     ])
     requests = []
 
     def respond(request, *, timeout):
         requests.append((json.loads(request.content), timeout))
         return httpx.Response(200, json={
-            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(next(replies))}}],
+            "choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [{
+                "id": "call_route", "type": "function", "function": {
+                    "name": "route_tasks", "arguments": json.dumps(next(replies)),
+                },
+            }]}}],
             "usage": {"completion_tokens": 100},
         }, request=request)
 
@@ -156,18 +158,18 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     compiler_limit = composition._component_context_limit("compiler")
     compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=compiler_limit))
     now = datetime.now(UTC)
-    result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', expected_evidence=['Measured result']), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
+    result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', tasks=[{'key': 'work', 'instruction': 'Measure the method'}]), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
     assert result.llm_calls == len(requests) == 1
     assert all(body["max_tokens"] == 256_000 and 599 < timeout <= 600 for body, timeout in requests)
-    message = requests[0][0]["messages"][0]["content"]
-    schema = json.dumps(CompilationDraft.model_json_schema(), ensure_ascii=False)
-    assert message.count(schema) == 1
-    assert message.count('"title": "CompilationDraft"') == 1
+    body = requests[0][0]
+    assert "response_format" not in body
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["route_tasks"]
+    assert body["tools"][0]["function"]["parameters"] == RouteTasks.model_json_schema()
     rows = [json.loads(line) for line in (tmp_path / "trace/llm_traces.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     for row in rows:
         assert row["request_max_tokens"] == 256_000
-        assert row["included_sections"] == ["system", "compiler_request"]
+        assert row["included_sections"] == ["system", "compiler_request", "native_tools"]
         assert 0 < row["estimated_tokens"] <= compiler_limit
         assert len(row["attempts"]) == row["retry_number"] + 1 == 1
 

@@ -25,6 +25,8 @@ from resagent2_contracts import (
 from resagent2_components.literature import load_literature_manifest
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 
+from resagent2_runtime.controls import RunControlInbox
+
 from . import render
 from .composition import CliApplication, build_application
 
@@ -211,6 +213,18 @@ def _exit_code(run: ResearchRun) -> int:
     return EXIT_FAILED
 
 
+
+def _submit_control(data_root: Path, run: ResearchRun, *, kind: str, text: str = "", store=None):
+    """Submit an immutable record, rechecking live status at publication."""
+    if run.status not in {RunStatus.RUNNING, RunStatus.PAUSED}:
+        raise ValueError("input and interruption require a running or paused Run")
+    store = store or _run_store(data_root)
+    def validate_live():
+        if store.load(run.run_id).status not in {RunStatus.RUNNING, RunStatus.PAUSED}:
+            raise ValueError("input and interruption require a running or paused Run")
+    return RunControlInbox(data_root / "controls").submit(run.run_id, kind, text, validate_run=validate_live)
+
+
 def _render_run(run: ResearchRun) -> None:
     for line in render.render_final(run):
         print(line)
@@ -272,11 +286,51 @@ def _parser(
     resume.add_argument("--data-root", default=_default_data_root())
     _workspace_args(resume)
 
+    user_input = subparsers.add_parser("input", help="queue a business supplement without interrupting")
+    user_input.add_argument("run_id")
+    input_text = user_input.add_mutually_exclusive_group(required=True)
+    input_text.add_argument("--text", help="business supplement, saved verbatim")
+    input_text.add_argument("--file", help="UTF-8 file containing the supplement")
+    user_input.add_argument("--data-root", default=_default_data_root())
+
+    interrupt = subparsers.add_parser("interrupt", help="request interruption; owner confirms the stop")
+    interrupt.add_argument("run_id")
+    interrupt.add_argument("--text", default="", help="optional business supplement after interruption")
+    interrupt.add_argument("--data-root", default=_default_data_root())
+
     shell = subparsers.add_parser(
         "shell", help="enter the interactive monitoring shell"
     )
     shell.add_argument("--data-root", default=_default_data_root())
     return parser
+
+
+def _owner_call(data_root: Path, run_id: str, operation: Callable[[], ResearchRun]) -> ResearchRun:
+    """Keep the owner alive while Ctrl-C is delivered as a durable cancel request."""
+    from .shell import Runner
+
+    runner = Runner()
+    runner.start(operation)
+    while not runner.done:
+        try:
+            runner.wait(0.1)
+        except KeyboardInterrupt:
+            def validate_live():
+                store = _run_store(data_root)
+                # A very early Ctrl-C may precede the owner's initial snapshot.
+                if store.exists(run_id) and store.load(run_id).status not in {RunStatus.RUNNING, RunStatus.PAUSED}:
+                    raise ValueError("input and interruption require a running or paused Run")
+            try:
+                RunControlInbox(data_root / "controls").submit(run_id, "interrupt", validate_run=validate_live)
+            except ValueError:
+                # The owner committed its terminal result before publication.
+                # Keep waiting for that result rather than acknowledge a stale stop.
+                continue
+            print("Interruption requested; waiting for the Run owner to confirm the stop.", file=sys.stderr)
+    result, error = runner.outcome()
+    if error is not None:
+        raise error
+    return result
 
 
 def cli(
@@ -300,6 +354,19 @@ def cli(
         _render_run(store_factory(data_root).load(args.run_id))
         return EXIT_COMPLETED
 
+    if args.command in {"input", "interrupt"}:
+        store = store_factory(data_root)
+        existing = store.load(args.run_id)
+        text = (Path(args.file).expanduser().read_text(encoding="utf-8")
+                if args.command == "input" and args.file else args.text)
+        record = _submit_control(data_root, existing, kind=args.command, text=text, store=store)
+        print(f"Saved {record.kind}: {record.event_id}")
+        if args.command == "interrupt":
+            print("Stop requested; use show to verify the owner's confirmed paused state.")
+        elif existing.status == RunStatus.PAUSED:
+            print("Input saved; the paused Run advances only after explicit resume.")
+        return EXIT_COMPLETED
+
     if args.command == "run":
         request = _request_from_args(args)
         prepared = load_literature_manifest(args.literature_file) if args.literature_file else None
@@ -308,11 +375,10 @@ def cli(
             workspaces=_workspace_specs(args),
         )
         literature_kwargs = {"literature": prepared} if prepared is not None else {}
-        run = application.controller.create_run(
-            args.run_id or _new_run_id(),
-            request,
-            **literature_kwargs,
-        )
+        run_id = args.run_id or _new_run_id()
+        run = _owner_call(data_root, run_id, lambda: application.controller.create_run(
+            run_id, request, **literature_kwargs,
+        ))
     elif args.command == "literature":
         prepared = load_literature_manifest(args.file)
         existing = store_factory(data_root).load(args.run_id)
@@ -332,11 +398,12 @@ def cli(
             workspaces=_specs_for_existing_run(args, existing),
         )
         if args.command == "resume":
-            run = application.controller.run_until_stable(args.run_id)
+            run = _owner_call(data_root, args.run_id, lambda: application.controller.resume_run(args.run_id))
         else:
-            run = application.controller.answer_question(
-                args.run_id, _answer_from_args(args, existing),
-            )
+            answer = _answer_from_args(args, existing)
+            run = _owner_call(data_root, args.run_id, lambda: application.controller.answer_question(
+                args.run_id, answer,
+            ))
 
     _render_run(run)
     return _exit_code(run)
@@ -346,7 +413,7 @@ def main() -> int:
     try:
         return cli()
     except KeyboardInterrupt:
-        print("Interrupted; persisted Run state is unchanged.", file=sys.stderr)
+        print("Interrupted before a Run owner started.", file=sys.stderr)
         return 130
     except Exception as error:
         print(f"resagent2: {error}", file=sys.stderr)

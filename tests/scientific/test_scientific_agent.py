@@ -58,7 +58,7 @@ def content(result, kind):
 def work():
     return {"tool": "request_work", "arguments": {
         "assessment": {"statement": "Need more evidence"},
-        "work_request": {"objective": "Run the experiment", "expected_evidence": ["accuracy"]},
+        "work_request": {'objective': 'Run the experiment', 'tasks': [{'key': 'work', 'instruction': 'Run the experiment'}]},
     }}
 
 
@@ -85,7 +85,7 @@ def test_request_work_has_direct_stable_control_without_artifact():
     result = ScientificAgent(ScriptedLLMClient(tool_turns([work()]))).invoke(request())
     assert result.status == "request_work", result.report
     assert result.control.action == "request_work"
-    assert result.control.work_request.request.expected_evidence == ["accuracy"]
+    assert result.control.work_request.request.tasks[0].instruction == "Run the experiment"
     assert result.artifacts == []
     assert result.control.work_request.id
 
@@ -150,14 +150,14 @@ def test_request_work_permission_is_enforced():
     assert result.status == "failed"
 
 
-def test_empty_expected_evidence_rejected_before_tool_execution(monkeypatch):
+def test_empty_tasks_rejected_before_tool_execution(monkeypatch):
     tool = RequestWorkTool()
     monkeypatch.setattr(tool, "execute", lambda *_: pytest.fail("Invalid arguments executed"))
     now = datetime.now(UTC)
     state = AgentState(session_id="session_v", agent_name="scientific",
                        owner=AgentOwner.SCIENTIFIC, run_id="run_example", created_at=now, updated_at=now)
     action = work()["arguments"]
-    action["work_request"]["expected_evidence"] = []
+    action["work_request"]["tasks"] = []
     with pytest.raises(ValidationError):
         ToolRegistry((tool,)).dispatch("request_work", action, state)
 

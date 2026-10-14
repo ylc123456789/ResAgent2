@@ -48,9 +48,10 @@ from resagent2_runtime import (
     JsonSessionStore,
     ModelProfile,
     ModelRequestClient,
-    OpenAICompatibleClient,
     PromptLLMClient,
+    OpenAICompatibleClient,
 )
+from resagent2_runtime.controls import RunControlInbox
 from resagent2_scientific import ScientificAgent
 
 
@@ -129,10 +130,8 @@ def _client() -> OpenAICompatibleClient:
 
 def _compiler_client(*, max_context_tokens: int) -> PromptLLMClient:
     return PromptLLMClient(
-        _client(),
-        system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
-        max_context_tokens=max_context_tokens,
-        section_name="compiler_request",
+        _client(), system_prompt="You are the stateless ResAgent2 task router. Call route_tasks exactly once.",
+        max_context_tokens=max_context_tokens, section_name="compiler_request", output_tool_name="route_tasks",
     )
 
 
@@ -256,6 +255,7 @@ def build_application(
         scheduler=scheduler,
         registry=registry,
         dataset_ref_source=dataset_catalog,
+        control_inbox=RunControlInbox(root / "controls"),
     )
     trace_level = os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
     print(f"LLM trace: {trace_level}; directory: {_trace_dir() or 'unset'}", file=sys.stderr)

@@ -109,10 +109,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             if len(self.contexts) == 1:
                 return tool_turns([{"tool": "request_work", "arguments": {
                     "assessment": {"statement": "Need code inspection, not a measured experiment"},
-                    "work_request": {
-                        "objective": "Inspect the code and provide the analysis to a follow-up",
-                        "expected_evidence": ["Code analysis with its uncertainty"],
-                    },
+                    "work_request": {'objective': 'Inspect the code and provide the analysis to a follow-up', 'tasks': [{'key': 'work', 'instruction': 'Inspect the code and provide the analysis to a follow-up'}]},
                 }}])[0]
             current = scheduler.store.load("run_handoffs")
             report_id = next(

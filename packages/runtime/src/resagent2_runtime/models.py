@@ -57,6 +57,7 @@ class ComposedContext(RuntimeModel):
     system_prompt: str = ""
     task_context: str = ""
     artifact_index: str = ""
+    pending_notifications: str = ""
     history_summary: str | None = None
     included_sections: list[str]
     omitted_sections: list[str] = Field(default_factory=list, max_length=0)
@@ -91,12 +92,15 @@ class ToolObservation(RuntimeModel):
     memory_updates: dict[str, JsonValue] = Field(default_factory=dict)
     finish_candidate: FinishCandidate | None = None
     question: QuestionDraft | None = None
+    task_reply: dict[str, JsonValue] | None = None
+    abandon_work_id: str | None = None
+    control_reason: str | None = None
     request_work: JsonValue | None = None
     artifacts: list[ArtifactRef] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_control_signal(self) -> "ToolObservation":
-        signals = (self.finish_candidate, self.question, self.request_work)
+        signals = (self.finish_candidate, self.question, self.request_work, self.task_reply, self.abandon_work_id)
         if sum(signal is not None for signal in signals) > 1:
             raise ValueError(
                 "a tool observation can carry at most one of "
@@ -174,6 +178,7 @@ class ToolCallTurn(RuntimeModel):
     executing_call_id: str | None = None
     executing_user_comment: str | None = None
     protocol_error: str | None = None
+    runtime_notice: str | None = None
 
     @model_validator(mode="after")
     def validate_call_ids(self) -> "ToolCallTurn":
@@ -201,8 +206,9 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
-    schema_version: Literal["26.0"] = SCHEMA_VERSION
+    schema_version: Literal["27.0"] = SCHEMA_VERSION
     session_id: SessionId
+    upstream_session_id: SessionId | None = None
     agent_name: NonEmptyStr
     owner: AgentOwner
     run_id: RunId

@@ -32,10 +32,7 @@ def work_request(status: WorkRequestStatus = WorkRequestStatus.REQUESTED) -> Wor
         "id": "work_round1",
         "run_id": "run_example",
         "scientific_session_id": "session_sci",
-        "request": WorkRequestDraft(
-            objective="Measure the method",
-            expected_evidence=["validation_accuracy"],
-        ),
+        "request": WorkRequestDraft(objective='Measure the method', tasks=[{'key': 'work', 'instruction': 'Measure the method'}]),
         "status": status,
         "created_at": NOW,
         "updated_at": NOW,
@@ -59,7 +56,7 @@ def work_request(status: WorkRequestStatus = WorkRequestStatus.REQUESTED) -> Wor
                 )
             ],
         )
-    if status == WorkRequestStatus.FAILED:
+    if status in {WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED}:
         fields["error"] = ModuleError(
             code=ErrorCode.CONTRACT_ERROR,
             message="compile failed",
@@ -82,10 +79,7 @@ def test_work_request_rejects_execution_fields_when_requested() -> None:
             id="work_round1",
             run_id="run_example",
             scientific_session_id="session_sci",
-            request=WorkRequestDraft(
-                objective="Measure",
-                expected_evidence=["accuracy"],
-            ),
+            request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]),
             status=WorkRequestStatus.REQUESTED,
             workflow_revision=1,
             created_at=NOW,
@@ -96,21 +90,13 @@ def test_work_request_rejects_execution_fields_when_requested() -> None:
 def test_work_request_rejects_execution_fields_from_llm() -> None:
     """WorkRequestDraft must reject capability/task/path/env/status fields."""
     with pytest.raises(ValidationError):
-        WorkRequestDraft(
-            objective="Measure",
-            expected_evidence=["accuracy"],
-            capability="experiment_run",
-        )
+        WorkRequestDraft(objective='Measure', capability='experiment_run', tasks=[{'key': 'work', 'instruction': 'Measure'}])
     with pytest.raises(ValidationError):
-        WorkRequestDraft(
-            objective="Measure",
-            expected_evidence=["accuracy"],
-            task_id="task_experiment",
-        )
+        WorkRequestDraft(objective='Measure', task_id='task_experiment', tasks=[{'key': 'work', 'instruction': 'Measure'}])
 
 
-def test_work_request_draft_requires_expected_evidence() -> None:
-    with pytest.raises(ValidationError, match="expected_evidence"):
+def test_work_request_draft_requires_tasks() -> None:
+    with pytest.raises(ValidationError, match="tasks"):
         WorkRequestDraft(objective="Measure")
 
 
@@ -242,10 +228,7 @@ def test_schema_1_1_object_is_rejected_as_2_0() -> None:
                 "id": "work_round1",
                 "run_id": "run_example",
                 "scientific_session_id": "session_sci",
-                "request": {
-                    "objective": "Measure",
-                    "expected_evidence": ["accuracy"],
-                },
+                "request": {'objective': 'Measure', 'tasks': [{'key': 'work', 'instruction': 'Measure'}]},
                 "status": "requested",
                 "created_at": NOW.isoformat(),
                 "updated_at": NOW.isoformat(),

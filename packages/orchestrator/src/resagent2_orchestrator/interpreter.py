@@ -15,7 +15,7 @@ class DeterministicWorkInterpreter:
     """Deliver registered refs and truthful execution navigation without rewriting reports."""
 
     def interpret(self, work, *, tasks, artifacts):
-        if work.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
+        if work.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED}:
             raise ValueError("only terminal work can be delivered")
         task_results = []
         refs = {}

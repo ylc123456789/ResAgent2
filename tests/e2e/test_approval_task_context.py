@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from e2e.native_fixtures import tool_turns
+from e2e.native_fixtures import tool_turns, ParentQuestionClient
 from resagent2_components import PreparedEnvironment, ResourceLayout
 from resagent2_contracts import (
     AgentOwner, ExecutionLimits, ResearchRequest, RunBudget, RunPermissions,
@@ -82,10 +82,10 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
         command,
         {"tool": "finish", "arguments": {"report": "Executed the approved command once"}},
     ]))
-    scientific_client = ScriptedLLMClient(tool_turns([
+    scientific_client = ParentQuestionClient(tool_turns([
         {"tool": "request_work", "arguments": {
             "assessment": {"statement": "Need a recorded execution outcome"},
-            "work_request": {"objective": "Execute the local marker script after asking the user", "expected_evidence": ["Recorded local execution"]},
+            "work_request": {'objective': 'Execute the local marker script after asking the user', 'tasks': [{'key': 'work', 'instruction': 'Execute the local marker script after asking the user'}]},
         }},
         {"tool": "finish", "arguments": {
             "report": "The local execution task is complete",
@@ -168,22 +168,24 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     assert len(audits) == 1
     task = run.workflow.tasks[0]
     assert len(task.attempts) == 1 and task.attempts[0].session.id == session_id
-    assert len(run.answers) == 2
-    assert run.answers[0].action is None and run.answers[1].action == action
-    assert JsonRunStore(tmp_path / "runs").load(run.run_id).answers[1].comment == comment
+    assert len(run.answers) == 3
+    assert run.answers[0].action is None and run.answers[0].source == "user"
+    assert run.answers[1].action is None and run.answers[1].source == "parent"
+    assert run.answers[2].action == action
+    assert JsonRunStore(tmp_path / "runs").load(run.run_id).answers[2].comment == comment
 
     assert not any(ref.kind in {"question", "answer", "work_request", "work_feedback", "work_record", "research_index"}
                    for ref in run.artifacts.values())
-    assert {answer.question_id for answer in run.answers} <= set(run.received_controls.values())
+    assert {answer.question_id for answer in run.answers if answer.source == "user"} <= set(run.received_controls.values())
     # Inspect the task section actually sent before execution and before finish.
     # The operation remains in durable control/history, not in task requirements.
     for context in worker_client.contexts[1:]:
         task_text = context.task_context.split("\n", 1)[1]
-        dialogue = json.loads(task_text)["user_answers"]
+        dialogue = [e["record"] for e in json.loads(task_text)["business_dialogue"] if e["type"] == "answer"]
         assert len(dialogue) == 1
         assert dialogue[0]["question_text"] == business_text
         assert dialogue[0]["values"] == {"approve": "yes"}
-        assert dialogue[0]["question_id"] == run.answers[0].question_id
+        assert dialogue[0]["question_id"] == run.answers[1].question_id
         assert "comment" not in dialogue[0]
         assert "只执行本次操作" not in context.task_context + context.artifact_index
 
@@ -200,4 +202,4 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     # It is in the actual paired native history sent to the model after restart.
     assert any(json.loads(raw).get("user_comment") == comment
                for turn in worker_client.histories[-1] for raw in turn.tool_results.values())
-    assert run.llm_calls_used == len(worker_client.contexts) + len(scientific_client.contexts) == 5
+    assert run.llm_calls_used == len(worker_client.contexts) + len(scientific_client.contexts) == 7

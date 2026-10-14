@@ -1,12 +1,12 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 26.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 27.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
 ## 先认识接口中的对象
 
-一次研究从用户提交需求开始。Controller 调用 Scientific 判断下一步；Scientific 可以直接使用工具，也可以通过 `request_work` 提交工作需求。后者由 Compiler 转成任务图、Scheduler 调用 Coding/Experiment 执行，结果再交回 Scientific。工件登记和状态保存贯穿这些调用。
+一次研究从用户提交需求开始。Controller 调用 Scientific 判断下一步；Scientific 可以直接使用工具，也可以通过 `request_work` 提交工作需求。后者含 Scientific 明确生成的 Tasks；Compiler 只匹配 Agent，固定代码组装图，Scheduler 调用 Coding/Experiment 执行，结果再交回 Scientific。工件登记和状态保存贯穿这些调用。
 
 | 层次 | 对象 | 解决什么问题 |
 |---|---|---|
@@ -24,7 +24,7 @@
 
 | 调用方向 | 入口 | 输入 → 输出 | 位置 |
 |---|---|---|---|
-| 用户入口 → Controller | create_run / import_literature / answer_question / run_until_stable | ResearchRequest / PreparedLiteratureImport / UserAnswer → ResearchRun | [用户与控制](#entry) |
+| 用户入口 → Controller | create_run / import_literature / answer_question / resume_run / run_until_stable；控制 inbox | ResearchRequest / PreparedLiteratureImport / UserAnswer → ResearchRun | [用户与控制](#entry) |
 | Controller → Scientific | ModulePort.invoke | AgentRequest → AgentResult | [统一调用](#module)、[科学决策](#scientific) |
 | Controller → Interpreter | WorkInterpreter.interpret | WorkRequest + 实际 Task/Attempt/Ref → WorkResult | [反向交接](#interpreter) |
 | Controller → Compiler | WorkflowCompiler.compile | WorkRequest + 图/路由/执行限制 → CompilationResult | [工作编译](#compiler) |
@@ -38,7 +38,7 @@
 
 公共模型继承 `ContractModel`，拒绝未知字段并校验版本。方法签名只规定调用形状；接收端还须校验身份、归属、状态和实际消费。机器状态不从报告文本推断，类型合法也不证明科学结论正确。
 
-`NonEmptyStr` 在校验时去掉首尾空白，并拒绝空值；例如 `ModuleError.message` 不能只包含空白。原始 report 使用独立的非空字符串约束，保留首尾空白。Controller/Scheduler 将异常转为公共错误时，使用去空白后的异常消息；没有消息时使用异常类名，保证失败本身也能被合法保存。
+`NonEmptyStr` 在校验时去掉首尾空白，并拒绝空值；例如 `ModuleError.message` 不能只包含空白。原始需求字段（WorkRequest 的 objective/constraints、Task instruction、shared_goal/shared_constraints、业务补充和 AgentRequest instruction）以及其结果导航使用 VerbatimText：拒绝纯空白，保留原文全部首尾空白与换行。原始 report 使用独立的非空字符串约束，保留首尾空白。Controller/Scheduler 将异常转为公共错误时，使用去空白后的异常消息；没有消息时使用异常类名，保证失败本身也能被合法保存。
 
 <a id="entry"></a>
 
@@ -49,7 +49,9 @@
 - `create_run(run_id, request, *, literature=())` 创建 Run、登记可选导入论文，并推进到完成、失败或等待用户。
 - `import_literature(run_id, literature)` 只给已暂停 Run 增加论文材料。
 - `answer_question(run_id, answer)` 校验当前问题、记录回答，再继续同一个 Run。
-- `run_until_stable(run_id)` 推进可恢复执行，不制造答案或绕过暂停。
+- `run_until_stable(run_id)` 由单一 owner 推进可恢复执行，不制造答案或绕过用户主动暂停。
+- `resume_run(run_id)` 明确继续用户主动暂停的 Run；不能代答仍有效的待答问题。
+- `RunControlInbox.submit` 追加本 Run 的 input/interrupt 小记录。CLI 的 input、interrupt 和 Shell 共用此入口，不直接改整份 Run/Session。
 
 Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控制链。CLI 与真实 E2E 共用 `build_application` 装配依赖；完整研究场景使用 Controller，定向 Agent 场景使用应用中已装配的 binding。
 
@@ -92,13 +94,18 @@ Controller 以 `source_type=import` 登记 `literature_paper` 和可选 `literat
 
 `QuestionDraft` 的 `text` 必须包含回答所需背景，`requested_fields` 非空；`options` 可选。字段键使用 AnswerFieldName：1–64 个 ASCII 字母、数字或下划线，以字母开头。正文和选项放在值中，不放进机器键。工具 schema 在暂停前校验这些规则。
 
-Agent 返回 `needs_user_input`、paused Session 和直接 `ControlSignal`。Runtime 在交接前分配并保存 PendingQuestion，包含 run_id、session_id、可选 Task/Attempt、完整 text、requested_fields、options、created_at 和可选 action。用户提交 `UserAnswer(question_id, values, answered_at, comment=None)`；值键必须与原字段完全一致，options 是提示而非额外枚举限制。业务问题没有 action，自由答案或补充写在对应 values 中，不接受 comment；操作批准允许附带可选 comment，批准和拒绝均可附说明，原文保留，不解析为授权。
+Agent 返回 `needs_user_input`、paused Session 和直接 `ControlSignal`。Runtime 保存 PendingQuestion，包含原 Run、Session、Task/Attempt、完整题目、字段/选项和 `recipient_session_id`。所有 Agent 使用同名 ask_user；有直接父关系时问题送父 Agent，只有根 Scientific 问真实用户。权限 action 继续单独交真实用户，不允许父 Agent 以业务答复批准扩权。
 
-Controller 生成带完整题目快照和作用域的 `RecordedAnswer`，保存到 Run，包括原文 comment，不生成 question/answer 工件。`user_answers` 是同作用域累计业务问答，`resume_answers` 是本次恢复数据，`control_ack` 确认原控制调用。业务回答进入第二部分；操作批准、拒绝及说明不进入第二或第四部分。
+父的 `reply_to_task` 绑定它的有效直接子 Task 和准确问题 ID，并给出完整字段答案；也可给尚未启动或原会话中的子任务定向澄清。父判断标明 source=parent。转交用户补充使用真实 `user_input_event_id`，固定代码复制原文、来源和原时间，不能把模型写的解释伪装为用户要求。父可以向自己的上级 ask_user，再回答原子问题。`reply_to_task.resume_work=false` 可先逐个任务传递澄清而不恢复子执行；最后一次答复使用 `true`（默认值）再继续工作。未答业务问题和待批准操作仍保持等待。
+
+用户提交 `UserAnswer(question_id, values, answered_at, comment=None)`；字段键必须与当前真实用户问题完全一致，options 是提示而非枚举限制。业务自由回答写入 values，不接受 comment；操作批准/拒绝可附可选说明，原文保留，不解析为授权。普通 input 不自动充当 ask_user 答案。
+
+Controller 保存完整 `RecordedAnswer`（含 source、source_session_id、原题目与作用域），不生成问答工件。子向上问答与收到的上级澄清进入子第二部分；父收到的下级问题和自己答子过程进入父第三部分，不改变父目标。未答下级问题由持久 pending 状态完整重投影，历史压缩不能使它丢失。父自己向上问答才进入父第二部分。操作批准、拒绝及说明不进入第二/第四部分。
+
 
 操作批准的 `ActionSnapshot` 绑定工具、校验参数、真实目录/环境/目标、Run/Task/Attempt/Session。原操作调用在批准前保持未完成回执；恢复时权限策略检查本次答案与准确快照，批准在副作用前持久消费，然后为原调用写唯一执行/拒绝回执。匹配答案的 comment 经 `PermissionDecision.user_comment` 传入 `ToolObservation.user_comment`，输出在原回执的顶层 `user_comment`；业务 value 保持原形，不要求是字典。拒绝回执 `ok=False`，value 含 `execution_status=not_executed`，批准说明随执行成功或失败回执保留。批准后派发期间期限中断也保存原调用的说明与失败回执，value 的 `execution_status=unknown` 保守表示不能保证没有部分执行，不重放。整个流程不另造反馈回执。说明不扩大许可、不替代命令，不增加继续/停止决策字段；下一步由模型结合任务及反馈判断。快照变化重新询问，旧说明不借给变化后的动作；拒绝、缺少权限或已消费批准不能执行。批次已完成项保留，后续未开始项 not_executed，只恢复当前待批准项。结果未知的副作用不重放。
 
-暂停继续原 Attempt/Session，真正 retry 新建尝试并保持问答隔离。控制来源身份是 Session、原始 turn 与 native call ID；不能只用供应商 call ID 作为全局幂等键。业务问答原 accepted 回执不在回答后改写，实际回答完整进入第二部分。
+业务等待与普通补充继续原 Attempt/Session，真正 retry 新建尝试并保持问答隔离；用户显式打断终止活动旧委派，继续不复活旧子 Session。控制来源身份是 Session、原始 turn 与 native call ID；不能只用供应商 call ID 作为全局幂等键。业务问答原 accepted 回执不在回答后改写，实际回答完整进入第二部分。
 
 <a id="module"></a>
 
@@ -127,8 +134,12 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | workspace、workspace_id、workspace_spec | 物理授权、逻辑工作区身份和来源声明 |
 | environment_spec、output_dir | 环境约束和系统指定的输出位置 |
 | confirm_commands | 继承 Run 的逐次外部操作确认要求 |
-| parent_session_id | 继续哪个 Session |
-| task_context | 初始控制事实：明确验收、数据集等；不是自由追加的动态工作集 |
+| parent_session_id | 继续哪个本 Agent Session；不是直接父关系 |
+| upstream_session_id | 真实直接父 Agent Session；根 Agent 为空 |
+| upstream_inputs | 有序完整上级补充；含原 event_id、原文、source、原时间 |
+| child_questions、runtime_notices | 第三部分的待答下级问题和真实运行通知，不入需求/工件 |
+| release_control | owner 临时唤醒父处理补充或子问题，不结束原工作关系 |
+| task_context | 明确验收、数据集、原共同目标/限制、有效子任务关系；不是工具正文工作集 |
 | user_answers、resume_answers | 累计业务问答、本次恢复实际答案（可含操作批准） |
 | work_results、control_ack | 已接收 WorkResult 导航、此次确认的原控制调用身份 |
 
@@ -138,7 +149,7 @@ permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都�
 
 ### AgentRequest 怎样进入模型输入
 
-固定契约在同一 Session 保持稳定；任务需求完整保留初始指令和本作用域业务问答；第三部分保存原生配对调用及工具内容；第四部分只有完整授权目录。只有第三部分可按完整回合压缩。上下文不重复投影近期正文、命令诊断或总体工作报告，具体结构见 [CONTEXT](CONTEXT.md)。
+固定契约在同一 Session 保持稳定；第二部分完整保留初始指令、共同限制、有序上级补充和向上业务问答；第三部分保存原生配对调用、工具内容、下级问题与运行通知；第四部分只有完整授权目录。来源、原消息身份和原时间保留，晚转发旧话不成为新要求；同范围后续明确修订替代对应旧选择，其余要求仍有效，含义冲突向直接上级澄清。只有第三部分可按完整回合压缩。上下文不重复投影近期正文、命令诊断或总体工作报告，具体结构见 [CONTEXT](CONTEXT.md)。
 
 ### AgentResult
 
@@ -148,11 +159,11 @@ permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都�
 | report | 非空原始说明；不 strip、选摘或自动折行，表达发现、结果和局限 |
 | artifacts | ArtifactCandidate 或本次所属且已登记的 ArtifactRef |
 | session | 子模块拥有的 SessionRef；暂停控制结果必填，其他结果可为空；提供时其状态必须与结果对应 |
-| control | action、原 Session/turn/call 身份，以及对应 PendingQuestion 或 WorkRequest；可携科学 assessment |
+| control | action、原 Session/turn/call 身份，以及对应问题、WorkRequest、定向答复或结束委派载荷；可携科学 assessment |
 | error、warnings | 结构化错误和非致命警告 |
 | llm_calls | 本次调用用量的诊断投影；严格非负整数，拒绝 bool；Run 以发送前持久占用为准 |
 
-`ControlSignal` 直接携 `action`、`source_session_id/source_turn/source_call_id` 及对应 question 或 work_request，二者互斥；可携 ScientificAssessment。来源必须匹配 paused Session。question/work_request 身份由 Runtime 在交接前分配并保存，不用工件定位，也不在接收端重新生成身份。只有 Scientific 可 request_work。
+`ControlSignal` 直接携 `action`、`source_session_id/source_turn/source_call_id` 及对应 question、work_request、task_reply 或 abandon_work_id，载荷互斥；可携 ScientificAssessment。来源必须匹配 paused Session。question/work_request 身份由 Runtime 在交接前分配并保存，不用工件定位，也不在接收端重新生成身份。只有 Scientific 可 request_work。
 
 | status | error / control | Session（提供时） | warnings |
 |---|---|---|---|
@@ -161,6 +172,8 @@ permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都�
 | `failed` / `blocked` | 必须有 error，control 为空 | failed / blocked | 可保留 |
 | `needs_user_input` | 无 error；ask_user control | 必须 paused | 可保留 |
 | `request_work` | 无 error；request_work control | 必须 Scientific paused Session | 可保留 |
+| `reply_to_task` / `abandon_work` | 无 error；准确父级控制 | 必须 paused | 可保留 |
+| `yielded` / `interrupted` | 无 error/control；边界让出或用户中断 | 必须 paused | 可保留 |
 
 接收端重新校验整个结果、Session 所有权、工件归属和恢复绑定，确认本次交付后记录答案已投递。投递记录不证明自定义 Port 实际阅读或理解；原生 Agent 将累计业务回答完整放进任务需求，操作批准由策略消费。错误返回不能抹掉已发生调用或已登记工件；report 不能自行决定状态。
 
@@ -228,7 +241,7 @@ Scientific 同样接收 AgentRequest 并返回 AgentResult，使用同一 prompt
 
 ### request_work：提出下一轮工作需求
 
-`WorkRequestDraft` 只表达 objective、expected_evidence、constraints、input_artifact_ids，不含执行图和物理路径。工具校验实际授权及冻结输入，保存 WorkRequest 和源调用身份，直接返回 accepted + work_request_id 后暂停。Controller 按此真实身份接收、编译与调度，不再为控制动作登记工件。ScientificAssessment 保留当时科学判断，不自动生成报告工件。
+`WorkRequestDraft` 包含整体 objective、共同 constraints 和非空 tasks；交付语义写在相应 Task，而非另一套 expected_evidence。`WorkTaskDraft` 包含局部 key、原自然 instruction、depends_on、input_artifact_ids、future input_artifact_bindings、output_names 和可选逻辑 workspace_id；不选择 Agent、不填写运行身份、物理路径或权限。固定代码校验 key 唯一、DAG、直接依赖及已声明输出选择器。工具校验实际授权及冻结输入，保存 WorkRequest 和源调用身份，直接返回 accepted + work_request_id 后暂停。Controller 按此真实身份接收、编译与调度，不再为控制动作登记工件。ScientificAssessment 保留当时科学判断，不自动生成报告工件。
 
 <a id="work-outcome"></a>
 
@@ -258,15 +271,15 @@ compile(request: WorkRequest, *, current: Workflow | None,
 
 成功返回 CompilationResult(output, llm_calls)，output 为 WorkflowProposal 或 WorkflowPatch；编译错误抛 CompilationError，并保留实际 llm_calls。预算耗尽和超时分别抛 BudgetExhaustedError、DeadlineExceededError，由 Controller 保存对应终止原因。Compiler 不读下游 Session，不直接修改 Run 状态。LLM 编译必须处于可信调用方绑定的共享 execution_budget 中，直接使用该余额和期限。
 
-LLMWorkflowCompiler 请求一个 CompilationDraft，由确定性代码物化正式身份、解析工作区并校验。正文解析或结构校验失败时最多纠正一次，无额外语义复审调用。Compiler 使用 PromptLLMClient 的 JSON 输出路径，无 AgentLoop、工具或 Session；客户端根据 action_type 提供输出 schema，Compiler 提示不重复嵌入；上下文和调用消费仍受共同预算约束。
+LLMWorkflowCompiler 请求 RouteTasks；原生 tools 只有 route_tasks。每项只能给 task_key 匹配注册 workflow_agent_kind，或说明不可路由原因，没有 instruction/依赖/资源改写字段。固定代码要求恰好覆盖全部原任务，原文复制 instruction、shared_goal/shared_constraints 及控制字段，分配正式身份并校验工作区、授权和图。有效不可路由判断直接交回 Scientific；只有输出格式/结构错误最多纠正一次，无语义复审调用。Compiler 不运行 AgentLoop、没有 Session；复用 PromptLLMClient(output_tool_name="route_tasks")、共享预算及原生传输。用户取消透传 OperationCancelled，不作为错误重试。
 
 <a id="workflow"></a>
 
 ### 图与任务字段
 
-TaskProposal 包含 id、work_request_id、workflow_agent_kind、instruction、depends_on、workspace_id、已有 input_artifacts ID、未来 input_artifact_bindings、output_names，以及可选 acceptance_spec。它不携带单独的扩权或确认开关。
+TaskProposal 包含 id、work_request_id、workflow_agent_kind、原 instruction、原 shared_goal/shared_constraints、depends_on、workspace_id、已有 input_artifacts ID、未来 input_artifact_bindings、output_names，以及可选 acceptance_spec。它不携带单独的扩权或确认开关。
 
-LLM 草图只给逻辑 key、路由、instruction、依赖、逻辑工作区和工件交接，不编造指标键、文件路径、验收策略、操作权限或运行身份。外部确定性调用方可以提供明确的 TaskAcceptanceSpec；自然语言证据要求仍须保留在 instruction 中。
+Scientific 给出原任务正文和必要逻辑控制；路由 LLM 仅匹配 Agent，不生成任务草图，不增删、拆合或重写原任务。外部确定性调用方可以提供明确的 TaskAcceptanceSpec；自然语言证据要求仍须保留在 instruction 中。
 
 Scheduler 接受时将 output_names 合入 required_output_names，将非空验收要求冻结为 acceptance_requirements。WorkflowTask 与后续每个 Attempt 绑定同一个 acceptance_ref；请求将该 Ref 作为输入材料，并从同一冻结原件投影 task_context.acceptance_requirements，保证明确要求完整进入第二部分。模型投影不是另一份可独立修改的要求记录。
 
@@ -315,9 +328,9 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 | `ok` | 机器可读成功标志；非零退出、参数拒绝、缺文件等可恢复失败为 False，不能解析 summary 猜状态 |
 | `user_comment` | 可选操作批准说明，由运行时从匹配回答透传到原回执顶层；不改业务 value |
 | `memory_updates` | 由 Loop 合入 Session 的确定性更新，不是第二份外部结果信封 |
-| `question` / `request_work` / `finish_candidate` | 至多一个非空；普通工具可全为空，Loop 负责形成对应控制或完成结果 |
+| `question` / `request_work` / `task_reply` / `abandon_work_id` / `finish_candidate` | 至多一个控制/完成结果；普通工具可全为空，Loop 负责形成对应外部结果 |
 
-所有 AgentLoop 客户端通过 `next_tool_call` 返回原生工具回合。每个 `Tool.input_model.model_json_schema()` 与说明共同生成 `tools`；实际注册表决定工具可用性并在执行前完整校验参数。三个 Agent 不维护自己的工具名 Literal，也不解析模型正文作为备用动作。仅有 `next_action` 的客户端不能运行 AgentLoop；Compiler 的结构化输出使用独立接口。
+所有 AgentLoop 客户端通过 `next_tool_call` 返回原生工具回合。每个 `Tool.input_model.model_json_schema()` 与说明共同生成 `tools`；实际注册表决定工具可用性并在执行前完整校验参数。三个 Agent 不维护自己的工具名 Literal，也不解析模型正文作为备用动作。仅有 `next_action` 的客户端不能运行 AgentLoop；Compiler 复用无状态 prompt 适配接口，其生产传输同样用原生工具。
 
 | 可注入入口 | 约定 |
 |---|---|
@@ -325,10 +338,10 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 | ContextBuilder(request, state, max_context_tokens) | 返回完整任务与工件目录 ContextSection；Runtime 接入配对历史和摘要，builder 不另分正文额度 |
 | ContextComposer.compose(...) | 完整组织固定输入段；Loop 按原生 messages + tools 计量并决定旧完整回合压缩，仍超限明确失败 |
 | LLMClient.next_tool_call(context, schemas, turns, *, max_input_tokens) | Agent 客户端必需方法；返回 ToolCallTurn，不执行工具；须提供稳定非空 tool_session_key |
-| StructuredLLMClient.next_action(context, action_type) | 无状态结构化输出接口，供 PromptLLMClient / Compiler 使用 |
+| StructuredLLMClient.next_action(context, action_type) | 可选 JSON 结构化输出接口，不作为生产 Compiler 路径 |
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
-| PromptLLMClient.next_action(prompt, action_type) | 普通提示复用 Composer/计量，无 Tool/Session/Loop |
+| PromptLLMClient.next_action(prompt, action_type) | 复用 Composer/计量；配置 output_tool_name 时仅提供该原生输出工具；无工具执行、Session 或 Loop |
 | ModelRequestClient.request(body) | 注入的单次模型 JSON 请求；共享用量/截止时间/trace，无重试、Tool 执行或 Agent/Session；供应商语义由调用组件解析 |
 | PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Capabilities，组合 Components 提供的基础边界；不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |
@@ -358,12 +371,12 @@ Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或�
 
 OpenAICompatibleClient 区分传输/响应封装失败和模型输出拒绝：前者至多三次 HTTP 尝试，仍受剩余调用数和时间限制；原生 framing 或 arguments JSON 被拒绝时，完成本次 trace 后直接交回 Loop，不在客户端原样重试。损坏的 HTTP 压缩正文按响应失败记录，不新增自动重试。
 
-原生每轮接受1–8个 tool calls，整批先校验参数/权限，再逐项复核权限与超时、串行执行。`finish / ask_user / request_work` 必须独占一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果、取消余下项，不回滚副作用；assistant content 不作为备用动作解析。
+原生每轮接受1–8个 tool calls，整批先校验参数/权限，再逐项复核权限与超时、串行执行。`finish / ask_user / request_work / reply_to_task / abandon_work` 必须独占一轮；零个、超量或混合控制工具的批次拒绝。中途失败保留已完成结果、取消余下项，不回滚副作用；assistant content 不作为备用动作解析。
 
 Loop 保存已发生 HTTP 尝试。可匹配原生 call 的错误、拒绝与完成检查进入对应唯一回执；没有可解析调用身份的协议失败记录真实事件，不能添加孤立 tool 消息。错误纠正仍受连续失败上限、共享调用预算和期限约束，不保证模型会纠正。不再用 required runtime_feedback 段复制原回执。
 
 
-Compiler 不运行 AgentLoop，也不使用原生工具：编译草图经 `PromptLLMClient.next_action` 从正文 JSON 获取结构。其 JSONDecodeError 在已有“最多两版 draft”内携带解析原因重编，所有消耗保留；没有新一层重试。PromptLLMClient 只透传异常并记录 last_attempts，不自行纠错。JSON 能解析但字段不符仍走原有 schema 校验。响应封装缺失/非字符串 content 等协议错误不伪装成模型正文解析错误。
+Compiler 不运行 AgentLoop；PromptLLMClient 把 RouteTasks schema 放进唯一 route_tasks 原生工具，并要求恰好一次匹配调用，不解析正文作为备用结构。格式/结构拒绝最多纠正一次，所有请求消耗保留；不可路由判断和用户取消不原样重试。适配器只透传异常与 last_attempts，不增加第二层纠错。
 
 HTTP 解码失败在请求所属边界转为现有领域错误：搜索直接返回失败回执而不登记工件；网页抓取返回失败回执、不登记正文。Run 截止和预算异常继续交给运行时处理，不冒充网页超时；ModelRequestClient 保持单次请求计量。
 
@@ -392,7 +405,7 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索直接返
 | `search_text` | 大小写不敏感字面子串，不是正则；a\|b 仍匹配原文字面串 |
 | 搜索覆盖 | skipped_count、skipped_files（最多50条）、skipped_files_truncated 描述授权候选中跳过文件及原因；truncated 表示达到结果上限后停止，后续匹配未检查、匹配总数未知；incomplete 表示跳过或触及结果上限，零匹配不能因此当成完整无匹配 |
 
-**模型输入容量。** ModelProfile 声明窗口、输出预留和安全余量，模块声明输入上限，有效额度取两者较小值。Agent 计量完整原生 messages + tools，含历史、schema 与 JSON 转义；Compiler 的结构化请求计量正文及其输出 schema。估算与分配规则见 [CONTEXT](CONTEXT.md#budgets)。输入压缩不另开模型调用额度；step 仅记录时序，不形成第二份预算。
+**模型输入容量。** ModelProfile 声明窗口、输出预留和安全余量，模块声明输入上限，有效额度取两者较小值。Agent 计量完整原生 messages + tools，含历史、schema 与 JSON 转义；Compiler 也计量原生 messages + 唯一路由 tools。估算与分配规则见 [CONTEXT](CONTEXT.md#budgets)。输入压缩不另开模型调用额度；step 仅记录时序，不形成第二份预算。
 
 <a id="components"></a>
 
@@ -426,7 +439,7 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索直接返
 
 trace 是可选诊断输出。两个模型客户端共用私有 JSONL 写入函数；该函数中的 JSON 序列化或文件系统写入失败时发出仅含异常类型的告警，保留模型响应、原始请求错误和 action 校验反馈，不自动重试或再次扣量。Run 用量、Session 等权威状态保存错误仍按原流程处理，不能因 trace 的容错而被忽略。
 
-不管理用量的客户端由 invoke_model 在调用前占用一次；原生 Agent 使用 next_tool_call，Compiler 使用 next_action。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
+不管理用量的客户端由 invoke_model 在调用前占用一次；原生 Agent 使用 next_tool_call，Compiler 的 prompt 适配入口为 next_action，生产底层请求 next_tool_call 和唯一 route_tasks。提供 manages_usage 的传输客户端负责通过当前共享预算逐次登记 HTTP 请求和重试；OpenAICompatibleClient 与 PromptLLMClient 遵循这一约定。托管搜索的 `ModelRequestClient` 每次发送前也占用一次共享模型调用，不自动重试；网页抓取只占 Run 时间。last_attempts、trace 等仍用于诊断，不再是 Run 扣费依据。自定义客户端隐藏的重试无法从单次方法调用推断，须接入同一用量接口。
 
 **一次逻辑调用与 HTTP 尝试。**
 
@@ -509,7 +522,7 @@ Run 表示完整研究请求，WorkRequest 是其中一轮需求，Task 是图�
 
 ### Attempt 与状态所有权
 
-暂停回答沿用 Attempt；retry 新建 Attempt。Attempt 保存 report、artifact_ids、SessionRef、error、acceptance_ref 及起止时间。running/needs_user_input 不含终止时间或错误；终态必须有 finished_at，failed/blocked 必须有 error。编号连续且从 1 开始。
+暂停回答沿用 Attempt；retry 新建 Attempt。Attempt 保存 report、artifact_ids、SessionRef、error、acceptance_ref 及起止时间。running/needs_user_input 不含终止时间或错误；终态必须有 finished_at，failed/blocked/cancelled 必须有 error。编号连续且从 1 开始。
 
 <a id="states"></a>
 <a id="state-mapping"></a>
@@ -517,13 +530,23 @@ Run 表示完整研究请求，WorkRequest 是其中一轮需求，Task 是图�
 | 对象 | 状态 | 所有者 |
 |---|---|---|
 | Run | pending / running / paused / completed / failed | Controller |
-| WorkRequest | requested / compiling / executing / stable / consumed / failed | Controller |
-| Task | pending / running / completed / failed / blocked / needs_user_input | Scheduler |
-| Attempt | running / completed / completed_with_warnings / failed / blocked / needs_user_input | Scheduler |
-| AgentResult | completed / completed_with_warnings / failed / blocked / needs_user_input / request_work | Agent，接收端校验 |
-| Session | active / completed / failed / blocked / paused | Agent/runtime |
+| WorkRequest | requested / compiling / executing / stable / consumed / failed / cancelled | Controller |
+| Task | pending / running / completed / failed / blocked / needs_user_input / cancelled | Scheduler |
+| Attempt | running / completed / completed_with_warnings / failed / blocked / needs_user_input / cancelled | Scheduler |
+| AgentResult | completed / completed_with_warnings / failed / blocked / needs_user_input / request_work / reply_to_task / abandon_work / yielded / interrupted | Agent，接收端校验 |
+| Session | active / completed / failed / blocked / paused / cancelled | Agent/runtime |
 
-completed_with_warnings 作为成功 Task 参与依赖，但保留 Attempt 状态和 warnings。needs_user_input 暂停 Run；request_work 仅用于 Scientific，将控制交回 Controller。Run 是否完成由最终 gate 决定。
+completed_with_warnings 作为成功 Task 参与依赖，但保留 Attempt 状态和 warnings。业务 needs_user_input 先唤醒直接父，根问题和操作批准才暂停等待用户；request_work 仅用于 Scientific，将控制交回 Controller。Run 是否完成由最终 gate 决定。
+
+### 运行中输入、打断与继续
+
+普通输入立即追加到控制 inbox，不取消当前模型请求，也不丢弃有效回复。已采纳工具批次正常完成后、下一模型判断前让原 Scientific 处理补充；活动子任务在此边界让出，Scientific 定向澄清后恢复同一 Attempt/Session。长命令不会因普通输入终止，需立即停止时使用 interrupt。用户主动暂停时补充可以保存，仍需明确 resume。
+
+显式 interrupt 关闭本 Run 派发，通过统一 CancellationToken 停止本地模型/HTTP等待及受管进程组和后代，保存真实回执后才确认 paused；不是只让主 Agent 暂停而留下子训练。模型未采纳回复失效，迟到回复不进有效历史或执行工具。已完成调用保留真实结果，未派发调用为 not_executed，运行中操作记录实际取消范围。远端已经发生的行为或供应商计算不保证撤销，不退还已派发调用预算。
+
+普通工具未返回时唯一原回执报告中断；ask_user/request_work 已返回 accepted+ID 的，原回执保持不变，后续状态用第三部分真实运行通知关联该 ID。模型取消不伪造 tool call。有效根问题保留，普通输入不代答。活动 WorkRequest 及未完成子 Task/Attempt 确认停止后进入 cancelled；完成任务、文件、日志、已冻结工件、预算与旧子记录全部保留，无自动回滚或重放，部分文件不自动算成功工件。相关旧问题/未消费批准撤销。
+
+继续只恢复 Scientific 原 Session。它收到旧委派完成/取消事实和可复用 workspace/工件，再按需提出新 WorkRequest（新身份）；旧未完成子 Session 不复活。普通补充使原工作不再适用时，Scientific 可用受限 abandon_work 结束自己的有效委派，不自动创建替代任务。短原子文件写入/登记结算为一致的完整状态再响应取消；安装取消使旧环境认证失效，复用前须核验。Git 回退不属于此接口。
 
 JSON RunStore 适合单进程、单写入者；单个快照可原子替换，但 Run、Session、命令和文件不是共同事务。中断不保证外部命令未发生，失败不自动回滚代码或环境。原生 Scientific 按控制来源身份复用已完成交付的结果，终态 Session 返回保存的原结果，重复返回的新增 llm_calls 为零；这不推广为所有 Port 或外部工具的 exactly-once 保证。
 
@@ -626,7 +649,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **26.0**，旧 25.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版保存可选操作 comment，并将它送入原调用回执；固定提示词变化也须使用新 Session。此前直接控制载荷、WorkResult、UUID 工件身份和完整目录继续沿用，不恢复旧控制/搜索/index 工件链或重复正文工作集。
+Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **27.0**，旧 26.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版显式 Tasks、纯路由、直接父问答与运行中 input/interrupt 改变控制状态；固定 prompt/schema 同 Session 必须保持稳定。原有准确操作批准及拒绝说明、UUID 工件身份和完整目录继续沿用，不恢复旧控制/搜索/index 工件或重复正文工作集。
 
 Run 顶层的嵌套公共 request 等带 schema；RunStore 重校验整个状态。SessionStore 先检查顶层 schema，再校验模型；缺版本不能靠默认值接受。恢复还检查协议、endpoint/model 和固定 prompt/tools 指纹。读取、解码、解析或状态校验失败返回明确 contract_error，不调用模型、不覆盖损坏记录，也不伪造 SessionRef。
 
@@ -635,3 +658,7 @@ Run 顶层的嵌套公共 request 等带 schema；RunStore 重校验整个状态
 ### 公共导出
 
 完整导出见 [contracts 包入口](../../packages/contracts/src/resagent2_contracts/__init__.py)。主要分组是 AgentRequest/AgentResult/AgentPermissions/ControlSignal、RunBudget/ExecutionLimits/RunPermissions、WorkspaceAccess/ActionSnapshot、工件与要求内容模型、工作流与绑定、身份状态、资源授权，以及 WorkRequest/WorkResult/ScientificOpinion。Runtime 的 AgentState、ToolObservation、FinishCandidate、CompletionDecision 和 ContextSection 仍由 runtime 定义；内部工具观察不等于跨 Agent 结果信封。
+
+业务升级问题的 `related_question_id` 绑定原子问题；委派取消只使其关联升级失效，不删除无关主问题。`reply_to_task.user_input_event_id/user_answer_question_id` 指向已授权真实记录，由代码复制原话/值和时间；下游答案的 `original_question_id` 保留原用户问题身份。模型输入只投影一份有序 `business_dialogue`。
+
+输入邮箱的 `settlement` 是最终完成提交与发布的互斥边界；生产 UI 调用 `submit(validate_run=...)` 时必须在发布锁内重新检查 Run 可接收输入，不能依赖界面之前读到的状态。无此回调的直接 submit 仅是底层发布原语。Scientific 完成候选的登记操作键包含结果 Session 的不可变 updated_at 快照，使延后完成后生成的新候选不覆盖先前冻结结果；恢复同一待接收结果仍使用原键。

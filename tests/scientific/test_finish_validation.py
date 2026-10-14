@@ -219,10 +219,7 @@ def test_native_missing_output_feedback_can_request_work_and_resume_same_session
         ("finish", finish().model_dump(mode="json")),
         ("request_work", {
             "assessment": {"statement": "The required metrics have not been produced"},
-            "work_request": {
-                "objective": "Produce metrics with output_name metrics",
-                "expected_evidence": ["Measured metrics"],
-            },
+            "work_request": {'objective': 'Produce metrics with output_name metrics', 'tasks': [{'key': 'work', 'instruction': 'Produce metrics with output_name metrics'}]},
         }),
         ("finish", finish().model_dump(mode="json")),
     ])

@@ -24,6 +24,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -39,9 +40,20 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "26.0"
+SCHEMA_VERSION = "27.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _nonblank_text(value: str) -> str:
+    if not value.strip():
+        raise ValueError("text must contain non-whitespace characters")
+    return value
+
+
+VerbatimText = Annotated[
+    str, StringConstraints(min_length=1), AfterValidator(_nonblank_text)
+]
 AnswerFieldName = Annotated[
     str,
     StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$"),
@@ -82,7 +94,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["26.0"] = SCHEMA_VERSION
+    schema_version: Literal["27.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +137,7 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     NEEDS_USER_INPUT = "needs_user_input"
+    CANCELLED = "cancelled"
 
 
 class AttemptStatus(StrEnum):
@@ -136,6 +149,7 @@ class AttemptStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     NEEDS_USER_INPUT = "needs_user_input"
+    CANCELLED = "cancelled"
 
 
 class ModuleStatus(StrEnum):
@@ -147,6 +161,10 @@ class ModuleStatus(StrEnum):
     BLOCKED = "blocked"
     NEEDS_USER_INPUT = "needs_user_input"
     REQUEST_WORK = "request_work"
+    YIELDED = "yielded"
+    INTERRUPTED = "interrupted"
+    REPLY_TO_TASK = "reply_to_task"
+    ABANDON_WORK = "abandon_work"
 
 
 class ErrorCode(StrEnum):
@@ -187,6 +205,7 @@ class SessionStatus(StrEnum):
     FAILED = "failed"
     BLOCKED = "blocked"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 class ScientificVerdict(StrEnum):
@@ -486,6 +505,7 @@ class ActionSnapshot(ContractModel):
 class QuestionDraft(ContractModel):
     """Self-contained user question, including any background needed to answer."""
 
+    related_question_id: QuestionId | None = None
     text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
     options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
@@ -498,13 +518,26 @@ class PendingQuestion(ContractModel):
     id: QuestionId
     run_id: RunId
     session_id: SessionId
+    recipient_session_id: SessionId | None = None
     task_id: TaskId | None = None
     attempt_number: int | None = Field(default=None, ge=1)
+    related_question_id: QuestionId | None = None
     text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
     options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
     created_at: datetime
     action: ActionSnapshot | None = None
+
+
+class BusinessInput(ContractModel):
+    """Original upstream text, ordered by its original event time and identity."""
+
+    event_id: NonEmptyStr
+    text: VerbatimText
+    source: Literal["user", "parent"]
+    created_at: datetime
+    source_session_id: SessionId | None = None
+    original_event_id: str | None = None
 
 
 class UserAnswer(ContractModel):
@@ -519,6 +552,9 @@ class UserAnswer(ContractModel):
 class RecordedAnswer(UserAnswer):
     """System-paired reply with the immutable question and recovery scope."""
 
+    source: Literal["user", "parent"] = "user"
+    source_session_id: SessionId | None = None
+    original_question_id: QuestionId | None = None
     question_text: NonEmptyStr
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
     options: dict[AnswerFieldName, list[NonEmptyStr]] | None = None
@@ -628,7 +664,7 @@ class Attempt(ContractModel):
             return self
         if self.finished_at is None:
             raise ValueError("terminal attempt requires finished_at")
-        if self.status in {AttemptStatus.FAILED, AttemptStatus.BLOCKED}:
+        if self.status in {AttemptStatus.FAILED, AttemptStatus.BLOCKED, AttemptStatus.CANCELLED}:
             if self.error is None:
                 raise ValueError("failed or blocked attempt requires error")
         elif self.error is not None:
@@ -642,7 +678,9 @@ class TaskProposal(ContractModel):
     id: TaskId
     work_request_id: WorkRequestId
     workflow_agent_kind: WorkflowAgentKind
-    instruction: NonEmptyStr
+    instruction: VerbatimText
+    shared_goal: VerbatimText | None = None
+    shared_constraints: list[VerbatimText] = Field(default_factory=list)
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
     acceptance_spec: TaskAcceptanceSpec | None = None
@@ -663,7 +701,9 @@ class WorkflowTask(ContractModel):
     id: TaskId
     work_request_id: WorkRequestId
     workflow_agent_kind: WorkflowAgentKind
-    instruction: NonEmptyStr
+    instruction: VerbatimText
+    shared_goal: VerbatimText | None = None
+    shared_constraints: list[VerbatimText] = Field(default_factory=list)
     depends_on: list[TaskId] = Field(default_factory=list)
     workspace_id: WorkspaceId | None = None
     acceptance_ref: ArtifactRef | None = None
@@ -894,7 +934,7 @@ class AgentRequest(ContractModel):
     task_id: TaskId | None = None
     attempt_number: int | None = Field(default=None, ge=1)
     agent: Literal[AgentOwner.CODING, AgentOwner.EXPERIMENT, AgentOwner.SCIENTIFIC]
-    instruction: NonEmptyStr
+    instruction: VerbatimText
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     budget: TaskBudget
     permissions: AgentPermissions
@@ -905,6 +945,11 @@ class AgentRequest(ContractModel):
     environment_spec: EnvironmentSpec = Field(default_factory=EnvironmentSpec)
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
+    upstream_session_id: SessionId | None = None
+    upstream_inputs: list[BusinessInput] = Field(default_factory=list)
+    runtime_notices: list[dict[str, JsonValue]] = Field(default_factory=list)
+    child_questions: list[PendingQuestion] = Field(default_factory=list)
+    release_control: bool = False
     task_context: dict[str, JsonValue] = Field(default_factory=dict)
     user_answers: list[RecordedAnswer] = Field(default_factory=list)
     resume_answers: list[RecordedAnswer] = Field(default_factory=list)
@@ -982,13 +1027,16 @@ class ControlOrigin(ContractModel):
 class ControlSignal(ContractModel):
     """Persisted control handoff; never an artifact or a model body projection."""
 
-    action: Literal["ask_user", "request_work"]
+    action: Literal["ask_user", "request_work", "reply_to_task", "abandon_work"]
     source_session_id: SessionId
     source_turn: int = Field(ge=0)
     source_call_id: NonEmptyStr
     question: PendingQuestion | None = None
     work_request: WorkRequest | None = None
     assessment: ScientificAssessment | None = None
+    task_reply: dict[str, JsonValue] | None = None
+    abandon_work_id: WorkRequestId | None = None
+    reason: str | None = None
 
     @property
     def origin(self) -> ControlOrigin:
@@ -997,6 +1045,16 @@ class ControlSignal(ContractModel):
 
     @model_validator(mode="after")
     def validate_payload(self) -> ControlSignal:
+        if self.action in {"reply_to_task", "abandon_work"}:
+            if self.question is not None or self.work_request is not None:
+                raise ValueError("parent control cannot carry a question or new work")
+            if self.action == "reply_to_task" and (self.task_reply is None or self.abandon_work_id is not None):
+                raise ValueError("reply control requires only task_reply")
+            if self.action == "abandon_work" and (self.abandon_work_id is None or self.task_reply is not None):
+                raise ValueError("abandon control requires only work id")
+            return self
+        if self.task_reply is not None or self.abandon_work_id is not None:
+            raise ValueError("unexpected parent control payload")
         if self.action == "ask_user":
             if self.question is None or self.work_request is not None:
                 raise ValueError("ask_user requires only question")
@@ -1026,6 +1084,8 @@ class AgentResult(ContractModel):
         actions = {
             ModuleStatus.NEEDS_USER_INPUT: "ask_user",
             ModuleStatus.REQUEST_WORK: "request_work",
+            ModuleStatus.REPLY_TO_TASK: "reply_to_task",
+            ModuleStatus.ABANDON_WORK: "abandon_work",
         }
         if self.status in actions:
             if self.control is None or self.control.action != actions[self.status] or self.error is not None:
@@ -1034,6 +1094,9 @@ class AgentResult(ContractModel):
                 raise ValueError(f"{self.status.value} result requires a paused session")
             if self.status == ModuleStatus.REQUEST_WORK and self.session.module != AgentOwner.SCIENTIFIC:
                 raise ValueError("only Scientific may return request_work")
+        elif self.status in {ModuleStatus.YIELDED, ModuleStatus.INTERRUPTED}:
+            if self.control is not None or self.error is not None or self.session is None:
+                raise ValueError("suspended invocation requires session and no control/error")
         elif self.status in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}:
             if self.error is None or self.control is not None:
                 raise ValueError("failed or blocked result requires error and no control")
@@ -1046,6 +1109,10 @@ class AgentResult(ContractModel):
             ModuleStatus.BLOCKED: SessionStatus.BLOCKED,
             ModuleStatus.NEEDS_USER_INPUT: SessionStatus.PAUSED,
             ModuleStatus.REQUEST_WORK: SessionStatus.PAUSED,
+            ModuleStatus.REPLY_TO_TASK: SessionStatus.PAUSED,
+            ModuleStatus.ABANDON_WORK: SessionStatus.PAUSED,
+            ModuleStatus.YIELDED: SessionStatus.PAUSED,
+            ModuleStatus.INTERRUPTED: SessionStatus.PAUSED,
         }[self.status]
         if self.session is not None and self.session.status != expected_session_status:
             raise ValueError("result status and session status disagree")
@@ -1099,6 +1166,7 @@ class WorkRequestStatus(StrEnum):
     EXECUTING = "executing"
     STABLE = "stable"
     CONSUMED = "consumed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -1111,13 +1179,75 @@ class ScientificAssessment(ContractModel):
     unresolved_questions: list[NonEmptyStr] = Field(default_factory=list)
 
 
-class WorkRequestDraft(ContractModel):
-    """Semantic request for evidence; never carries execution-graph fields."""
+TaskKey = Annotated[
+    str, StringConstraints(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+]
 
-    objective: NonEmptyStr
-    expected_evidence: list[NonEmptyStr] = Field(min_length=1)
-    constraints: list[NonEmptyStr] = Field(default_factory=list)
+
+class WorkTaskArtifactBinding(ContractModel):
+    """A future output selected from a direct dependency's local task key."""
+
+    source_task: TaskKey
+    output_selector: OutputName
+
+
+class WorkTaskDraft(ContractModel):
+    """Scientific's original task instruction and resource/handoff controls."""
+
+    key: TaskKey
+    instruction: VerbatimText
+    depends_on: list[TaskKey] = Field(default_factory=list)
+    workspace_id: WorkspaceId | None = None
     input_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    input_artifact_bindings: list[WorkTaskArtifactBinding] = Field(default_factory=list)
+    output_names: list[OutputName] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_controls(self) -> WorkTaskDraft:
+        for name in ("depends_on", "input_artifact_ids", "output_names"):
+            values = getattr(self, name)
+            if len(values) != len(set(values)):
+                raise ValueError(f"{name} must be unique")
+        return self
+
+
+class WorkRequestDraft(ContractModel):
+    """Explicit tasks and shared scientific requirements, before Agent routing."""
+
+    objective: VerbatimText
+    constraints: list[VerbatimText] = Field(default_factory=list)
+    tasks: list[WorkTaskDraft] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_tasks(self) -> WorkRequestDraft:
+        keys = [task.key for task in self.tasks]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate task key")
+        by_key = {task.key: task for task in self.tasks}
+        visiting, visited = set(), set()
+
+        def visit(key: str) -> None:
+            if key in visiting:
+                raise ValueError("task dependency cycle")
+            if key in visited:
+                return
+            visiting.add(key)
+            task = by_key[key]
+            for dependency in task.depends_on:
+                if dependency not in by_key:
+                    raise ValueError("task dependency references an unknown key")
+                visit(dependency)
+            for binding in task.input_artifact_bindings:
+                if binding.source_task not in task.depends_on:
+                    raise ValueError("future artifact source must be a direct dependency")
+                if binding.output_selector not in by_key[binding.source_task].output_names:
+                    raise ValueError("future artifact selector must name a declared output")
+            visiting.remove(key)
+            visited.add(key)
+
+        for key in keys:
+            visit(key)
+        return self
 
 
 class WorkRequest(ContractModel):
@@ -1170,7 +1300,7 @@ class WorkRequest(ContractModel):
                 raise ValueError(
                     "consumed work request requires workflow_revision and outcome, no error"
                 )
-        elif self.status == WorkRequestStatus.FAILED:
+        elif self.status in {WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED}:
             if self.error is None:
                 raise ValueError("failed work request requires error")
         return self
@@ -1193,7 +1323,7 @@ class WorkTaskResult(ContractModel):
 
     task_id: TaskId
     workflow_agent_kind: WorkflowAgentKind
-    instruction: NonEmptyStr
+    instruction: VerbatimText
     status: TaskStatus
     attempts: list[WorkAttemptResult] = Field(default_factory=list)
     error: ModuleError | None = None
@@ -1206,7 +1336,7 @@ class WorkResult(ContractModel):
     run_id: RunId
     session_id: SessionId
     work_request_id: WorkRequestId
-    objective: NonEmptyStr
+    objective: VerbatimText
     status: WorkRequestStatus
     workflow_revision: int | None = Field(default=None, ge=1)
     error: ModuleError | None = None
@@ -1215,9 +1345,9 @@ class WorkResult(ContractModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> WorkResult:
-        if self.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
+        if self.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED}:
             raise ValueError("work result must describe a terminal outcome")
-        if self.status == WorkRequestStatus.FAILED and self.error is None:
+        if self.status in {WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} and self.error is None:
             raise ValueError("failed work result requires error")
         if self.status == WorkRequestStatus.STABLE and self.error is not None:
             raise ValueError("stable work result cannot carry error")

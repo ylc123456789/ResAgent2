@@ -2,7 +2,7 @@
 
 ResAgent2 把一次研究任务分成三件事：**Scientific 判断需要什么证据，Orchestrator 把执行工作组织起来，Coding 和 Experiment 完成专业工作。** 三个 Agent 都使用 LLM，但研究目标、任务状态、工具执行和证据登记分别有明确的负责人。
 
-本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **26.0**，旧 Run/Session（包括 25.0）不迁移、不兼容恢复。
+本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **27.0**，旧 Run/Session（包括 26.0）不迁移、不兼容恢复。
 
 <a id="overview"></a>
 
@@ -28,7 +28,7 @@ ResAgent2 是整个项目；**Orchestrator 是其中的研究编排包，不是�
 flowchart LR
     Entry[用户 / CLI] --> Controller[Controller<br/>管理 Run]
     Controller --> Scientific[Scientific<br/>研究判断]
-    Controller --> Compiler[Compiler<br/>需求转任务]
+    Controller --> Compiler[Compiler<br/>任务匹配 Agent]
     Controller --> Scheduler[Scheduler<br/>执行任务图]
     Controller --> Interpreter[Interpreter<br/>整理已有结果]
     Scheduler --> Coding[Coding<br/>代码工作]
@@ -37,7 +37,7 @@ flowchart LR
 
 Scientific 依据用户目标选择下一步：可以直接搜索、抓取或读取材料，也可以用 `request_work` 委托执行工作、用 `ask_user` 请求补充、或提交最终意见。系统没有固定“搜索网页 → 查论文 → 取全文 → 跑实验”的顺序。Coding 和 Experiment 也在各自职责、授权和预算内自主选择工具步骤。
 
-Compiler 使用 LLM 把执行需求翻译为任务草图；Scheduler 用代码接受并执行任务图；Interpreter 用固定代码组织已经记录的结果。它们没有独立的 AgentLoop 或 Session，也不代替 Scientific 作科学结论。
+Scientific 明确提出任务，Compiler 使用 LLM 为原任务匹配注册 Agent；固定代码校验并建立任务图，Scheduler 执行任务；Interpreter 用固定代码组织已经记录的结果。它们没有独立的 AgentLoop 或 Session，也不代替 Scientific 作科学结论。
 
 <a id="flow"></a>
 <a id="3-一次工作如何往返"></a>
@@ -47,8 +47,8 @@ Compiler 使用 LLM 把执行需求翻译为任务草图；Scheduler 用代码�
 这条链从用户需求开始，最终回到 Scientific 的判断；只有需要执行工作时才进入 Compiler 和 Scheduler。
 
 1. **建立研究过程。** CLI 装配模块，将 `ResearchRequest` 和工作区交给 Controller。Controller 创建 Run、保存授权和预算、登记用户输入及导入论文，并发现部署目录中的数据集引用。
-2. **研究与取材。** Controller 调用 Scientific。Scientific 按需使用文献、网页和工件工具；读取结果进入它的工具回执与后续上下文。发现执行需求时返回 `WorkRequestDraft`，表达目标、约束和期望证据。
-3. **翻译执行需求。** Controller 调用 Compiler。LLM 生成任务草图，代码分配身份、解析依赖和工作区并校验结构；解析或结构错误最多纠正一次，不另做语义复审。
+2. **研究与取材。** Controller 调用 Scientific。Scientific 按需使用文献、网页和工件工具；读取结果进入它的工具回执与后续上下文。发现执行需求时返回 `WorkRequestDraft`，表达共同目标、原约束及明确 Tasks。
+3. **路由已有任务。** Controller 调用 Compiler。LLM 只有 `route_tasks` 一个原生输出工具，逐项匹配已注册 Agent；代码复制 Scientific 的原任务与共同限制、分配身份、解析依赖和工作区并校验结构。不能改写或改变 Task 边界；结构错误最多纠正一次。
 4. **执行任务。** Scheduler 接受任务图，只派发依赖已成功的 ready Task。任务以 `AgentRequest` 交给 Coding 或 Experiment；专业 Agent 在内部工具循环中执行，返回 `AgentResult`。
 5. **接收真实交付。** Scheduler 保存报告和 Attempt，调用 Registry 校验并冻结候选工件，按冻结要求验收。下游任务通过显式 `output_name` 绑定上游成功 Attempt 的唯一工件。每个真实终态 Attempt 的报告按原字符冻结；本轮任务稳定后整理 `WorkResult`，携带原始报告和实际交付物 Ref。
 6. **把结果交回研究判断。** `request_work` 原调用立即得到 accepted 与工作 ID 后暂停。Controller 调用 Interpreter 组织实际状态和 Ref，接入 Scientific 的完整目录。目录按 WorkRequest → Task → 实际工件展开；Scientific 在原 Session 按 ID 读取任务原报告和交付物，再决定继续工作、提问或完成。不生成 WorkRequest 总报告。
@@ -56,15 +56,16 @@ Compiler 使用 LLM 把执行需求翻译为任务草图；Scheduler 用代码�
 
 所有 Agent 共用一种业务接口：`invoke(AgentRequest) → AgentResult`。需求主要是 `instruction + input_artifacts`，交付主要是 `report + artifacts`；身份、权限、预算、工作区和恢复由控制字段表达。`request_work` 是 Scientific 的普通工具调用；它返回执行需求后，由 Controller 接管跨 Agent 的过程，Scientific 不直接调用另一个 Agent。
 
-Compiler 按职责路由：实现代码和正确性验证交 Coding；为回答研究问题而进行的训练、拟合、评估和测量交 Experiment。同一 Agent 的准备、检查与执行尽量留在一个任务内。Scientific 表达工作内容、必要顺序和约束，Compiler 基于这些意图细化而不另立研究目标；提示词要求尽量保留关键原句的动作、条件和限制。当前 WorkRequest 没有独立 Task 列表，代码不从编号步骤猜 Task 边界，也不把整轮需求重复拼给每个子 Agent。`depends_on` 表示上游成功，不表示失败修复；需要新的修复工作时，由 Scientific 提出新 WorkRequest，而不是在依赖图里隐藏第二套控制流程。
+Compiler 只匹配职责：代码实现和正确性验证交 Coding，研究测量交 Experiment。Scientific 已通过 `WorkRequestDraft.tasks` 指定任务边界和必要依赖；Compiler 不能增删、拆并、改写任务或控制字段。公共目标和限制按原文保存在 Task 并传给子 Agent，不让模型重新复述。`depends_on` 表示上游成功，不表示失败修复；新的修复工作由 Scientific 提出新 WorkRequest。
+
 
 ### 三个循环，不要混在一起
 
 | 循环 | 它推进什么 | 何时交回控制 |
 | --- | --- | --- |
 | Controller | 科学回合、工作需求、反馈和用户问答 | Run 完成、失败或等待用户 |
-| Scheduler | ready Task、Attempt 和允许的 retry | 本轮任务图稳定或需要暂停 |
-| AgentLoop | 构造上下文、模型动作、工具回执和完成检查 | Agent 结束、请求工作或问用户 |
+| Scheduler | ready Task、Attempt 和允许的 retry | 本轮任务图稳定、下级提问、普通输入边界或显式打断 |
+| AgentLoop | 构造上下文、模型动作、工具回执和完成检查 | Agent 结束、向上提问、父方答复、模型边界让出或显式打断 |
 
 三个 Agent 共用同一个 AgentLoop 实现，差别由身份 prompt、工具列表、上下文 builder、权限策略和完成检查注入。Compiler 是无状态的模型调用，Interpreter 是固定结果整理，两者不增加第四、第五套工具循环。
 
@@ -76,8 +77,8 @@ Compiler 按职责路由：实现代码和正确性验证交 Coding；为回答�
 | 模块 | 负责的事情 | 不负责的事情 | 代码入口 |
 | --- | --- | --- | --- |
 | `apps/cli` | 用户命令、配置、问答与监看；选择并装配实现 | 调度 Task、改写 Run 状态 | [composition.py](../../apps/cli/src/resagent2_cli/composition.py) |
-| `orchestrator` | Run 控制、需求编译、任务调度、结果整理、工件登记和最终验收 | 直接改代码、跑实验、形成科学意见 | [controller.py](../../packages/orchestrator/src/resagent2_orchestrator/controller.py)、[scheduler.py](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) |
-| `agents/scientific` | 按研究目标取材、读证据、提出执行需求和科学意见 | 生成任务图、直接调用其他 Agent | [agent.py](../../packages/agents/scientific/src/resagent2_scientific/agent.py) |
+| `orchestrator` | Run 控制、任务路由、任务调度、结果整理、工件登记和最终验收 | 直接改代码、跑实验、形成科学意见 | [controller.py](../../packages/orchestrator/src/resagent2_orchestrator/controller.py)、[scheduler.py](../../packages/orchestrator/src/resagent2_orchestrator/scheduler.py) |
+| `agents/scientific` | 按研究目标取材、读证据、提出执行需求和科学意见 | 分配运行时任务身份、直接调用其他 Agent | [agent.py](../../packages/agents/scientific/src/resagent2_scientific/agent.py) |
 | `agents/coding` | 理解或修改代码、验证正确性、交付实际变更 | 承担正式研究测量和科学结论 | [agent.py](../../packages/agents/coding/src/resagent2_coding/agent.py) |
 | `agents/experiment` | 解读已有结果、准备环境、执行实验、交付原始证据 | 修改产品代码、用自报数值代替测量 | [agent.py](../../packages/agents/experiment/src/resagent2_experiment/agent.py) |
 | `runtime` | 通用 AgentLoop、模型客户端、工具协议、Session、上下文和预算机制 | 研究规划、Workflow 调度、具体文件/环境操作 | [包入口](../../packages/runtime/src/resagent2_runtime/) |
@@ -96,7 +97,7 @@ flowchart TB
     Root -->|创建并配置| Agents[Scientific / Coding / Experiment]
     Orch -->|ModulePort| Agents
     Agents -.-> Shared[runtime · capabilities · components<br/>循环、工具与普通操作]
-    Orch -.->|预算及有限组件| Shared
+    Orch -.->|预算、取消及有限组件| Shared
     Shared -.-> Contracts[contracts<br/>各模块共享的数据约定]
 ```
 
@@ -111,7 +112,7 @@ CLI 的 `build_application` 是产品组合根，创建模型客户端、状态�
 | `components` | `contracts`；实际需要的 `runtime` 类型、HTTP、模型请求、预算和投影 helper | 不 import Capabilities、Agent、Orchestrator 或 CLI |
 | `capabilities` | `contracts`、`runtime`、`components` | 不 import Agent 或 Orchestrator |
 | 三个 Agent | `contracts`、`runtime`、`components`、`capabilities` | 不直接 import、调用其他 Agent |
-| `orchestrator` | `contracts`；`runtime.budget`；`components.workspace/artifacts/materials/literature` | 不 import 具体 Agent 或模型 Tool |
+| `orchestrator` | `contracts`；`runtime.budget/cancellation/lifecycle`；`components.workspace/artifacts/materials/literature` | 不 import 具体 Agent 或模型 Tool |
 | CLI 组合根 / E2E 场景入口 | CLI 装配所需各包，真实 E2E 复用已装配应用 | 具体行为仍调用拥有者接口；mock 保留确定性测试替身 |
 
 Components 可以直接被 Agent 的准备/完成步骤或组合根调用，不要求先经过 Tool；其共享内容投影可以使用 Runtime。Capabilities 与 Components 没有一一对应关系，不建立逐项配对的类或自动映射。通用 `run_shell`、安装和 Coding 的领域 `run_verification` 共用 ProcessRunner，但专业验证规则仍留在 Coding。
@@ -133,10 +134,16 @@ Runtime 的 `finish/ask_user` 和 Scientific 的控制工具留在职责所属�
 
 Scientific Session 属于整个 Run，跨工作回合复用；Coding/Experiment Session 属于 `Run + Task + Attempt`。上层保存 SessionRef，通过公共结果协作，不读 Agent 的私有 memory 来驱动调度。
 
-**问答续跑不是 retry。** Runtime 预分配问题身份，保存直接控制交接；Controller 从 PendingQuestion 配对完整 RecordedAnswer，不生成问答工件。业务问答可自行输入答案，累计进入同作用域的任务需求；操作批准的决定只由权限策略消费，可选说明按原文随原调用回执交给模型，不进入任务需求或工件目录。回答继续原 Attempt、Session、输出目录和基线；失败重试才创建新 Attempt/Session，不自动继承旧问答。批准绑定原生调用的准确动作和作用域，恢复执行原调用或形成含未执行事实的拒绝回执，不要求模型重新发出命令。CLI 提供同一回答链路的交互和命令入口，说明不扩大授权，后续业务判断仍由模型负责。
+**向上业务问答不是权限授权，也不是 retry。** 所有 Agent 共用 ask_user，运行时按 `upstream_session_id` 路由到直接父 Agent；只有根 Scientific 问真实用户。父方收到的问题在第三部分，父方给子任务的答复在子方第二部分；父方不能用一句“同意”给子任务扩权。业务字段可自由输入；操作批准的准确绑定及可选拒绝说明保持原回执路径，批准不进入第二/第四部分。
 
+子 Agent 提问后，Controller 暂时唤醒原父 Session，由 `reply_to_task` 定向回复准确问题或澄清自己的有效子任务，再继续原 Task/Attempt/Session。父方也可向上询问。尚未回答的下级问题有持久关系和当前第三部分投影，不能因历史压缩失联。尚未启动的 Task 也可收到父方澄清。`reply_to_task.resume_work=false` 可先逐个任务传递澄清而不恢复子执行；最后一次答复使用 `true`（默认值）再继续工作。未答业务问题和待批准操作仍保持等待。问答不生成工件或第二套索引；实际嵌套委派尚未开放，上下级身份不硬编码为永远 Scientific。
 
-Controller 是 Run 的业务入口：`create_run` 创建后推进到稳定状态，`answer_question` 保存回答再续跑，`run_until_stable` 不伪造答案或绕过 paused。外部论文可在创建时导入，或仅在 paused 时追加并刷新目录；导入不答题、不恢复、不重置预算，也不创建独立论文库。
+CLI 的普通输入与显式打断提交不可变控制记录，不读取 Agent memory 或覆盖 Run/Session。Controller 是唯一执行写入者，以 OS owner lock 排除同时 resume/answer；运行时 watcher 只读取邮箱并设置取消信号。普通输入在当前模型回复和已采纳工具批次完成后交主 Agent，不能等整项任务结束；终态提交与输入发布使用同一个发布锁，界面发布时在锁内重读 Run 状态，防止旧界面在 Run 完成后仍确认收件。手工暂停后输入不自动继续，也不自动答复 pending ask_user。
+
+Esc、Ctrl-C、`/interrupt` 停止整个 Run 当前链路：取消模型等待或受管工具，确认停止、保存准确原回执，保留已完成结果和现有文件。活动 WorkRequest 的未完成任务进入 cancelled，旧子 Session 不恢复；继续只恢复 Scientific 原 Session，按需重新委派。部分产物不是成功交付，没有自动文件回滚或 Git 检查点。无法确认进程停止时明确失败，不显示已暂停。
+
+Controller 的 `create_run` 创建并推进，`answer_question` 保存准确答案再继续，`resume_run` 在没有待答主问题时继续暂停 Run；这些入口都受执行所有权约束。外部论文可在创建时导入，或仅在 paused 时追加；导入不答题、不重置预算。
+
 
 ### 恢复保证的范围
 
@@ -176,7 +183,7 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 | 数据集 | 部署 catalog 提供登记，Controller 保存 Run 引用，Agent 检查实际可用性；缺所需资源时问用户 | [资源契约](CONTRACTS.md#resources) |
 | 文献 | arXiv/OpenAlex 查询临时线索；显式 fetch 获取并登记元信息、PDF 和解析文本，不固定检索阶段 | [文献流程](CONTEXT.md#literature) |
 | 网页 | 独立 `web_search` 寻找来源，`web_fetch` 获取单页；默认可用 DeepSeek 托管搜索，也可关闭搜索 | [联网组件](../../packages/components/README.md#web) |
-| 模型请求 | Agent 原生 function call、Compiler 无状态 JSON 编译、托管搜索独立请求共用 Run 用量和截止时间 | [Runtime](CONTRACTS.md#tools) |
+| 模型请求 | Agent 原生 function call、Compiler 无状态原生任务路由、托管搜索独立请求共用 Run 用量和截止时间 | [Runtime](CONTRACTS.md#tools) |
 | 上下文 | Agent builder 完整重建任务和目录，Composer 组织固定输入，Loop 接入原生历史并计量整包；只压缩旧工具回合 | [上下文构造](CONTEXT.md) |
 
 网页和文献使用同一登记、目录与读取体系，但各自保留来源格式和操作。网页不会自动成为论文，搜索不会自动下载全部正文。Scientific 根据用户需要选择工具；读取正文不创建新工件，抓取新材料则登记来源与内容。
@@ -207,8 +214,8 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 
 ## 8. 当前没有承诺的能力
 
-当前没有通用 MCP/A2A 服务、动态插件市场、分布式调度或通用逐轮聊天控制；Port 是实现替换位置，不代表这些能力已经存在。RunBudget 限制模型请求次数和执行时间，没有整个 Run 的货币或总输出 token 硬预算。
+当前没有通用 MCP/A2A 服务、动态插件市场、分布式调度或任意 Agent 消息总线；Port 是实现替换位置，不代表这些能力已经存在。RunBudget 限制模型请求次数和执行时间，没有整个 Run 的货币或总输出 token 硬预算。
 
-操作审批、路径规则和进程执行不是 OS 沙箱，环境 audit 也不是安全认证。没有隔离后端时，局部或只读工作区拒绝通用脚本执行，批准不能绕过；完整授权适用于可信代码。到期可以取消受控 HTTP/进程，但不能回滚已发生的副作用，也不保证供应商停止计算或计费。停止 CLI 监看不等于取消执行。
+操作审批、路径规则和进程执行不是 OS 沙箱，环境 audit 也不是安全认证。没有隔离后端时，局部或只读工作区拒绝通用脚本执行，批准不能绕过；完整授权适用于可信代码。到期或用户显式打断可以取消受管 HTTP/进程，但不能回滚已发生的副作用，也不保证供应商停止计算或计费。停止 CLI 监看不等于取消执行。
 
 网页抓取不执行 JavaScript；PDF 解析默认不 OCR。full trace 可能含用户输入、源码、工具调用和模型推理，只用于受控调试，不自动成为科学证据；metadata trace 不表示 Session 不保存协议续传内容。这些限制与状态、资源的详细边界见 [CONTRACTS](CONTRACTS.md)，不属于文档重整新增的能力或降级。

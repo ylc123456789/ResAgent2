@@ -29,10 +29,13 @@ class RequestWorkTool:
     model_guidance = (
         "assessment contains statement, evidence_artifact_ids, limitations, and "
         "unresolved_questions. Cite registered evidence IDs. work_request contains "
-        "objective, expected_evidence, constraints, and input_artifact_ids. Describe "
-        "the needed work and evidence semantically; do not invent task IDs, executable "
-        "paths, or routing fields. Preserve explicit requirements and logical output "
-        "names. Use input_artifact_ids to supply registered materials needed for the work."
+        "objective, shared constraints, and explicit tasks. Each task has a local key, "
+        "natural instruction, optional depends_on local keys, input_artifact_ids, "
+        "input_artifact_bindings, output_names, and logical workspace_id. Keep tasks "
+        "unambiguous and self-contained. Preserve explicit requirements and declared "
+        "output names. Do not select an Agent, invent runtime task IDs or physical "
+        "paths, or prescribe unspecified implementation details. The Compiler only "
+        "routes your existing tasks; it cannot rewrite, add, split, or repair them."
     )
     name = "request_work"
     input_model = RequestWorkInput
@@ -50,7 +53,8 @@ class RequestWorkTool:
             return error
         try:
             cited_artifacts(
-                args.work_request.input_artifact_ids, run_id=state.run_id, reader=self.reader,
+                [artifact_id for task in args.work_request.tasks for artifact_id in task.input_artifact_ids],
+                run_id=state.run_id, reader=self.reader,
             )
         except (ValueError, OSError) as error:
             return ToolObservation(summary=f"Invalid work input artifacts: {error}", ok=False)
@@ -82,6 +86,6 @@ class AskUserTool:
             return error
         return ToolObservation(
             summary=args.assessment.statement,
-            question=QuestionDraft(text=args.text, requested_fields=args.requested_fields, options=args.options),
+            question=QuestionDraft(text=args.text, requested_fields=args.requested_fields, options=args.options, related_question_id=args.related_question_id),
             memory_updates={"latest_assessment": args.assessment.model_dump(mode="json")},
         )

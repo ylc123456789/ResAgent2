@@ -119,7 +119,7 @@ def test_nonterminal_task_prevents_completion(prepared, status):
 def test_active_work_request_prevents_completion(prepared):
     _, run, gate = prepared
     run.work_requests = [WorkRequest(id="work_test", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-        request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]), created_at=run.created_at, updated_at=run.updated_at)]
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), created_at=run.created_at, updated_at=run.updated_at)]
     result, refs = registered_result(prepared)
     assert not gate.validate(run, result, refs).ok
 
@@ -139,7 +139,7 @@ def test_failed_task_requires_limitations_and_is_reported(prepared):
     issue = WorkTaskResult(task_id="task_failed", status="failed", instruction="Command failed", workflow_agent_kind="experiment",
         error=ModuleError(code="tool_failed", message="exit 1", retryable=False))
     run.work_requests = [WorkRequest(id="work_test", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-        request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]), status="consumed", workflow_revision=1,
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), status="consumed", workflow_revision=1,
         outcome=WorkResult(run_id=run.run_id, session_id=run.scientific_session.id, objective="Measure", status="stable", work_request_id="work_test", workflow_revision=1, tasks=[issue]),
         created_at=run.created_at, updated_at=run.updated_at)]
     result, refs = registered_result(prepared)
@@ -154,7 +154,7 @@ def test_compilation_failure_without_tasks_requires_limitations_and_is_reported(
     error = ModuleError(code="contract_error", message="Compilation did not produce a valid graph", retryable=False)
     run.work_requests = [WorkRequest(
         id="work_uncompiled", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-        request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]), status="failed", error=error,
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), status="failed", error=error,
         outcome=WorkResult(run_id=run.run_id, session_id=run.scientific_session.id, work_request_id="work_uncompiled",
                            objective="Measure", status="failed", error=error),
         created_at=run.created_at, updated_at=run.updated_at,

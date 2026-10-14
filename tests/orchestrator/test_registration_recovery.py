@@ -315,7 +315,7 @@ def test_compiler_result_is_reused_after_workflow_registration_interruption(tmp_
     now = datetime.now(UTC)
     run = store.load("run_recovery")
     run.work_requests = [WorkRequest(id="work_original", run_id=run.run_id, scientific_session_id="session_scientific",
-        request=WorkRequestDraft(objective="Deliver measurements", expected_evidence=["metrics"]),
+        request=WorkRequestDraft(objective='Deliver measurements', tasks=[{'key': 'work', 'instruction': 'Deliver measurements'}]),
         status="requested", created_at=now, updated_at=now)]
     store.save(run)
     class Compiler:
@@ -399,9 +399,7 @@ def test_rejected_compilation_does_not_replace_the_next_work_request_graph(tmp_p
             assert request.task_id == "task_accepted"
             return AgentResult(status="completed", report="The new work request completed")
     actions = [{"tool": "request_work", "arguments": {
-        "assessment": {"statement": f"Request {index}"}, "work_request": {
-            "objective": f"Run independent request {index}", "expected_evidence": ["Execution outcome"],
-        },
+        "assessment": {"statement": f"Request {index}"}, "work_request": {'objective': f'Run independent request {index}', 'tasks': [{'key': 'work', 'instruction': f'Run independent request {index}'}]},
     }} for index in range(2)]
     actions.append({"tool": "finish", "arguments": {"report": "The replacement request completed", "artifacts": [{
         "kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Conclusion",

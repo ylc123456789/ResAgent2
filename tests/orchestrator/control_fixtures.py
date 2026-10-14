@@ -21,7 +21,10 @@ class ScopedScriptedModulePort(ScriptedModulePort):
             signal = result.control.model_copy(deep=True)
             signal.question = signal.question.model_copy(update={
                 "run_id": request.run_id, "task_id": request.task_id,
-                "attempt_number": request.attempt_number, "created_at": __import__("resagent2_orchestrator.scheduler", fromlist=["datetime"]).datetime.now(UTC),
+                "attempt_number": request.attempt_number, "recipient_session_id": request.upstream_session_id, "created_at": __import__("resagent2_orchestrator.scheduler", fromlist=["datetime"]).datetime.now(UTC),
             })
             result = result.model_copy(update={"control": signal})
         return result
+
+
+from e2e.native_fixtures import ParentQuestionClient

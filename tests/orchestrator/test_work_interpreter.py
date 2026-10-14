@@ -10,7 +10,7 @@ ERROR=ModuleError(code="tool_failed",message="command failed",retryable=False)
 
 def work(**kw):
     return WorkRequest(id="work_test",run_id="run_test",scientific_session_id="session_test",
-        request=WorkRequestDraft(objective="Compare methods",expected_evidence=["metrics"]),
+        request=WorkRequestDraft(objective='Compare methods', tasks=[{'key': 'work', 'instruction': 'Compare methods'}]),
         created_at=NOW,updated_at=NOW,**kw)
 
 

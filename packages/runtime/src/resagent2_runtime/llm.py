@@ -22,6 +22,7 @@ from .budget import (
 from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
+from .cancellation import OperationCancelled, check_cancelled, current_cancellation
 from .http import send_request
 from ._trace import write_trace_record
 from .tool_calling import (
@@ -111,6 +112,7 @@ class PromptLLMClient:
         system_prompt: str,
         max_context_tokens: int,
         section_name: str = "request",
+        output_tool_name: str | None = None,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -118,6 +120,7 @@ class PromptLLMClient:
         self._system_prompt = system_prompt
         self._max_context_tokens = max_context_tokens
         self._section_name = section_name
+        self._output_tool_name = output_tool_name
         self._composer = ContextComposer()
         self.last_attempts = 0
         self._attempt_limit = 3
@@ -143,7 +146,7 @@ class PromptLLMClient:
         budgeter = getattr(self._client, "context_budget", None)
         max_tokens = (
             budgeter(action_type, self._max_context_tokens)
-            if budgeter is not None else self._max_context_tokens
+            if budgeter is not None and self._output_tool_name is None else self._max_context_tokens
         )
         context = self._composer.compose(
             self._system_prompt,
@@ -158,7 +161,18 @@ class PromptLLMClient:
         ) as budget:
             before = budget.usage.used
             try:
-                return invoke_model(self._client, "next_action", context, action_type)
+                if self._output_tool_name is None:
+                    return invoke_model(self._client, "next_action", context, action_type)
+                schemas = [{"type": "function", "function": {
+                    "name": self._output_tool_name,
+                    "description": "Return the requested structured result using this sole output tool.",
+                    "parameters": action_type.model_json_schema(),
+                }}]
+                turn = invoke_model(self._client, "next_tool_call", context, schemas, [],
+                                    max_input_tokens=self._max_context_tokens)
+                if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != self._output_tool_name:
+                    raise NativeToolCallError(f"Expected exactly one {self._output_tool_name} output call")
+                return action_type.model_validate_json(turn.tool_calls[0].arguments)
             finally:
                 self.last_attempts = budget.usage.used - before
                 self._attempt_limit = 3
@@ -524,7 +538,13 @@ class OpenAICompatibleClient:
             for attempt in range(attempt_limit):
                 budget.check()
                 if attempt:
-                    time.sleep(budget.remaining_timeout(1.0))
+                    wait = budget.remaining_timeout(1.0)
+                    cancellation = current_cancellation()
+                    if cancellation is not None:
+                        cancellation.wait(wait)
+                    else:
+                        time.sleep(wait)
+                check_cancelled()
                 budget.charge(call_id, attempt)
                 self.last_attempts = attempt + 1
                 # Never attribute an earlier response to a later transport failure.
@@ -566,6 +586,9 @@ class OpenAICompatibleClient:
                     if not native and not text and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
+                except OperationCancelled as error:
+                    last_error = error
+                    raise
                 except httpx.DecodingError as error:
                     outcome = "failed"
                     last_error = error

@@ -50,7 +50,9 @@ class ToolRegistry:
     ) -> ToolObservation:
         """Validate raw arguments and execute the selected Tool."""
 
+        from .cancellation import check_cancelled
         parsed = self.validate(name, arguments)
+        check_cancelled()
         if prepared is not None:
             return self._tools[name].execute_prepared(state, parsed, prepared)
         return self._tools[name].execute(state, parsed)
@@ -94,8 +96,9 @@ class FinishTool:
 class AskUserToolInput(RuntimeModel):
     """Input schema for AskUserTool."""
 
+    related_question_id: str | None = Field(default=None, description="When escalating your direct child question, reference its exact question ID")
     text: NonEmptyStr = Field(
-        description="Self-contained question shown to the user. Include the "
+        description="Self-contained question shown to your direct superior (root asks the user). Include the "
         "background needed to answer in this text."
     )
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
@@ -103,7 +106,7 @@ class AskUserToolInput(RuntimeModel):
 
 
 class AskUserTool:
-    """Request user input with a self-contained question and named answer fields."""
+    """Request direct-superior input with a self-contained question and named answer fields."""
 
     name = "ask_user"
     input_model = AskUserToolInput

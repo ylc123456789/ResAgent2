@@ -29,7 +29,7 @@ def scheduler(tmp_path, proposals, results, *, store=None):
     run = engine.accept_proposal(run.run_id, WorkflowProposal(work_request_id="work_test", tasks=proposals))
     run.work_requests.append(WorkRequest(
         id="work_test", run_id=run.run_id, scientific_session_id="session_test",
-        request=WorkRequestDraft(objective="Evaluate the task results", expected_evidence=["analysis"]), status="executing",
+        request=WorkRequestDraft(objective='Evaluate the task results', tasks=[{'key': 'work', 'instruction': 'Evaluate the task results'}]), status="executing",
         workflow_revision=run.workflow.revision, created_at=now, updated_at=now,
     ))
     engine.store.save(run)

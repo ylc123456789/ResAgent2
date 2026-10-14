@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from contextlib import contextmanager, nullcontext
+from threading import Thread, Event
+from contextvars import ContextVar
+_OWNER = ContextVar("resagent2_run_owner", default=None)
+from resagent2_runtime.cancellation import CancellationToken, OperationCancelled, bind_cancellation, current_cancellation, check_cancelled
+from resagent2_runtime.lifecycle import model_boundary
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 from typing import Protocol
@@ -11,7 +18,7 @@ from pydantic import BaseModel
 from resagent2_components.literature import PreparedLiteratureImport, render_paper
 from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, execution_budget
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, AgentResult, ArtifactImport, ConclusionRequirements,
+    AgentOwner, AgentPermissions, AgentRequest, AgentResult, BusinessInput, TaskStatus, AttemptStatus, ArtifactImport, ConclusionRequirements,
     DatasetRef, ErrorCode, ModuleError, ModuleStatus,
     RecordedAnswer, ResearchRequest, RunStatus, ControlOrigin,
     SessionRef, SessionStatus, TaskBudget, UserAnswer,
@@ -51,7 +58,7 @@ def _scientific_instruction(request: ResearchRequest) -> str:
 class ResearchController:
     """Coordinate Scientific reasoning, execution feedback and user pauses."""
     def __init__(self, *, scientific_port: ModulePort, compiler, scheduler, registry, interpreter: WorkInterpreter,
-                 gate=None, report_renderer=None, dataset_ref_source=None):
+                 gate=None, report_renderer=None, dataset_ref_source=None, control_inbox=None):
         self.scientific_port = scientific_port
         self.compiler = compiler
         self.interpreter = interpreter
@@ -60,8 +67,13 @@ class ResearchController:
         self.gate = gate or ScientificCompletionValidator(registry, scheduler.artifact_registry)
         self.report_renderer = report_renderer or FinalReportRenderer()
         self.dataset_ref_source = dataset_ref_source
+        self.control_inbox = control_inbox
 
     def create_run(self, run_id, request, *, literature=()):
+        with self._execution(run_id):
+            return self._create_owned(run_id, request, literature=literature)
+
+    def _create_owned(self, run_id, request, *, literature=()):
         if self.scheduler.store.exists(run_id):
             raise ValueError("run already exists")
         now = datetime.now(UTC)
@@ -72,8 +84,9 @@ class ResearchController:
         run.initialization = RunInitialization(imports=request.input_artifacts,
                                                literature=[PreparedLiteratureImport.model_validate(item) for item in literature])
         self._save(run)
-        self._complete_initialization(run)
-        return self.run_until_stable(run_id)
+        with self._execution(run_id):
+            self._complete_initialization(run)
+            return self.run_until_stable(run_id)
 
     def _complete_initialization(self, run):
         """Recover original input positions before invoking any model."""
@@ -99,6 +112,10 @@ class ResearchController:
         self.scheduler.artifact_registry.acknowledge_registration("initialization:requirements", run_id=run.run_id, run=run)
 
     def import_literature(self, run_id, literature):
+        with self._execution(run_id):
+            return self._import_owned(run_id, literature)
+
+    def _import_owned(self, run_id, literature):
         run = self.scheduler.store.load(run_id)
         if run.status != RunStatus.PAUSED:
             raise ValueError("literature may only be appended to a paused Run")
@@ -148,6 +165,10 @@ class ResearchController:
                     )
 
     def answer_question(self, run_id, answer: UserAnswer):
+        with self._execution(run_id):
+            return self._answer_owned(run_id, answer)
+
+    def _answer_owned(self, run_id, answer):
         run = self.scheduler.store.load(run_id)
         question = run.pending_question
         _validate_answer(question, answer)
@@ -174,9 +195,28 @@ class ResearchController:
         return self.run_until_stable(run_id)
 
     def run_until_stable(self, run_id):
+        with self._execution(run_id):
+            try:
+                return self._advance(run_id)
+            except OperationCancelled as error:
+                if not error.stopped:
+                    run = self.scheduler.store.load(run_id)
+                    return self._fail_run(run, ModuleError(code=ErrorCode.INTERRUPTED,
+                        message="Unable to confirm execution stopped: " + str(error), retryable=False,
+                        details={**error.details, "stop_confirmed": False}))
+                return self._pause_interrupted(run_id, str(error))
+
+    def _advance(self, run_id):
         while True:
             run = self.scheduler.store.load(run_id)
+            if run.status in {RunStatus.COMPLETED, RunStatus.FAILED}:
+                return run
+            interrupted = self._consume_controls(run)
+            if interrupted:
+                return self._pause_interrupted(run_id, "User interrupted current execution")
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
+                return run
+            if run.terminal_error and run.terminal_error.details.get("stop_confirmed") is False:
                 return run
             if not run.initialization.complete:
                 self._complete_initialization(run)
@@ -195,8 +235,10 @@ class ResearchController:
             if run.llm_calls_used >= run.request.budget.max_llm_calls:
                 return self._fail_run(run, ModuleError(code=ErrorCode.BUDGET_EXHAUSTED, message="Run LLM-call budget exhausted", retryable=False))
             active = self._active_work_request(run)
-            if active and active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
-                self._execute_work_request(run_id)
+            if active and active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} and not run.parent_attention:
+                result = self._execute_work_request(run_id)
+                if result.status == RunStatus.PAUSED and current_cancellation() and current_cancellation().cancelled:
+                    return self._pause_interrupted(run_id, current_cancellation().reason)
                 continue
             self._bind_initial_scientific_session(run)
             try:
@@ -215,10 +257,222 @@ class ResearchController:
             with execution_budget(max_llm_calls=request.budget.max_llm_calls,
                                   timeout_seconds=run.remaining_timeout_seconds(datetime.now(UTC)),
                                   usage=RunUsagePort(run, self.scheduler.store)):
+                check_cancelled()
                 result = self.scientific_port.invoke(request)
             run = self._apply_turn(run_id, request, result)
             if run.status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.PAUSED}:
                 return run
+
+    @contextmanager
+    def _execution(self, run_id):
+        """One owner writes Run/Session; the watcher reads inbox and signals only."""
+        if _OWNER.get() == (id(self), run_id):
+            yield
+            return
+        owner_marker = _OWNER.set((id(self), run_id))
+        token = current_cancellation() or CancellationToken()
+        stop = Event()
+        thread = None
+        lock = None
+        if self.control_inbox is not None:
+            # An OS lock fences separate CLI invocations as well as local threads.
+            import fcntl
+            lock_path = self.control_inbox.root / run_id / "owner.lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock = lock_path.open("a")
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock.close()
+                _OWNER.reset(owner_marker)
+                raise ValueError("Run already has an active execution owner")
+            def watch():
+                while not stop.wait(0.05):
+                    if not self.scheduler.store.exists(run_id):
+                        continue
+                    run = self.scheduler.store.load(run_id)
+                    if any(e.kind == "interrupt" for e in self.control_inbox.pending(run_id, run.consumed_control_ids)):
+                        token.cancel("User interrupted current execution")
+                        return
+            thread = Thread(target=watch, daemon=True)
+            thread.start()
+        def boundary():
+            if self.control_inbox is None:
+                return False
+            run = self.scheduler.store.load(run_id)
+            return any(e.kind == "input" for e in self.control_inbox.pending(run_id, run.consumed_control_ids))
+        try:
+            with bind_cancellation(token), model_boundary(boundary):
+                yield
+        finally:
+            stop.set()
+            if thread:
+                thread.join()
+            if lock:
+                lock.close()
+            _OWNER.reset(owner_marker)
+
+    def _consume_controls(self, run, *, records=None):
+        if self.control_inbox is None:
+            return False
+        interrupted = False
+        if records is None:
+            records = self.control_inbox.pending(run.run_id, run.consumed_control_ids)
+        for event in records:
+            if event.text.strip():
+                run.upstream_inputs.append(BusinessInput(event_id=event.event_id, text=event.text,
+                                                        source="user", created_at=event.created_at))
+                run.parent_attention = True
+            interrupted |= event.kind == "interrupt"
+            run.consumed_control_ids.append(event.event_id)
+        self._save(run)
+        return interrupted
+
+    def resume_run(self, run_id):
+        with self._execution(run_id):
+            return self._resume_owned(run_id)
+
+    def _resume_owned(self, run_id):
+        run = self.scheduler.store.load(run_id)
+        if run.status in {RunStatus.COMPLETED, RunStatus.FAILED}:
+            raise ValueError("terminal Run cannot resume")
+        if self._consume_controls(run):
+            return self._pause_interrupted(run_id, "User interrupted while the Run was waiting")
+        if run.pending_question is not None:
+            raise ValueError("answer the pending question before continuing")
+        if run.manually_paused_at is not None:
+            run.user_wait_seconds += max(0, (datetime.now(UTC)-run.manually_paused_at).total_seconds())
+            run.manually_paused_at = None
+        run.status = RunStatus.RUNNING
+        self._save(run)
+        return self.run_until_stable(run_id)
+
+    def _cancel_work(self, run, work, reason):
+        """No operations remain in flight here: invoked only after port return."""
+        if work.status not in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING}:
+            raise ValueError("delegation is not active")
+        error = ModuleError(code=ErrorCode.INTERRUPTED, message=reason, retryable=False)
+        for task in run.workflow.tasks if run.workflow else []:
+            if task.work_request_id != work.id or task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}:
+                continue
+            task.status = TaskStatus.CANCELLED
+            if task.attempts:
+                attempt = task.attempts[-1]
+                if attempt.status in {AttemptStatus.RUNNING, AttemptStatus.NEEDS_USER_INPUT}:
+                    attempt.status = AttemptStatus.CANCELLED
+                    attempt.finished_at = datetime.now(UTC)
+                    attempt.error = error
+                    attempt.report = attempt.report or reason
+                    if attempt.session:
+                        terminate = getattr(self.scheduler.bindings[task.workflow_agent_kind].port, "terminate_session", None)
+                        if terminate:
+                            terminate(attempt.session.id, reason)
+                        attempt.session = attempt.session.model_copy(update={"status": SessionStatus.CANCELLED})
+                    self._save(run)
+                    self.scheduler._persist_attempt_report(run, task, attempt)
+        child_ids = {task.id for task in run.workflow.tasks if task.work_request_id == work.id} if run.workflow else set()
+        cancelled_question_ids = {key for key, question in run.child_questions.items() if question.task_id in child_ids}
+        if run.pending_question and run.pending_question.related_question_id in cancelled_question_ids:
+            question = run.pending_question
+            cancel = getattr(self.scientific_port, "cancel_question", None)
+            if cancel:
+                cancel(question.session_id, question.id, "Escalated question ended with its original child work")
+            run.user_wait_seconds += max(0, (datetime.now(UTC)-question.created_at).total_seconds())
+            run.pending_question = None
+        run.child_questions = {key: question for key, question in run.child_questions.items() if question.task_id not in child_ids}
+        if run.pending_question is not None and run.pending_question.task_id in child_ids:
+            run.user_wait_seconds += max(0, (datetime.now(UTC)-run.pending_question.created_at).total_seconds())
+            run.pending_question = None
+        run.pending_compilation = None
+        _transition_work_request(work, WorkRequestStatus.CANCELLED, error=error)
+        work.outcome = self.interpreter.interpret(work, tasks=run.workflow.tasks if run.workflow else [], artifacts=run.artifacts)
+        for ref in work.outcome.artifacts:
+            if ref.id not in run.scientific_artifact_ids:
+                run.scientific_artifact_ids.append(ref.id)
+        run.runtime_notices.append({"event_id": "cancel:" + work.id, "type": "work_interrupted",
+            "work_request_id": work.id, "reason": reason, "stop_confirmed": True,
+            "files_retained": True, "tasks": [t.model_dump(mode="json") for t in work.outcome.tasks],
+            "reusable_workspace_ids": list(dict.fromkeys(t.workspace_id for t in run.workflow.tasks
+                if t.work_request_id == work.id and t.workspace_id)) if run.workflow else []})
+        run.parent_attention = True
+
+    def _pause_interrupted(self, run_id, reason):
+        run = self.scheduler.store.load(run_id)
+        self._consume_controls(run)
+        work = self._active_work_request(run)
+        if work is not None and work.status in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING}:
+            self._cancel_work(run, work, reason)
+        run.status = RunStatus.PAUSED
+        run.manually_paused_at = datetime.now(UTC)
+        run.runtime_notices.append({"event_id": "pause:" + str(len(run.runtime_notices)),
+                                   "type": "user_interrupted", "reason": reason,
+                                   "stop_confirmed": True, "files_retained": True})
+        self._save(run)
+        return run
+
+    def _apply_parent_reply(self, run, signal):
+        payload = signal.task_reply
+        key = f"session:{signal.source_session_id}:turn:{signal.source_turn}:call:{signal.source_call_id}"
+        if key in run.received_controls:
+            return
+        task_id = payload.get("task_id")
+        question_id = payload.get("question_id")
+        active = self._active_work_request(run)
+        if task_id is not None:
+            task = self.scheduler._task(run, task_id)
+            if active is None or task.work_request_id != active.id or task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}:
+                raise ValueError("reply target is not this parent's live child")
+            if signal.source_session_id != active.scientific_session_id:
+                raise ValueError("reply source is not the direct parent")
+            if question_id:
+                question = run.child_questions.get(question_id)
+                if question is None or question.task_id != task_id or question.recipient_session_id != signal.source_session_id:
+                    raise ValueError("reply does not bind this child question")
+                original = None
+                if payload.get("user_answer_question_id"):
+                    original = next((a for a in run.answers if a.question_id == payload["user_answer_question_id"] and a.source == "user" and a.action is None
+                                     and a.session_id == signal.source_session_id and a.task_id is None), None)
+                    if original is None:
+                        raise ValueError("forwarded user answer is not authorized")
+                answer = UserAnswer(question_id=question.id, values=original.values if original else payload["values"],
+                                    answered_at=original.answered_at if original else datetime.now(UTC))
+                _validate_answer(question, answer)
+                run.answers.append(RecordedAnswer(**answer.model_dump(), question_text=question.text,
+                    requested_fields=question.requested_fields, options=question.options,
+                    run_id=run.run_id, session_id=question.session_id, task_id=task_id,
+                    attempt_number=question.attempt_number, source="user" if original else "parent", source_session_id=signal.source_session_id,
+                    original_question_id=original.question_id if original else None))
+                del run.child_questions[question_id]
+            if payload.get("user_answer_question_id") and not question_id:
+                answer = next((a for a in run.answers if a.question_id == payload["user_answer_question_id"] and a.source == "user" and a.action is None
+                               and a.session_id == signal.source_session_id and a.task_id is None), None)
+                if answer is None:
+                    raise ValueError("forwarded user answer is not authorized")
+                records = run.task_inputs.setdefault(task_id, [])
+                if not any(e.event_id == answer.question_id for e in records):
+                    records.append(BusinessInput(event_id=answer.question_id, original_event_id=answer.question_id,
+                        text=json.dumps({"question": answer.question_text, "values": answer.values}, ensure_ascii=False),
+                        source="user", created_at=answer.answered_at))
+            if payload.get("clarification"):
+                run.task_inputs.setdefault(task_id, []).append(BusinessInput(event_id=key,
+                    text=payload["clarification"], source="parent", created_at=datetime.now(UTC),
+                    source_session_id=signal.source_session_id))
+            if payload.get("user_input_event_id"):
+                event = next((e for e in run.upstream_inputs if e.event_id == payload["user_input_event_id"] and e.source == "user"), None)
+                if event is None:
+                    raise ValueError("forwarded user record is not authorized")
+                records = run.task_inputs.setdefault(task_id, [])
+                if not any(e.event_id == event.event_id for e in records):
+                    records.append(event.model_copy(update={"original_event_id": event.event_id}))
+        run.received_controls[key] = task_id or "continue"
+        # The parent may clarify several Tasks before releasing any child work.
+        resume_work = payload.get("resume_work", True)
+        if resume_work:
+            for task in run.workflow.tasks if run.workflow else []:
+                if active and task.work_request_id == active.id and task.status == TaskStatus.NEEDS_USER_INPUT:
+                    if not any(q.task_id == task.id for q in run.child_questions.values()) and not (run.pending_question and run.pending_question.task_id == task.id):
+                        self.scheduler.resume_task_in_place(run, task.id)
+        run.parent_attention = not resume_work or bool(run.child_questions)
 
     def _merge_registered_datasets(self, run):
         if self.dataset_ref_source is None:
@@ -239,7 +493,7 @@ class ResearchController:
 
     def _prepare_research_handoff(self, run):
         active = self._active_work_request(run)
-        if active is None or active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED}:
+        if active is None or active.status not in {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED}:
             return
         if active.outcome is None:
             result = self.interpreter.interpret(active, tasks=run.workflow.tasks if run.workflow else [], artifacts=run.artifacts)
@@ -253,7 +507,7 @@ class ResearchController:
         answers = [answer for answer in run.answers if answer.task_id is None and answer.session_id == run.scientific_session.id]
         fresh = [answer for answer in answers if answer.question_id not in run.delivered_answer_ids]
         results = [work.outcome for work in run.work_requests if work.outcome is not None]
-        parent = run.scientific_session.id if run.scientific_session.status == SessionStatus.PAUSED or fresh or results else None
+        parent = run.scientific_session.id if run.scientific_session.status == SessionStatus.PAUSED or fresh or results or run.parent_attention or run.upstream_inputs else None
         controls = [key for key in run.received_controls if key.startswith(f"session:{run.scientific_session.id}:")]
         origin = None
         if controls:
@@ -262,9 +516,17 @@ class ResearchController:
         return AgentRequest(
             run_id=run.run_id, agent=AgentOwner.SCIENTIFIC, instruction=_scientific_instruction(run.request),
             input_artifacts=self._authorized_artifacts(run), permissions=AgentPermissions(request_work=True),
-            parent_session_id=parent, user_answers=[answer for answer in answers if answer.action is None],
+            parent_session_id=parent, upstream_inputs=run.upstream_inputs,
+            runtime_notices=run.runtime_notices,
+            child_questions=list(run.child_questions.values()),
+            release_control=run.parent_attention,
+            user_answers=[answer for answer in answers if answer.action is None],
             resume_answers=fresh if parent else [], work_results=results, control_ack=origin if parent else None,
-            task_context={"conclusion_requirements": read_json(run.conclusion_requirements_ref),
+            task_context={"active_work_request_id": self._active_work_request(run).id if self._active_work_request(run) and self._active_work_request(run).status in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING} else None,
+                          "child_tasks": [{"task_id": t.id, "instruction": t.instruction, "status": t.status.value}
+                              for t in run.workflow.tasks if self._active_work_request(run) and t.work_request_id == self._active_work_request(run).id
+                              and t.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT}] if run.workflow else [],
+                          "conclusion_requirements": read_json(run.conclusion_requirements_ref),
                           "dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs]},
             budget=TaskBudget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
                               timeout_seconds=max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))),
@@ -287,6 +549,11 @@ class ResearchController:
             if "scientific" not in run.pending_module_results:
                 run.pending_module_results["scientific"] = PendingModuleResult(request=request, result=result)
                 self._save(run)
+            if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS} and self.control_inbox and self.control_inbox.pending(run_id, run.consumed_control_ids):
+                # Completion is decided at receiving, after the last invocation.
+                # An input submitted before this boundary must get a model turn.
+                interrupted = self._defer_completed_turn(run, result)
+                return self._pause_interrupted(run_id, "User interrupted before Run completion") if interrupted else run
             run.scientific_report = result.report
             if run.llm_calls_used > run.request.budget.max_llm_calls:
                 raise ValueError("Run LLM-call budget exhausted")
@@ -303,20 +570,65 @@ class ResearchController:
             ]))
             if result.status in {ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS}:
                 validation = self.gate.validate(accepted, result, refs)
-                if not validation.ok:
-                    run.completion_violations = list(validation.violations)
-                    raise ValueError("Scientific completion was rejected")
-                rendered = self.report_renderer.render(validation.report)
-                report = self.scheduler.artifact_registry.register_final_report(rendered.candidate, rendered.content, run_id=run.run_id, run=accepted)
-                accepted.artifacts[report.id] = report
-                accepted.final_opinion = validation.report.opinion
-                accepted.final_report_artifact_id = report.id
-                accepted.status = RunStatus.COMPLETED
+                rendered = self.report_renderer.render(validation.report) if validation.ok else None
+                # Validation/rendering may take time. Inputs accepted during
+                # those steps must be processed before the Run becomes terminal.
+                boundary = (self.control_inbox.settlement(run_id, accepted.consumed_control_ids)
+                            if self.control_inbox else nullcontext([]))
+                deferred = False
+                interrupted = False
+                with boundary as records:
+                    if records:
+                        interrupted = self._defer_completed_turn(accepted, result, refs=refs, records=records)
+                        deferred = True
+                    else:
+                        if not validation.ok:
+                            run.completion_violations = list(validation.violations)
+                            raise ValueError("Scientific completion was rejected")
+                        report = self.scheduler.artifact_registry.register_final_report(rendered.candidate, rendered.content, run_id=run.run_id, run=accepted)
+                        accepted.artifacts[report.id] = report
+                        accepted.final_opinion = validation.report.opinion
+                        accepted.final_report_artifact_id = report.id
+                        accepted.status = RunStatus.COMPLETED
+                        accepted.scientific_session = result.session
+                        accepted.scientific_artifact_ids = list(dict.fromkeys([
+                            *accepted.scientific_artifact_ids, *[ref.id for ref in refs],
+                        ]))
+                        accepted.delivered_input_ids = list(dict.fromkeys([
+                            *accepted.delivered_input_ids, *[e.event_id for e in request.upstream_inputs],
+                        ]))
+                        accepted.parent_attention = False
+                        accepted.pending_module_results.pop("scientific", None)
+                        # Keep the publication fence through the terminal commit.
+                        self._save(accepted)
+                self._acknowledge_scientific_outputs(accepted, result)
+                if deferred:
+                    return self._pause_interrupted(run_id, "User interrupted before Run completion") if interrupted else accepted
+                self.scheduler.artifact_registry.acknowledge_registration("final_report", run_id=run.run_id, run=accepted)
+                return accepted
             elif result.status == ModuleStatus.REQUEST_WORK:
                 draft = result.control.work_request.request
-                if not set(draft.input_artifact_ids) <= {ref.id for ref in request.input_artifacts} | {ref.id for ref in refs}:
+                if not {key for task in draft.tasks for key in task.input_artifact_ids} <= {ref.id for ref in request.input_artifacts} | {ref.id for ref in refs}:
                     raise ValueError("work request references unauthorized materials")
                 receive_control(accepted, request, result)
+            elif result.status in {ModuleStatus.REPLY_TO_TASK, ModuleStatus.ABANDON_WORK}:
+                if result.control.source_session_id != accepted.scientific_session.id:
+                    raise ValueError("parent control source mismatch")
+                if result.status == ModuleStatus.REPLY_TO_TASK:
+                    self._apply_parent_reply(accepted, result.control)
+                else:
+                    work = self._active_work_request(accepted)
+                    if work is None or work.id != result.control.abandon_work_id:
+                        raise ValueError("cannot end a foreign delegation")
+                    self._cancel_work(accepted, work, result.control.reason or "Parent ended delegation")
+                    accepted.received_controls[f"session:{result.control.source_session_id}:turn:{result.control.source_turn}:call:{result.control.source_call_id}"] = work.id
+            elif result.status in {ModuleStatus.YIELDED, ModuleStatus.INTERRUPTED}:
+                accepted.scientific_session = result.session
+                accepted.pending_module_results.pop("scientific", None)
+                self._save(accepted)
+                if result.status == ModuleStatus.INTERRUPTED:
+                    return self._pause_interrupted(run_id, result.report)
+                return accepted
             elif result.status == ModuleStatus.NEEDS_USER_INPUT:
                 receive_control(accepted, request, result)
                 accepted.status = RunStatus.PAUSED
@@ -326,6 +638,10 @@ class ResearchController:
             for ref in refs:
                 if ref.id not in accepted.scientific_artifact_ids:
                     accepted.scientific_artifact_ids.append(ref.id)
+            accepted.delivered_input_ids = list(dict.fromkeys([*accepted.delivered_input_ids,
+                                                               *[e.event_id for e in request.upstream_inputs]]))
+            if result.status not in {ModuleStatus.ABANDON_WORK, ModuleStatus.REPLY_TO_TASK, ModuleStatus.NEEDS_USER_INPUT}:
+                accepted.parent_attention = False
             accepted.pending_module_results.pop("scientific", None)
             self._save(accepted)
             for key in list(accepted.pending_registrations):
@@ -341,6 +657,26 @@ class ResearchController:
             latest.scientific_report = run.scientific_report
             latest.completion_violations = run.completion_violations
             return self._fail_run(latest, ModuleError(code=ErrorCode.CONTRACT_ERROR, message=str(error).strip() or type(error).__name__, retryable=False))
+
+    def _defer_completed_turn(self, run, result, *, refs=(), records=None):
+        interrupted = self._consume_controls(run, records=records)
+        defer = getattr(self.scientific_port, "defer_completion", None)
+        if defer is None or result.session is None:
+            raise ValueError("port cannot defer completion for pending upstream input")
+        defer(result.session.id, "Run completion deferred: upstream input arrived before the owner committed completion; process it before finishing")
+        run.scientific_session = result.session.model_copy(update={"status": SessionStatus.PAUSED})
+        run.scientific_artifact_ids = list(dict.fromkeys([
+            *run.scientific_artifact_ids, *[ref.id for ref in refs],
+        ]))
+        run.pending_module_results.pop("scientific", None)
+        run.parent_attention = True
+        self._save(run)
+        return interrupted
+
+    def _acknowledge_scientific_outputs(self, run, result):
+        for key in list(run.pending_registrations):
+            if key.startswith(f"session:{result.session.id}:result:"):
+                self.scheduler.artifact_registry.acknowledge_registration(key, run_id=run.run_id, run=run)
 
     def _fail_run(self, run, error):
         run.status = RunStatus.FAILED
@@ -379,6 +715,7 @@ class ResearchController:
                     compilation = self.compiler.compile(active, current=run.workflow, registry=self.registry,
                                                         limits=run.request.execution_limits,
                                                         workspaces=self._workspace_descriptors(run))
+                check_cancelled()
                 run.pending_compilation = compilation.output
                 self._save(run)
             if run.llm_calls_used > run.request.budget.max_llm_calls:
@@ -393,6 +730,8 @@ class ResearchController:
             run.pending_compilation = None
             self._save(run)
             return self.scheduler.run_until_stable(run_id)
+        except OperationCancelled:
+            raise
         except Exception as error:
             run = self.scheduler.store.load(run_id)
             active = self._active_work_request(run)

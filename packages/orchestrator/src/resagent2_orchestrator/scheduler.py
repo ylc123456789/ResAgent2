@@ -7,6 +7,7 @@ from graphlib import TopologicalSorter
 from pathlib import Path
 from pydantic import BaseModel
 from resagent2_runtime.budget import execution_budget
+from resagent2_runtime.cancellation import OperationCancelled, check_cancelled
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
     ErrorCode, ModuleError, ModuleStatus, RunStatus, ArtifactCandidate,
@@ -37,11 +38,11 @@ def _validate_answer(question, answer):
 
 
 _WORK_REQUEST_TRANSITIONS = {
-    WorkRequestStatus.REQUESTED: {WorkRequestStatus.COMPILING, WorkRequestStatus.FAILED},
-    WorkRequestStatus.COMPILING: {WorkRequestStatus.EXECUTING, WorkRequestStatus.FAILED},
-    WorkRequestStatus.EXECUTING: {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED},
+    WorkRequestStatus.REQUESTED: {WorkRequestStatus.COMPILING, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED},
+    WorkRequestStatus.COMPILING: {WorkRequestStatus.EXECUTING, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED},
+    WorkRequestStatus.EXECUTING: {WorkRequestStatus.STABLE, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED},
     WorkRequestStatus.STABLE: {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED},
-    WorkRequestStatus.CONSUMED: set(), WorkRequestStatus.FAILED: set(),
+    WorkRequestStatus.CONSUMED: set(), WorkRequestStatus.FAILED: set(), WorkRequestStatus.CANCELLED: set(),
 }
 
 
@@ -103,6 +104,7 @@ class WorkflowScheduler:
             tasks.append(WorkflowTask(
                 id=item.id, work_request_id=item.work_request_id,
                 workflow_agent_kind=item.workflow_agent_kind, instruction=item.instruction,
+                shared_goal=item.shared_goal, shared_constraints=item.shared_constraints,
                 depends_on=item.depends_on, workspace_id=self._resolve_workspace_id(run, item),
                 input_artifacts=item.input_artifacts, input_artifact_bindings=item.input_artifact_bindings,
                 acceptance_ref=ref,
@@ -165,6 +167,7 @@ class WorkflowScheduler:
         return list(dict.fromkeys(ids))
 
     def execute_task(self, run_id, task_id):
+        check_cancelled()
         run = self.store.load(run_id)
         if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.FAILED}:
             raise OrchestrationError(f"run is not executable: {run.status}")
@@ -237,9 +240,13 @@ class WorkflowScheduler:
             permissions=AgentPermissions(**run.request.permissions.model_dump(exclude={"schema_version"})),
             confirm_commands=run.request.confirm_commands,
             parent_session_id=parent_session_id,
+            upstream_session_id=run.scientific_session.id if run.scientific_session else None,
+            upstream_inputs=run.task_inputs.get(task.id, []),
             user_answers=[answer for answer in answers if answer.action is None],
             resume_answers=fresh_answers if parent_session_id else [], control_ack=origin,
-            task_context={"dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs],
+            task_context={"shared_goal": task.shared_goal, "shared_constraints": task.shared_constraints,
+                          "upstream_source": run.scientific_session.id if run.scientific_session else None,
+                          "dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs],
                           "acceptance_requirements": read_json(task.acceptance_ref) if task.acceptance_ref else {}},
         )
 
@@ -253,12 +260,15 @@ class WorkflowScheduler:
                                   usage=RunUsagePort(run, self.store)):
                 attempt.agent_started = True
                 self._save(run)
+                check_cancelled()
                 raw = binding.port.invoke(request)
             value = raw.model_dump() if isinstance(raw, BaseModel) else raw
             claimed = value.get("llm_calls", 0) if isinstance(value, dict) else 0
             if isinstance(claimed, int) and not isinstance(claimed, bool) and claimed >= 0:
                 calls = claimed
             result = AgentResult.model_validate(value)
+        except OperationCancelled:
+            raise
         except Exception as error:
             message = str(error).strip() or type(error).__name__
             result = AgentResult(status=ModuleStatus.FAILED, report=f"Agent invocation rejected: {message}",
@@ -316,7 +326,13 @@ class WorkflowScheduler:
             attempt.reception_error = failure
             result = AgentResult(status=ModuleStatus.FAILED, report=attempt.report,
                                  error=failure)
-        if result.status == ModuleStatus.NEEDS_USER_INPUT:
+        if result.status in {ModuleStatus.YIELDED, ModuleStatus.INTERRUPTED}:
+            attempt.status = AttemptStatus.NEEDS_USER_INPUT
+            task.status = TaskStatus.NEEDS_USER_INPUT
+            run.parent_attention = result.status == ModuleStatus.YIELDED
+            if result.status == ModuleStatus.INTERRUPTED:
+                run.status = RunStatus.PAUSED
+        elif result.status == ModuleStatus.NEEDS_USER_INPUT:
             attempt.status = AttemptStatus.NEEDS_USER_INPUT
             task.status = TaskStatus.NEEDS_USER_INPUT
         else:
@@ -334,7 +350,11 @@ class WorkflowScheduler:
         if attempt.status not in {AttemptStatus.RUNNING, AttemptStatus.NEEDS_USER_INPUT}:
             self._persist_attempt_report(run, task, attempt)
         run.pending_module_results.pop(f"task:{task.id}:attempt:{attempt.number}", None)
-        self._evaluate_run(run)
+        if result.error is not None and result.error.details.get("stop_confirmed") is False:
+            run.terminal_error = result.error
+            run.status = RunStatus.FAILED
+        elif result.status != ModuleStatus.INTERRUPTED:
+            self._evaluate_run(run)
         self._save(run)
         return run.model_copy(deep=True)
 
@@ -381,10 +401,11 @@ class WorkflowScheduler:
     def run_until_stable(self, run_id):
         while True:
             run = self.store.load(run_id)
-            if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.FAILED}:
+            if run.status in {RunStatus.COMPLETED, RunStatus.PAUSED, RunStatus.FAILED} or run.parent_attention:
                 return run
             if run.llm_calls_used >= run.request.budget.max_llm_calls or run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:
                 return run
+            check_cancelled()
             ready = self._ready_task_ids(run)
             if not ready:
                 self._evaluate_run(run)
@@ -460,7 +481,7 @@ class WorkflowScheduler:
             for task_id in TopologicalSorter({key: task.depends_on for key, task in tasks.items()}).static_order():
                 task = tasks[task_id]
                 if task.status == TaskStatus.PENDING and any(
-                    tasks[key].status in {TaskStatus.FAILED, TaskStatus.BLOCKED} for key in task.depends_on
+                    tasks[key].status in {TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED} for key in task.depends_on
                 ):
                     task.status = TaskStatus.BLOCKED
             active = self._active_work_request(run)

@@ -8,7 +8,9 @@ import json
 from pydantic import ValidationError
 
 from resagent2_contracts import ArtifactCandidate, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
-from resagent2_components import EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, media_type_for
+from resagent2_components import (
+    EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, execution_record, media_type_for,
+)
 from resagent2_components.artifacts import ArtifactCandidateError, check_task_output_artifacts
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
@@ -38,6 +40,9 @@ class CodingCompletionCheck:
                 complete=False,
                 report="Patches and verification records are generated from actual execution",
             )
+        record = execution_record(state)
+        if record is not None:
+            artifacts.insert(0, record)
         if changed:
             deleted = self.repository.deleted_paths_since(self.baseline)
             artifacts.append(ArtifactCandidate(

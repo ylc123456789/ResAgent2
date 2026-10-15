@@ -21,7 +21,7 @@ def request_task_context(request: AgentRequest) -> dict:
     value = request.model_dump(mode="json", exclude_none=True, include={
         "run_id", "task_id", "attempt_number", "instruction", "task_context",
         "permissions", "confirm_commands", "workspace", "workspace_id",
-        "workspace_spec", "environment_spec", "output_dir", "budget",
+        "workspace_spec", "environment_spec", "output_dir",
     })
     value["business_dialogue"] = sorted(
         [{"event_id": event.event_id, "created_at": event.created_at.isoformat(),

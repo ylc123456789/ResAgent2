@@ -221,7 +221,7 @@ Scientific 的材料归属其 Session，支持 literature_paper/PDF/fulltext、w
 
 注入的进程内 ModulePort 与原生 Agent 的确定性 finalizer 是可信实现。模型 finish 候选不能提交 `execution_record`、`verification_result` 或 `observation_trace`；原生代码从真实命令回执、验证状态和读取观察中生成它们。Coding 的 patch 同样从实际差异生成。
 
-任务是否完成由 Coding/Experiment 通过统一 finish 的 status 声明，不从命令 argv 或历史退出码推断。系统生成的 execution_record 保留 run_shell、run_setup 实际命令结果及其事件顺序；未执行的 blocked 回执不是命令事实；一次操作失败不自动等于任务失败，后续成功也不抹去旧记录。任务报告解释失败与交付的关系，Scientific 判断科研充分性。
+任务是否完成由 Coding/Experiment 通过统一 finish 的 status 声明，不从命令 argv 或历史退出码推断。系统生成的 execution_record 按原生工具回合与回执顺序保留 run_shell、run_setup、run_verification 的实际命令结果，以及环境工具中断时已经取得的进程事实；未执行的 blocked 回执不是命令事实；一次操作失败不自动等于任务失败，后续成功也不抹去旧记录。任务报告解释失败与交付的关系，Scientific 判断科研充分性。
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
@@ -382,7 +382,7 @@ HTTP 解码失败在请求所属边界转为现有领域错误：搜索直接返
 
 ### 原生 Session 身份与恢复
 
-创建 Session 时写入 `AgentState.tool_protocol_key` 和固定身份 prompt/实际工具 schema 的 `contract_fingerprint`。OpenAICompatibleClient 的 `tool_session_key` 是协议、endpoint、model 的稳定 hash，不含 API key；其他原生客户端也须提供非空、稳定且能标识其协议配置的身份。恢复时身份须完全相同；旧正文 JSON Session、endpoint/model 变化均拒绝，不自动迁移。
+创建 Session 时写入 `AgentState.tool_protocol_key` 和实际 system 内容（身份 prompt 与通用原生协议规则）/实际工具 schema 的 `contract_fingerprint`。OpenAICompatibleClient 的 `tool_session_key` 是协议、endpoint、model 的稳定 hash，不含 API key；其他原生客户端也须提供非空、稳定且能标识其协议配置的身份。恢复时身份须完全相同；旧正文 JSON Session、endpoint/model 或固定规则变化均拒绝，不自动迁移。动态预算不属于固定契约指纹。
 
 `AgentState.tool_turns` 按轮保存 assistant `content`、`reasoning_content`、原始 `tool_calls` 和按 call ID 配对的 `tool_results`。Loop 先保存整批 call，每次派发前保存 executing_call_id；批准操作的匹配说明同时保存在 `ToolCallTurn.executing_user_comment`，随后按 observation/event 路径配对该调用的 receipt 并清除执行标记和临时说明。该字段仅是运行期恢复元数据，不形成另一套批准流程。重启保留已完成回执；正在执行且缺回执的项记为 unknown outcome，其说明附回原调用的未知回执，其余缺回执项记为未开始。未知恢复不重放、不重新授予许可或把说明借给后续动作。它防止把未知结果误判为成功，但只保证进程重启 checkpoint，不保证掉电持久化，也不是外部副作用的 exactly-once 事务。
 
@@ -443,7 +443,7 @@ trace 是可选诊断输出。两个模型客户端共用私有 JSONL 写入函�
 
 **一次逻辑调用与 HTTP 尝试。**
 
-OpenAICompatibleClient 的 trace 按 call_id 关联逻辑调用和后续校验记录。attempts 保留各次 finish_reason/usage/错误，顶层响应对应最后一次；retry_number+1 是 HTTP 尝试数，不能再加 attempts 长度。request_max_tokens 是实际输出上限，null 表示未指定。
+OpenAICompatibleClient 的 trace 按 call_id 关联逻辑调用和后续校验记录。attempts 保留各次 finish_reason/usage/错误，以及该次重新计量后的请求（full 为原文，metadata 为 hash）；顶层请求和响应对应最后一次已发送尝试。每次发送或重试前重新从 Run 账本投影共享总预算到第三部分，不复用旧额度或另行扣量。retry_number+1 是 HTTP 尝试数，不能再加 attempts 长度。request_max_tokens 是实际输出上限，null 表示未指定。
 
 收到格式反馈后的请求是新逻辑调用、新 call_id，不是上一调用内的 HTTP retry。正文/原生参数解析和调用数量错误写在主记录/attempts 的 validation_error；schema_validation_error 补充行记录已解析候选的外层 schema 错误，以及原生调用身份/回执校验拒绝。主记录按带 model 的行识别，不把补充行计成另一次调用。统计解析失败、候选校验、HTTP retry、Task Attempt retry 时分开计数。
 
@@ -486,7 +486,7 @@ trace 与 Session 是独立边界：metadata 只留内容 hash，不表示 Sessi
 
 Coding/Experiment 和 ArtifactRegistry 共用 Components 的 `resolve_artifact_source`：候选文件必须在授权 workspace 或本 Attempt 的 output_dir 中唯一定位。缺失或歧义文件、重复 output_name 进入本次 finish 的拒绝回执，原 Task/Attempt/Session 继续修改提交；三个 Agent 共用输出名唯一性检查。回执带稳定 code 和具体文件/名称，未新增对外诊断 schema。连续失败上限、预算和超时继续生效。
 
-越权、IO 异常和登记时的证据损坏不转成可接受结果；接收端错误沿现有失败路径处理。Experiment 的 execution_record 排在候选前面，使后续某候选登记失败时仍保留执行事实。声明 failed 也要先通过候选事实检查，不自动修改文件名或忽略非法候选。
+越权、IO 异常和登记时的证据损坏不转成可接受结果；接收端错误沿现有失败路径处理。Coding/Experiment 的 execution_record 排在候选前面，使后续某候选登记失败时仍保留执行事实。正常、失败和中断共用 Components 的提取逻辑，从本 Agent 完整原生工具回执生成既有 results 结构；没有实际执行结果则不生成。中断保存实际 command、停止确认、耗时、日志和已知退出码，不补造字段或验证半成品。记录随 AgentResult.artifacts 经 Scheduler/Registry 接收，Task 报告关联 output_artifact_ids，父方中断通知提供公开工件 ID，不读取子 Session 或另造交接格式。声明 failed 也要先通过候选事实检查，不自动修改文件名或忽略非法候选。
 
 统一的 finish 提交 `status/report/artifacts`；status 复用 ModuleStatus 的 completed/failed（缺省 completed），不增加另一套业务结果或生命周期。CompletionCheck 接受候选后，AgentLoop 将其映射到唯一的 AgentResult.status；模型声明失败标为 AGENT_REPORTED_FAILURE，报告保留模型的原因，不能冒充系统验证的 TOOL_FAILED。failed 仍沿现有 Session/Attempt/Task 失败与依赖阻断路径返回，预算、权限及真实技术错误不受模型声明覆盖。
 
@@ -649,7 +649,7 @@ Controller 把目录引用冻结为 Run 级 dataset_catalog 工件；Controller/
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **27.0**，旧 26.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版显式 Tasks、纯路由、直接父问答与运行中 input/interrupt 改变控制状态；固定 prompt/schema 同 Session 必须保持稳定。原有准确操作批准及拒绝说明、UUID 工件身份和完整目录继续沿用，不恢复旧控制/搜索/index 工件或重复正文工作集。
+Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **27.0**，旧 26.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写。此版显式 Tasks、纯路由、直接父问答与运行中 input/interrupt 改变控制状态；固定 prompt/schema 同 Session 必须保持稳定。本轮执行记录与动态预算不新增持久字段或状态，公共 schema 仍为 27.0；固定原生规则和控制工具说明已经修正，旧固定契约的 Session 会因指纹不符而拒绝恢复，证据保持原样。原有准确操作批准及拒绝说明、UUID 工件身份和完整目录继续沿用，不恢复旧控制/搜索/index 工件或重复正文工作集。
 
 Run 顶层的嵌套公共 request 等带 schema；RunStore 重校验整个状态。SessionStore 先检查顶层 schema，再校验模型；缺版本不能靠默认值接受。恢复还检查协议、endpoint/model 和固定 prompt/tools 指纹。读取、解码、解析或状态校验失败返回明确 contract_error，不调用模型、不覆盖损坏记录，也不伪造 SessionRef。
 

@@ -38,21 +38,22 @@ class CompactionPlan:
     estimated_tokens: int
 
 
-def compaction_input(prompt: str) -> dict:
+def compaction_input(prompt: str, *, runtime_status: str = "") -> dict:
     """Return the exact provider message payload used for one summary request."""
 
-    return {
-        "messages": [
-            {"role": "system", "content": COMPACTION_SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt},
-        ]
-    }
+    messages = [
+        {"role": "system", "content": COMPACTION_SYSTEM_INSTRUCTION},
+        {"role": "user", "content": prompt},
+    ]
+    if runtime_status:
+        messages.append({"role": "user", "content": "Runtime status (current shared limits):\n" + runtime_status})
+    return {"messages": messages}
 
 
-def compaction_input_text(prompt: str) -> str:
+def compaction_input_text(prompt: str, *, runtime_status: str = "") -> str:
     """Serialize the complete summary input for budgeting and full tracing."""
 
-    return json.dumps(compaction_input(prompt), ensure_ascii=False)
+    return json.dumps(compaction_input(prompt, runtime_status=runtime_status), ensure_ascii=False)
 
 
 def _history_tokens(turns: Sequence[ToolCallTurn]) -> int:
@@ -160,7 +161,8 @@ def plan_compaction(
         source,
         target_summary_chars=target_summary_chars,
     )
-    summary_tokens = ContextComposer.estimate_tokens(compaction_input_text(prompt))
+    status = current_context.runtime_status if isinstance(current_context, ComposedContext) else ""
+    summary_tokens = ContextComposer.estimate_tokens(compaction_input_text(prompt, runtime_status=status))
     if summary_tokens > summary_input_limit:
         raise ContextBudgetExceeded(
             "completed tool-history prefix exceeds the compaction input budget; "

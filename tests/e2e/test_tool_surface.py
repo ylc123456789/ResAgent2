@@ -30,6 +30,8 @@ Schema 27 adds explicit Task requests and parent reply/abandon controls; ask_use
 uses direct-parent routing without adding model-filled routing fields.
 Schema 26 only updates embedded public schema constants; approval explanations
 are supplied by the user and returned in receipts, not added to tool inputs.
+Later schema 27 guidance derives singleton hints for all five control tools
+from the enforced rule and describes declared logical workspace selection.
 """
 
 import hashlib

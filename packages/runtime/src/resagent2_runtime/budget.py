@@ -5,12 +5,41 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+import json
 import time
 from typing import Callable, Iterator, Literal, Protocol
 import uuid
 
 
 RequestOutcome = Literal["succeeded", "failed", "unknown"]
+
+
+@dataclass(frozen=True)
+class BudgetSnapshot:
+    """Read-only model projection of existing limits and charged attempts."""
+
+    scope: Literal["run", "invocation"]
+    max_llm_calls: int
+    llm_calls_used: int
+    remaining_llm_calls: int
+    remaining_timeout_seconds: float
+
+    def render(self) -> str:
+        owner = (
+            "This is the entire Run's shared total, used by Scientific, Compiler, "
+            "all execution Agents and later work, including final delivery. "
+            "It is not a dedicated allowance for the current Agent or Task. "
+            "Interrupting, resuming or delegating again does not reset it."
+            if self.scope == "run" else
+            "No Run-wide budget is bound. These are the outer invocation's shared limits, "
+            "not an additional allowance for each nested request."
+        )
+        return (
+            "Current execution budget (runtime facts, before dispatching this provider attempt):\n"
+            + json.dumps(self.__dict__, ensure_ascii=False) + "\n" + owner + " "
+            "Every dispatched provider attempt consumes one call, including failed retries "
+            "and requests interrupted after dispatch. This next attempt has not yet been charged."
+        )
 
 
 class BudgetExhaustedError(RuntimeError):
@@ -67,6 +96,22 @@ class ExecutionBudget:
     call_limit: int
     deadline: float
     clock: Callable[[], float]
+    parent: ExecutionBudget | None = field(default=None, repr=False)
+
+    def snapshot(self) -> BudgetSnapshot:
+        """Use the Run owner's facts, or the outer standalone invocation limits."""
+        snapshot = getattr(self.usage, "snapshot", None)
+        if snapshot is not None:
+            return snapshot()
+        root = self
+        while root.parent is not None:
+            root = root.parent
+        return BudgetSnapshot(
+            scope="invocation", max_llm_calls=root.call_limit,
+            llm_calls_used=self.usage.used,
+            remaining_llm_calls=max(0, root.call_limit - self.usage.used),
+            remaining_timeout_seconds=round(max(0.0, root.deadline - root.clock()), 3),
+        )
 
     @property
     def expired(self) -> bool:
@@ -103,6 +148,12 @@ def current_budget() -> ExecutionBudget | None:
     return _execution_budget.get()
 
 
+def current_budget_status() -> str:
+    """Refresh a disposable P3 projection; never append to durable history."""
+    budget = current_budget()
+    return "" if budget is None else budget.snapshot().render()
+
+
 @contextmanager
 def execution_budget(
     *, max_llm_calls: int, timeout_seconds: float, usage: UsagePort | None = None,
@@ -123,7 +174,8 @@ def execution_budget(
     else:
         usage = usage if usage is not None else MemoryUsage()
         call_limit = usage.used + max_llm_calls
-    budget = ExecutionBudget(usage=usage, call_limit=call_limit, deadline=deadline, clock=clock)
+    budget = ExecutionBudget(usage=usage, call_limit=call_limit, deadline=deadline, clock=clock,
+                             parent=parent)
     token = _execution_budget.set(budget)
     try:
         yield budget

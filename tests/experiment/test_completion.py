@@ -10,7 +10,9 @@ import pytest
 
 from resagent2_contracts import AgentOwner, ArtifactCandidate, WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind
 from resagent2_components import WorkspaceBoundary
-from resagent2_runtime import AgentEvent, AgentState, FinishCandidate
+from resagent2_runtime import AgentState, FinishCandidate, ToolObservation
+from resagent2_runtime.models import NativeToolCall, ToolCallTurn
+from resagent2_runtime.tool_calling import tool_receipt
 from resagent2_experiment.completion import ExperimentCompletionCheck
 
 
@@ -32,6 +34,16 @@ def evidence(path="metrics.json", **extra):
         kind="experiment_result", path=path, media_type="application/json",
         summary="Experimental measurements", **extra,
     )
+
+
+def command_receipt(current, tool, value, *, ok):
+    call_id = f"command_{len(current.tool_turns) + 1}"
+    current.tool_turns.append(ToolCallTurn(
+        tool_calls=[NativeToolCall(id=call_id, name=tool,
+            arguments=json.dumps({"command": value.get("command", "python train.py")}))],
+        tool_results={call_id: tool_receipt(ToolObservation(
+            summary="Actual command receipt", ok=ok, value=value))},
+    ))
 
 
 def test_analysis_does_not_require_execution_or_new_evidence(tmp_path):
@@ -98,14 +110,11 @@ def test_report_does_not_self_certify_command_failure(tmp_path):
 @pytest.mark.parametrize("tool_name", ["run_shell", "run_setup"])
 def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, exit_code, timed_out, status, tool_name):
     current = state()
-    current.events.append(AgentEvent(
-        sequence=1, step=1, type="observation", tool=tool_name, created_at=current.created_at,
-        data={"ok": False, "value": {
-            "command": "python train.py", "exit_code": exit_code, "timed_out": timed_out,
-            "stdout_path": "out.stdout", "stderr_path": "out.stderr", "stderr_tail": "real error",
-            "duration_seconds": 0.1,
-        }},
-    ))
+    command_receipt(current, tool_name, {
+        "command": "python train.py", "exit_code": exit_code, "timed_out": timed_out,
+        "stdout_path": "out.stdout", "stderr_path": "out.stderr", "stderr_tail": "real error",
+        "duration_seconds": 0.1,
+    }, ok=False)
     candidate = FinishCandidate(status=status, report="Training failed")
     decision = check(tmp_path).evaluate(current, candidate)
     assert decision.complete
@@ -114,7 +123,7 @@ def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, 
     assert record["exit_code"] == exit_code
     assert record["timed_out"] is timed_out
     assert record["stderr_path"] == "out.stderr"
-    assert current.events[0].data["value"]["stderr_tail"] == "real error"
+    assert json.loads(current.tool_turns[0].tool_results["command_1"])["value"]["stderr_tail"] == "real error"
 
     invalid = candidate.model_copy(update={"artifacts": [evidence("missing.json")]})
     rejected = check(tmp_path).evaluate(current, invalid)
@@ -126,30 +135,23 @@ def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, 
 @pytest.mark.parametrize("tool_name", ["run_shell", "run_setup"])
 def test_unexecuted_failure_text_is_not_command_evidence(tmp_path, tool_name):
     current = state()
-    current.events.append(AgentEvent(
-        sequence=1, step=1, type="observation", tool=tool_name, created_at=current.created_at,
-        data={"ok": False, "value": {"blocked": True, "reason": "No environment"}},
-    ))
+    command_receipt(current, tool_name, {"blocked": True, "reason": "No environment"}, ok=False)
     decision = check(tmp_path).evaluate(current, FinishCandidate(status="failed", report="Cannot execute"))
     assert decision.complete
     assert decision.artifacts == []
 
 
-def test_setup_and_shell_execution_facts_are_delivered_in_event_order(tmp_path):
+def test_setup_and_shell_execution_facts_are_delivered_in_receipt_order(tmp_path):
     current = state()
     commands = [("run_setup", "python -m pip install -r requirements.txt", 1),
                 ("run_setup", "python -m pip install numpy", 0),
                 ("run_shell", "python train.py", 0)]
     for sequence, (tool, command, exit_code) in enumerate(commands, start=1):
-        current.events.append(AgentEvent(
-            sequence=sequence, step=sequence, type="observation", tool=tool,
-            created_at=current.created_at,
-            data={"ok": exit_code == 0, "value": {
-                "command": command, "exit_code": exit_code, "timed_out": False,
-                "stdout_path": f"{sequence}.stdout", "stderr_path": f"{sequence}.stderr",
-                "duration_seconds": 0.1, "environment_information": {"prepared": True},
-            }},
-        ))
+        command_receipt(current, tool, {
+            "command": command, "exit_code": exit_code, "timed_out": False,
+            "stdout_path": f"{sequence}.stdout", "stderr_path": f"{sequence}.stderr",
+            "duration_seconds": 0.1, "environment_information": {"prepared": True},
+        }, ok=exit_code == 0)
     decision = check(tmp_path).evaluate(current, FinishCandidate(report="Recorded all outcomes"))
     assert decision.complete
     records = json.loads(decision.artifacts[0].content)["results"]

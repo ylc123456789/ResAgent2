@@ -30,6 +30,7 @@ from .git import (
     GitWorkspace,
     GitWorkspaceError,
 )
+from .execution_records import execution_record, preserve_execution_record
 from .process import (
     CommandPermissionDecision,
     ProcessRunner,
@@ -74,6 +75,8 @@ from .web import (
 )
 
 __all__ = [
+    'execution_record',
+    'preserve_execution_record',
     'read_artifact_json',
     'request_dataset_refs',
     'request_task_context',

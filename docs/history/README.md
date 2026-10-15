@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-15：中断执行交接、共享总预算与工具说明
+
+在 `fix/native-agent-receipts` 上继续修正：正常、暂停及中断沿原公共工件交接真实 execution_record；每次模型尝试从 Run 总账刷新第三部分共享预算；控制工具说明与校验共用定义，补齐逻辑工作区和科研 verdict 的真实说明缺口。公共 schema 仍为 27.0，固定契约变更的旧 Session 明确拒绝恢复。最终本地全量 2288 passed / 1 skipped，mock completed / 8 工件，diff 检查通过；本地 pip check 仍有既有缺项。服务器连接被拒绝，真实短场景尚未运行。实现边界、失败记录和验证依据见[实施与验证记录](reviews/FEEDBACK_AND_SHARED_BUDGET_IMPLEMENTATION_2026-10-15.md)。
+
 ## 2026-10-12：权限反馈、CLI 问答与通用提示词实施
 
 只读复核确认：四次冒烟拒绝均为操作批准，模型收到拒绝决定但没有具体说明；业务正式运行回答已经送达，61 次子 Agent 输入没有丢失 Task 指令。用户确认后在 `fix/native-agent-receipts` 实施：schema 26.0 保存可选操作 comment，并随原调用唯一回执交给模型；CLI 提供自由业务回答及操作说明入口。第二项先优化 Scientific / Compiler，第三、第四项同样只改通用执行、反馈和交接提示词，不增加继续/停止选项，不改 WorkRequest 任务接口。旧 25.0 Run/Session 明确拒绝，四份 current 与相关指南同步。最终本地全量 2168 passed / 1 skipped（61.11 秒），初轮专项 545 passed；补齐执行中崩溃的说明恢复边界后受影响复测 145 passed、最终 mock completed/8 工件、diff clean。首次全量指纹 fixture 未同步版本的失败与核对修复保留，pip check 仍有既有 cryptography 缺项。服务器真实场景与 L3 尚未执行，分支未合并。详见[完整修改方案](reviews/PERMISSION_FEEDBACK_AND_TASK_INSTRUCTIONS_PLAN_2026-10-12.md)、[官方指南和固定源码调研](reviews/PROMPT_GUIDANCE_RESEARCH_2026-10-12.md)及[实施测试计划](reviews/PERMISSION_FEEDBACK_TEST_PLAN_2026-10-12.md)。

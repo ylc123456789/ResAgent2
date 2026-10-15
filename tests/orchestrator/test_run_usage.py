@@ -82,3 +82,29 @@ def test_usage_updates_preserve_artifacts_registered_during_invocation(tmp_path)
     assert persisted.artifacts[ref.id] == ref
     assert persisted.llm_calls_used == 2
     assert persisted.usage.requests == {"first:0": "succeeded", "second:0": "unknown"}
+
+
+def test_snapshot_uses_run_total_across_narrowed_invocations_and_resume(tmp_path):
+    store, run = prepared(tmp_path, calls=12)
+    port = RunUsagePort(run, store)
+    port.charge("earlier", 0)
+    port.complete("earlier", 0, "failed")
+    port.charge("interrupted", 0)
+    with execution_budget(max_llm_calls=3, timeout_seconds=4, usage=port) as invocation:
+        with execution_budget(max_llm_calls=1, timeout_seconds=1) as nested:
+            assert nested.remaining_calls == 1
+            snapshot = nested.snapshot()
+            assert snapshot.scope == "run"
+            assert (snapshot.max_llm_calls, snapshot.llm_calls_used,
+                    snapshot.remaining_llm_calls) == (12, 2, 10)
+            assert 50 < snapshot.remaining_timeout_seconds <= 60
+            nested.charge("current", 0)
+            nested.usage.complete("current", 0, "succeeded")
+        assert invocation.snapshot().remaining_llm_calls == 9
+    restored = store.load(run.run_id)
+    with execution_budget(max_llm_calls=2, timeout_seconds=2,
+                          usage=RunUsagePort(restored, store)) as resumed:
+        snapshot = resumed.snapshot()
+        assert (snapshot.max_llm_calls, snapshot.llm_calls_used,
+                snapshot.remaining_llm_calls) == (12, 3, 9)
+        assert restored.usage.requests["interrupted:0"] == "unknown"

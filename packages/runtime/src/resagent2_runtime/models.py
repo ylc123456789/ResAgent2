@@ -58,6 +58,7 @@ class ComposedContext(RuntimeModel):
     task_context: str = ""
     artifact_index: str = ""
     pending_notifications: str = ""
+    runtime_status: str = ""
     history_summary: str | None = None
     included_sections: list[str]
     omitted_sections: list[str] = Field(default_factory=list, max_length=0)

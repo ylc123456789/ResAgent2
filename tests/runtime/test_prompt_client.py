@@ -67,7 +67,8 @@ def test_plain_prompt_rejects_invalid_component_limit():
 
 def test_over_budget_prompt_does_not_call_provider_or_reuse_previous_count():
     client = StructuredClient([{"tool": "finish"}])
-    adapter = _adapter(client, limit=64)
+    # Leave room for the current invocation status as well as the short task.
+    adapter = _adapter(client, limit=256)
     adapter.next_action("Complete", AgentAction)
     assert adapter.last_attempts == 1
 

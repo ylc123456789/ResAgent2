@@ -2,8 +2,12 @@
 from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
+import json
+from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from datetime import UTC, datetime
 
@@ -139,8 +143,14 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
         "code_patch",
         "code_change",
         "verification_result",
+        "execution_record",
     }
     assert all(len(artifact.sha256) == 64 for artifact in run.artifacts.values())
+    record = next(ref for ref in run.artifacts.values() if ref.kind == "execution_record")
+    commands = json.loads(Path(url2pathname(urlparse(record.uri).path)).read_text())["results"]
+    assert len(commands) == 1
+    assert "py_compile util.py" in commands[0]["command"]
+    assert commands[0]["exit_code"] == 0
 
 
 def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None:

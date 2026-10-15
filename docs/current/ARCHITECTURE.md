@@ -192,6 +192,8 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 
 授权与预算贯穿这些能力：子调用只能继承或收紧 Run 上限；模型每次 HTTP 尝试发送前占用共享调用预算，失败或 unknown 消耗不退款。用户等待不重置既有用量。Tool 的 allow/ask/deny、WorkspaceBoundary、实际环境检查分别核对自己的边界，审批不能绕过它们。可选 trace 是诊断输出，其写盘失败不替代业务结果；权威状态保存失败仍需传播。
 
+模型每次发送前在第三部分看到同一 Run 总账的最新预算，而非当前 Agent 的专属配额。中断后的执行明细也沿原公开交接链返回：Agent 从自己的工具回执生成 execution_record，Scheduler 登记，Task 报告关联，父 Agent 通过通知和完整目录取得真实工件入口；Controller 不读取子 Agent 的私有 Session。已发生的文件修改保留，执行记录不把半成品认作已验证交付。
+
 <a id="principles"></a>
 
 ## 7. 开发时保持的边界

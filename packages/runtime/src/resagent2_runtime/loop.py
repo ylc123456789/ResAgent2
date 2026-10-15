@@ -37,7 +37,8 @@ from .context import (
     DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer,
 )
 from .budget import (
-    BudgetExhaustedError, DeadlineExceededError, current_budget, execution_budget, invoke_model,
+    BudgetExhaustedError, DeadlineExceededError, current_budget, current_budget_status,
+    execution_budget, invoke_model,
 )
 from .compaction import plan_compaction
 from .llm import LLMClient, LLMExhaustedError
@@ -890,7 +891,8 @@ class AgentLoop:
     def _fixed_context(self, definition, request, state, context_limit):
         sections = list(definition.context_builder(request, state, context_limit))
         context = self.context_composer.compose(definition.system_prompt, sections, max_tokens=context_limit)
-        return context.model_copy(update={"pending_notifications": json.dumps(
+        return context.model_copy(update={"runtime_status": current_budget_status(),
+                                         "pending_notifications": json.dumps(
             [q.model_dump(mode="json") for q in request.child_questions], ensure_ascii=False
         ) if request.child_questions else ""})
 

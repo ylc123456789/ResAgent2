@@ -2,11 +2,18 @@
 
 from resagent2_capabilities import ReplaceTextTool
 from resagent2_coding.verification import RunVerificationTool
+from resagent2_contracts import ScientificVerdict
 from resagent2_scientific.context import SCIENTIFIC_PROMPT
 
 
 # Line wrapping is presentation; these checks cover a few prior failure modes.
 SCIENTIFIC_GUIDANCE = " ".join(SCIENTIFIC_PROMPT.split())
+
+
+def test_scientific_opinion_guidance_publishes_its_content_enum() -> None:
+    # The finish tool's generic artifact content has no nested opinion schema.
+    assert ", ".join(value.value for value in ScientificVerdict) in SCIENTIFIC_GUIDANCE
+    assert "independently of finish.status" in SCIENTIFIC_GUIDANCE
 
 
 def test_scientific_prompt_keeps_own_tool_failures_out_of_request_work() -> None:

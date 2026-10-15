@@ -21,7 +21,7 @@ NATIVE_TOOL_INSTRUCTION = (
     f"Request between 1 and {MAX_TOOL_CALLS_PER_TURN} tools per response. "
     "Tools run sequentially in the supplied order, not concurrently. "
     "Use a new response when an action needs to inspect a preceding tool's result. "
-    "finish, ask_user and request_work must each be the only call in their response. "
+    f"{', '.join(sorted(CONTROL_TOOLS))} must each be the only call in their response. "
     "If a tool fails, remaining calls are cancelled and receive not-executed receipts.\n\n"
     "### Validation and completion\n"
     "Tools execute only after local validation and permission checks. "
@@ -57,6 +57,8 @@ def native_tool_schemas(tools: tuple[Tool, ...]) -> list[dict]:
         guidance = getattr(tool, "model_guidance", None)
         if guidance:
             description += "\n" + guidance
+        if tool.name in CONTROL_TOOLS:
+            description += "\nThis control tool must be the only tool call in its response."
         schemas.append({
             "type": "function",
             "function": {
@@ -70,9 +72,13 @@ def native_tool_schemas(tools: tuple[Tool, ...]) -> list[dict]:
 
 def contract_fingerprint(system_prompt: str, schemas: list[dict]) -> str:
     """Bind one Session to its fixed model-visible contract, excluding credentials."""
-    value = json.dumps({"system": system_prompt, "tools": schemas}, ensure_ascii=False,
+    value = json.dumps({"system": _native_system_prompt(system_prompt), "tools": schemas}, ensure_ascii=False,
                        sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _native_system_prompt(system_prompt: str) -> str:
+    return "\n\n".join(part for part in (system_prompt, NATIVE_TOOL_INSTRUCTION) if part)
 
 
 def parse_tool_turn(message: dict, finish_reason: str | None) -> ToolCallTurn:
@@ -118,8 +124,12 @@ def native_actions(turn: ToolCallTurn) -> list[dict]:
         raise NativeToolCallError(
             f"Expected 1 to {MAX_TOOL_CALLS_PER_TURN} native tool calls; no tool was executed."
         )
-    if len(turn.tool_calls) > 1 and any(call.name in CONTROL_TOOLS for call in turn.tool_calls):
-        raise NativeToolCallError("finish, ask_user and request_work must be called alone")
+    controls = list(dict.fromkeys(call.name for call in turn.tool_calls if call.name in CONTROL_TOOLS))
+    if len(turn.tool_calls) > 1 and controls:
+        raise NativeToolCallError(
+            f"{', '.join(controls)} must be called alone. No tool in this batch was executed. "
+            "Request exactly one tool in the next response."
+        )
     actions = []
     for call in turn.tool_calls:
         arguments = json.loads(call.arguments)
@@ -162,9 +172,7 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
         context = ComposedContext(
             text=context, task_context=context, included_sections=[], omitted_sections=[], estimated_tokens=0,
         )
-    messages = [{"role": "system", "content": "\n\n".join(
-        part for part in (context.system_prompt, NATIVE_TOOL_INSTRUCTION) if part
-    )}]
+    messages = [{"role": "system", "content": _native_system_prompt(context.system_prompt)}]
     if context.task_context:
         messages.append({"role": "user", "content": context.task_context})
     if context.history_summary:
@@ -175,6 +183,8 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
     messages.extend(tool_messages(turns))
     if context.pending_notifications:
         messages.append({"role": "user", "content": "Pending child questions (runtime facts):\n" + context.pending_notifications})
+    if context.runtime_status:
+        messages.append({"role": "user", "content": "Runtime status (current shared limits, not task requirements):\n" + context.runtime_status})
     if context.artifact_index:
         messages.append({"role": "user", "content": context.artifact_index})
     return {"messages": messages, "tools": schemas}

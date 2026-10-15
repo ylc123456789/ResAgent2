@@ -167,6 +167,22 @@ class ArtifactRegistry:
                 except (ArtifactCandidateError, OSError) as error:
                     raise ArtifactRegistrationError(str(error)) from error
                 metadata.update(source_path=source.relative_to(workspace).as_posix(), source_root=label)
+        elif candidate.kind == "execution_record" and pending is None and run is not None:
+            # A paused invocation can hand over the same cumulative command
+            # snapshot again at completion. Reuse only equal frozen bytes from
+            # the same producing Attempt; paths never establish identity.
+            digest = hashlib.sha256(candidate.content.encode("utf-8")).hexdigest()
+            expected = (candidate.kind, producer, run_id, task_id, attempt_number, None, digest,
+                        candidate.media_type, candidate.output_name, metadata)
+            for ref in run.artifacts.values():
+                if (ref.kind, ref.producer, ref.run_id, ref.task_id, ref.attempt_number, ref.session_id, ref.sha256,
+                        ref.media_type, ref.output_name, ref.metadata) != expected:
+                    continue
+                try:
+                    RegisteredArtifactReader([ref], run_id=run_id).verify(ref.id)
+                except ArtifactReadError as error:
+                    raise ArtifactRegistrationError(str(error)) from error
+                return ref
         return self._freeze(candidate, run_id=run_id, producer=producer, operation_key=key, run=run,
                             source=source, encoded=candidate.content.encode("utf-8") if candidate.content is not None else None,
                             metadata=metadata, task_id=task_id, attempt_number=attempt_number)

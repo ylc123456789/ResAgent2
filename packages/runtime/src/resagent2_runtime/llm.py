@@ -11,13 +11,13 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 import httpx
 from pydantic import BaseModel
 
 from .budget import (
-    RequestOutcome, current_budget, execution_budget, invoke_model,
+    RequestOutcome, current_budget, current_budget_status, execution_budget, invoke_model,
 )
 from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
@@ -26,7 +26,7 @@ from .cancellation import OperationCancelled, check_cancelled, current_cancellat
 from .http import send_request
 from ._trace import write_trace_record
 from .tool_calling import (
-    NativeToolCallError, native_actions, native_input, native_input_text, parse_tool_turn,
+    NativeToolCallError, native_actions, native_input, parse_tool_turn,
 )
 
 
@@ -160,7 +160,13 @@ class PromptLLMClient:
             timeout_seconds=getattr(self._client, "timeout_seconds", 120),
         ) as budget:
             before = budget.usage.used
+            context = context.model_copy(update={"runtime_status": current_budget_status()})
             try:
+                estimated = self._composer.estimate_tokens(
+                    "\n\n".join((context.text, context.runtime_status)))
+                if estimated > max_tokens:
+                    raise ContextBudgetExceeded("prompt and runtime status exceed the input budget")
+                context = context.model_copy(update={"estimated_tokens": estimated})
                 if self._output_tool_name is None:
                     return invoke_model(self._client, "next_action", context, action_type)
                 schemas = [{"type": "function", "function": {
@@ -304,23 +310,28 @@ class OpenAICompatibleClient:
     ) -> ToolCallTurn:
         """Request native calls; serial execution remains the Runtime's policy."""
         self.last_attempts = 0
-        wire_input = native_input(context, schemas, turns)
-        message = native_input_text(context, schemas, turns)
-        estimated = ContextComposer.estimate_tokens(message)
-        if estimated > self.tool_input_limit(max_input_tokens):
-            raise ContextBudgetExceeded("native request exceeds the total input budget")
         included = [*context.included_sections, "native_tools"]
         if turns:
             included.append("tool_history")
-        context = context.model_copy(update={
-            "estimated_tokens": estimated, "included_sections": included,
-        })
-        body_data = {"model": self.model, **wire_input, "temperature": 0}
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+
+        def prepare():
+            current = context.model_copy(update={"runtime_status": current_budget_status(),
+                                                  "included_sections": included})
+            wire_input = native_input(current, schemas, turns)
+            message = json.dumps(wire_input, ensure_ascii=False)
+            estimated = ContextComposer.estimate_tokens(message)
+            if estimated > self.tool_input_limit(max_input_tokens):
+                raise ContextBudgetExceeded("native request exceeds the total input budget")
+            current = current.model_copy(update={"estimated_tokens": estimated})
+            body_data = {"model": self.model, **wire_input, "temperature": 0}
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return current, message, body_data
+
+        current, message, body_data = prepare()
         # No JSON response_format, force-tool option or beta strict mode. The
         # regular native protocol is shared across OpenAI-compatible providers.
-        return self._request(context, message, body_data, native=True)
+        return self._request(current, message, body_data, native=True, prepare=prepare)
 
     def summarize_history(
         self,
@@ -334,24 +345,25 @@ class OpenAICompatibleClient:
         if max_input_tokens < 1:
             raise ValueError("compaction input budget must be positive")
 
-        message = compaction_input_text(prompt)
-        estimated = ContextComposer.estimate_tokens(message)
-        if estimated > self.tool_input_limit(max_input_tokens):
-            raise ContextBudgetExceeded("compaction request exceeds the total input budget")
-        context = ComposedContext(
-            text=prompt,
-            included_sections=["compaction"],
-            omitted_sections=[],
-            estimated_tokens=estimated,
-        )
-        body_data = {
-            "model": self.model,
-            **compaction_input(prompt),
-            "temperature": 0,
-        }
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
-        return self._request(context, message, body_data, native=False, text=True)
+        def prepare():
+            status = current_budget_status()
+            message = compaction_input_text(prompt, runtime_status=status)
+            estimated = ContextComposer.estimate_tokens(message)
+            if estimated > self.tool_input_limit(max_input_tokens):
+                raise ContextBudgetExceeded("compaction request exceeds the total input budget")
+            context = ComposedContext(
+                text=prompt, runtime_status=status, included_sections=["compaction"],
+                omitted_sections=[], estimated_tokens=estimated,
+            )
+            body_data = {
+                "model": self.model, **compaction_input(prompt, runtime_status=status), "temperature": 0,
+            }
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return context, message, body_data
+
+        context, message, body_data = prepare()
+        return self._request(context, message, body_data, native=False, text=True, prepare=prepare)
 
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
@@ -474,16 +486,30 @@ class OpenAICompatibleClient:
         action_type: type[BaseModel],
     ) -> BaseModel | dict:
         """Structured output for Compiler and explicit JSON-only callers."""
-        message = f"{context.text}\n\n{self._action_instruction(action_type)}"
-        body_data = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": message}],
-            "response_format": {"type": "json_object"},
-            "temperature": 0,
-        }
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
-        return self._request(context, message, body_data, native=False)
+        def prepare():
+            current = context.model_copy(update={"runtime_status": current_budget_status()})
+            message = "\n\n".join(part for part in (
+                current.text, current.runtime_status, self._action_instruction(action_type),
+            ) if part)
+            current = current.model_copy(update={
+                "estimated_tokens": ContextComposer.estimate_tokens(message),
+            })
+            if (self.model_profile is not None
+                    and current.estimated_tokens > self.model_profile.input_budget(
+                        schema_tokens=0, component_limit=self.model_profile.context_window)):
+                raise ContextBudgetExceeded("structured request exceeds the total input budget")
+            body_data = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": message}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0,
+            }
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return current, message, body_data
+
+        current, message, body_data = prepare()
+        return self._request(current, message, body_data, native=False, prepare=prepare)
 
     def _request(
         self,
@@ -493,6 +519,7 @@ class OpenAICompatibleClient:
         *,
         native: bool,
         text: bool = False,
+        prepare: Callable[[], tuple[ComposedContext, str, dict]] | None = None,
     ):
         """One transport/retry/accounting implementation for both output protocols."""
         if native and text:
@@ -506,27 +533,17 @@ class OpenAICompatibleClient:
         ):
             return self._request_attempts(
                 context, message, body_data,
-                native=native, text=text, attempt_limit=attempt_limit,
+                native=native, text=text, attempt_limit=attempt_limit, prepare=prepare,
             )
 
     def _request_attempts(
-        self, context, message, body_data, *, native, text, attempt_limit,
+        self, context, message, body_data, *, native, text, attempt_limit, prepare=None,
     ):
         budget = current_budget()
         assert budget is not None
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
-        body = json.dumps(body_data).encode("utf-8")
-        request = httpx.Request(
-            "POST",
-            self.endpoint,
-            content=body,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-        )
         call_id = uuid.uuid4().hex
         created_at = datetime.now(UTC).isoformat()
         self._last_call_id = call_id
@@ -545,7 +562,19 @@ class OpenAICompatibleClient:
                     else:
                         time.sleep(wait)
                 check_cancelled()
+                if prepare is not None:
+                    prepared_context, prepared_message, prepared_body = prepare()
+                else:
+                    prepared_context, prepared_message, prepared_body = context, message, body_data
+                request = httpx.Request(
+                    "POST", self.endpoint,
+                    content=json.dumps(prepared_body).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                )
                 budget.charge(call_id, attempt)
+                # Preparation can outlive the deadline or fail to persist a charge.
+                # Only a reserved attempt owns this input in the response trace.
+                context, message, body_data = prepared_context, prepared_message, prepared_body
                 self.last_attempts = attempt + 1
                 # Never attribute an earlier response to a later transport failure.
                 raw_response_text = None
@@ -642,6 +671,9 @@ class OpenAICompatibleClient:
                     budget.usage.complete(call_id, attempt, outcome)
                     attempts.append({
                         "retry_number": attempt,
+                        "estimated_tokens": context.estimated_tokens,
+                        **({"request_text": message} if self.trace_level == "full" else
+                           {"request_sha256": self._sha256(message)}),
                         **self._response_trace_fields(
                             parsed_action, raw_response_text, raw_reasoning_text,
                             str(last_error) if last_error is not None else None,

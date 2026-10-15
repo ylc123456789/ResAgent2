@@ -128,7 +128,8 @@ def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
     assert "response_format" not in requests[0]
     assert "tool_choice" not in requests[0]  # provider-specific force mode is not assumed
     messages = requests[1]["messages"]
-    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool", "user"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool", "user", "user"]
+    assert messages[-2]["content"].startswith("Runtime status (")
     assert messages[2]["reasoning_content"] == "PRIVATE_REASONING"
     assert messages[3]["tool_call_id"] == "call_write"
     receipt = json.loads(messages[3]["content"])
@@ -536,8 +537,8 @@ def test_native_session_cannot_resume_with_json_only_client(setup):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("changed", ["endpoint", "model", "old_json"])
-def test_session_rejects_silent_protocol_or_provider_migration(setup, changed):
+@pytest.mark.parametrize("changed", ["endpoint", "model", "old_json", "native_rules"])
+def test_session_rejects_silent_protocol_or_provider_migration(setup, changed, monkeypatch):
     definition, store, requests, install = setup
     install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
@@ -551,6 +552,9 @@ def test_session_rejects_silent_protocol_or_provider_migration(setup, changed):
         store.save(AgentState.model_validate(old))
     elif changed == "endpoint":
         definition.llm_client.endpoint = "https://different-provider.invalid/chat/completions"
+    elif changed == "native_rules":
+        from resagent2_runtime import tool_calling
+        monkeypatch.setattr(tool_calling, "NATIVE_TOOL_INSTRUCTION", "Updated fixed execution rules")
     else:
         definition.llm_client.model = "different-model"
     before = store.load("session_native")

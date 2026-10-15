@@ -9,7 +9,7 @@ from resagent2_components import (
     request_task_context, artifact_index_context,
 )
 
-from resagent2_contracts import AgentRequest
+from resagent2_contracts import AgentRequest, ScientificVerdict
 from resagent2_runtime import AgentState, ContextSection
 
 from .completion import SCIENTIFIC_FINISH_ARTIFACT_KINDS
@@ -128,7 +128,10 @@ Finish with status="completed", a report, and exactly one scientific_opinion JSO
 artifact. Insufficient evidence can warrant an inconclusive verdict, request_work,
 or ask_user; status="failed" cannot bypass evidence and delivery requirements.
 The opinion contains verdict, statement, evidence_artifact_ids, limitations,
-unresolved_questions, and recommended_next_steps. Submit kind="scientific_opinion",
+unresolved_questions, and recommended_next_steps. Its verdict must be one of
+{", ".join(value.value for value in ScientificVerdict)}; it describes the scientific
+judgment, independently of finish.status, which describes execution completion.
+Submit kind="scientific_opinion",
 path="scientific_opinion.json", media_type="application/json", summary, and JSON
 content. New artifact kinds allowed: {", ".join(sorted(SCIENTIFIC_FINISH_ARTIFACT_KINDS))}.
 Cite existing evidence under its original ID instead of returning or copying it as

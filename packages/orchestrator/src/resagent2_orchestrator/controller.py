@@ -392,6 +392,8 @@ class ResearchController:
         run.runtime_notices.append({"event_id": "cancel:" + work.id, "type": "work_interrupted",
             "work_request_id": work.id, "reason": reason, "stop_confirmed": True,
             "files_retained": True, "tasks": [t.model_dump(mode="json") for t in work.outcome.tasks],
+            "artifact_ids": [ref.id for ref in work.outcome.artifacts],
+            "file_retention_note": "Files were retained without rollback; partial files are not validated deliveries.",
             "reusable_workspace_ids": list(dict.fromkeys(t.workspace_id for t in run.workflow.tasks
                 if t.work_request_id == work.id and t.workspace_id)) if run.workflow else []})
         run.parent_attention = True
@@ -527,6 +529,7 @@ class ResearchController:
                               for t in run.workflow.tasks if self._active_work_request(run) and t.work_request_id == self._active_work_request(run).id
                               and t.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT}] if run.workflow else [],
                           "conclusion_requirements": read_json(run.conclusion_requirements_ref),
+                          "workspaces": [item.model_dump(mode="json", exclude_defaults=True) for item in self._workspace_descriptors(run)],
                           "dataset_refs": [ref.model_dump(mode="json") for ref in run.dataset_refs]},
             budget=TaskBudget(max_llm_calls=run.request.budget.max_llm_calls-run.llm_calls_used,
                               timeout_seconds=max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))),

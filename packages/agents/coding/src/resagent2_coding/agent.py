@@ -18,7 +18,7 @@ from resagent2_components import (
     EnvironmentManager, GitWorkspace, GitWorkspaceError, ProcessRunner,
     RegisteredArtifactReader, RepoMaterializer, RepoMaterializerError,
     ResourceLayout, WorkspaceBoundary, WorkspacePermissionError,
-    GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
+    GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
@@ -165,6 +165,7 @@ class NativeCodingAgent:
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory=initial_memory,
         )
+        result = preserve_execution_record(result, self.loop.store)
         if (result.status not in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}
                 or any(item.kind == "code_patch" for item in result.artifacts)):
             return result

@@ -239,7 +239,8 @@ def test_summary_request_uses_exact_bounded_wire_and_shared_full_trace(
     assert result == "concise handoff"
     assert client.last_attempts == len(requests) == 1
     body = requests[0]
-    wire = compaction_input_text(prompt)
+    status = body["messages"][-1]["content"].split("\n", 1)[1]
+    wire = compaction_input_text(prompt, runtime_status=status)
     assert body["messages"] == json.loads(wire)["messages"]
     assert body["max_tokens"] == 128
     assert body["temperature"] == 0

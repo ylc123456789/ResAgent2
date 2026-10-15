@@ -30,6 +30,9 @@ from resagent2_contracts import (
     WorkflowAgentDefinition,
     Workflow,
     WorkflowTask,
+    WorkspaceRecord,
+    WorkspaceSpec,
+    WorkspaceAccess,
 )
 from resagent2_orchestrator import DeterministicWorkInterpreter, JsonRunStore, ResearchController, ResearchRun, WorkflowScheduler
 from resagent2_orchestrator.handoffs import system_artifact
@@ -66,6 +69,28 @@ def prepared(tmp_path):
     request = controller._scientific_request(run)
     controller.scheduler.store.save(run)
     return controller, run, request
+
+
+def test_scientific_sees_declared_logical_workspaces_without_physical_locations(tmp_path):
+    from resagent2_components import request_task_context
+
+    controller, run, _ = prepared(tmp_path)
+    for workspace_id, kind in (("ws_source", "local"), ("ws_results", "generated")):
+        source = WorkspaceSpec(
+            workspace_id=workspace_id, source_kind=kind,
+            location=str(tmp_path / "private-source") if kind == "local" else None,
+            access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
+        )
+        run.workspaces[workspace_id] = WorkspaceRecord(
+            workspace_id=workspace_id, root=str(tmp_path / workspace_id),
+            source=source, managed=kind != "local",
+        )
+    context = request_task_context(controller._scientific_request(run))
+    assert context["task_context"]["workspaces"] == [
+        {"workspace_id": "ws_source", "source_kind": "local"},
+        {"workspace_id": "ws_results", "source_kind": "generated"},
+    ]
+    assert str(tmp_path) not in json.dumps(context)
 
 
 def reply(run, status):

@@ -23,6 +23,9 @@ def test_task_context_preserves_all_business_question_fields_and_initial_facts()
     before=req.model_dump_json()
     value=request_task_context(req)
     assert value["instruction"]=="Original requirement"
+    # Internal per-invoke ceilings are not the live Run-wide remaining budget.
+    assert "budget" not in value
+    assert req.budget.max_llm_calls == 8
     assert value["task_context"]["required_artifacts"]==["comparison_results"]
     assert [item["question_id"] for item in [event["record"] for event in value["business_dialogue"] if event["type"] == "answer"]]==["question_1","question_2"]
     assert [event["record"] for event in value["business_dialogue"] if event["type"] == "answer"][0]["requested_fields"]==["scope"]

@@ -17,7 +17,7 @@ from resagent2_components import (
     EnvironmentManager, ProcessRunner, RegisteredArtifactReader,
     RepoMaterializer, RepoMaterializerError, ResourceLayout,
     WorkspaceBoundary, WorkspacePermissionError,
-    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
+    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
@@ -138,19 +138,4 @@ class NativeExperimentAgent:
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
         )
-        if (result.status != ModuleStatus.FAILED or result.session is None
-                or any(item.kind == "execution_record" for item in result.artifacts)):
-            return result
-        try:
-            state = self.loop.store.load(result.session.id)
-        except (OSError, ValueError, KeyError) as error:
-            # Recovering command evidence must not replace the original failure.
-            return result.model_copy(update={"error": result.error.model_copy(update={
-                "details": {**result.error.details, "execution_record_error": str(error)},
-            })})
-        execution_record = ExperimentCompletionCheck.execution_record(state)
-        if execution_record is None:
-            return result
-        return result.model_copy(update={
-            "artifacts": [execution_record, *result.artifacts],
-        })
+        return preserve_execution_record(result, self.loop.store)

@@ -117,7 +117,8 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
      ("python train.py", 0, False)],
 ])
 def test_command_history_is_preserved_without_inferred_task_failure(tmp_path, commands):
-    from resagent2_runtime import AgentEvent
+    from resagent2_runtime.models import NativeToolCall, ToolCallTurn
+    from resagent2_runtime.tool_calling import tool_receipt
     now = datetime.now(UTC)
     state = AgentState(
         session_id="session_test", agent_name="experiment", owner=AgentOwner.EXPERIMENT,
@@ -127,9 +128,10 @@ def test_command_history_is_preserved_without_inferred_task_failure(tmp_path, co
         observation = Command(exit_code).execute(state, CommandInput())
         observation.value.update(command=command, timed_out=timed_out,
                                  stdout_path=f"{sequence}.stdout", stderr_path=f"{sequence}.stderr")
-        state.events.append(AgentEvent(
-            sequence=sequence, step=sequence, type="observation", tool="run_shell",
-            data=observation.model_dump(mode="json"), created_at=now,
+        call_id = f"command_{sequence}"
+        state.tool_turns.append(ToolCallTurn(
+            tool_calls=[NativeToolCall(id=call_id, name="run_shell", arguments=json.dumps({"command": command}))],
+            tool_results={call_id: tool_receipt(observation)},
         ))
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))
     decision = ExperimentCompletionCheck(boundary).evaluate(

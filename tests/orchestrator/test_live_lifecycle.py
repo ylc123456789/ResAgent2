@@ -136,6 +136,73 @@ def test_explicit_interrupt_invalidates_late_child_reply_and_terminates_work(tmp
     assert "Stop old work and reassess" in parent_client.contexts[1].task_context
     assert any(turn.runtime_notice and "work_interrupted" in turn.runtime_notice for turn in controller.scientific_port.store.load(resumed.scientific_session.id).tool_turns)
 
+def test_parent_can_read_interrupted_command_through_same_task_artifact_handoff(tmp_path):
+    from dataclasses import replace
+    from resagent2_components import RegisteredArtifactReader, preserve_execution_record
+    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_runtime.cancellation import OperationCancelled
+
+    facts = {"operation": "process", "command": "python train.py", "pid": 321,
+             "exit_code": -15, "stdout_path": "partial.stdout", "stderr_path": "partial.stderr",
+             "duration_seconds": 1.25, "files_retained": True}
+    partial = tmp_path / "partial.checkpoint"
+
+    class InterruptedCommand:
+        name = "run_shell"
+        input_model = MarkInput
+        def execute(self, state, arguments):
+            partial.write_bytes(b"actual incomplete checkpoint")
+            controller.control_inbox.submit("run_stop_record", "interrupt", "Stop and inspect what happened")
+            current_cancellation().cancel("User interrupted command")
+            raise OperationCancelled("User interrupted command", details=facts)
+
+    class CommandChild(Child):
+        def __init__(self, client):
+            super().__init__(client, [])
+            self.definition = replace(self.definition, tools=(InterruptedCommand(), FinishTool()),
+                permission_policy=AllowListPermissionPolicy({"run_shell", "finish"}))
+        def invoke(self, request):
+            return preserve_execution_record(super().invoke(request), self.store)
+
+    child = CommandChild(ScriptedLLMClient(tool_turns([action("run_shell", value="run command")])))
+    parent_client = ScriptedLLMClient(tool_turns([work(), scientific_finish()]))
+    controller = build(tmp_path, parent_client, child)
+    paused = controller.create_run("run_stop_record", request())
+    assert paused.status == RunStatus.PAUSED
+    task = paused.workflow.tasks[0]
+    attempt = task.attempts[0]
+    assert task.status == TaskStatus.CANCELLED
+    record = next(paused.artifacts[key] for key in attempt.artifact_ids
+                  if paused.artifacts[key].kind == "execution_record")
+    assert read_json(record) == {"results": [{**facts, "execution_status": "interrupted", "stop_confirmed": True}]}
+    report = paused.artifacts[attempt.report_artifact_id]
+    assert record.id in report.metadata["output_artifact_ids"]
+    assert record.id in paused.scientific_artifact_ids
+    notice = next(item for item in paused.runtime_notices if item["type"] == "work_interrupted")
+    assert notice["stop_confirmed"] is True and record.id in notice["artifact_ids"]
+    assert "not validated deliveries" in notice["file_retention_note"]
+    assert not any(item.kind == "code_change" for item in paused.artifacts.values())
+    assert partial.read_bytes() == b"actual incomplete checkpoint"
+    child_state = child.store.load("session_live_child")
+    assert len(child_state.tool_turns[0].tool_results) == 1
+
+    # The parent uses only public refs; details do not enter its requirements.
+    resumed = controller.resume_run(paused.run_id)
+    assert resumed.status == RunStatus.COMPLETED, resumed.terminal_error
+    context = parent_client.contexts[1]
+    assert record.id in context.artifact_index
+    assert facts["command"] not in context.task_context
+    directory = json.loads(context.artifact_index.split("\n", 1)[1])
+    indexed_task = directory["work_requests"][0]["tasks"][0]
+    assert indexed_task["task_id"] == task.id
+    assert any(item["artifact_id"] == record.id for item in indexed_task["artifacts"])
+    reader = RegisteredArtifactReader(list(resumed.artifacts.values()), run_id=resumed.run_id)
+    assert json.loads(reader.read_text(record.id)["content"])["results"][0]["command"] == "python train.py"
+    assert len(child.requests) == 1
+    assert sum(item.kind == "execution_record" for item in resumed.artifacts.values()) == 1
+    assert partial.read_bytes() == b"actual incomplete checkpoint"
+
+
 def test_user_forward_keeps_original_identity_time_and_parent_cannot_invent_source(tmp_path):
     from resagent2_contracts import AgentRequest, BusinessInput, TaskBudget
     event = BusinessInput(event_id="original", text="Exact original words", source="user", created_at=datetime(2020,1,1,tzinfo=UTC))
@@ -146,6 +213,51 @@ def test_user_forward_keeps_original_identity_time_and_parent_cannot_invent_sour
     with pytest.raises(PermissionError, match="reference"):
         tool.execute(state, ReplyToTaskInput(task_id="task_live", user_input_event_id="invented"))
     assert tool.execute(state, ReplyToTaskInput(task_id="task_live", user_input_event_id="original")).task_reply["user_input_event_id"] == "original"
+
+
+def test_interrupt_while_waiting_keeps_prior_command_record_readable_to_parent(tmp_path):
+    from dataclasses import replace
+    from e2e.native_fixtures import ParentQuestionClient
+    from resagent2_components import preserve_execution_record
+    from resagent2_runtime import ToolObservation
+    from resagent2_orchestrator.handoffs import read_json
+    from resagent2_contracts import VerificationResult
+
+    facts = dict(command="python prepare.py", exit_code=0, timed_out=False,
+        stdout_path="prepared.stdout", stderr_path="prepared.stderr", duration_seconds=0.1)
+    class Command:
+        name = "run_shell"
+        input_model = MarkInput
+        def execute(self, state, arguments):
+            return ToolObservation(summary="Preparation completed", value=facts)
+    class CommandChild(Child):
+        def __init__(self, client):
+            super().__init__(client, [])
+            self.definition = replace(self.definition, tools=(Command(), AskUserTool(), FinishTool()),
+                permission_policy=AllowListPermissionPolicy({"run_shell", "ask_user", "finish"}))
+        def invoke(self, request):
+            return preserve_execution_record(super().invoke(request), self.store)
+
+    parent = ParentQuestionClient(tool_turns([work(), scientific_finish()]))
+    child = CommandChild(ScriptedLLMClient(tool_turns([
+        action("run_shell", value="prepare"),
+        action("ask_user", text="Choose how to continue", requested_fields=["choice"]),
+    ])))
+    controller = build(tmp_path, parent, child)
+    waiting = controller.create_run("run_wait_record", request())
+    assert waiting.pending_question and waiting.workflow.tasks[0].status == TaskStatus.NEEDS_USER_INPUT
+    prior = next(ref for ref in waiting.artifacts.values() if ref.kind == "execution_record")
+    assert read_json(prior) == {"results": [VerificationResult(**facts).model_dump(mode="json")]}
+    controller.control_inbox.submit(waiting.run_id, "interrupt", "Stop while awaiting a decision")
+    paused = controller.resume_run(waiting.run_id)
+    assert paused.status == RunStatus.PAUSED and paused.pending_question is None
+    assert prior.id in paused.scientific_artifact_ids
+    assert paused.artifacts[prior.id] == prior
+    assert child.store.load("session_live_child").status == SessionStatus.CANCELLED
+    resumed = controller.resume_run(paused.run_id)
+    assert resumed.status == RunStatus.COMPLETED, resumed.terminal_error
+    assert prior.id in parent.contexts[-1].artifact_index
+    assert len(child.requests) == 1
 
 
 def test_input_between_last_agent_return_and_owner_receiving_is_not_swallowed(tmp_path):

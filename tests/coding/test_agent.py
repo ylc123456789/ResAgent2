@@ -176,3 +176,91 @@ def test_explicit_failure_keeps_one_patch_and_does_not_require_a_failed_command(
     assert {item.path for item in result.artifacts if item.kind == "code_change"} == {"util.py"}
     state = agent.loop.store.load(result.session.id)
     assert not any(event.tool == "run_verification" for event in state.events)
+
+
+@pytest.mark.parametrize("owner", [AgentOwner.CODING, AgentOwner.EXPERIMENT])
+@pytest.mark.parametrize("ending", ["completed", "failed", "interrupted", "unconfirmed"])
+def test_native_agents_return_actual_execution_record_on_normal_failed_and_interrupted_exit(
+    tmp_path, monkeypatch, owner, ending,
+):
+    from resagent2_capabilities import RunShellTool
+    from resagent2_experiment import NativeExperimentAgent
+    from resagent2_runtime import PermissionDecision, ToolObservation
+    from resagent2_runtime.cancellation import OperationCancelled
+
+    init_repo(tmp_path)
+    facts = dict(command="python long_task.py", exit_code=0, timed_out=False,
+        stdout_path="actual.stdout", stderr_path="actual.stderr", duration_seconds=0.2)
+
+    def execute(self, state, arguments):
+        if ending in {"interrupted", "unconfirmed"}:
+            (tmp_path / "partial.txt").write_text("Actual partial output")
+            raise OperationCancelled("User stopped work", stopped=ending == "interrupted",
+                details={**facts, "exit_code": None, "operation": "process", "pid": 123,
+                         "files_retained": True})
+        return ToolObservation(summary="Actual command outcome", value=facts)
+
+    monkeypatch.setattr(RunShellTool, "execute", execute)
+    monkeypatch.setattr("resagent2_capabilities.permissions.OperationPermissionPolicy.check",
+                        lambda *_: PermissionDecision(outcome="allow"))
+    client = ScriptedLLMClient(tool_turns([
+        {"tool": "run_shell", "arguments": {"command": "python long_task.py"}},
+        finish("Exact original report", status="failed" if ending == "failed" else "completed"),
+    ]))
+    agent = NativeCodingAgent(client) if owner == AgentOwner.CODING else NativeExperimentAgent(client)
+    result = agent.invoke(request(tmp_path, writable=True, agent=owner))
+    assert result.status == ("failed" if ending == "unconfirmed" else ending)
+    records = [item for item in result.artifacts if item.kind == "execution_record"]
+    assert len(records) == 1
+    row = json.loads(records[0].content)["results"][0]
+    assert row["command"] == "python long_task.py" and row["stdout_path"] == "actual.stdout"
+    if ending in {"interrupted", "unconfirmed"}:
+        assert (tmp_path / "partial.txt").read_text() == "Actual partial output"
+        assert row["stop_confirmed"] == (ending == "interrupted")
+        assert row["execution_status"] == ("interrupted" if ending == "interrupted" else "unknown")
+        assert row["exit_code"] is None
+    if ending == "unconfirmed":
+        assert result.error.details["stop_confirmed"] is False
+    state = agent.loop.store.load(result.session.id)
+    assert all(len(turn.tool_calls) == len(turn.tool_results) for turn in state.tool_turns)
+
+
+@pytest.mark.parametrize("owner", [AgentOwner.CODING, AgentOwner.EXPERIMENT])
+def test_native_model_interruption_without_command_does_not_create_execution(tmp_path, owner):
+    from resagent2_experiment import NativeExperimentAgent
+    from resagent2_runtime.cancellation import OperationCancelled
+
+    init_repo(tmp_path)
+    class InterruptedClient(ScriptedLLMClient):
+        def next_tool_call(self, *args, **kwargs):
+            raise OperationCancelled("User stopped model generation", details={"operation": "model"})
+    client = InterruptedClient([])
+    agent = NativeCodingAgent(client) if owner == AgentOwner.CODING else NativeExperimentAgent(client)
+    result = agent.invoke(request(tmp_path, writable=True, agent=owner))
+    assert result.status == "interrupted"
+    assert not any(item.kind == "execution_record" for item in result.artifacts)
+
+
+@pytest.mark.parametrize("owner", [AgentOwner.CODING, AgentOwner.EXPERIMENT])
+def test_native_question_wait_already_preserves_completed_command_snapshot(tmp_path, monkeypatch, owner):
+    from resagent2_capabilities import RunShellTool
+    from resagent2_experiment import NativeExperimentAgent
+    from resagent2_runtime import PermissionDecision, ToolObservation
+    from resagent2_contracts import VerificationResult
+
+    init_repo(tmp_path)
+    facts = dict(command="python prepare.py", exit_code=0, timed_out=False,
+        stdout_path="prepare.stdout", stderr_path="prepare.stderr", duration_seconds=0.1)
+    monkeypatch.setattr(RunShellTool, "execute", lambda *_: ToolObservation(summary="Command completed", value=facts))
+    monkeypatch.setattr("resagent2_capabilities.permissions.OperationPermissionPolicy.check",
+                        lambda *_: PermissionDecision(outcome="allow"))
+    client = ScriptedLLMClient(tool_turns([
+        {"tool": "run_shell", "arguments": {"command": "python prepare.py"}},
+        {"tool": "ask_user", "arguments": {"text": "Choose the next step", "requested_fields": ["choice"]}},
+    ]))
+    agent = NativeCodingAgent(client) if owner == AgentOwner.CODING else NativeExperimentAgent(client)
+    result = agent.invoke(request(tmp_path, writable=True, agent=owner))
+    assert result.status == "needs_user_input"
+    assert json.loads(result.artifacts[0].content) == {"results": [VerificationResult(**facts).model_dump(mode="json")]}
+    agent.terminate_session(result.session.id, "User cancelled while waiting")
+    assert agent.loop.store.load(result.session.id).status == "cancelled"

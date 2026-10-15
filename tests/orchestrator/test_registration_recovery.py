@@ -162,6 +162,97 @@ def test_returned_result_recovery_does_not_call_agent_or_allocate_outputs_again(
     assert recovered.pending_registrations == {}
 
 
+@pytest.mark.parametrize("boundary", ["frozen", "registered"])
+def test_interrupted_execution_record_registration_recovery_reuses_identity(tmp_path, monkeypatch, boundary):
+    import json
+    from resagent2_contracts import AttemptStatus, ModuleError, SessionRef, TaskStatus
+
+    store, registry = setup_run(tmp_path)
+    facts = {"results": [{"operation": "process", "command": "python train.py", "pid": 123,
+        "execution_status": "interrupted", "stop_confirmed": True, "files_retained": True}]}
+    class Port:
+        calls = 0
+        def invoke(self, request):
+            self.calls += 1
+            now = datetime.now(UTC)
+            return AgentResult(status="interrupted", report="Command interrupted; files retained", session=SessionRef(
+                id="session_stopped", module="experiment", state_uri="session://session_stopped",
+                status="paused", created_at=now, updated_at=now), artifacts=[ArtifactCandidate(
+                    kind="execution_record", path="execution_record.json", media_type="application/json",
+                    summary="Actual execution", content=json.dumps(facts))])
+
+    port = Port()
+    scheduler = WorkflowScheduler(bindings={"experiment": ModuleBinding(owner=AgentOwner.EXPERIMENT, port=port)},
+                                  store=store, artifact_root=registry.root, data_root=tmp_path / "data")
+    scheduler.accept_proposal("run_recovery", WorkflowProposal(work_request_id="work_original", tasks=[
+        TaskProposal(id="task_result", work_request_id="work_original", workflow_agent_kind="experiment",
+                     instruction="Preserve stopped command evidence")]))
+    with monkeypatch.context() as patch:
+        if boundary == "frozen":
+            original = artifacts_module.os.replace
+            def crash_after_freeze(source, destination):
+                original(source, destination)
+                if Path(destination).name.startswith("artifact_"):
+                    raise ProcessCrash()
+            patch.setattr(artifacts_module.os, "replace", crash_after_freeze)
+        else:
+            original = scheduler.artifact_registry.register
+            def crash_after_registration(*args, **kwargs):
+                original(*args, **kwargs)
+                raise ProcessCrash()
+            patch.setattr(scheduler.artifact_registry, "register", crash_after_registration)
+        with pytest.raises(ProcessCrash):
+            scheduler.execute_task("run_recovery", "task_result")
+    interrupted = store.load("run_recovery")
+    allocated = next(iter(interrupted.pending_registrations.values())).ref.id
+    assert scheduler._recover_interrupted_attempts_in_place(interrupted)
+    recovered = store.load("run_recovery")
+    task = recovered.workflow.tasks[0]
+    attempt = task.attempts[0]
+    assert port.calls == 1 and attempt.artifact_ids == [allocated]
+    assert json.loads(Path(url2pathname(urlparse(recovered.artifacts[allocated].uri).path)).read_text()) == facts
+    # Controller's ordinary cancellation finalizes this Attempt and freezes the
+    # same report+artifact association, without inventing a successful delivery.
+    task.status = TaskStatus.CANCELLED
+    attempt.status = AttemptStatus.CANCELLED
+    attempt.finished_at = datetime.now(UTC)
+    attempt.error = ModuleError(code="interrupted", message="User stopped work", retryable=False)
+    scheduler._persist_attempt_report(recovered, task, attempt)
+    scheduler._save(recovered)
+    scheduler._recover_interrupted_attempts_in_place(recovered)
+    again = store.load("run_recovery")
+    assert port.calls == 1 and sum(ref.kind == "execution_record" for ref in again.artifacts.values()) == 1
+    assert again.artifacts[attempt.report_artifact_id].metadata["output_artifact_ids"] == [allocated]
+    assert not again.pending_registrations and not again.pending_module_results
+
+
+def test_execution_record_snapshots_reuse_only_equal_bytes_and_producing_attempt(tmp_path):
+    import json
+    from resagent2_orchestrator import ArtifactRegistrationError
+
+    store, registry = setup_run(tmp_path)
+    first = {"command": "python prepare.py", "exit_code": 0, "timed_out": False,
+             "stdout_path": "first.stdout", "stderr_path": "first.stderr", "duration_seconds": 0.1}
+    candidate = ArtifactCandidate(kind="execution_record", path="execution_record.json", media_type="application/json",
+        summary="Cumulative execution snapshot", content=json.dumps({"results": [first]}))
+    common = dict(grant=None, producer=AgentOwner.EXPERIMENT, run_id="run_recovery", task_id="task_result",
+                  attempt_number=1, index=1)
+    original = registry.register(candidate, operation_key="pause:1", **common)
+    registry.acknowledge_registration("pause:1", run_id="run_recovery")
+    assert registry.register(candidate, operation_key="pause:2", **common) == original
+    assert registry.register(candidate, operation_key="finish", **common) == original
+    more = candidate.model_copy(update={"content": json.dumps({"results": [first, {**first, "command": "python analyze.py"}]})})
+    latest = registry.register(more, operation_key="pause:3", **common)
+    assert latest.id != original.id and latest.sha256 != original.sha256
+    another_attempt = registry.register(candidate, operation_key="attempt:2", **{**common, "attempt_number": 2})
+    assert another_attempt.id not in {original.id, latest.id}
+    assert len(store.load("run_recovery").artifacts) == 3
+    Path(url2pathname(urlparse(original.uri).path)).write_text("corrupted frozen execution record")
+    with pytest.raises(ArtifactRegistrationError):
+        registry.register(candidate, operation_key="after_corruption", **common)
+    assert len(store.load("run_recovery").artifacts) == 3
+
+
 def test_scheduler_keeps_artifacts_registered_during_agent_invocation(tmp_path):
     store, registry = setup_run(tmp_path)
     class Port:

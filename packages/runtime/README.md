@@ -49,11 +49,13 @@ ContextComposer 完整组织固定契约、任务需求和工件目录；Loop �
   → CompletionCheck
 ```
 
-`AgentAction.arguments` 保持通用对象，同一 Loop 复用不同 Tool 集；工具名及输入校验只由实际 ToolRegistry 决定。所有 Agent 客户端，包括 ScriptedLLMClient，都必须实现原生 `next_tool_call`；ScriptedLLMClient 接收 ToolCallTurn，不接收正文 JSON 动作。Compiler 通过独立 StructuredLLMClient / PromptLLMClient.next_action 从正文读取结构化 JSON。两者共用既有传输、上下文容量与 Run 用量，Agent 的协议历史只属于 Session。
+`AgentAction.arguments` 保持通用对象，同一 Loop 复用不同 Tool 集；工具名及输入校验只由实际 ToolRegistry 决定。所有 Agent 客户端，包括 ScriptedLLMClient，都必须实现原生 `next_tool_call`；ScriptedLLMClient 接收 ToolCallTurn，不接收正文 JSON 动作。Compiler 通过独立 PromptLLMClient.next_action 请求唯一 route_tasks 原生调用，传输客户端保留供显式 JSON 调用方使用的独立 next_action 接口。两者共用既有传输、上下文容量与 Run 用量，Agent 的协议历史只属于 Session。
 
 PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，Capabilities 的 OperationPermissionPolicy 适配 Components 的固定规则与执行边界；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过直接 PendingQuestion/RecordedAnswer 确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
 
-原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work` 必须单独调用；零个、超量或混入控制工具的批次整体拒绝，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
+原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work`、`reply_to_task`、`abandon_work` 必须单独调用；工具说明、通用规则与拒绝反馈共用 `CONTROL_TOOLS` 定义。零个、超量或混入控制工具的批次整体拒绝，反馈点名实际控制工具并说明整批未执行、应单独重试，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
+
+每次模型 HTTP 尝试发送前从当前共享执行预算生成第三部分运行事实：整个 Run 的调用上限、已用、剩余和剩余执行时间。明确覆盖主 Agent、Compiler、子 Agent、后续委派及最终交付，不是当前任务的专属额度；独立调用标注 invocation 范围。重试重新生成和计量请求，失败及已发送的取消调用不退款。该投影不持久化到原生历史，不改变限额或分配策略。
 
 Session 创建时固定非空 `tool_protocol_key`：OpenAICompatibleClient 使用不含 API key 的协议、endpoint、model 身份 hash；当前串行检查点协议为 `openai-compatible-tools/v2`。其他原生客户端必须提供非空、稳定且能标识协议配置的 `tool_session_key`。恢复不允许协议/endpoint/model 切换，没有隐式迁移。
 

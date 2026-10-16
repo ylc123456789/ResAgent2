@@ -1,10 +1,11 @@
-"""The independent E2E composition root uses production mechanisms."""
+"""Real E2E uses the CLI application and its budgeted compiler adapter."""
 
 from datetime import UTC, datetime
 
 import pytest
 
 from e2e import real_e2e
+from resagent2_cli import composition
 from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
 from resagent2_runtime.budget import execution_budget
 
@@ -14,19 +15,29 @@ def composition_scope():
     with execution_budget(max_llm_calls=6, timeout_seconds=60):
         yield
 from resagent2_orchestrator import CompilationError
+from resagent2_orchestrator.compiler import RouteTasks
+from e2e.native_fixtures import tool_turn
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS,
-    AgentAction,
     ContextBudgetExceeded,
     PromptLLMClient,
-    ScriptedLLMClient,
 )
 
 
+class StructuredClient:
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.contexts = []
+
+    def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
+        self.contexts.append(context)
+        return tool_turn("route_tasks", next(self.replies))
+
+
 def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path, composition_scope):
-    client = ScriptedLLMClient([{"tool": "finish"}])
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    client = StructuredClient([{"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]}])
+    monkeypatch.setattr(composition, "_client", lambda: client)
+    controller = real_e2e._application(tmp_path).controller
     layout = controller.scientific_port.resource_layout
     assert all(
         binding.port.resource_layout is layout
@@ -36,11 +47,11 @@ def test_real_e2e_compiler_uses_budgeted_adapter(monkeypatch, tmp_path, composit
     adapter = controller.compiler._client
     assert isinstance(adapter, PromptLLMClient)
 
-    adapter.next_action("Compile this objective", AgentAction)
+    adapter.next_action("Compile this objective", RouteTasks)
     assert client.contexts[0].included_sections == ["system", "compiler_request"]
     assert 0 < client.contexts[0].estimated_tokens <= DEFAULT_AGENT_CONTEXT_TOKENS
     with pytest.raises(ContextBudgetExceeded):
-        adapter.next_action("x" * (DEFAULT_AGENT_CONTEXT_TOKENS * 4), AgentAction)
+        adapter.next_action("x" * (DEFAULT_AGENT_CONTEXT_TOKENS * 4), RouteTasks)
     assert len(client.contexts) == 1
     assert adapter.last_attempts == 0
 
@@ -50,17 +61,13 @@ def test_compilation_instruction_uses_the_existing_context_budget(monkeypatch, t
     """Actual compiler + composition adapter; no network or scripted judgment claim."""
     repeats = DEFAULT_AGENT_CONTEXT_TOKENS if oversized else 4000
     instructions = "Measure accuracy without changing code." + " detail" * repeats
-    draft = {
-        "tasks": [{
-            "key": "measure", "workflow_agent_kind": "experiment", "instruction": instructions,
-        }],
-    }
-    client = ScriptedLLMClient([draft])
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: client)
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    draft = {"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]}
+    client = StructuredClient([draft])
+    monkeypatch.setattr(composition, "_client", lambda: client)
+    controller = real_e2e._application(tmp_path).controller
     request = WorkRequest(
         id="work_review", run_id="run_review", scientific_session_id="session_review",
-        request=WorkRequestDraft(objective=instructions, expected_evidence=["accuracy"]),
+        request=WorkRequestDraft(objective=instructions, tasks=[{'key': 'work', 'instruction': instructions}]),
         created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
     kwargs = dict(current=None, registry=controller.registry, limits=ExecutionLimits())

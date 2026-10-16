@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, RequestOutcome
+from resagent2_runtime.budget import BudgetExhaustedError, BudgetSnapshot, DeadlineExceededError, RequestOutcome
 
 from .models import ResearchRun
 from .store import RunStore
@@ -18,6 +18,16 @@ class RunUsagePort:
     @property
     def used(self) -> int:
         return self.run.usage.used
+
+    def snapshot(self) -> BudgetSnapshot:
+        """Project the same Run facts used by enforcement; no second ledger."""
+        limit = self.run.request.budget.max_llm_calls
+        return BudgetSnapshot(
+            scope="run", max_llm_calls=limit, llm_calls_used=self.used,
+            remaining_llm_calls=max(0, limit - self.used),
+            remaining_timeout_seconds=round(
+                self.run.remaining_timeout_seconds(datetime.now(UTC)), 3),
+        )
 
     def charge(self, call_id: str, retry_index: int) -> None:
         if self.run.remaining_timeout_seconds(datetime.now(UTC)) <= 0:

@@ -9,13 +9,13 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 23.0。旧版 Run 不支持 resume，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 和 E2E 保留独立装配入口，使用相同资源组件。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。答案、工作反馈、目录及精确验收要求通过冻结工件传递，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 27.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：
 
-当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。命令和 E2E 仍独立装配。
+当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。真实 E2E 同样通过 CLI 的 `build_application` 装配。
 
 ```bash
 conda env create -f environment.yml
@@ -59,15 +59,19 @@ resagent2> /quit
 | `/show <run_id>` | 显示已持久化 Run 的当前快照 |
 | `/attach <run_id>` | 只监看现状，不启动或恢复 Run |
 | `/resume <run_id>` | 继续一个已持久化且尚未稳定的 Run |
+| `/answer` | 显示原题与选项，逐字段输入；选项以外的自由文本也可直接填写 |
 | `/answer <value>` | 当前问题只有一个字段时的简写 |
 | `/answer name=value ...` | 显式回答一个或多个字段 |
+| `/answer no --comment "说明"` | 拒绝当前操作，并可选附带说明；批准使用 `yes` |
+| 普通文本 | 原样保存业务补充，不取消当前调用；不是待答问题的答案 |
+| `/interrupt [补充]` | 停止当前模型与受管工具；无补充时暂停等待，有补充时确认停止后处理并继续主会话 |
 | `/artifacts` | 列出当前 Run 的 Artifact |
 | `/trace [run_id]` | 查看 full trace 中的原始请求、响应、原生 tool calls 和可选 reasoning |
 | `/help` / `/quit` | 查看帮助 / 退出 shell |
 
 边界需要特别注意：
 
-- `Ctrl-C` 只停止当前监看并回到提示符，不取消 Run；
+- `Esc`、`Ctrl-C` 与 `/interrupt` 一样请求打断（Esc 需要 POSIX 交互终端；非交互输入使用 /interrupt）；运行中的工具及子进程确认停止后才显示暂停。打断保留已完成工作和文件，不自动回退；活动 WorkRequest 的未完成任务终止，继续时由 Scientific 按需新建委派；
 - `/attach` 只读，不会偷偷启动后台执行；没有执行者推进时应显式使用 `/resume`；
 - shell 启动时确定一个 data root，内部命令不能再切换，以免混用两个 Run store；
 - 默认实时视图只显示 Run 快照和 metadata trace 中的 Agent/Tool 名称，不读取 full trace 的敏感正文。
@@ -100,6 +104,17 @@ resagent2 run --workspace /path/to/repo \
 
 要求在创建 Run 时冻结为 `conclusion_requirements`。缺失时 Scientific 在原 Session 收到反馈，可请求补交工作或询问用户；最终 gate 只接受实际登记且通过冻结文件 hash 检查的产物。这是存在要求，不额外要求 Scientific 阅读或引用该产物，也不证明其内容正确；原有证据引用规则独立生效。
 
+运行中可以从另一个终端补充输入或请求打断，只发布控制记录，不启动第二个执行者：
+
+```bash
+resagent2 input <Run ID> --text '补充要求：先核对已有结果。'
+resagent2 input <Run ID> --file supplement.txt
+resagent2 interrupt <Run ID> --text '暂停后改用已有数据。'
+resagent2 show <Run ID>
+```
+
+普通输入让当前模型回复及已接受的工具批次完成，在下一次模型判断前由 Scientific 处理，不等整个 Task 或 WorkRequest。长命令要立即停止需明确打断。暂停中的 Run 保存输入后仍需显式 resume；普通文本不会被当成当前 ask_user 的答案。一次性 interrupt 返回“请求已保存”，实际是否停止以执行者保存的 paused 状态和中断记录为准；没有运行中的执行者时需 resume 消费控制记录。shell 继续监看到自己的执行者确认结束；活动执行者尚未停止时不允许 /quit。
+
 查看、回答和恢复：
 
 ```bash
@@ -116,6 +131,17 @@ resagent2 resume run_20260901_120000_ab12cd34
 按 `show` 显示的实际 Fields 填写回答即可，不需要重写原题，也没有新增 `--question-text` 参数。Controller 会从当前已保存的问题取得原文，与答案一起记录；恢复时对应 Agent 同时看见原题和答案，避免把“是”或“第二个”误配到另一问题。问题身份和字段校验仍沿用原规则。
 
 Fields 是简短机器键（例如 `mode`）：1–64 个字母、数字或下划线，以 ASCII 字母开头；问题与选项显示在正文，不放在键里。若实际字段是 mode，可用 `--field 'mode=第二个，mul=2*3'`，或在 shell 用 `/answer "mode=第二个，mul=2*3"`。命令仍按第一个 `=` 分隔，答案本身可以包含 `=` 和自然语言。shell 与一次性 CLI 共用参数解析和答案组装，也都接受单字段值或 `NAME=VALUE` 简写；答案放在工作区选项之前，或使用可重复的 `--field NAME=VALUE`。不要自行改名；无效提问键由共享工具契约在暂停前拒绝并反馈给模型，详见 [问答规则](../../docs/current/CONTRACTS.md#questions)。
+
+业务问答的选项只是建议，不限制答案。`show` 和 shell 都展示原题、字段及选项；可以输入选项文字，也可以填写自己的说明，例如 `--field 'strategy=复用已有环境，只执行正式方案'`。shell 中直接 `/answer` 会逐字段询问，输入中的空格、引号和 `=` 按回答内容处理，不作为 shell 命令解析。提交前按 Ctrl-C 或遇到 EOF 不会提交部分答案。
+
+操作批准只接受明确的 `yes` 或 `no`，说明单独填写：
+
+```bash
+resagent2 answer <Run ID> no --comment '这条操作不符合原任务边界，请调整。'
+resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作。'
+```
+
+对应的 shell 写法为 `/answer no --comment "说明"`；直接 `/answer` 会先询问决定，再询问可选说明，直接按 Enter 表示不附说明。不要把决定和说明混写成 `yes，因为……`，CLI 会拒绝这种输入。`--comment` 仅用于操作批准；业务补充应写入该问题的字段。显式传入的说明完整保留原文，包括空字符串、空白和换行；未传 `--comment` 表示无说明，不从说明文字推断任何授权。
 
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 
@@ -148,7 +174,9 @@ resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报�
 
 正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具确认目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/环境/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 git 探针和获准命令执行前的环境核验不另外提问；环境核验失败则不执行命令。显式调用 audit_env 等外部操作仍遵守确认设置，批准也不开放被拒绝的路径或命令。
 
-回答同意后，同一个 Agent 恢复并再次提交原操作，经过复验才真正执行；确认问题不是成功执行记录。用户仍只需通过 answer 回答，最终以实际工具回执和产物判断结果。
+CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。操作确认显示完整工具参数及实际目录、绑定环境等执行上下文。业务问答补充任务信息，进入上下文第二部分；操作决定及可选说明进入原调用的第三部分工具回执，不进入累计任务需求或第四部分工件目录。两类问答直接保存为记录，不产生问答工件；字段名为 `approve` 本身不表示操作批准。
+
+回答后，系统恢复暂停的原工具调用，复验准确动作并消费一次性决定，不需要模型再次提交该调用。批准后才可能执行；拒绝时不执行，并将决定、用户说明和 `not_executed` 事实放入原调用回执。批准后的实际工具回执也保留用户说明。模型根据任务和反馈决定下一步，CLI 不另设“继续／停止”回答字段。最终以实际工具回执和产物判断结果。
 
 三个 Agent、Compiler、历史压缩及模型重试共用 Run 用量；固定 Interpreter 不调用模型。请求发送前先保存占用，崩溃留下的未知请求不退款；`show` 中的用量不等于供应商精确账单。HTTP 与受控子进程共享剩余时间，到期取消请求或终止进程树，恢复不会重新获得完整预算。
 
@@ -294,6 +322,8 @@ bash apps/cli/run-configured.sh /data/resagent2/cli-config.sh resume <Run ID> <�
 
 失败排查时看 `llm_traces.jsonl`：每个逻辑调用一条记录，`attempts` 列出最多三次尝试各自的 `finish_reason`、`usage` 和错误；full 档还有每次原始 response/reasoning/tool calls。顶层响应字段对应最后一次尝试。Agent 原生调用的 `request_text` 是序列化的 `{messages, tools}` JSON，`raw_tool_calls` 是 Provider 返回的数组，单工具 `parsed_action` 为 `{tool, arguments}`、多工具为该对象的数组，`tools` 按执行顺序记录名称；工具调用的 `raw_response_text` 可以为 null，不代表空动作。`request_max_tokens` 是实际发送的输出上限，null 表示未指定；`retry_number + 1` 就是该调用的 HTTP 尝试数，不要再加 attempts 长度。即使最终 JSON 为空，用量和结束原因仍会保存（前提是 provider 返回了它们）。`/trace` 展示顶层最终响应和原生 tool calls；压缩调用显示 compaction，其 action_valid/tool/parsed_action 为 null，不是无效工具动作；逐次失败细节查看 JSONL 的 attempts。
 
+交互实时视图按字节位置读取已完成的 JSONL 行，等待末尾尚未写完的 JSON 或 UTF-8 字符补齐后再展示；完整行的 UTF-8/JSON 损坏时跳过，不阻塞后续记录。该视图仍只展示既有元数据，不改变 full trace 的私有边界。
+
 三个 Agent 的 Session 独立保存在 data root 下的 `sessions/coding`、`sessions/experiment`、`sessions/scientific`，目录/文件权限为 `0700` / `0600`。Session 持久化不受 LLM trace level 控制：即使 trace 为 `off`，原生 assistant/tool 配对历史和 Provider 返回的 reasoning 仍会完整保存；模型输入仅续传近期完整回合与可用交接摘要，不累积旧 prompt。原始 Session 文件不会因压缩变小，仍需按需管理存储。它们可能包含敏感输入或工具结果，应按与 full trace 相同的可信存储边界管理。
 
 原生 Session 创建时绑定协议版本、API endpoint 和模型名的哈希身份，不包含 API key；恢复必须匹配。旧 JSON-only Session、没有该身份的旧记录，或更换了模型/API endpoint 后都不会静默续接，需要新建 Run，当前没有记录迁移。运行时会在工具派发前保存 checkpoint，重启仅把 executing_call_id 对应缺回执项标记未知，后续缺回执项标记未开始，已完成回执不变且不自动重放；这不承诺掉电持久性，也不是有副作用工具的 exactly-once 保证。
@@ -320,17 +350,17 @@ Interpreter 使用固定代码，不创建模型客户端或读取独立上下�
 
 网络等待参数：`RESAGENT2_LLM_TIMEOUT_SECONDS` 默认 `600`，限制单次模型 HTTP 请求总时长。实际取它与 Run 当前剩余时间的较小值，通过 httpx 与可取消的总超时执行；每次重试重新计算余量，同时消耗请求次数。取消本地请求不保证供应商停止计算或计费，未知结果保留预算占用。
 
-三个Agent共享默认值与额度算法，但可分别覆盖。256K表示256000 tokens的模块总输入上限，覆盖完整序列化 `{messages, tools}`：固定原生协议说明、完整工具 `input_model` schema、Session 中已配对的 assistant/tool 历史，以及最后一条重新构造的领域 `user` 上下文。旧轮次的完整领域 prompt 不累积；历史 receipt 不再另做400字符预览裁剪，但工具原始 IO 截断仍有效，且与 `file_reads`、`artifact_reads`、`verification_state`、`command_results` 等领域投影的重复内容都会计量。
+三个 Agent 共享默认值与额度算法，但可分别覆盖。256K 表示 256000 tokens 的模块总输入上限，覆盖完整序列化 `{messages, tools}`：第一部分固定指令与工具契约、第二部分任务需求及累计业务回答、第三部分已配对的 assistant/tool 历史、第四部分完整授权工件目录。旧轮次的完整领域 prompt 不累积；工具结果及读取正文仅由第三部分承载，不再另建重复工作集。原始工具 IO 上限仍有效。
 
-Loop/Composer先计入tools、续传历史、固定领域正文及材料导航框，余量统一分配：文件、工件、诊断和目录先各得相对份额，未用完的空间按优先级借用。材料扩展到整包80%软水位，固定必需内容仍可使用到100%硬上限；不会为了填满窗口加入不需要的内容。完整请求超过80%或实际装不下时，沿用旧历史压缩并保留近期完整配对，原始记录不删。摘要也消耗同一Run调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
+完整请求超过 80% 软水位或实际装不下时，只压缩第三部分的旧历史，并保留近期完整配对；第一、第二、第四部分保持完整，原始工具记录不删。摘要也消耗同一 Run 调用预算，输出额度不变。最终仍超限或摘要失败就明确失败，不自动扩大配置上限、不新增自动暂停。计量仍近似 `ceil(chars / 4)`，不是 Provider tokenizer。详见[上下文构成与额度](../../docs/current/CONTEXT.md#budgets)、[压缩边界](../../docs/current/CONTEXT.md#compaction)。
 
-实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的 JSON-only 路径还计入输出 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过 `PromptLLMClient.next_action` 使用分段上下文和JSON-only路径，不进入AgentLoop；Agent 的原生坏输出不会降级给它处理。
+实际输入预算取“模块限制”和“模型窗口扣除输出与安全余量后”两者的较小值；Compiler 的单一路由工具也计入 schema 说明。1M是默认模型容量，不会把模块输入自动扩到1M：三个Agent与Compiler默认均为256000。切换模型/网关时，同时配置真实 `RESAGENT2_CONTEXT_WINDOW` 和provider接受的 `RESAGENT2_RESERVED_OUTPUT_TOKENS`；不合法组合在调用前拒绝，不按模型名字猜容量。Compiler 通过单一原生路由工具返回 task key 与 Agent 的匹配，不改写 Scientific 的原任务；它不进入 AgentLoop。
 
 `RESAGENT2_RESERVED_OUTPUT_TOKENS` 不只是输入预算里的预留值：它也作为请求的 `max_tokens` 发给 provider。思考模型如何计算输出额度以该 provider 的定义为准；如果思考计入输出额度，就要为思考和最终 JSON 一起留空间。“输入没有超限”不代表“输出不会被截断”。遇到空 JSON，先看 trace 的 `finish_reason` / `usage` / `request_max_tokens`，不要仅凭重跑成功归因模型抖动。确认输出额度不足后可调整这一个现有配置；系统不会自行扩容，仍须满足总窗口约束。
 
 默认值采用 DeepSeek 官方 Harness 的 1M 容量 / 256000 输出额度策略；依据、取舍和验收见 [模型输出默认配置](../../docs/history/reviews/MODEL_OUTPUT_DEFAULTS.md)。更大上限不强迫输出到上限，但允许长思考消耗更多时间和 tokens；这不是对任意任务永不截断的保证。
 
-**升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。程序化客户端和独立 E2E 组合根不会自动继承 CLI 的部署默认值。
+**升级注意**：环境变量优先于代码默认值。如果部署脚本仍显式设置输出 `4096` 或容量 `65536`，更新代码不会覆盖它。使用新默认时应移除这两个旧覆盖，或成对设置 `1000000` / `256000`；只保留旧的小容量会被现有校验拒绝。不要打印 API key 来核对配置。真实 E2E 复用 CLI 的配置与校验；自行创建的程序化客户端仍须显式配置。
 
 如果脚本仍设置某个Agent或Compiler的 `*_CONTEXT_TOKENS=8192` 或 `128000`，该显式覆盖会继续生效，不会随代码默认值升级；使用新的统一默认需移除它或明确设为256000。更大输入允许保留更多工具历史和已读材料，但也可能增加调用耗时和费用，不保证消除模型错误、重复动作或循环。
 
@@ -342,31 +372,31 @@ arXiv 和 OpenAlex 仍是平级来源。literature_search 的 source=auto 只用
 
 可选环境变量 `OPENALEX_API_KEY` 是 OpenAlex 服务密钥，与 LLM key 无关；未设置时使用匿名访问，是否可用及额度以服务端为准。通过现有安全方式加载，勿写入命令行、goal 或日志；后端只通过 Authorization header 发送，不放进 URL/工件/上下文。需要密钥或新费用时先由用户决定，不自动注册或付费。
 
-arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因及来源尝试可查看工具回执和 stdout/stderr 日志，实际来源也保存在回执以及论文工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。检索所得元信息与完整来源摘要按论文保存为 literature_paper，工具仅预览500字符并标明裁剪/复用；literature_search 是查询回执，不代表全文。没有 next_request 不必然代表搜尽：来源总数可能未知，OpenAlex 页号分页也只覆盖前10000条。Scientific 可按需调用 fetch_literature_fulltext，以论文工件 ID 获取公开可用 PDF 并提取正文；原件和解析文本分别登记，PyMuPDF4LLM 的 OCR 关闭，同 Run 已冻结材料可复用。全文不可获取或解析失败应与检索失败分开报告。用户提供的离线资料可经 [外部论文导入](#literature-import) 进入同一 Run；这不算在线检索成功，也不改变服务限流规则。
+arXiv 在同进程内串行请求，间隔至少 3 秒，OpenAlex 至少 1 秒。两源分别遵循共用的冷却规则：429 后至少冷却 60 秒，Retry-After 更长则遵守更长等待；冷却期不向该源发 HTTP 请求，转试其他源。它不是跨进程/IP 的限流器，也不保证修复当前服务器出口的访问问题。不可用原因及来源尝试可查看工具回执和 stdout/stderr 日志，实际来源也保存在回执以及论文工件的 paper_id/source_url；`llm_traces.jsonl` 不是论文 HTTP 请求日志。搜索结果只是临时线索，不创建工件；历史压缩后模型可能看不到它们。Scientific 通过 fetch_literature(source) 持久保存选择的材料，source 使用搜索给出的精确 arxiv:/doi:/openalex: 来源或授权 artifact: 论文。元信息、原 PDF 和提取全文分别登记；PyMuPDF4LLM OCR 关闭。同授权来源和相同快照可复用，失败保留真实部分材料与缺口。离线资料可经 [外部论文导入](#literature-import) 进入同一 Run，不伪装成联网成功。
 
 ### 通用联网搜索和网页获取
 
-CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 网页并通过 `read_artifact` 阅读冻结正文。默认搜索 provider 为 DeepSeek：已有 `DEEPSEEK_API_KEY` 时同时装配 `web_search`，复用该 key，无需申请另一家搜索服务；没有该 key 时搜索不可用，网页获取仍可独立使用。不会因为存在 `TAVILY_API_KEY` 就自动换源。
+CLI 默认装配 `web_fetch`，Scientific 可按需抓取一个公开 HTML/text 网页并通过 `read_artifact` 阅读冻结正文。默认搜索 provider 为 DeepSeek：已有 `DEEPSEEK_API_KEY` 时同时装配 `web_search`，复用该 key，无需申请另一家搜索服务；没有该 key 时搜索不可用，网页获取仍可独立使用。搜索配置只支持 `deepseek` 和 `off`，不自动换源。
 
 | 部署变量 | 默认值与规则 |
 |---|---|
-| `RESAGENT2_WEB_SEARCH_PROVIDER` | 未设置时默认 `deepseek`；可显式设 `deepseek`、`tavily` 或 `off`。显式选择前两者须分别有 `DEEPSEEK_API_KEY` / `TAVILY_API_KEY`，否则在创建客户端和目录前报配置错误；`off` 只关闭搜索 |
+| `RESAGENT2_WEB_SEARCH_PROVIDER` | 未设置时默认 `deepseek`；可显式设 `deepseek` 或 `off`。显式选择 `deepseek` 须有 `DEEPSEEK_API_KEY`，否则在创建客户端和目录前报配置错误；其他值也直接报配置错误，不静默回退；`off` 只关闭搜索 |
 | `RESAGENT2_WEB_SEARCH_MODEL` | `deepseek-flash`；用于 DeepSeek 搜索请求，独立于三个 Agent/Compiler 的 `RESAGENT2_MODEL` |
 | `RESAGENT2_WEB_SEARCH_TIMEOUT_SECONDS` | 60秒；DeepSeek 搜索请求上限，须正整数 |
-| `RESAGENT2_WEB_TIMEOUT_SECONDS` | 30秒；网页抓取和显式 Tavily 搜索上限，须正整数 |
-| `RESAGENT2_WEB_MAX_RESPONSE_BYTES` | 4 MiB；两种搜索响应及网页抓取的字节上限，须正整数 |
+| `RESAGENT2_WEB_TIMEOUT_SECONDS` | 30秒；网页抓取上限，须正整数 |
+| `RESAGENT2_WEB_MAX_RESPONSE_BYTES` | 4 MiB；DeepSeek 搜索响应及网页抓取的字节上限，须正整数 |
 
-DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/messages`，发送 `anthropic-version: 2023-06-01`、`x-api-key` 和 `Authorization: Bearer`。它不读取 `RESAGENT2_API_BASE`，当前不提供另一个搜索 base URL 配置；主 Agent 使用兼容服务时也可单独使用官方 DeepSeek 搜索。密钥通过现有安全配置加载，不进入工件、目标文本或模型上下文。显式 Tavily 仍使用其独立 key；无需新增 SDK。
+DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/messages`，发送 `anthropic-version: 2023-06-01`、`x-api-key` 和 `Authorization: Bearer`。它不读取 `RESAGENT2_API_BASE`，当前不提供另一个搜索 base URL 配置；主 Agent 使用兼容服务时也可单独使用官方 DeepSeek 搜索。密钥通过现有安全配置加载，不进入工件、目标文本或模型上下文。搜索不需要独立的搜索服务 key 或 SDK。
 
-`web_search` 默认预览5条、最多10条，每次一批，不支持分页。搜索工件保存本次收到的全部规范化结果；回执提供保存总数、预览省略数与截断标记，更多来源通过 `read_artifact` 读取。`max_results` 不保证降低 DeepSeek 内部搜索次数或费用；Tavily 同时把该值作为提供方请求的数量提示。DeepSeek 独立请求沿用 DSH 简短查询提示，后端只使用原生来源，生成回答不作为网页证据或替代 Scientific 的研究判断；后端通过供应商托管的 `web_search` 工具获得来源，单次请求输出上限4096 tokens、托管工具设置 `max_uses=5`；链接及标题只取原生 `web_search_result`，snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，不把生成正文当网页证据。标题、URL和snippet仍是线索，不代表已读网页或已核对论文。本轮大陆服务器实测DeepSeek只返回标题/URL和不透明的`encrypted_content`，没有citation片段，因此snippet全空；不保证每次搜索提供可读摘要，需要正文时由Scientific按目标选择网页或论文全文工具。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源、抓取时间及HTML中的链接文字/合法http(s)地址，相对地址按最终页面URL解析；链接保留不等于已抓取链接目标，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
+`web_search` 默认预览5条、最多10条，每次一批，不支持分页。搜索返回本次规范化候选及预览信息，不登记工件；候选只保留在可压缩的第三部分。需要长期保留的网页须经 `web_fetch` 冻结并登记。`max_results` 只控制预览数量，不保证降低 DeepSeek 内部搜索次数或费用。DeepSeek 独立请求沿用 DSH 简短查询提示，后端只使用原生来源，生成回答不作为网页证据或替代 Scientific 的研究判断；后端通过供应商托管的 `web_search` 工具获得来源，单次请求输出上限4096 tokens、托管工具设置 `max_uses=5`；链接及标题只取原生 `web_search_result`，snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，不把生成正文当网页证据。标题、URL和snippet仍是线索，不代表已读网页或已核对论文。本轮大陆服务器实测DeepSeek只返回标题/URL和不透明的`encrypted_content`，没有citation片段，因此snippet全空；不保证每次搜索提供可读摘要，需要正文时由Scientific按目标选择网页或论文全文工具。`web_fetch` 使用普通 HTTP，不执行 JavaScript，不读取 PDF/二进制或需登录的页面；提取文本保留来源、抓取时间及HTML中的链接文字/合法http(s)地址，相对地址按最终页面URL解析；链接保留不等于已抓取链接目标，失败如实反馈。它仅连接经过校验的公网地址，不使用环境 HTTP 代理。
 
-每次 DeepSeek 搜索会额外占用一次共享 Run `max_llm_calls`，与 Scientific、其他 Agent、Compiler、压缩和重试共用总账；托管搜索的 `max_uses` 不是新的模型请求钱包。搜索不创建另一套 Agent/Session，不自动续传、重试或换源。Tavily 搜索与网页抓取不占模型请求次数，所有请求仍受 Run 剩余时间约束，超大响应拒绝而不是默默截断。失败回执保留实际错误和可用的 `retry_after`。DeepSeek 返回 `max_uses_exceeded` 且已有有效来源时，保留来源并明确给出 `status=partial` / `incomplete_reason`，不补发请求；没有有效来源则失败。部分结果不能当作完整搜索，`truncated` 只表示预览省略。服务端 usage 可能包括被次数限制拒绝的额外尝试，应记录实际值，不能从客户端一次请求推算内部次数或费用。
+每次 DeepSeek 搜索会额外占用一次共享 Run `max_llm_calls`，与 Scientific、其他 Agent、Compiler、压缩和重试共用总账；托管搜索的 `max_uses` 不是新的模型请求钱包。搜索不创建另一套 Agent/Session，不自动续传、重试或换源。网页抓取不占模型请求次数，所有请求仍受 Run 剩余时间约束，超大响应拒绝而不是默默截断。失败回执保留实际错误和可用的 `retry_after`。DeepSeek 返回 `max_uses_exceeded` 且已有有效来源时，保留来源并明确给出 `status=partial` / `incomplete_reason`，不补发请求；没有有效来源则失败。部分结果不能当作完整搜索，`truncated` 只表示预览省略。服务端 usage 可能包括被次数限制拒绝的额外尝试，应记录实际值，不能从客户端一次请求推算内部次数或费用。
 
 搜索请求沿用 `RESAGENT2_LLM_TRACE_LEVEL` / `RESAGENT2_LLM_TRACE_DIR`：`full` 保存请求与响应正文，`metadata` 只保存内容 hash，并关联当前 Run、Session 和工具步骤；认证 header 不写入 trace。托管搜索也可能消费模型 tokens 或供应商搜索费用；没有核实额外搜索费率时不能称其免费。本轮大陆服务器已完成真实验收及独立复核，见[验收记录](../../docs/history/reviews/WEB_TOOLS_2026-10-06.md)；其他账号和网络出口仍须独立检查，不能由确定性测试或单节点结果推断。
 
 联网搜索会产生额外模型 token 费用，见[DeepSeek 官方 Web Search 说明](https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code/#使用-claude-code-的-web-search-功能)和[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。公开文档未单列按次搜索费率；具体以实际usage和账单为准。
 
-网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿原登记表与 research index 交接，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
+网页工具和文献工具是不同材料入口：网页工具寻找通用来源、读取页面；文献工具核对学术来源题录并获取论文 PDF/全文。是否使用、如何组合以及何时停止由 Scientific 根据用户目标决定，没有固定“网页→论文”流程。工件沿唯一登记表交接，第四部分从授权材料重建完整目录，不建立第二份资料库。调用契约见 [网页工具](../../docs/current/CONTRACTS.md#通用网页工具)。
 
 ### 退出码
 
@@ -384,4 +414,4 @@ DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/message
 - 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。
 
-文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；程序化调用和独立 E2E 不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。
+文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；真实 E2E 共用这一装配及配置；自行创建的程序化调用不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

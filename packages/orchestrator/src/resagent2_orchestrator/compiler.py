@@ -1,4 +1,4 @@
-"""Compile a work request into a bounded graph of single-mode Agent calls."""
+"""Route Scientific's explicit tasks without rewriting their requirements."""
 
 from __future__ import annotations
 
@@ -6,14 +6,16 @@ import json
 from dataclasses import dataclass
 from typing import Annotated, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
-from resagent2_runtime.budget import BudgetExhaustedError, DeadlineExceededError, current_budget, invoke_model
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from resagent2_runtime.budget import (
+    BudgetExhaustedError, DeadlineExceededError, current_budget, invoke_model,
+)
 
 from resagent2_contracts import (
     FutureArtifactBinding, ExecutionLimits, TaskProposal, Workflow, WorkflowAgentKind,
-    WorkflowAgentRegistry, WorkflowPatch, WorkflowProposal, WorkRequest,
-    WorkspaceDescriptor, WorkspaceId,
+    WorkflowAgentRegistry, WorkflowPatch, WorkflowProposal, WorkRequest, WorkspaceDescriptor,
 )
+from resagent2_runtime.cancellation import OperationCancelled
 from .workflow_validation import validate_workflow_candidate
 
 
@@ -31,9 +33,11 @@ class CompilationError(ValueError):
         self.llm_calls = llm_calls
 
 
-class CompilerLLM(Protocol):
-    """Client supplies the output schema from action_type; Compiler validates it."""
+class UnrouteableTaskError(CompilationError):
+    """Valid routing judgment that needs a revised Scientific task."""
 
+
+class CompilerLLM(Protocol):
     def next_action(self, prompt: str, action_type: type[BaseModel]) -> BaseModel | dict: ...
 
 
@@ -45,38 +49,33 @@ class WorkflowCompiler(Protocol):
     ) -> CompilationResult: ...
 
 
-DraftKey = Annotated[str, StringConstraints(
-    strip_whitespace=True, min_length=1, max_length=80,
-    pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+TaskKey = Annotated[str, StringConstraints(
+    min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
 )]
 NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-class DraftArtifactBinding(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source_task: DraftKey
-    output_selector: NonEmpty
+class TaskRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+    task_key: TaskKey
+    workflow_agent_kind: WorkflowAgentKind | None = None
+    reason: NonEmpty | None = None
+
+    @model_validator(mode="after")
+    def validate_choice(self):
+        if (self.workflow_agent_kind is None) == (self.reason is None):
+            raise ValueError("provide exactly one Agent match or unrouteable reason")
+        return self
 
 
-class CompilationTaskDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    key: DraftKey
-    workflow_agent_kind: WorkflowAgentKind
-    instruction: NonEmpty
-    depends_on: list[DraftKey] = Field(default_factory=list)
-    workspace_id: WorkspaceId | None = None
-    input_artifacts: list[str] = Field(default_factory=list)
-    input_artifact_bindings: list[DraftArtifactBinding] = Field(default_factory=list)
-    output_names: list[str] = Field(default_factory=list)
-
-
-class CompilationDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tasks: list[CompilationTaskDraft] = Field(min_length=1)
+class RouteTasks(BaseModel):
+    """The sole Compiler output: one routing decision per existing task."""
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
+    routes: list[TaskRoute] = Field(min_length=1)
 
 
 class DeterministicWorkflowCompiler:
-    """Inject a graph in deterministic tests without an LLM."""
+    """Inject a trusted graph in orchestration fixtures without an LLM."""
 
     def __init__(self, proposal: WorkflowProposal, patch: WorkflowPatch | None = None) -> None:
         self._proposal = proposal
@@ -84,72 +83,79 @@ class DeterministicWorkflowCompiler:
 
     def compile(self, request, *, current, registry, limits, workspaces=None):
         if current is None:
-            return CompilationResult(self._proposal)
+            proposal = self._proposal.model_copy(deep=True)
+            proposal.work_request_id = request.id
+            for task in proposal.tasks:
+                task.work_request_id = request.id
+                task.shared_goal = request.request.objective
+                task.shared_constraints = list(request.request.constraints)
+            return CompilationResult(proposal)
         if self._patch is None:
             raise CompilationError("no patch configured for an existing workflow")
-        return CompilationResult(self._patch)
+        patch = self._patch.model_copy(deep=True)
+        patch.work_request_id = request.id
+        for task in patch.add_tasks:
+            task.work_request_id = request.id
+            task.shared_goal = request.request.objective
+            task.shared_constraints = list(request.request.constraints)
+        return CompilationResult(patch)
 
 
 def _compile_prompt(request, current, registry, limits, workspaces, *, feedback=None):
-    remaining = limits.max_tasks - (len(current.tasks) if current else 0)
     lines = [
         "### Responsibility",
-        "Compile the smallest currently executable graph for this work request. "
-        "Each Agent has one business mode. Choose its role by the purpose of the work: "
-        "code correctness belongs to Coding; research measurements belong to Experiment. "
-        "When implementation is a known prerequisite, route it to Coding before Experiment. "
-        "Use Experiment directly when the needed code is available. Minimize the graph "
-        "within these roles: keep an Agent's inspection, preparation and execution together "
-        "where possible. Asking the user is part of a task, not a separate workflow phase. "
-        "Route existing-results analysis to Experiment even when execution is forbidden. "
-        "Scientific is never a graph node.",
-        "Preserve the work request's objective, evidence needs and constraints. "
-        "Add task work only when requested or necessary for an identified prerequisite. "
-        "Do not turn optional improvements into required deliverables or add speculative "
-        "implementation, generalization or validation work. Let Agents inspect uncertain "
-        "details within their assigned tasks; do not assume missing information requires "
-        "new code, or assign missing implementation to Experiment as a fallback.",
-        "",
-        "### Graph and handoff rules",
-        "Dependencies refer only to keys in this draft and require success. "
-        "Conditional repairs are requested in a later round after an actual failure.",
-        "Future input bindings select a logical output_name declared by a direct dependency. "
-        "Use output_names only when an explicit cross-task handoff needs named outputs. "
-        "Do not guess artifact IDs. Existing input_artifacts must already be supplied materials.",
-        "Preserve the work request's constraints on effects. A confirmation request is "
-        "not execution: one approved operation may require calling the same tool again "
-        "after approval. Do not turn a single intended operation into a one-tool-call limit.",
+        "Match each explicit Scientific task to a registered execution Agent by the task's purpose. "
+        "Coding owns implementation and code correctness; Experiment owns research execution and measurements, "
+        "including analysis of existing results. Scientific is never a graph node.",
+        "You are a router, not a task planner. Do not rewrite instructions or shared constraints, "
+        "add, delete, split or merge tasks, alter dependencies, select resources, or broaden permissions. "
+        "Local keys identify already specified tasks; runtime identities are assigned by fixed code.",
+        "If one task mixes incompatible responsibilities, cannot be matched, or requires an unavailable Agent, "
+        "return its specific unrouteable reason. Do not silently choose a fallback or repair the request.",
         "",
         "### Output",
-        "Return CompilationDraft using the supplied output schema. Use instruction as "
-        "the only task text. Do not invent metric names, file paths, acceptance policies, "
-        "permissions or runtime identities. Preserve explicitly requested artifact "
-        "output_name values verbatim in the task instruction; Run delivery requirements "
-        "do not create a new task acceptance policy.",
+        "Call the only supplied tool route_tasks once. Cover each supplied task key exactly once. "
+        "For each key provide workflow_agent_kind, or reason when it cannot be routed; never both. "
+        "Do not invent task text, evidence, file paths, commands, or control fields.",
         "",
         "### Available execution Agents",
         *[f"- {item.workflow_agent_kind.value}: {item.description}" for item in registry.definitions],
         "",
-        "### Work input",
-        "Work request: " + request.request.model_dump_json(),
-        f"Remaining task capacity (an upper bound, not a target): {remaining}",
-        "Logical workspaces: " + json.dumps([w.model_dump(mode="json") for w in workspaces]),
+        "### Original work input",
+        request.request.model_dump_json(),
     ]
     if feedback:
-        lines.extend(["", "### Structural feedback",
-                      "Previous draft rejected by structural validation: " + feedback])
+        lines.extend(["", "### Structural feedback", "Previous routing rejected: " + feedback])
     return "\n".join(lines)
 
 
-def _materialize_draft(draft, *, request, current, registry, limits, workspaces):
+def _validate_request_resources(request, current, limits, workspaces):
     used = len(current.tasks) if current else 0
-    if not draft.tasks or len(draft.tasks) > limits.max_tasks - used:
-        raise CompilationError("draft exceeds remaining task limits or is empty")
-    keys = [task.key for task in draft.tasks]
-    if len(keys) != len(set(keys)):
-        raise CompilationError("draft has duplicate task keys")
+    if len(request.request.tasks) > limits.max_tasks - used:
+        raise CompilationError("explicit tasks exceed remaining task limits")
+    workspace_ids = {w.workspace_id for w in workspaces}
+    for task in request.request.tasks:
+        if task.workspace_id is None and len(workspace_ids) > 1:
+            raise CompilationError("workspace_id required with multiple workspaces")
+        if task.workspace_id is not None and task.workspace_id not in workspace_ids:
+            raise CompilationError("task selected an undeclared workspace")
+
+
+def _materialize_routes(routes, *, request, current, registry, limits, workspaces):
+    _validate_request_resources(request, current, limits, workspaces)
+    keys = [task.key for task in request.request.tasks]
+    route_keys = [route.task_key for route in routes.routes]
+    if len(route_keys) != len(set(route_keys)):
+        raise CompilationError("routing has duplicate task keys")
+    if set(route_keys) != set(keys):
+        raise CompilationError("routing must cover exactly the supplied task keys")
     declared = {item.workflow_agent_kind for item in registry.definitions}
-    workspace_ids = [w.workspace_id for w in workspaces]
+    by_key = {route.task_key: route for route in routes.routes}
+    for route in routes.routes:
+        if route.reason is not None:
+            raise UnrouteableTaskError(f"task {route.task_key} cannot be routed: {route.reason}")
+        if route.workflow_agent_kind not in declared:
+            raise CompilationError("router selected an undeclared Agent")
     existing = {task.id for task in current.tasks} if current else set()
     mapping = {}
     for key in keys:
@@ -161,47 +167,35 @@ def _materialize_draft(draft, *, request, current, registry, limits, workspaces)
             counter += 1
         existing.add(candidate)
         mapping[key] = candidate
+    workspace_ids = [w.workspace_id for w in workspaces]
     tasks = []
-    for item in draft.tasks:
-        if item.workflow_agent_kind not in declared:
-            raise CompilationError("compiler selected an undeclared Agent")
-        if not set(item.input_artifacts) <= set(request.request.input_artifact_ids):
-            raise CompilationError("compiler selected an unsupplied input artifact")
-        if any(dep not in mapping for dep in item.depends_on):
-            raise CompilationError("draft dependency references an unknown key")
+    for item in request.request.tasks:
         workspace = item.workspace_id
         if workspace is None and len(workspace_ids) == 1:
             workspace = workspace_ids[0]
-        elif workspace is None and len(workspace_ids) > 1:
-            raise CompilationError("workspace_id required with multiple workspaces")
-        if workspace is not None and workspace not in workspace_ids:
-            raise CompilationError("draft selected an undeclared workspace")
-        bindings = []
-        for binding in item.input_artifact_bindings:
-            if binding.source_task not in mapping:
-                raise CompilationError("future artifact source is unknown")
-            bindings.append(FutureArtifactBinding(
-                source_task=mapping[binding.source_task], output_selector=binding.output_selector,
-            ))
         tasks.append(TaskProposal(
             id=mapping[item.key], work_request_id=request.id,
-            workflow_agent_kind=item.workflow_agent_kind, instruction=item.instruction,
+            workflow_agent_kind=by_key[item.key].workflow_agent_kind,
+            instruction=item.instruction,
+            shared_goal=request.request.objective,
+            shared_constraints=list(request.request.constraints),
             depends_on=[mapping[key] for key in item.depends_on], workspace_id=workspace,
-            input_artifacts=item.input_artifacts, input_artifact_bindings=bindings,
-            output_names=item.output_names,
+            input_artifacts=list(item.input_artifact_ids),
+            input_artifact_bindings=[FutureArtifactBinding(
+                source_task=mapping[binding.source_task], output_selector=binding.output_selector,
+            ) for binding in item.input_artifact_bindings],
+            output_names=list(item.output_names),
         ))
     if current is None:
         candidate = WorkflowProposal(work_request_id=request.id, tasks=tasks)
     else:
-        candidate = WorkflowPatch(
-            work_request_id=request.id, based_on_revision=current.revision, add_tasks=tasks,
-        )
+        candidate = WorkflowPatch(work_request_id=request.id, based_on_revision=current.revision, add_tasks=tasks)
     validate_workflow_candidate(candidate)
     return candidate
 
 
 class LLMWorkflowCompiler:
-    """One structured draft, with at most one correction for invalid structure."""
+    """One routing call, with at most one correction of invalid output structure."""
 
     def __init__(self, client: CompilerLLM) -> None:
         self._client = client
@@ -210,16 +204,12 @@ class LLMWorkflowCompiler:
     def compile(self, request, *, current, registry, limits, workspaces=None):
         if current_budget() is None:
             raise CompilationError("Compiler requires a caller-supplied execution budget")
-        return self._compile(request, current=current, registry=registry, limits=limits,
-                             workspaces=workspaces)
-
-    def _compile(self, request, *, current, registry, limits, workspaces=None):
         self.llm_calls = 0
         initial_usage = current_budget().usage.used
         feedback = None
         try:
-            if limits.max_tasks <= (len(current.tasks) if current else 0):
-                raise CompilationError("no remaining task slots")
+            request = WorkRequest.model_validate(request)
+            _validate_request_resources(request, current, limits, workspaces or [])
             for attempt in range(2):
                 current_budget().check()
                 setter = getattr(self._client, "set_attempt_limit", None)
@@ -230,32 +220,24 @@ class LLMWorkflowCompiler:
                     tracer(agent="workflow_compiler", run_id=request.run_id, work_request_id=request.id)
                 try:
                     raw = invoke_model(self._client, "next_action",
-                        _compile_prompt(request, current, registry, limits, workspaces or [], feedback=feedback),
-                        CompilationDraft,
-                    )
-                except (json.JSONDecodeError, ValidationError) as error:
-                    if attempt:
-                        raise
-                    feedback = str(error)
-                    continue
-                finally:
-                    self.llm_calls = current_budget().usage.used - initial_usage
-                try:
-                    draft = CompilationDraft.model_validate(raw.model_dump() if isinstance(raw, BaseModel) else raw)
-                    output = _materialize_draft(
-                        draft, request=request, current=current, registry=registry,
-                        limits=limits, workspaces=workspaces or [],
-                    )
-                    return CompilationResult(output, self.llm_calls)
+                        _compile_prompt(request, current, registry, limits, workspaces or [], feedback=feedback), RouteTasks)
+                    routes = RouteTasks.model_validate(raw.model_dump() if isinstance(raw, BaseModel) else raw)
+                    output = _materialize_routes(routes, request=request, current=current,
+                        registry=registry, limits=limits, workspaces=workspaces or [])
+                    return CompilationResult(output, current_budget().usage.used - initial_usage)
+                except UnrouteableTaskError:
+                    raise
                 except (ValueError, json.JSONDecodeError) as error:
                     if attempt:
-                        raise CompilationError(f"compiler failed after 2 attempts: {error}") from error
+                        raise CompilationError(f"router failed after 2 attempts: {error}") from error
                     feedback = str(error)
-        except (BudgetExhaustedError, DeadlineExceededError):
+                finally:
+                    self.llm_calls = current_budget().usage.used - initial_usage
+        except (BudgetExhaustedError, DeadlineExceededError, OperationCancelled):
             raise
         except Exception as error:
             if isinstance(error, CompilationError):
                 error.llm_calls = self.llm_calls
                 raise
             raise CompilationError(str(error) or type(error).__name__, llm_calls=self.llm_calls) from error
-        raise CompilationError("compiler failed", llm_calls=self.llm_calls)
+        raise CompilationError("router failed", llm_calls=self.llm_calls)

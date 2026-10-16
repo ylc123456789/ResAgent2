@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field
 from resagent2_contracts import (
     AgentOwner, ArtifactCandidate, ArtifactRef, AttemptStatus, ConclusionRequirements,
-    ModuleStatus, ScientificOpinion, SessionStatus, TaskStatus,
-    WorkRequestStatus, WorkTaskOutcome, missing_required_evidence_kinds,
+    ModuleStatus, ModuleError, ScientificOpinion, SessionStatus, TaskStatus,
+    WorkRequestStatus, WorkTaskResult, missing_required_evidence_kinds,
 )
 from resagent2_components.artifacts import RegisteredArtifactReader
 from .handoffs import read_json, check_acceptance
@@ -19,7 +19,8 @@ class FinalReportData(BaseModel):
     goal: str
     opinion: ScientificOpinion
     evidence: list[ArtifactRef]
-    execution_issues: list[WorkTaskOutcome] = Field(default_factory=list)
+    execution_issues: list[WorkTaskResult] = Field(default_factory=list)
+    work_errors: dict[str, ModuleError] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class ScientificCompletionValidator:
         if (session is None or session.module != AgentOwner.SCIENTIFIC or session.status != SessionStatus.COMPLETED
                 or run.scientific_session is None or session.id != run.scientific_session.id):
             reject(CompletionViolationCode.INVALID_SESSION, "completed result requires its bound Scientific session")
-        if run.pending_question or any(work.status not in {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED} for work in run.work_requests):
+        if run.pending_question or run.child_questions or any(work.status not in {WorkRequestStatus.CONSUMED, WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} for work in run.work_requests):
             reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "active control state prevents completion")
         if any(task.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT} for task in (run.workflow.tasks if run.workflow else [])):
             reject(CompletionViolationCode.ACTIVE_CONTROL_STATE, "non-terminal tasks prevent completion")
@@ -107,18 +108,21 @@ class ScientificCompletionValidator:
                 outputs = [run.artifacts[key] for key in last.artifact_ids]
                 if any(ref.run_id != run.run_id or ref.task_id != task.id or ref.attempt_number != last.number
                        or ref.producer.value != task.workflow_agent_kind.value for ref in outputs
-                       if ref.kind != "question"):
+                       if ref.kind != "module_report"):
                     raise ValueError("completed task has foreign output artifacts")
                 check_acceptance(run, task, last, outputs)
             except (ValueError, OSError, KeyError) as error:
                 reject(CompletionViolationCode.INCONSISTENT_TASK_RESULT, str(error), [task.id])
         issues = [item for work in run.work_requests if work.outcome for item in work.outcome.tasks if item.status != "completed"]
-        if issues and not opinion.limitations:
+        work_errors = {work.id: work.error for work in run.work_requests
+                       if work.status in {WorkRequestStatus.FAILED, WorkRequestStatus.CANCELLED} and work.error is not None}
+        if (issues or work_errors) and not opinion.limitations:
             reject(CompletionViolationCode.MISSING_LIMITATIONS, "failed execution work requires stated limitations")
         if violations:
             return CompletionValidation(tuple(violations))
         return CompletionValidation(report=FinalReportData(run_id=run.run_id, goal=run.request.goal, opinion=opinion,
-                                                          evidence=[run.artifacts[key] for key in opinion.evidence_artifact_ids], execution_issues=issues))
+                                                          evidence=[run.artifacts[key] for key in opinion.evidence_artifact_ids],
+                                                          execution_issues=issues, work_errors=work_errors))
 
 
 class FinalReportRenderer:
@@ -136,8 +140,9 @@ class FinalReportRenderer:
                               ("Recommended next steps", opinion.recommended_next_steps)]:
             lines.extend(["", "## " + title, "", *["- " + item for item in values or ["None."]]])
         lines.extend(["", "## Execution issues", ""])
-        lines.extend(f"- `{issue.task_id}` ({issue.status}): {issue.summary}" for issue in data.execution_issues)
-        if not data.execution_issues:
+        lines.extend(f"- WorkRequest `{work_id}` (failed): {error.message}" for work_id, error in data.work_errors.items())
+        lines.extend(f"- `{issue.task_id}` ({issue.status.value}): {issue.error.message if issue.error else 'No detailed error recorded'}" for issue in data.execution_issues)
+        if not data.execution_issues and not data.work_errors:
             lines.append("- None.")
         content = "\n".join(lines) + "\n"
         return RenderedFinalReport(ArtifactCandidate(kind="final_report", path="final_report.md", media_type="text/markdown",

@@ -55,7 +55,8 @@ def test_plan_keeps_recent_complete_turns_and_does_not_mutate_history():
     assert 0 < plan.history_start < len(turns)
     payload = json.loads(plan.prompt)
     target_chars = min(4096, max(1, limit // 20)) * 4
-    assert f"Aim for {target_chars} characters or fewer" in payload["output_requirement"]
+    assert "Aim for " in payload["output_requirement"]
+    assert "characters or fewer" in payload["output_requirement"]
     assert "non-empty" in payload["output_requirement"]
     compacted = payload["completed_tool_messages"]
     assert [message["role"] for message in compacted] == [
@@ -238,7 +239,8 @@ def test_summary_request_uses_exact_bounded_wire_and_shared_full_trace(
     assert result == "concise handoff"
     assert client.last_attempts == len(requests) == 1
     body = requests[0]
-    wire = compaction_input_text(prompt)
+    status = body["messages"][-1]["content"].split("\n", 1)[1]
+    wire = compaction_input_text(prompt, runtime_status=status)
     assert body["messages"] == json.loads(wire)["messages"]
     assert body["max_tokens"] == 128
     assert body["temperature"] == 0

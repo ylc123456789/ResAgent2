@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import RuntimeModel
+from resagent2_runtime.cancellation import OperationCancelled
 from resagent2_components.environment import EnvironmentBinding, EnvironmentManagerError, version_matches
 
 def _valid_python_version(version: str) -> bool:
@@ -99,6 +100,15 @@ class PrepareEnvironmentTool:
                 workspace_id=self.binding.workspace_id,
                 python_version=version,
             )
+        except OperationCancelled:
+            # A partially rebuilt prefix is preserved but must be prepared and
+            # audited again before use, including after a process restart.
+            self.binding.current = None
+            self.binding.invalidate()
+            self.binding.manager.invalidate(
+                run_id=self.binding.run_id, workspace_id=self.binding.workspace_id,
+            )
+            raise
         except EnvironmentManagerError as error:
             # A failed switch must not leave the old env as the active binding,
             # but must still remember the attempted version.

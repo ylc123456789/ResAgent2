@@ -36,7 +36,7 @@ def _finish(artifact_id):
 def _source(tmp_path, *, run_id="run_s"):
     registry = ArtifactRegistry(tmp_path / "artifacts")
     ref = registry.register_scientific(ArtifactCandidate(
-        kind="module_report", path="evidence.txt", media_type="text/plain",
+        kind="web_page", path="evidence.txt", media_type="text/plain",
         summary="Source report", content="Source content",
     ), run_id=run_id, session_id="session_s")
     return ref, RegisteredArtifactReader([ref], run_id="run_s")
@@ -72,7 +72,7 @@ def test_registered_unread_citation_does_not_block_control_tools(tmp_path, actio
         tool = RequestWorkTool(reader=reader)
         args = RequestWorkInput.model_validate({
             "assessment": assessment,
-            "work_request": {"objective": "Measure", "expected_evidence": ["metric"]},
+            "work_request": {'objective': 'Measure', 'tasks': [{'key': 'work', 'instruction': 'Measure'}]},
         })
     else:
         tool = AskUserTool(reader)
@@ -109,10 +109,7 @@ def test_work_inputs_are_rejected_without_emitting_control_or_observing(tmp_path
     state = _state()
     observation = RequestWorkTool(reader=reader).execute(state, RequestWorkInput(
         assessment={"statement": "Need a measurement"},
-        work_request={
-            "objective": "Measure", "expected_evidence": ["metric"],
-            "input_artifact_ids": [artifact_id],
-        },
+        work_request={'objective': 'Measure', 'tasks': [{'key': 'work', 'instruction': 'Measure', 'input_artifact_ids': [artifact_id]}]},
     ))
     assert not observation.ok
     assert "Invalid work input artifacts" in observation.summary
@@ -126,12 +123,9 @@ def test_work_inputs_verify_frozen_bytes_without_requiring_or_recording_a_read(t
     state = _state()
     observation = RequestWorkTool(reader=reader).execute(state, RequestWorkInput(
         assessment={"statement": "Need a measurement"},
-        work_request={
-            "objective": "Measure", "expected_evidence": ["metric"],
-            "input_artifact_ids": [ref.id],
-        },
+        work_request={'objective': 'Measure', 'tasks': [{'key': 'work', 'instruction': 'Measure', 'input_artifact_ids': [ref.id]}]},
     ))
     assert observation.ok
-    assert observation.request_work["work_request"]["input_artifact_ids"] == [ref.id]
+    assert observation.request_work["work_request"]["tasks"][0]["input_artifact_ids"] == [ref.id]
     assert "read_artifact_ids" not in observation.memory_updates
     assert not state.memory

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 from resagent2_contracts import (
-    ArtifactCandidate, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS,
+    SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
-from resagent2_components import WorkspaceBoundary
+from resagent2_components import WorkspaceBoundary, execution_record
 from resagent2_components.artifacts import ArtifactCandidateError, check_task_output_artifacts
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
@@ -25,9 +23,9 @@ class ExperimentCompletionCheck:
                 complete=False, report="Execution records are generated from actual command observations",
             )
         artifacts = list(candidate.artifacts)
-        execution_record = self.execution_record(state)
-        if execution_record is not None:
-            artifacts.insert(0, execution_record)
+        record = execution_record(state)
+        if record is not None:
+            artifacts.insert(0, record)
         try:
             check_task_output_artifacts(
                 artifacts, grant=self.boundary.grant, output_dir=self.output_dir,
@@ -37,30 +35,3 @@ class ExperimentCompletionCheck:
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=artifacts,
         )
-
-    @staticmethod
-    def execution_record(state: AgentState) -> ArtifactCandidate | None:
-        records = ExperimentCompletionCheck._execution_records(state)
-        if not records:
-            return None
-        return ArtifactCandidate(
-            kind="execution_record", path="execution_record.json",
-            media_type="application/json", summary="Recorded experiment command outcomes",
-            content=json.dumps({"results": records}),
-        )
-
-    @staticmethod
-    def _execution_records(state: AgentState) -> list[dict]:
-        records = []
-        for event in state.events:
-            if event.type != "observation" or event.tool != "run_shell" or not isinstance(event.data, dict):
-                continue
-            value = event.data.get("value")
-            if not isinstance(value, dict) or "exit_code" not in value:
-                continue
-            record = {key: value[key] for key in VerificationResult.model_fields if key in value}
-            try:
-                records.append(VerificationResult.model_validate(record).model_dump(mode="json"))
-            except ValueError:
-                continue
-        return records

@@ -18,7 +18,7 @@ from resagent2_components import (
     EnvironmentManager, GitWorkspace, GitWorkspaceError, ProcessRunner,
     RegisteredArtifactReader, RepoMaterializer, RepoMaterializerError,
     ResourceLayout, WorkspaceBoundary, WorkspacePermissionError,
-    GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
+    GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
@@ -28,7 +28,6 @@ from resagent2_runtime import (
 
 from .completion import CodingCompletionCheck, derive_control_state
 from .context import CODING_PROMPT, build_context
-from .models import CodingAction
 from .verification import RunVerificationTool
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
@@ -63,6 +62,9 @@ class NativeCodingAgent:
             report=message,
             error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
         )
+
+    def terminate_session(self, session_id: str, reason: str) -> None:
+        self.loop.terminate_session(session_id, reason)
 
     def invoke(self, request: AgentRequest) -> AgentResult:
         try:
@@ -122,7 +124,8 @@ class NativeCodingAgent:
         tools = (
             ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
-            GitDiffTool(repository, baseline=baseline),
+            GitDiffTool(repository, baseline=baseline,
+                        verification_state=lambda state, diff: derive_control_state(state, binding, diff=diff)),
             CreateFileTool(boundary), ReplaceTextTool(boundary), DeletePathTool(boundary),
             PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
             RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
@@ -149,20 +152,20 @@ class NativeCodingAgent:
             name="coding", owner=AgentOwner.CODING, system_prompt=CODING_PROMPT,
             tools=tools, llm_client=self.llm_client,
             context_builder=lambda request, state, limit: build_context(
-                request, state, binding=binding, datasets=datasets,
-                control_state=derive_control_state(state, binding), max_context_tokens=limit,
+                request, state, datasets=datasets,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=CodingCompletionCheck(
                 repository, boundary, baseline=baseline, env_binding=binding, output_dir=request.output_dir,
             ),
-            action_type=CodingAction, max_context_tokens=self.max_context_tokens,
+            max_context_tokens=self.max_context_tokens,
         )
         result = self.loop.run(
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
             initial_memory=initial_memory,
         )
+        result = preserve_execution_record(result, self.loop.store)
         if (result.status not in {ModuleStatus.FAILED, ModuleStatus.BLOCKED}
                 or any(item.kind == "code_patch" for item in result.artifacts)):
             return result

@@ -1,7 +1,13 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
+import json
+from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from datetime import UTC, datetime
 
@@ -93,7 +99,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
-            [
+            tool_turns([
                 _PREPARE, _AUDIT,
                 {
                     "tool": "replace_text",
@@ -111,7 +117,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
                     "tool": "finish",
                     "arguments": {"report": "Updated VALUE"},
                 },
-            ]
+            ])
         )
     )
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=coding)}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
@@ -133,11 +139,18 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
 
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert {artifact.kind for artifact in run.artifacts.values()} == {
+        "module_report",
         "code_patch",
         "code_change",
         "verification_result",
+        "execution_record",
     }
     assert all(len(artifact.sha256) == 64 for artifact in run.artifacts.values())
+    record = next(ref for ref in run.artifacts.values() if ref.kind == "execution_record")
+    commands = json.loads(Path(url2pathname(urlparse(record.uri).path)).read_text())["results"]
+    assert len(commands) == 1
+    assert "py_compile util.py" in commands[0]["command"]
+    assert commands[0]["exit_code"] == 0
 
 
 def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None:
@@ -159,7 +172,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
-            [
+            tool_turns([
                 _PREPARE,
                 _AUDIT,
                 {
@@ -186,7 +199,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
                     "tool": "finish",
                     "arguments": {"report": "Updated VALUE"},
                 },
-            ]
+            ])
         )
     )
 
@@ -195,9 +208,18 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
     first = coding.invoke(request)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
 
-    resume_request = request.model_copy(
-        update={"parent_session_id": first.session.id}
+    from resagent2_contracts import RecordedAnswer
+    question = first.control.question
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
+        options=question.options, values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=question.run_id, session_id=question.session_id,
+        task_id=question.task_id, attempt_number=question.attempt_number,
     )
+    resume_request = request.model_copy(update={
+        "parent_session_id": first.session.id, "control_ack": first.control.origin,
+        "user_answers": [answer], "resume_answers": [answer],
+    })
     second = coding.invoke(resume_request)
 
     assert second.status == ModuleStatus.COMPLETED

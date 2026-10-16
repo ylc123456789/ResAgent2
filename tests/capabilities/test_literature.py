@@ -4,7 +4,6 @@ from datetime import UTC, datetime, date
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-import json
 import re
 
 from resagent2_orchestrator import ArtifactRegistry
@@ -21,13 +20,9 @@ from resagent2_capabilities import (
 )
 from resagent2_contracts import (
     AgentOwner,
-    ArtifactRef,
-    RunId,
-    SessionId,
     SessionStatus,
-    TaskId,
 )
-from resagent2_runtime import AgentState, ToolObservation
+from resagent2_runtime import AgentState
 
 
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
@@ -126,83 +121,55 @@ def paper(paper_id: str) -> LiteraturePaper:
     )
 
 
-def test_tool_returns_separate_papers_and_search_receipt(tmp_path) -> None:
-    register = _FakeRegister(tmp_path)
-    tool = LiteratureSearchTool(_FakeBackend([paper("2301.00001"), paper("2301.00002")]), register)
-    observation = tool.execute(state(), LiteratureSearchToolInput(query="electron", max_results=5))
-    value = observation.value
-    assert value["artifact"]["kind"] == "literature_search"
-    assert len(value["papers"]) == 2
-    ids = [item["artifact_id"] for item in value["papers"]]
-    assert len(set(ids)) == 2
-    assert all(register.refs[key].kind == "literature_paper" for key in ids)
-    assert register.last_run_id == "run_example"
-    assert register.last_session_id == "session_sci"
-    receipt = json.loads(register.last_candidate.content)
-    assert receipt["paper_artifact_ids"] == ids
-    assert "An abstract" not in register.last_candidate.content
-    assert "id" not in register.last_candidate.model_dump()
-    assert "sha256" not in register.last_candidate.model_dump()
-
-
-def test_tool_reuses_papers_and_tracks_outputs_not_read_status(tmp_path) -> None:
-    register = _FakeRegister(tmp_path)
-    tool = LiteratureSearchTool(_FakeBackend([paper("1")]), register)
-    observation = tool.execute(state(), LiteratureSearchToolInput(query="x", max_results=1))
-    first_paper = observation.value["papers"][0]["artifact_id"]
-    assert "literature_artifact_ids" not in observation.memory_updates
-    original = state(memory=observation.memory_updates)
-    second = tool.execute(original, LiteratureSearchToolInput(query="y", max_results=1))
-    assert second.value["papers"][0]["artifact_id"] == first_paper
-    assert second.value["papers"][0]["reused"] is True
-    assert len([ref for ref in register.refs.values() if ref.kind == "literature_paper"]) == 1
-    assert len(second.memory_updates["artifact_index"]) == 3
-
-
-def test_tool_keeps_preview_separate_from_frozen_abstract(tmp_path) -> None:
-    full_abstract = "Scientific evidence. " * 100
-    result_paper = paper("1").model_copy(update={"abstract": full_abstract})
-    register = _FakeRegister(tmp_path)
-    original = state()
+def test_search_returns_deduplicated_leads_without_registration():
+    backend = _FakeBackend([paper("2301.00001v2"), paper("2301.00001v2"), paper("2301.00002v1")])
+    original = state(memory={"artifact_index": [{"artifact_id": "artifact_existing"}]})
     before = original.model_copy(deep=True)
-    observation = LiteratureSearchTool(_FakeBackend([result_paper]), register).execute(
-        original, LiteratureSearchToolInput(query="evidence"),
+    result = LiteratureSearchTool(backend).execute(original, LiteratureSearchToolInput(query="electron"))
+    assert result.ok and result.value["status"] == "results"
+    assert [item["fetch_source"] for item in result.value["papers"]] == [
+        "arxiv:2301.00001v2", "arxiv:2301.00002v1",
+    ]
+    assert all("artifact_id" not in item for item in result.value["papers"])
+    assert "artifact" not in result.value
+    assert result.memory_updates == {} and original == before
+
+
+def test_search_preserves_provided_abstract_without_claiming_fulltext():
+    abstract = "Scientific evidence. " * 100
+    candidate = paper("2301.00001v2").model_copy(update={"abstract": abstract})
+    result = LiteratureSearchTool(_FakeBackend([candidate])).execute(
+        state(), LiteratureSearchToolInput(query="evidence"),
     )
-    brief = observation.value["papers"][0]
-    assert brief["abstract"] == full_abstract[:500]
-    assert brief["abstract_truncated"] is True
-    ref = register.refs[brief["artifact_id"]]
-    assert ref.metadata["paper"]["abstract"] == full_abstract
-    assert len(observation.memory_updates["artifact_index"]) == 2
-    assert original == before
+    assert result.value["papers"][0]["abstract"] == abstract
+    assert result.memory_updates == {}
+    assert "fulltext_artifact_id" not in result.value
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_empty_or_failed_search_is_a_receipt_not_a_paper(tmp_path, failure):
+def test_empty_or_failed_search_does_not_create_artifacts(failure):
     class Backend:
         def search(self, *args, **kwargs):
             if failure:
                 raise LiteratureSearchError("provider unavailable")
             return _search_result([])
-    register = _FakeRegister(tmp_path)
-    result = LiteratureSearchTool(Backend(), register).execute(
-        state(), LiteratureSearchToolInput(query="missing"),
-    )
+    result = LiteratureSearchTool(Backend()).execute(state(), LiteratureSearchToolInput(query="missing"))
     assert result.value["status"] == ("failed" if failure else "empty")
     assert result.ok is (not failure)
     assert result.value["papers"] == []
-    assert [ref.kind for ref in register.refs.values()] == ["literature_search"]
+    assert result.memory_updates == {} and "artifact" not in result.value
 
 
-def test_tool_forwards_query_and_bounds(tmp_path) -> None:
-    backend = _FakeBackend([paper("1")])
-    LiteratureSearchTool(backend, _FakeRegister(tmp_path)).execute(
+def test_tool_forwards_query_and_bounds():
+    backend = _FakeBackend([paper("2301.00001v2")])
+    LiteratureSearchTool(backend).execute(
         state(), LiteratureSearchToolInput(
             query="graph neural networks", max_results=7, start_year=2020, end_year=2024,
         ),
     )
     assert backend.last_kwargs == {
-        "query": "graph neural networks", "max_results": 7, "start_year": 2020, "end_year": 2024, "source": "auto", "scope": "topic", "page": 1,
+        "query": "graph neural networks", "max_results": 7, "start_year": 2020,
+        "end_year": 2024, "source": "auto", "scope": "topic", "page": 1,
     }
 
 
@@ -390,7 +357,7 @@ def test_search_receipt_exposes_real_source_and_pinned_next_request(tmp_path):
         def search(self, *args, **kwargs):
             return LiteratureSearchResult([paper("1")], "openalex", "executed topic", 1, 2, attempts)
     register = _FakeRegister(tmp_path)
-    observation = LiteratureSearchTool(Backend(), register).execute(
+    observation = LiteratureSearchTool(Backend()).execute(
         state(), LiteratureSearchToolInput(query="topic", scope="title", start_year=2020),
     )
     value = observation.value
@@ -398,14 +365,13 @@ def test_search_receipt_exposes_real_source_and_pinned_next_request(tmp_path):
     assert value["executed_query"] == "executed topic"
     assert value["source_attempts"] == attempts
     assert value["total_results"] is None
-    assert value["papers"][0]["reused"] is False
+    assert value["papers"][0]["fetch_source"] == "arxiv:1"
     assert value["next_request"] == {
         "query": "topic", "source": "openalex", "scope": "title", "page": 2,
         "max_results": 5, "start_year": 2020, "end_year": None,
     }
-    receipt = json.loads(register.last_candidate.content)
-    assert receipt["requested_source"] == "auto"
-    assert receipt["next_request"] == value["next_request"]
+    assert value["requested_source"] == "auto"
+    assert observation.memory_updates == {} and register.refs == {}
 
 
 def test_search_failure_preserves_source_errors(tmp_path):
@@ -414,7 +380,7 @@ def test_search_failure_preserves_source_errors(tmp_path):
         def search(self, *args, **kwargs):
             raise LiteratureSearchError("HTTP 429", error_type="unavailable", source_attempts=attempts, retry_after=30)
     register = _FakeRegister(tmp_path)
-    value = LiteratureSearchTool(Backend(), register).execute(
+    value = LiteratureSearchTool(Backend()).execute(
         state(), LiteratureSearchToolInput(query="topic", source="arxiv"),
     ).value
     assert value["status"] == "failed"

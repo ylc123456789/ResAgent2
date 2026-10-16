@@ -1,5 +1,7 @@
 """Deployment output headroom must not expand module input or retry policies."""
 
+from e2e.native_fixtures import tool_turns
+
 from datetime import UTC, datetime
 import httpx
 import json
@@ -7,7 +9,6 @@ import json
 import pytest
 
 from resagent2_cli import composition
-from resagent2_coding.models import CodingAction
 from resagent2_contracts import ExecutionLimits, WorkRequest, WorkRequestDraft
 from resagent2_runtime.budget import execution_budget
 
@@ -16,11 +17,9 @@ from resagent2_runtime.budget import execution_budget
 def model_config_scope():
     with execution_budget(max_llm_calls=10, timeout_seconds=900):
         yield
-from resagent2_experiment.models import ExperimentAction
 from resagent2_orchestrator import DeterministicWorkInterpreter, LLMWorkflowCompiler
-from resagent2_orchestrator.compiler import CompilationDraft
+from resagent2_orchestrator.compiler import RouteTasks
 from resagent2_runtime import DEFAULT_AGENT_CONTEXT_TOKENS, ComposedContext, ScriptedLLMClient
-from resagent2_scientific.models import ScientificAction
 
 
 @pytest.fixture
@@ -36,27 +35,26 @@ def defaults(monkeypatch):
     monkeypatch.setenv("TEST_CONFIG_KEY", "test-only")
 
 
-@pytest.mark.parametrize("component,action_type,limit", [
-    ("scientific", ScientificAction, 256_000),
-    ("coding", CodingAction, 256_000),
-    ("experiment", ExperimentAction, 256_000),
-    ("compiler", CompilationDraft, 256_000),
+@pytest.mark.parametrize("component,limit", [
+    ("scientific", 256_000), ("coding", 256_000),
+    ("experiment", 256_000), ("compiler", 256_000),
 ])
-def test_output_headroom_preserves_every_module_input_limit(defaults, component, action_type, limit):
+def test_output_headroom_preserves_every_module_input_limit(defaults, component, limit):
     client = composition._client()
     assert client.model_profile.context_window == 1_000_000
     assert client.model_profile.reserved_output_tokens == 256_000
     assert client.model_profile.safety_margin_tokens == 1024
     assert client.timeout_seconds == 600
     assert composition._component_context_limit(component) == limit
-    assert client.context_budget(action_type, limit) == limit
+    assert (client.context_budget(RouteTasks, limit) if component == "compiler"
+            else client.tool_input_limit(limit)) == limit
 
 
 def test_real_e2e_translation_uses_the_shared_cli_default(defaults, monkeypatch, tmp_path):
     from e2e import real_e2e
 
-    monkeypatch.setattr(real_e2e, "_new_llm_client", lambda: ScriptedLLMClient([]))
-    controller, _ = real_e2e._build_controller(tmp_path, None)
+    monkeypatch.setattr(composition, "_client", lambda: ScriptedLLMClient([]))
+    controller = real_e2e._application(tmp_path).controller
 
     assert controller.compiler._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
     assert composition._component_context_limit("compiler") == DEFAULT_AGENT_CONTEXT_TOKENS
@@ -76,8 +74,8 @@ def test_composition_uses_fixed_interpreter_without_a_model_client(defaults, mon
         controller = composition.build_application(data_root=tmp_path).controller
     else:
         from e2e import real_e2e
-        monkeypatch.setattr(real_e2e, "_new_llm_client", client)
-        controller, _ = real_e2e._build_controller(tmp_path, None)
+        monkeypatch.setattr(composition, "_client", client)
+        controller = real_e2e._application(tmp_path).controller
 
     assert isinstance(controller.interpreter, DeterministicWorkInterpreter)
     # Scientific, Coding, Experiment and Compiler only.
@@ -92,13 +90,16 @@ def test_cli_wire_uses_configured_output_cap_not_an_input_cap(defaults, monkeypa
 
     def respond(request, *, timeout):
         seen.append((json.loads(request.content), timeout))
-        return httpx.Response(200, json={"choices": [{"message": {"content": '{"tool":"finish"}'}}]}, request=request)
+        return httpx.Response(200, json={"choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [{
+            "id": "call_config", "type": "function",
+            "function": {"name": "finish", "arguments": '{"report":"done"}'},
+        }]}}]}, request=request)
 
     monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
     client = composition._client()
-    client.next_action(ComposedContext(
-        text="Return JSON", included_sections=["system"], omitted_sections=[], estimated_tokens=3,
-    ), ScientificAction)
+    client.next_tool_call(ComposedContext(
+        text="Select the next tool", included_sections=["system"], omitted_sections=[], estimated_tokens=3,
+    ), [], [], max_input_tokens=256_000)
     assert len(seen) == client.last_attempts == 1
     body, timeout = seen[0]
     assert body["max_tokens"] == 256_000
@@ -119,7 +120,7 @@ def test_custom_model_can_override_capacity_output_and_timeout(defaults, monkeyp
     assert client.model_profile.context_window == 32000
     assert client.model_profile.reserved_output_tokens == 3000
     assert client.timeout_seconds == 90
-    assert client.context_budget(CodingAction, composition._component_context_limit("coding")) == 12000
+    assert client.tool_input_limit(composition._component_context_limit("coding")) == 12000
 
 
 @pytest.mark.parametrize("key,value", [
@@ -138,16 +139,18 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_LEVEL", "full")
     monkeypatch.setenv("RESAGENT2_LLM_TRACE_DIR", str(tmp_path / "trace"))
     replies = iter([
-        {"tasks": [{
-            "key": "measure", "workflow_agent_kind": "experiment", "instruction": "Measure the method",
-        }]},
+        {"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]},
     ])
     requests = []
 
     def respond(request, *, timeout):
         requests.append((json.loads(request.content), timeout))
         return httpx.Response(200, json={
-            "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(next(replies))}}],
+            "choices": [{"finish_reason": "tool_calls", "message": {"content": None, "tool_calls": [{
+                "id": "call_route", "type": "function", "function": {
+                    "name": "route_tasks", "arguments": json.dumps(next(replies)),
+                },
+            }]}}],
             "usage": {"completion_tokens": 100},
         }, request=request)
 
@@ -155,18 +158,18 @@ def test_full_cli_compilation_uses_new_defaults_for_one_draft(defaults, monkeypa
     compiler_limit = composition._component_context_limit("compiler")
     compiler = LLMWorkflowCompiler(composition._compiler_client(max_context_tokens=compiler_limit))
     now = datetime.now(UTC)
-    result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', expected_evidence=['Measured result']), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
+    result = compiler.compile(WorkRequest(id='work_config', run_id='run_config', scientific_session_id='session_config', request=WorkRequestDraft(objective='Measure the method', tasks=[{'key': 'work', 'instruction': 'Measure the method'}]), created_at=now, updated_at=now), current=None, registry=composition._registry(), limits=ExecutionLimits())
     assert result.llm_calls == len(requests) == 1
     assert all(body["max_tokens"] == 256_000 and 599 < timeout <= 600 for body, timeout in requests)
-    message = requests[0][0]["messages"][0]["content"]
-    schema = json.dumps(CompilationDraft.model_json_schema(), ensure_ascii=False)
-    assert message.count(schema) == 1
-    assert message.count('"title": "CompilationDraft"') == 1
+    body = requests[0][0]
+    assert "response_format" not in body
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["route_tasks"]
+    assert body["tools"][0]["function"]["parameters"] == RouteTasks.model_json_schema()
     rows = [json.loads(line) for line in (tmp_path / "trace/llm_traces.jsonl").read_text().splitlines()]
     assert len(rows) == 1
     for row in rows:
         assert row["request_max_tokens"] == 256_000
-        assert row["included_sections"] == ["system", "compiler_request"]
+        assert row["included_sections"] == ["system", "compiler_request", "native_tools"]
         assert 0 < row["estimated_tokens"] <= compiler_limit
         assert len(row["attempts"]) == row["retry_number"] + 1 == 1
 

@@ -4,6 +4,12 @@
 
 旧学习率调度规程已[归档](../history/reviews/L3_RESEARCH_TEST_2026-09-16.md)，其 `e6688f3` / schema 8 的[验收结果](../history/reviews/COMPILER_CONTEXT_L3_ACCEPTANCE.md)仍有效于当时的案例。当前指南只维护这一版；历史结果不套用新评分标准。
 
+2026-10-11 同步 schema 25 的材料和交接接口；题目、固定输入、预算和评分规则不变。新版本须新建 Run，结构与恢复专项先按[本轮测试计划](../history/reviews/TOOL_CONTEXT_IMPLEMENTATION_TEST_PLAN_2026-10-11.md)复核，本页历史验收不代表新版本通过。
+
+2026-10-11：`5d28f74` / schema 25 已完成本规程 L3，产品链路通过，研究评分 9/10、有人协助完成；独立数值核对 86/88，保留两项优化收敛失败、报告区间错误和人工阻止提前 test 冒烟的记录。见[验收结果与问题](../history/reviews/TOOL_CONTEXT_ACCEPTANCE_2026-10-11.md)。这是该冻结版本单次案例的结果，不改变题目、预算或评分规则，也不证明后续版本质量。
+
+2026-10-12：schema 26 增加可选操作说明和清楚的 CLI 回答入口，并调整通用提示词。先按[权限反馈测试计划](../history/reviews/PERMISSION_FEEDBACK_TEST_PLAN_2026-10-12.md)检查新链路，再用本规程新建 Run；不能恢复旧 25.0 状态。题目、预算和评分保持不变，旧验收不套用新版本，单次 L3 不证明提示词普遍提升质量。
+
 L3 沿用本项目“半开放真实研究任务”的叫法，不是通用评测标准或 RSI 自治等级。测试人员只给初始目标、资源、权限和预算，系统提问时作有限回答，结束后独立审计。**本文供测试方阅读，不能整篇塞给 Agent。** 不新增测试平台、模拟用户 Agent、产品接口或前置 Validation；[阶段三仍暂缓](../history/reviews/VALIDATION_DESIGN.md)。
 
 ## 1. 公开科研 Agent 评测给我们的启发
@@ -66,7 +72,7 @@ L3 沿用本项目“半开放真实研究任务”的叫法，不是通用评�
 1. **产品身份**：用 Git 同步 `main`（或本轮明确指定的待验收分支），记录并冻结准确 SHA。遵循[开发指南](DEVELOPMENT.md#5-什么时候需要真实服务器验收)，产品仓库使用 `/root/autodl-tmp/projects/ResAgent2`；核对安装、`pip check`、9 个包的实际 import 来源。已有无关未跟踪目录单列，不擅自删除；测试期间不拉取、换分支或编辑产品。
 2. **数据与实验副本**：确认 catalog 中 `cifar10` 的真实路径及可读性、数据与 split hash、实验初始 commit/准备 diff、许可、剩余磁盘。`RESAGENT2_DATASETS_JSON` 如需配置，值是 ID→路径 JSON，不是 catalog 路径；具体见 [CLI 配置](../../apps/cli/README.md)。
 3. **中性冒烟**：在单独目录运行基线 1–2 epochs，检查 GPU、loss/accuracy、checkpoint 保存、固定切分和时间估计。不得拟合候选或把冒烟 checkpoint/指标作为正式交付。只有预估可以留出训练、拟合、评价与报告时间，才进入正式 Run。
-4. **文献服务**：检查实际配置的 arXiv/OpenAlex 后端；分别记录状态。一个来源可用即可继续，两源均失败则报告外部阻断，不偷偷取消查资料要求或把离线回放当实时成功。schema 21 起同时区分 literature_search 搜索回执、literature_paper 元信息/摘要和按需取得的 literature_fulltext；全文可用性另记，不把搜索成功等同于读到全文，也不以 observed 标记评价研究质量。schema 22 支持外部论文导入；应明确区分导入材料和真实检索记录。纯离线导入验收只证明导入/读取链路，不可作为实时文献搜索或自然科研 L3 通过的证据。
+4. **文献服务**：检查实际配置的 arXiv/OpenAlex 后端；分别记录状态。一个来源可用即可继续，两源均失败则报告外部阻断，不偷偷取消查资料要求或把离线回放当实时成功。搜索只产生临时工具回执；模型显式 fetch_literature 后，实际取得的 literature_paper、PDF 和 literature_fulltext 才登记工件。全文可用性另记，不把搜索成功等同于读到全文，也不以 observed 标记评价研究质量。应明确区分用户导入材料和真实检索/获取记录。纯离线导入验收只证明导入/读取链路，不可作为实时文献搜索或自然科研 L3 通过的证据。
 5. **模型与成本**：只用一个模型配置；记录实际模型、三个 Agent 与 Compiler 的上下文配置、输出上限、HTTP 重试配置、设备和依赖；固定 Interpreter 没有模型或独立上下文配置。冻结 `12 / 2 / 200 / 14400` 预算。列出人工准备、预计模型与服务器费用，以及验收复算成本；已有本轮启动授权则直接依范围执行，缺少启动/费用授权才向用户补齐，不重复索要已给的授权。
 6. **审计就绪**：准备完整 CLI 日志、Session、trace、用量账本和工件保存位置。full trace 目录 `0700`、文件 `0600`；凭据从安全配置载入，不写入 goal 或日志。指标复算只读最终产物、不调用模型、不修改产品或研究结果。
 
@@ -165,6 +171,8 @@ bash "$L3_CLI" "$L3_ROOT/cli-config.sh" resume "$L3_RUN_ID" --data-root "$L3_ROO
 
 系统没有问就不主动辅导；不要求本轮必须出现 ask_user。每次保存 question_id、原题、requested_fields、答案、依据、回答者和外部操作。提交前核对仍是同一待答题，提交后核对答案归属。
 
+业务问题允许在对应字段自由回答，不必选择原选项；补充仍写入 values，不使用权限 comment。若当前问题确实带有操作快照，批准或拒绝可以用 `--comment` 附带简短事实说明。说明必须通过产品回答入口提交，并核对原工具回执的 `user_comment`；只写测试方日志不能说明模型已经收到。授权边界的重述不是新授权，不能借此代选算法、调参或提供代码修复。当前操作的说明不自动变成第二部分的长期任务需求。
+
 同一事实且条件未变时不反复答 ready；研究决策推回一次后仍反复索要代做，则保留 paused 并报告停滞。新事实可正常回应。用户或测试方若实际选方案、修代码或解释研究错误，标记“有人协助”，不得当独立完成。外部服务恢复和补充事实也要记录，但不自动视为代做研究。
 
 ## 8. 独立验收：完成、质量和当前链路分开报告
@@ -188,7 +196,7 @@ bash "$L3_CLI" "$L3_ROOT/cli-config.sh" resume "$L3_RUN_ID" --data-root "$L3_ROO
 |---|---|
 | 正向目标传递 | goal → Scientific WorkRequest → Compiler → 统一 `instruction + input_artifacts`，研究约束没有丢失；Run 的 conclusion_requirements 被 Scientific 保留到相关工作请求及实际交付，不要求 required_artifacts 自动转为每个 Task 的 acceptance_requirements，也不固定 Task ID/数量 |
 | 子任务交付 | 当前 `report + artifacts` 与登记来源匹配，报告、失败和局限可读；不再核对旧 understand/modify 模式或旧结果外壳 |
-| 反向交接 | 固定 WorkInterpreter 按原任务和尝试组织已记录报告，保留状态、错误、累计警告及产物 ID；完整 research_index 可导航，长正文省略可见且可补读。Scientific 按需读取原始证据，不把多份报告当独立测量，报告展示不能代替原件内容依据；访问记录只用于审计 |
+| 反向交接 | 固定 WorkInterpreter 组织真实 WorkResult，完整 artifact_index 按 WorkRequest → Task 展开所有原始 Attempt 报告及产物，无总体工作报告或索引工件；正文通过 read_artifact 进入原生历史。Scientific 按需读取原始证据，不把多份报告当独立测量，目录导航不能代替原件内容依据；访问记录只用于审计 |
 | 明确交付 | `comparison_results` 按精确 output_name 登记、同 Run 归属和冻结 hash 可核对；完成检查通过不等于结论正确 |
 | 问答和恢复 | 仅检查实际发生的路径；原题/答案和归属准确，继续同 Run/对应 Session，不重置预算；未发生就写“未触发” |
 | 拒绝与纠错 | 原始 Session 的参数拒绝、命令失败、completion feedback 与最终结果分开；`action_valid=true` 不等于工具执行或科学内容正确 |

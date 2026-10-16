@@ -121,6 +121,11 @@ class EnvironmentManager:
     def prefix(self, *, run_id: str, workspace_id: str) -> Path:
         return self.env_root / self.env_id(run_id=run_id, workspace_id=workspace_id)
 
+    def invalidate(self, *, run_id: str, workspace_id: str) -> None:
+        """Retain a cancelled prefix while withdrawing its structural readiness."""
+        marker = self.prefix(run_id=run_id, workspace_id=workspace_id) / _BASE_MARKER
+        marker.unlink(missing_ok=True)
+
     def inspect(self, *, run_id: str, workspace_id: str) -> PreparedEnvironment | None:
         """Return a structurally healthy, already-created base env, or ``None``.
 

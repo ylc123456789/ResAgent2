@@ -37,15 +37,15 @@ def module_error() -> ModuleError:
 def _artifact_ref(**overrides: object) -> ArtifactRef:
     values: dict[str, object] = {
         "id": "artifact_contract",
-        "kind": "work_feedback",
+        "kind": "module_report",
         "producer": AgentOwner.ORCHESTRATOR,
         "run_id": "run_example",
-        "session_id": "session_example",
+        "task_id": "task_example", "attempt_number": 1,
         "uri": "file:///tmp/work-feedback.json",
         "sha256": "0" * 64,
         "media_type": "application/json",
         "summary": "contract test artifact",
-        "metadata": {"source_type": "controller_feedback"},
+        "metadata": {"source_type": "task_report"},
     }
     values.update(overrides)
     return ArtifactRef(**values)
@@ -53,12 +53,12 @@ def _artifact_ref(**overrides: object) -> ArtifactRef:
 
 def test_system_artifact_provenance_shapes_are_explicit() -> None:
     feedback = _artifact_ref()
-    assert feedback.session_id == "session_example"
+    assert feedback.task_id == "task_example" and feedback.attempt_number == 1
 
     acceptance = _artifact_ref(
         id="artifact_acceptance",
         kind="acceptance_requirements",
-        session_id=None,
+        session_id=None, attempt_number=None,
         task_id="task_example",
         metadata={"source_type": "task_requirement"},
     )
@@ -66,11 +66,11 @@ def test_system_artifact_provenance_shapes_are_explicit() -> None:
 
     task_answer = _artifact_ref(
         id="artifact_answer",
-        kind="answer",
+        kind="module_report",
         session_id=None,
         task_id="task_example",
         attempt_number=1,
-        metadata={"source_type": "controller_answer"},
+        metadata={"source_type": "task_report"},
     )
     assert task_answer.attempt_number == 1
 
@@ -80,16 +80,16 @@ def test_system_artifact_provenance_rejects_mismatched_kind_scope() -> None:
         _artifact_ref(
             kind="acceptance_requirements",
             task_id="task_example",
-            session_id=None,
-            metadata={"source_type": "controller_feedback"},
+            session_id=None, attempt_number=None,
+            metadata={"source_type": "task_report"},
         )
 
     with pytest.raises(ValidationError, match="orchestrator scope"):
         _artifact_ref(
-            kind="answer",
+            kind="module_report",
             task_id="task_example",
-            session_id=None,
-            metadata={"source_type": "controller_answer"},
+            session_id=None, attempt_number=None,
+            metadata={"source_type": "task_report"},
         )
 
 def test_research_request_does_not_accept_deployment_resources() -> None:
@@ -165,7 +165,7 @@ def test_task_acceptance_spec_is_task_control_plane_data() -> None:
         instruction=task.instruction,
 
         acceptance_ref=_artifact_ref(
-            kind="acceptance_requirements", session_id=None, task_id=task.id,
+            kind="acceptance_requirements", session_id=None, task_id=task.id, attempt_number=None,
             metadata={"source_type": "task_requirement"},
         ),
     )
@@ -184,10 +184,10 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == '24.0'
+    assert restored.schema_version == '27.0'
 
 
-@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "12.0", "13.0", "14.0", "15.0", "16.0", "17.0", "18.0", "19.0", "20.0", "21.0", "22.0", "23.0"])
+@pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "12.0", "13.0", "14.0", "15.0", "16.0", "17.0", "18.0", "19.0", "20.0", "21.0", "22.0", "23.0", "24.0", "25.0"])
 def test_previous_schema_state_is_rejected(schema_version: str) -> None:
     with pytest.raises(ValidationError):
         Workflow(
@@ -382,7 +382,7 @@ def test_attempt_report_round_trips() -> None:
 def test_question_and_answer_have_distinct_owners() -> None:
     pending = PendingQuestion(
         id="question_dataset",
-        run_id="run_example",
+        run_id="run_example", session_id="session_example",
         task_id="task_plan",
         text="Which dataset should be used?",
         requested_fields=["dataset"],

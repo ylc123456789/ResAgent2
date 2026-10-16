@@ -1,4 +1,6 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 import json
 """Exercise real analysis artifacts across native Agent and controller boundaries."""
@@ -53,8 +55,8 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
         }}
 
     clients = {
-        "task_inspect": ScriptedLLMClient([read_file, finish(answer)]),
-        "task_independent": ScriptedLLMClient([read_file, finish("Independent inspection.")]),
+        "task_inspect": ScriptedLLMClient(tool_turns([read_file, finish(answer)])),
+        "task_independent": ScriptedLLMClient(tool_turns([read_file, finish("Independent inspection.")])),
     }
     requests = {}
     sessions = JsonSessionStore(tmp_path / "coding_sessions")
@@ -65,10 +67,10 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             requests[request.task_id] = request
             if request.task_id == "task_followup":
                 report = next(ref for ref in request.input_artifacts if ref.output_name == "analysis")
-                clients[request.task_id] = ScriptedLLMClient([
+                clients[request.task_id] = ScriptedLLMClient(tool_turns([
                     {"tool": "read_artifact", "arguments": {"artifact_id": report.id}},
                     read_file, finish("Follow-up inspected the shared analysis and source."),
-                ])
+                ]))
             return NativeCodingAgent(
                 clients[request.task_id], store=sessions, resource_layout=layout,
             ).invoke(request)
@@ -95,27 +97,28 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             ))
 
     class ScientificClient:
+        tool_session_key = "test-native-tools/v1"
+
         def __init__(self):
             self.contexts = []
+            self.histories = []
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.contexts.append(context)
+            self.histories.append([turn.model_copy(deep=True) for turn in turns])
             if len(self.contexts) == 1:
-                return {"tool": "request_work", "arguments": {
+                return tool_turns([{"tool": "request_work", "arguments": {
                     "assessment": {"statement": "Need code inspection, not a measured experiment"},
-                    "work_request": {
-                        "objective": "Inspect the code and provide the analysis to a follow-up",
-                        "expected_evidence": ["Code analysis with its uncertainty"],
-                    },
-                }}
+                    "work_request": {'objective': 'Inspect the code and provide the analysis to a follow-up', 'tasks': [{'key': 'work', 'instruction': 'Inspect the code and provide the analysis to a follow-up'}]},
+                }}])[0]
             current = scheduler.store.load("run_handoffs")
             report_id = next(
                 ref.id for ref in current.artifacts.values()
                 if ref.task_id == "task_inspect" and ref.output_name == "analysis"
             )
             if len(self.contexts) == 2:
-                return {"tool": "read_artifact", "arguments": {"artifact_id": report_id}}
-            return {"tool": "finish", "arguments": {
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": report_id}}])[0]
+            return tool_turns([{"tool": "finish", "arguments": {
                 "report": "Scientific conclusion", "artifacts": [{
                     "kind": "scientific_opinion", "path": "opinion.json",
                     "media_type": "application/json", "summary": "Scientific conclusion",
@@ -124,7 +127,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
                         "limitations": [uncertainty], "evidence_artifact_ids": [report_id],
                     }),
                 }],
-            }}
+            }}])[0]
 
     scientific_client = ScientificClient()
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=CodingPort())}, store=JsonRunStore(tmp_path / 'runs'), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
@@ -152,27 +155,29 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
     assert not any(a.kind == "module_report" for a in requests["task_independent"].input_artifacts)
     assert [a.id for a in requests["task_followup"].input_artifacts if a.kind == "module_report"] == [report_id]
     # Check actual native-Agent prompts after read_artifact, not just stored payload.
-    for context in [clients["task_followup"].contexts[1], scientific_client.contexts[-1]]:
-        assert answer in context.text
-        assert uncertainty in context.text
-        assert "artifact_reads" in context.included_sections
+    for context, history in [(clients["task_followup"].contexts[1], clients["task_followup"].histories[1]),
+                             (scientific_client.contexts[-1], scientific_client.histories[-1])]:
+        receipts = json.dumps([turn.model_dump(mode="json") for turn in history])
+        assert answer in receipts and uncertainty in receipts
+        assert answer not in context.artifact_index and uncertainty not in context.artifact_index
+        assert "artifact_reads" not in context.included_sections
     assert report_id in scientific_client.contexts[1].text
     assert '"kind": "module_report"' in scientific_client.contexts[1].text
-    context_payloads = [json.loads(line) for line in scientific_client.contexts[1].text.splitlines()
-                        if line.startswith("{")]
-    materials = next(value for value in context_payloads if "index_artifact_id" in value and "artifacts" in value)
-    index_reader = RegisteredArtifactReader(list(run.artifacts.values()), run_id=run.run_id)
-    frozen_index = json.loads(index_reader.read_text(materials["index_artifact_id"])["content"])
-    assert frozen_index["run_id"] == run.run_id
-    assert materials["groups"] == [
-        {"key": group["key"], "title": group["title"],
-         "artifact_ids": [entry["artifact_id"] for entry in group["artifacts"]]}
-        for group in frozen_index["groups"]
-    ]
-    assert report_id in {entry["artifact_id"] for entry in materials["artifacts"]}
-    assert report_id in {artifact_id for group in materials["groups"] for artifact_id in group["artifact_ids"]}
-    assert '"index_changes"' not in scientific_client.contexts[1].text
-    assert '"work_outcome"' not in scientific_client.contexts[1].text
+    materials = json.loads(scientific_client.contexts[1].artifact_index.split("\n", 1)[1])
+    assert len(materials["work_requests"]) == 1
+    work = materials["work_requests"][0]
+    assert work["work_request_id"] == run.work_requests[0].id
+    assert {task["task_id"] for task in work["tasks"]} == {task.id for task in run.workflow.tasks}
+    inspected = next(task for task in work["tasks"] if task["task_id"] == "task_inspect")
+    assert report_id in {entry["artifact_id"] for entry in inspected["artifacts"]}
+    original_report_id = run.workflow.tasks[0].attempts[0].report_artifact_id
+    assert original_report_id in {entry["artifact_id"] for entry in inspected["artifacts"]}
+    entries = [entry for group in materials["materials"].values() for entry in group]
+    entries.extend(entry for task in work["tasks"] for entry in task["artifacts"])
+    assert materials["artifact_count"] == len(entries) == len({entry["artifact_id"] for entry in entries})
+    assert not any(ref.kind in {"question", "answer", "work_request", "work_feedback", "work_record", "research_index"}
+                   for ref in run.artifacts.values())
+    assert not any(key in entry for entry in entries for key in ("uri", "sha256", "content"))
     assert run.final_opinion.statement == answer
     assert run.final_opinion.limitations == [uncertainty]
 

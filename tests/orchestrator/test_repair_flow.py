@@ -9,6 +9,8 @@ Verifies two things:
 
 from __future__ import annotations
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import RunPermissions, ExecutionLimits
 
 import json
@@ -79,10 +81,7 @@ def _request_work() -> dict:
         "tool": "request_work",
         "arguments": {
             "assessment": {"statement": "need evidence"},
-            "work_request": {
-                "objective": "Produce the accuracy evidence",
-                "expected_evidence": ["accuracy"],
-            },
+            "work_request": {'objective': 'Produce the accuracy evidence', 'tasks': [{'key': 'work', 'instruction': 'Produce the accuracy evidence'}]},
         },
     }
 
@@ -167,7 +166,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
         artifact_root=tmp_path / "artifacts",
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([_request_work(), _request_work(), _finish()]),
+        ScriptedLLMClient(tool_turns([_request_work(), _request_work(), _finish()])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(
@@ -194,7 +193,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
 
 
 class _ScriptedCompilerLLM:
-    """Return scripted drafts and auto-accept semantic reviews."""
+    """Return scripted routing decisions for explicitly supplied Tasks."""
 
     def __init__(self, drafts: list[dict]) -> None:
         self._drafts = list(drafts)
@@ -206,20 +205,14 @@ class _ScriptedCompilerLLM:
 
 
 def _proposal_draft() -> dict:
-    return {
-        "tasks": [
-            {'key': 'run_initial', "workflow_agent_kind": 'experiment', 'instruction': 'Run the experiment'}
-        ],
-    }
+    return {"routes": [{"task_key": "run_initial", "workflow_agent_kind": "experiment"}]}
 
 
 def _repair_draft() -> dict:
-    return {
-        "tasks": [
-            {'key': 'fix', "workflow_agent_kind": 'coding', 'instruction': 'Fix the bug'},
-            {'key': 'rerun', "workflow_agent_kind": 'experiment', 'instruction': 'Rerun the experiment', 'depends_on': ['fix']},
-        ],
-    }
+    return {"routes": [
+        {"task_key": "fix", "workflow_agent_kind": "coding"},
+        {"task_key": "rerun", "workflow_agent_kind": "experiment"},
+    ]}
 
 
 def _finish_after_repair() -> dict:
@@ -229,9 +222,9 @@ def _finish_after_repair() -> dict:
 def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
     """The production LLMWorkflowCompiler drives the repair loop end to end.
 
-    Round 1 compiles a semantic draft into a proposal (one experiment task that
-    fails); round 2 compiles a repair draft into an append-only patch that adds
-    a fix + rerun. The failed attempt is preserved as immutable history.
+    Scientific explicitly supplies the initial experiment and the later repair
+    Tasks. Compiler only selects their Agents; fixed code builds the proposal and
+    append-only repair patch. The failed Attempt remains immutable history.
     """
     scheduler = WorkflowScheduler(
         bindings={
@@ -248,7 +241,18 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
         artifact_root=tmp_path / "artifacts",
     )
     scientific = ScientificAgent(
-        ScriptedLLMClient([_request_work(), _request_work(), _finish_after_repair()]),
+        ScriptedLLMClient(tool_turns([
+            {"tool": "request_work", "arguments": {"assessment": {"statement": "Initial experiment"}, "work_request": {
+                "objective": "Run the experiment", "tasks": [{"key": "run_initial", "instruction": "Run the experiment"}],
+            }}},
+            {"tool": "request_work", "arguments": {"assessment": {"statement": "Repair the observed failure"}, "work_request": {
+                "objective": "Fix the bug and rerun", "tasks": [
+                    {"key": "fix", "instruction": "Fix the bug"},
+                    {"key": "rerun", "instruction": "Rerun the experiment", "depends_on": ["fix"]},
+                ],
+            }}},
+            _finish_after_repair(),
+        ])),
         store=InMemorySessionStore(),
     )
     controller = ResearchController(

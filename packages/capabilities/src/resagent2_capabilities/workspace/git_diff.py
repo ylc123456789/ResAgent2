@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import cast
 
 from pydantic import BaseModel, Field
@@ -25,18 +26,28 @@ class GitDiffTool:
 
     name = "git_diff"
     input_model = GitDiffInput
+    model_guidance = (
+        "Read the current Attempt-relative patch. The response also reports current "
+        "verification facts when supplied by the Agent: recorded pass/fail and whether "
+        "those results still cover the current workspace/environment are separate facts."
+    )
 
     def __init__(
-        self, repository: GitWorkspace, *, baseline: GitBaseline
+        self, repository: GitWorkspace, *, baseline: GitBaseline,
+        verification_state: Callable[[AgentState, str], dict] | None = None,
     ) -> None:
         self.repository = repository
         self.baseline = baseline
+        self.verification_state = verification_state
 
     def execute(self, state: AgentState, arguments: BaseModel) -> ToolObservation:
         args = cast(GitDiffInput, arguments)
         diff = self.repository.diff_since(self.baseline)
         truncated = len(diff) > args.max_chars
+        value = {"diff": diff[: args.max_chars], "truncated": truncated}
+        if self.verification_state is not None:
+            value["verification"] = self.verification_state(state, diff)
         return ToolObservation(
             summary="Read current Git diff",
-            value={"diff": diff[: args.max_chars], "truncated": truncated},
+            value=value,
         )

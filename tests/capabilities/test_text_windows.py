@@ -1,5 +1,7 @@
 """Text windows work across workspace and frozen evidence without weakening grants."""
 
+from e2e.native_fixtures import tool_turns
+
 import hashlib
 import io
 import zipfile
@@ -73,12 +75,41 @@ def test_workspace_and_artifact_share_line_range_semantics(tmp_path, start, end,
     for result in (file_result, artifact_result):
         assert result.value["start_line"] == start
         assert result.value["end_line"] == end
+        assert result.value["total_lines"] == 4
+        assert result.value["selected_chars"] == len(expected)
         assert result.value["content"] == expected
         assert result.value["truncated"] is False
     assert artifact_result.memory_updates.get("read_artifact_ids", []) == ([ref.id] if expected else [])
     assert artifact_result.value["provenance"] == {
         "producer": "experiment", "task_id": "task_reader", "attempt_number": 1,
     }
+
+
+@pytest.mark.parametrize("registered", [False, True])
+@pytest.mark.parametrize("body,options,total_lines,selected_chars", [
+    ("", {}, 0, 0),
+    ("one\ntwo\n", {"start_line": 8, "end_line": 10}, 2, 0),
+    ("one\ntwo\n", {"start_char": 8}, 2, 8),
+    ("one\ntwo\n", {"start_char": 20}, 2, 8),
+])
+def test_text_tools_distinguish_empty_source_and_ranges_beyond_end(
+    tmp_path, registered, body, options, total_lines, selected_chars,
+):
+    path = tmp_path / "text.txt"
+    path.write_bytes(body.encode("utf-8"))
+    if registered:
+        ref = _artifact(path)
+        tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+        source = {"artifact_id": ref.id}
+    else:
+        tool = ReadFileTool(_boundary(tmp_path))
+        source = {"path": path.name}
+    result = tool.execute(_state(), tool.input_model(**source, **options)).value
+    assert result["content"] == ""
+    assert result["total_lines"] == total_lines
+    assert result["selected_chars"] == selected_chars
+    assert result["truncated"] is False
+    assert result["next_start_char"] is None
 
 
 def test_artifact_range_can_recover_text_after_default_character_limit(tmp_path):
@@ -182,7 +213,7 @@ def test_search_guidance_matches_bounded_input_schema(tmp_path):
 
 
 def test_search_pipe_is_literal_and_guidance_does_not_promise_regex(tmp_path):
-    from resagent2_runtime.tools import tool_contracts_text
+    from resagent2_runtime.tool_calling import native_tool_schemas
 
     (tmp_path / "names.txt").write_text("alpha\nbeta\nALPHA|BETA\n", encoding="utf-8")
     tool = SearchTextTool(_boundary(tmp_path))
@@ -190,7 +221,7 @@ def test_search_pipe_is_literal_and_guidance_does_not_promise_regex(tmp_path):
     assert result.value["matches"] == [
         {"path": "names.txt", "line": 3, "text": "ALPHA|BETA"},
     ]
-    contracts = tool_contracts_text((tool,))
+    contracts = native_tool_schemas((tool,))[0]["function"]["description"]
     assert "literal substring match, not regex" in contracts
     assert "search alternatives separately" in contracts
     assert "no regular expressions" in tool.input_model.model_json_schema()[
@@ -329,17 +360,17 @@ def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, regi
         def evaluate(self, state, candidate):
             return CompletionDecision(complete=candidate is not None, report="Finished")
 
-    llm = ScriptedLLMClient([
+    llm = ScriptedLLMClient(tool_turns([
         *(AgentAction(tool=tool.name, arguments=args) for args in arguments),
         AgentAction(tool="finish", arguments={"report": "Finished"}),
-    ])
+    ]))
     store = InMemorySessionStore()
     result = AgentLoop(store=store).run(
         AgentDefinition(
             name="reader", owner=AgentOwner.CODING, system_prompt="Read the evidence.",
             tools=(tool, FinishTool()), llm_client=llm,
             context_builder=lambda request, state, limit: [
-                ContextSection(name="task", content=request.instruction, required=True),
+                ContextSection(name="task", content=request.instruction),
             ],
             permission_policy=AllowListPermissionPolicy({tool.name, "finish"}),
             completion_check=AcceptFinish(),
@@ -352,12 +383,13 @@ def test_failed_binary_read_recovers_without_recording_it_as_read(tmp_path, regi
         session_id="session_reader",
     )
     assert result.status == ModuleStatus.COMPLETED
-    assert "runtime_feedback" in llm.contexts[1].included_sections
-    assert "Cannot read as UTF-8 text" in llm.contexts[1].text
-    assert "\ufffd" not in llm.contexts[1].text
+    from resagent2_runtime.tool_calling import native_input_text
+    wire = native_input_text(llm.contexts[1], llm.schemas[1], llm.histories[1])
+    assert "Cannot read as UTF-8 text" in wire
+    assert "\ufffd" not in wire
     state = store.load("session_reader")
     assert state.memory[memory_key] == expected
-    assert state.runtime_feedback is None
+    assert json.loads(state.tool_turns[0].tool_results[state.tool_turns[0].tool_calls[0].id])["ok"] is False
 
 
 @pytest.mark.parametrize("start_line,end_line,start_char,end_char", [
@@ -385,6 +417,60 @@ def test_workspace_and_artifact_share_character_windows_and_newlines(
         _state(), file_tool.input_model(path=path.name, **options),
     ).value
     artifact_value = artifact_tool.reader.read_text(ref.id, max_chars=5, **options)
-    for key in ("start_line", "end_line", "start_char", "end_char", "content", "truncated"):
+    for key in (
+        "start_line", "end_line", "start_char", "end_char", "total_lines",
+        "selected_chars", "next_start_char", "content", "truncated",
+    ):
         assert file_value[key] == artifact_value[key]
     assert path.read_bytes() == body.encode("utf-8")
+
+
+@pytest.mark.parametrize("registered", [False, True])
+@pytest.mark.parametrize("window_size", [128_000, 256_000, None])
+def test_text_tools_continuation_recovers_every_source_character(tmp_path, registered, window_size):
+    # Explicit windows which exactly fill the cap still have a continuation,
+    # even though their requested content was not truncated.
+    body = "中文😀abc\r\n" * 40_000 + "LAST_CHARACTER"
+    path = tmp_path / "large.txt"
+    path.write_bytes(body.encode("utf-8"))
+    if registered:
+        ref = _artifact(path)
+        tool = ReadArtifactTool(RegisteredArtifactReader([ref], run_id=ref.run_id))
+        source = {"artifact_id": ref.id}
+    else:
+        tool = ReadFileTool(_boundary(tmp_path))
+        source = {"path": path.name}
+    state = _state()
+    pieces = []
+    start = 0
+    for _ in range(10):
+        end = start + window_size if window_size is not None else None
+        result = tool.execute(state, tool.input_model(
+            **source, start_char=start, end_char=end,
+        )).value
+        assert result["start_char"] == start
+        assert result["end_char"] == end
+        assert result["content"] == body[start:end][:128_000]
+        assert result["truncated"] is (len(body[start:end]) > 128_000)
+        pieces.append(result["content"])
+        next_start = result["next_start_char"]
+        if next_start is None:
+            break
+        assert next_start == start + len(result["content"])
+        assert next_start > start
+        start = next_start
+    else:
+        pytest.fail("Text continuation did not reach the selected source end")
+    assert "".join(pieces) == body
+    assert path.read_bytes() == body.encode("utf-8")
+
+
+@pytest.mark.parametrize("tool_type", [ReadFileTool, ReadArtifactTool])
+def test_text_tools_explain_continuation_and_requested_window_scope(tool_type):
+    guidance = tool_type.model_guidance
+    assert "next_start_char" in guidance
+    assert "total_lines" in guidance
+    assert "selected_chars" in guidance
+    assert "Keep the line range fixed" in guidance
+    assert "truncated=False" in guidance
+    assert "selected lines are exhausted" in guidance

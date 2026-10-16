@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from resagent2_runtime.budget import DeadlineExceededError
+from resagent2_runtime.cancellation import OperationCancelled
 
 from .process import run_process
 
@@ -109,6 +110,10 @@ def _query(command: list[str], *, timeout: int) -> tuple[str | None, dict]:
     """A failed optional observation never changes an execution result or gate."""
     try:
         result = run_process(command, capture_output=True, text=True, timeout=timeout)
+    except OperationCancelled:
+        # This optional observation follows the primary operation. Interruption
+        # must not erase an installation/check that already completed.
+        return None, {"status": "unavailable", "error": "Environment observation interrupted"}
     except DeadlineExceededError:
         # Preserve an already-finished setup's receipt. The next normal operation
         # still checks the shared deadline before it executes.

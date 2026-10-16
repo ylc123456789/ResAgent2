@@ -18,7 +18,6 @@ from resagent2_components import (
     MultiSourceLiteratureBackend,
     OpenAlexLiteratureBackend,
     DeepSeekWebSearchBackend,
-    TavilyWebSearchBackend,
     WebPageFetcher,
 )
 from resagent2_components import (
@@ -49,9 +48,10 @@ from resagent2_runtime import (
     JsonSessionStore,
     ModelProfile,
     ModelRequestClient,
-    OpenAICompatibleClient,
     PromptLLMClient,
+    OpenAICompatibleClient,
 )
+from resagent2_runtime.controls import RunControlInbox
 from resagent2_scientific import ScientificAgent
 
 
@@ -84,14 +84,13 @@ def _web_search_provider() -> str | None:
 
     explicit_provider = os.environ.get("RESAGENT2_WEB_SEARCH_PROVIDER")
     provider = "deepseek" if explicit_provider is None else explicit_provider
-    if provider not in {"deepseek", "tavily", "off"}:
-        raise ValueError("RESAGENT2_WEB_SEARCH_PROVIDER must be deepseek, tavily, or off")
+    if provider not in {"deepseek", "off"}:
+        raise ValueError("RESAGENT2_WEB_SEARCH_PROVIDER must be deepseek or off")
     if provider == "off":
         return None
-    key_env = "DEEPSEEK_API_KEY" if provider == "deepseek" else "TAVILY_API_KEY"
-    if not os.environ.get(key_env, "").strip():
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         if explicit_provider is not None:
-            raise ValueError(f"RESAGENT2_WEB_SEARCH_PROVIDER={provider} requires {key_env}")
+            raise ValueError("RESAGENT2_WEB_SEARCH_PROVIDER=deepseek requires DEEPSEEK_API_KEY")
         return None
     return provider
 
@@ -131,10 +130,8 @@ def _client() -> OpenAICompatibleClient:
 
 def _compiler_client(*, max_context_tokens: int) -> PromptLLMClient:
     return PromptLLMClient(
-        _client(),
-        system_prompt="You are the stateless ResAgent2 Workflow Compiler.",
-        max_context_tokens=max_context_tokens,
-        section_name="compiler_request",
+        _client(), system_prompt="You are the stateless ResAgent2 task router. Call route_tasks exactly once.",
+        max_context_tokens=max_context_tokens, section_name="compiler_request", output_tool_name="route_tasks",
     )
 
 
@@ -232,12 +229,6 @@ def build_application(
             ),
             model=os.environ.get("RESAGENT2_WEB_SEARCH_MODEL", "deepseek-flash"),
         )
-    elif web_search_provider == "tavily":
-        web_search_backend = TavilyWebSearchBackend(
-            os.environ["TAVILY_API_KEY"],
-            timeout_seconds=web_timeout_seconds,
-            max_response_bytes=web_max_response_bytes,
-        )
     scientific = ScientificAgent(
         _client(),
         literature_backend=MultiSourceLiteratureBackend(
@@ -264,6 +255,7 @@ def build_application(
         scheduler=scheduler,
         registry=registry,
         dataset_ref_source=dataset_catalog,
+        control_inbox=RunControlInbox(root / "controls"),
     )
     trace_level = os.environ.get("RESAGENT2_LLM_TRACE_LEVEL", "off")
     print(f"LLM trace: {trace_level}; directory: {_trace_dir() or 'unset'}", file=sys.stderr)

@@ -1,18 +1,14 @@
 """Reusable operations and presentation; no Tool entry points or Agent loop."""
 
 from .materials import (
-    read_artifact_json, read_request_material, read_work_feedback_source,
-    request_materials_context, request_dataset_refs,
-    request_task_context, merge_artifact_index, artifact_index_context,
+    read_artifact_json, request_dataset_refs, request_task_context, artifact_index_context,
 )
 from .artifacts import (
     ArtifactRegistrationPort,
     ArtifactReadError,
     RegisteredArtifactReader,
-    build_module_report,
     media_type_for,
 )
-from .context import workspace_context
 from .dataset import (
     DatasetAvailability,
     DatasetCatalog,
@@ -34,6 +30,7 @@ from .git import (
     GitWorkspace,
     GitWorkspaceError,
 )
+from .execution_records import execution_record, preserve_execution_record
 from .process import (
     CommandPermissionDecision,
     ProcessRunner,
@@ -68,7 +65,6 @@ from .literature import (
 from .web_deepseek import DeepSeekWebSearchBackend
 
 from .web import (
-    TavilyWebSearchBackend,
     WebFetchError,
     WebPage,
     WebPageFetcher,
@@ -79,13 +75,11 @@ from .web import (
 )
 
 __all__ = [
+    'execution_record',
+    'preserve_execution_record',
     'read_artifact_json',
-    'read_request_material',
-    'read_work_feedback_source',
-    'request_materials_context',
     'request_dataset_refs',
     'request_task_context',
-    'merge_artifact_index',
     'artifact_index_context',
     'ArxivLiteratureBackend',
     'OpenAlexLiteratureBackend',
@@ -99,7 +93,6 @@ __all__ = [
     'LiteratureSearchError',
     'LiteratureUnavailableError',
     'DeepSeekWebSearchBackend',
-    'TavilyWebSearchBackend',
     'WebFetchError',
     'WebPage',
     'WebPageFetcher',
@@ -130,12 +123,10 @@ __all__ = [
     'UnsafeCommandError',
     'WorkspaceBoundary',
     'WorkspacePermissionError',
-    'build_module_report',
     'dataset_context',
     'dataset_env_overrides',
     'find_conda',
     'media_type_for',
     'parse_command',
     'resolve_dataset_refs',
-    'workspace_context',
 ]

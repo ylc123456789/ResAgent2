@@ -10,6 +10,7 @@
 | [git.py](src/resagent2_components/git.py) | Coding 使用的 GitBaseline、恢复与 Attempt 相对变化 |
 | [repo.py](src/resagent2_components/repo.py) | 仓库物化 |
 | [process.py](src/resagent2_components/process.py) | 直接 argv / Linux Bash 执行、凭据过滤、有界日志尾部、进程树超时终止 |
+| [execution_records.py](src/resagent2_components/execution_records.py) | 从本 Agent 的原生工具回执冻结正常、失败、中断命令事实，沿统一 report + artifacts 交回 |
 | [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
@@ -35,11 +36,10 @@ ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间
 
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 
-workspace_context 消费原事件和真实环境绑定，不读旧缓存猜环境状态；材料按 Runtime 的统一权重/优先级分配，旧读取保留时序和后续内置修改标记。规则与预算只在 [CONTEXT](../../docs/current/CONTEXT.md) 维护；调用语义见 [CONTRACTS](../../docs/current/CONTRACTS.md#components)。
 
 `missing_required_artifacts` 共用 `RegisteredArtifactReader` 的 Run 授权与冻结 hash 检查，精确比较已登记 Ref 的 `output_name`；存在检查通过 `verify` 分块计算文件 hash，不解码文本或全量载入二进制产物；不扫描工作区、不按文件名猜测，也不把存在检查写成 Scientific 的观察记录。Scientific 和 Registry 复用此事实规则，登记权威仍在 Orchestrator。
 
-text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；read_text_file 预检大小后最多读取上限加1字节，encode_text 在写盘前核对编码及最终字节数。slice_text_lines 先选物理行，再选字符窗口，最后限制返回字符数，保留原换行；它不是流式读取。read_file 与 read_artifact 共用窗口规则，后者仍校验整份冻结 hash，不受工作区10 MiB限制。授权继续由原调用边界负责。
+text.py 的工作区处理默认上限为10 MiB，严格 UTF-8 且拒绝 NUL；read_text_file 预检大小后最多读取上限加1字节，encode_text 在写盘前核对编码及最终字节数。slice_text_lines 先选物理行，再选字符窗口，最后限制返回字符数，保留原换行；回执同时提供整份文本 total_lines 和字符切片前的所选行段 selected_chars，空文件均为0，范围计数不随工具或上下文裁剪变化。它不是流式读取。read_file 与 read_artifact 共用窗口规则，后者仍校验整份冻结 hash，不受工作区10 MiB限制。授权继续由原调用边界负责。
 
 <a id="literature"></a>
 
@@ -79,10 +79,12 @@ OpenAlex 可选 API key 由组合根读取，仅经 Authorization header 发送�
 
 ## 通用网页组件
 
-`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回本次有界响应内收到的全部规范化结果；`max_results` 是可用时提交给提供方的数量提示，模型预览由 Capabilities 控制。`WebPageFetcher.fetch(url)` 获取并解析一个网页。组合根可注入 `DeepSeekWebSearchBackend` 或 `TavilyWebSearchBackend`，每次只发一次请求，不提供分页、自动重试或隐式换源；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
+`web.py` 提供两个普通 Python 接口：`WebSearchBackend.search(query, max_results)` 返回本次有界响应内收到的全部规范化结果；`max_results` 是搜索接口的预览参数，模型预览由 Capabilities 控制；DeepSeek 不用它裁掉原生来源或限制内部搜索次数。`WebPageFetcher.fetch(url)` 获取并解析一个网页。组合根注入 `DeepSeekWebSearchBackend`，每次只发一次请求，不提供分页、自动重试或隐式换源；provider 的认证、HTTP 响应和限流信息在组件边界内归一化为 `WebSearchError`。没有搜索 provider 时仍可独立使用网页抓取，不伪造搜索能力。
 
-`DeepSeekWebSearchBackend(client, model="deepseek-flash", max_tokens=4096, max_uses=5)` 构造独立 Anthropic-compatible 托管 `web_search` 请求，沿用 DSH 简短提示 `Perform a web search for the query: {query}`，保持4096输出tokens/`max_uses=5`的既有设置；按返回顺序保留各原生批次、按精确URL去重，不按预览大小裁掉后续来源。将原生 `web_search_result` 的URL/title/page_age归一化为普通网页线索；snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，生成正文不充当证据。缺少原生结果块为 `search_not_executed`，明确空列表才是成功空结果；原生工具错误无论位于对象还是列表，都按同一路径校验：只有 `max_uses_exceeded` 且存在有效来源时返回已校验来源和 `incomplete_reason`；无来源则报 `search_limit_exceeded`。其他工具错误保留 `provider_error` / `rate_limited`，畸形条目仍拒绝；`max_tokens` / `pause_turn` 等未完成响应仍为 `incomplete_response`，不自动续传。注入的 Runtime `ModelRequestClient` 负责认证、响应字节/时间上限、一次共享模型用量占用和 trace，组件不启动模型循环、不创建 Session。CLI 默认复用已有 DeepSeek key，显式 Tavily 仍走普通 HTTP；部署选择和费用限制见 [CLI 配置](../../apps/cli/README.md#通用联网搜索和网页获取)。
+`DeepSeekWebSearchBackend(client, model="deepseek-flash", max_tokens=4096, max_uses=5)` 构造独立 Anthropic-compatible 托管 `web_search` 请求，沿用 DSH 简短提示 `Perform a web search for the query: {query}`，保持4096输出tokens/`max_uses=5`的既有设置；按返回顺序保留各原生批次、按精确URL去重，不按预览大小裁掉后续来源。将原生 `web_search_result` 的URL/title/page_age归一化为普通网页线索；snippet只取匹配URL的citation `cited_text`，没有引用文本时留空，生成正文不充当证据。缺少原生结果块为 `search_not_executed`，明确空列表才是成功空结果；原生工具错误无论位于对象还是列表，都按同一路径校验：只有 `max_uses_exceeded` 且存在有效来源时返回已校验来源和 `incomplete_reason`；无来源则报 `search_limit_exceeded`。其他工具错误保留 `provider_error` / `rate_limited`，畸形条目仍拒绝；`max_tokens` / `pause_turn` 等未完成响应仍为 `incomplete_response`，不自动续传。注入的 Runtime `ModelRequestClient` 负责认证、响应字节/时间上限、一次共享模型用量占用和 trace，组件不启动模型循环、不创建 Session。CLI 默认复用已有 DeepSeek key，也可关闭搜索；部署选择和费用限制见 [CLI 配置](../../apps/cli/README.md#通用联网搜索和网页获取)。
 
-`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML解析器保留链接文字及合法http(s)目标，相对href按最终响应URL解析；内联文字与链接内的块分隔保留，空或非法目标只保留可见文字。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
+`WebPageFetcher` 只做有界的 HTTP GET 和 HTML/XHTML/text 提取：检查 http(s) URL、最多5次重定向、超时、响应字节数、内容类型和严格 UTF-8，拒绝凭据 URL、NUL、PDF 及其他二进制，不执行 JavaScript。Runtime 的 HTTP 公网连接选项在同一超时内异步解析地址并固定实际连接的 IP，保留 Host/TLS SNI；拒绝非公网及混合公私地址，不经环境代理。HTML/XHTML 使用 BeautifulSoup 的 html.parser 和 Markdownify 转为 Markdown，parser 为 markdownify/html.parser；text/plain 原文保持不变，parser 为 plain。普通链接保留为 Markdown 链接，相对href按最终响应URL解析，空或非法目标只保留可见文字；pre 正文保留换行、缩进和空白，输出代码围栏，嵌套 pre 加分隔，链接包住代码块时另列地址。图片只保留 alt 文字，不保留图片源地址或解析图像。SVG/MathML/noscript/template 内 title 不污染页面标题；script/style/noscript/template/title 未闭合、空提取或转换失败沿现有 parse_failed 路径报告，不生成残缺正文。依赖由本包 pyproject.toml 声明，editable 安装时一并解析，不新增 Node 运行时。不自动抓取链接、不解释HTML `<base>`或浏览器布局。Fetcher 只返回页面事实，不登记工件、不更新 Run、不调用模型；`web_search`/`web_fetch` 的模型 schema、工件登记和 Scientific 交接由 Capabilities 负责。
 
 网页组件与 `literature/` 的边界是：literature 提供论文来源、论文身份和 PDF/全文链；web 提供不限定领域的网页线索和页面正文。网页结果不会自动变成论文，两个入口共用 Runtime 的 HTTP/Run 截止时间和 Artifact Registry，但不共享查询或相关性判断。
+
+当前接入规则：文献和网页搜索只返回临时线索；fetch_literature(source)/web_fetch 显式保存材料，read_artifact 按需读取。工具回执只进原生历史，实际 Ref 增量由共享 Loop 摄入完整目录。工作结果按 WorkRequest → Task → 原报告和实际产物展开，不生成总体报告。业务问答直接保存并累计，操作批准续执行原调用。规则以 [CONTEXT](../../docs/current/CONTEXT.md) 和 [CONTRACTS](../../docs/current/CONTRACTS.md) 为准。

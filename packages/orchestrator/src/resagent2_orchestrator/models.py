@@ -7,10 +7,15 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from resagent2_components.literature import PreparedLiteratureImport
 
 from resagent2_contracts import (
     ArtifactId,
+    ArtifactImport,
     ArtifactRef,
+    AgentResult,
+    AgentRequest,
+    BusinessInput,
     DatasetRef,
     ModuleError,
     PendingQuestion,
@@ -23,9 +28,12 @@ from resagent2_contracts import (
     ScientificOpinion,
     SessionRef,
     Workflow,
+    WorkflowProposal,
+    WorkflowPatch,
     WorkRequest,
     WorkRequestStatus,
     WorkspaceRecord,
+    WorkResult,
 )
 
 
@@ -71,6 +79,33 @@ class RunUsage(OrchestratorModel):
                 for outcome in ("succeeded", "failed", "unknown")}
 
 
+class PendingRegistration(OrchestratorModel):
+    """Allocated identity and expected frozen facts until registration commits."""
+
+    ref: ArtifactRef
+    candidate_path: str
+    source_path: str | None = None
+    await_receipt: bool = False
+
+
+class RunInitialization(OrchestratorModel):
+    """Original inputs and progress saved before the first file is frozen."""
+
+    imports: list[ArtifactImport] = Field(default_factory=list)
+    literature: list[PreparedLiteratureImport] = Field(default_factory=list)
+    next_import: int = Field(default=0, ge=0)
+    next_literature: int = Field(default=0, ge=0)
+    complete: bool = False
+
+
+class PendingModuleResult(OrchestratorModel):
+    """Result already returned by a port, awaiting its receiving gate and registration."""
+
+    request: AgentRequest
+    result: AgentResult
+    previous_artifact_ids: list[ArtifactId] = Field(default_factory=list)
+
+
 class ResearchRun(OrchestratorModel):
     """Complete persisted state owned by the Research Orchestrator."""
 
@@ -83,11 +118,22 @@ class ResearchRun(OrchestratorModel):
     workspaces: dict[str, WorkspaceRecord] = Field(default_factory=dict)
     artifacts: dict[ArtifactId, ArtifactRef] = Field(default_factory=dict)
     pending_question: PendingQuestion | None = None
-    pending_question_ref: ArtifactRef | None = None
+    child_questions: dict[str, PendingQuestion] = Field(default_factory=dict)
+    upstream_inputs: list[BusinessInput] = Field(default_factory=list)
+    task_inputs: dict[str, list[BusinessInput]] = Field(default_factory=dict)
+    consumed_control_ids: list[str] = Field(default_factory=list)
+    delivered_input_ids: list[str] = Field(default_factory=list)
+    runtime_notices: list[dict] = Field(default_factory=list)
+    parent_attention: bool = False
+    manually_paused_at: datetime | None = None
     conclusion_requirements_ref: ArtifactRef | None = None
     dataset_catalog_ref: ArtifactRef | None = None
-    research_index_ref: ArtifactRef | None = None
-    feedback_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
+    initialization: RunInitialization = Field(default_factory=RunInitialization)
+    pending_registrations: dict[str, PendingRegistration] = Field(default_factory=dict)
+    pending_module_results: dict[str, PendingModuleResult] = Field(default_factory=dict)
+    pending_compilation: WorkflowProposal | WorkflowPatch | None = None
+    received_controls: dict[str, str] = Field(default_factory=dict)
+    scientific_artifact_ids: list[ArtifactId] = Field(default_factory=list)
     scientific_report: str = ""
     answers: list[RecordedAnswer] = Field(default_factory=list)
     workflow_history: list[Workflow] = Field(default_factory=list)
@@ -98,7 +144,7 @@ class ResearchRun(OrchestratorModel):
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
     usage: RunUsage = Field(default_factory=RunUsage)
-    # Settled ask_user pauses only; the currently open pause is derived below.
+    # Settled user waits; the currently open question/manual pause is derived below.
     user_wait_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
     terminal_error: ModuleError | None = None
@@ -109,6 +155,16 @@ class ResearchRun(OrchestratorModel):
     def llm_calls_used(self) -> int:
         return self.usage.used
 
+    @property
+    def user_wait_started_at(self) -> datetime | None:
+        """Start of the open user-wait interval, counted once if reasons overlap."""
+        if self.status != RunStatus.PAUSED:
+            return None
+        starts = [self.manually_paused_at] if self.manually_paused_at is not None else []
+        if self.pending_question is not None:
+            starts.append(self.pending_question.created_at)
+        return min(starts) if starts else None
+
     def remaining_timeout_seconds(self, now: datetime) -> float:
         """One Run clock for Controller and Scheduler: wall time minus user wait.
 
@@ -116,8 +172,9 @@ class ResearchRun(OrchestratorModel):
         No user-supplied answer timestamp is used to extend this budget.
         """
         waited = self.user_wait_seconds
-        if self.status == RunStatus.PAUSED and self.pending_question is not None:
-            waited += max(0.0, (now - self.pending_question.created_at).total_seconds())
+        started = self.user_wait_started_at
+        if started is not None:
+            waited += max(0.0, (now - started).total_seconds())
         elapsed = max(0.0, (now - self.created_at).total_seconds() - waited)
         return max(0.0, self.request.budget.timeout_seconds - elapsed)
 

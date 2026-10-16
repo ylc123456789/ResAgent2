@@ -1,8 +1,5 @@
 """Run grants and deterministic operation rules share one tool policy."""
 
-from resagent2_contracts import RecordedAnswer
-from resagent2_components.artifacts import RegisteredArtifactReader
-from resagent2_components.materials import read_artifact_json
 from resagent2_runtime import AllowListPermissionPolicy, PermissionDecision
 
 
@@ -18,10 +15,7 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
         self.tools = {tool.name: tool for tool in tools}
         self.boundary = boundary
         self.binding = binding
-        reader = RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)
-        self.answers = [read_artifact_json(reader, ref.id, RecordedAnswer)
-                        for ref in request.input_artifacts
-                        if ref.kind == "answer" and ref.id in request.resume_artifact_ids]
+        self.answers = request.resume_answers
 
     def check(self, action, state, request):
         decision = super().check(action, state, request)
@@ -76,10 +70,12 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             return decision
         for answer in self.answers:
             if (answer.action != pending or answer.run_id != request.run_id
-                    or answer.task_id != request.task_id or answer.attempt_number != request.attempt_number):
+                    or answer.task_id != request.task_id or answer.attempt_number != request.attempt_number
+                    or answer.session_id != state.session_id):
                 continue
             approved = answer.values.get("approve", "").strip().lower() in {"yes", "true", "approve", "approved", "确认", "同意", "是"}
             return decision.model_copy(update={"outcome": "allow" if approved else "deny",
                                                "reason": "Operation approved" if approved else "User declined this operation",
-                                               "approval_id": pending.action_id})
+                                               "approval_id": pending.action_id,
+                                               "user_comment": answer.comment})
         return decision

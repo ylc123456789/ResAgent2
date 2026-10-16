@@ -11,21 +11,22 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 import httpx
 from pydantic import BaseModel
 
 from .budget import (
-    RequestOutcome, current_budget, execution_budget, invoke_model,
+    RequestOutcome, current_budget, current_budget_status, execution_budget, invoke_model,
 )
 from .compaction import compaction_input, compaction_input_text
 from .context import ContextBudgetExceeded, ContextComposer
 from .models import ComposedContext, ContextSection, ToolCallTurn
+from .cancellation import OperationCancelled, check_cancelled, current_cancellation
 from .http import send_request
 from ._trace import write_trace_record
 from .tool_calling import (
-    NativeToolCallError, native_actions, native_input, native_input_text, parse_tool_turn,
+    NativeToolCallError, native_actions, native_input, parse_tool_turn,
 )
 
 
@@ -72,24 +73,27 @@ class ModelProfile:
 
 
 class LLMClient(Protocol):
-    """Provider-neutral interface: only ``next_action`` is required.
+    """Native tool-calling client; Session owns the paired protocol history.
 
-    Consumers feature-detect optional budget and trace hooks. A minimal client
-    needs none of them; absent attempt accounting means one call per request.
-    AgentLoop prefers ``next_tool_call`` when provided; Compiler still uses
-    ``next_action``. Native history belongs to Session, never to the client.
+    Budget and trace hooks are optional. A minimal client consumes one model
+    request per call and provides a stable protocol identity for continuation.
     """
 
-    def next_action(
-        self,
-        context: ComposedContext,
-        action_type: type[BaseModel],
-    ) -> BaseModel | dict:
-        """Return a candidate, or raise JSONDecodeError for malformed output.
+    @property
+    def tool_session_key(self) -> str: ...
 
-        The caller owns schema validation and bounded correction feedback;
-        transport failures remain separate from invalid model output.
-        """
+    def next_tool_call(
+        self, context: ComposedContext, schemas: list[dict],
+        turns: list[ToolCallTurn], *, max_input_tokens: int,
+    ) -> ToolCallTurn: ...
+
+
+class StructuredLLMClient(Protocol):
+    """Structured output for stateless callers such as Workflow Compiler."""
+
+    def next_action(
+        self, context: ComposedContext, action_type: type[BaseModel],
+    ) -> BaseModel | dict: ...
 
 
 class PromptLLMClient:
@@ -103,11 +107,12 @@ class PromptLLMClient:
 
     def __init__(
         self,
-        client: LLMClient,
+        client: StructuredLLMClient,
         *,
         system_prompt: str,
         max_context_tokens: int,
         section_name: str = "request",
+        output_tool_name: str | None = None,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -115,6 +120,7 @@ class PromptLLMClient:
         self._system_prompt = system_prompt
         self._max_context_tokens = max_context_tokens
         self._section_name = section_name
+        self._output_tool_name = output_tool_name
         self._composer = ContextComposer()
         self.last_attempts = 0
         self._attempt_limit = 3
@@ -140,12 +146,12 @@ class PromptLLMClient:
         budgeter = getattr(self._client, "context_budget", None)
         max_tokens = (
             budgeter(action_type, self._max_context_tokens)
-            if budgeter is not None else self._max_context_tokens
+            if budgeter is not None and self._output_tool_name is None else self._max_context_tokens
         )
         context = self._composer.compose(
             self._system_prompt,
             [ContextSection(
-                name=self._section_name, content=prompt, required=True,
+                name=self._section_name, content=prompt,
             )],
             max_tokens=max_tokens,
         )
@@ -154,8 +160,25 @@ class PromptLLMClient:
             timeout_seconds=getattr(self._client, "timeout_seconds", 120),
         ) as budget:
             before = budget.usage.used
+            context = context.model_copy(update={"runtime_status": current_budget_status()})
             try:
-                return invoke_model(self._client, "next_action", context, action_type)
+                estimated = self._composer.estimate_tokens(
+                    "\n\n".join((context.text, context.runtime_status)))
+                if estimated > max_tokens:
+                    raise ContextBudgetExceeded("prompt and runtime status exceed the input budget")
+                context = context.model_copy(update={"estimated_tokens": estimated})
+                if self._output_tool_name is None:
+                    return invoke_model(self._client, "next_action", context, action_type)
+                schemas = [{"type": "function", "function": {
+                    "name": self._output_tool_name,
+                    "description": "Return the requested structured result using this sole output tool.",
+                    "parameters": action_type.model_json_schema(),
+                }}]
+                turn = invoke_model(self._client, "next_tool_call", context, schemas, [],
+                                    max_input_tokens=self._max_context_tokens)
+                if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != self._output_tool_name:
+                    raise NativeToolCallError(f"Expected exactly one {self._output_tool_name} output call")
+                return action_type.model_validate_json(turn.tool_calls[0].arguments)
             finally:
                 self.last_attempts = budget.usage.used - before
                 self._attempt_limit = 3
@@ -170,23 +193,27 @@ class LLMTextResponseError(ValueError):
 
 
 class ScriptedLLMClient:
-    """Deterministic mock LLM that returns predefined structured candidates."""
+    """Deterministic native client returning predefined tool-call turns."""
 
-    def __init__(self, actions: list[BaseModel | dict]) -> None:
-        self._actions = deque(actions)
+    tool_session_key = "scripted-native-tools/v1"
+
+    def __init__(self, turns: list[ToolCallTurn]) -> None:
+        self._turns = deque(ToolCallTurn.model_validate(turn) for turn in turns)
         self.contexts: list[ComposedContext] = []
+        self.schemas: list[list[dict]] = []
+        self.histories: list[list[ToolCallTurn]] = []
 
-    def next_action(
-        self,
-        context: ComposedContext,
-        action_type: type[BaseModel],
-    ) -> BaseModel | dict:
-        """Record context and return the next scripted candidate."""
-
+    def next_tool_call(
+        self, context: ComposedContext, schemas: list[dict],
+        turns: list[ToolCallTurn], *, max_input_tokens: int,
+    ) -> ToolCallTurn:
+        """Record current context and return the next native model reply."""
         self.contexts.append(context)
-        if not self._actions:
-            raise LLMExhaustedError("scripted LLM has no remaining action")
-        return self._actions.popleft()
+        self.schemas.append(schemas)
+        self.histories.append([turn.model_copy(deep=True) for turn in turns])
+        if not self._turns:
+            raise LLMExhaustedError("scripted LLM has no remaining turn")
+        return self._turns.popleft()
 
 
 class OpenAICompatibleClient:
@@ -283,23 +310,28 @@ class OpenAICompatibleClient:
     ) -> ToolCallTurn:
         """Request native calls; serial execution remains the Runtime's policy."""
         self.last_attempts = 0
-        wire_input = native_input(context.text, schemas, turns)
-        message = native_input_text(context.text, schemas, turns)
-        estimated = ContextComposer.estimate_tokens(message)
-        if estimated > self.tool_input_limit(max_input_tokens):
-            raise ContextBudgetExceeded("native request exceeds the total input budget")
         included = [*context.included_sections, "native_tools"]
         if turns:
             included.append("tool_history")
-        context = context.model_copy(update={
-            "estimated_tokens": estimated, "included_sections": included,
-        })
-        body_data = {"model": self.model, **wire_input, "temperature": 0}
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+
+        def prepare():
+            current = context.model_copy(update={"runtime_status": current_budget_status(),
+                                                  "included_sections": included})
+            wire_input = native_input(current, schemas, turns)
+            message = json.dumps(wire_input, ensure_ascii=False)
+            estimated = ContextComposer.estimate_tokens(message)
+            if estimated > self.tool_input_limit(max_input_tokens):
+                raise ContextBudgetExceeded("native request exceeds the total input budget")
+            current = current.model_copy(update={"estimated_tokens": estimated})
+            body_data = {"model": self.model, **wire_input, "temperature": 0}
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return current, message, body_data
+
+        current, message, body_data = prepare()
         # No JSON response_format, force-tool option or beta strict mode. The
         # regular native protocol is shared across OpenAI-compatible providers.
-        return self._request(context, message, body_data, native=True)
+        return self._request(current, message, body_data, native=True, prepare=prepare)
 
     def summarize_history(
         self,
@@ -313,24 +345,25 @@ class OpenAICompatibleClient:
         if max_input_tokens < 1:
             raise ValueError("compaction input budget must be positive")
 
-        message = compaction_input_text(prompt)
-        estimated = ContextComposer.estimate_tokens(message)
-        if estimated > self.tool_input_limit(max_input_tokens):
-            raise ContextBudgetExceeded("compaction request exceeds the total input budget")
-        context = ComposedContext(
-            text=prompt,
-            included_sections=["compaction"],
-            omitted_sections=[],
-            estimated_tokens=estimated,
-        )
-        body_data = {
-            "model": self.model,
-            **compaction_input(prompt),
-            "temperature": 0,
-        }
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
-        return self._request(context, message, body_data, native=False, text=True)
+        def prepare():
+            status = current_budget_status()
+            message = compaction_input_text(prompt, runtime_status=status)
+            estimated = ContextComposer.estimate_tokens(message)
+            if estimated > self.tool_input_limit(max_input_tokens):
+                raise ContextBudgetExceeded("compaction request exceeds the total input budget")
+            context = ComposedContext(
+                text=prompt, runtime_status=status, included_sections=["compaction"],
+                omitted_sections=[], estimated_tokens=estimated,
+            )
+            body_data = {
+                "model": self.model, **compaction_input(prompt, runtime_status=status), "temperature": 0,
+            }
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return context, message, body_data
+
+        context, message, body_data = prepare()
+        return self._request(context, message, body_data, native=False, text=True, prepare=prepare)
 
     def set_trace_context(self, **kwargs) -> None:
         """Attach per-call correlation fields for the optional JSONL trace."""
@@ -453,16 +486,30 @@ class OpenAICompatibleClient:
         action_type: type[BaseModel],
     ) -> BaseModel | dict:
         """Structured output for Compiler and explicit JSON-only callers."""
-        message = f"{context.text}\n\n{self._action_instruction(action_type)}"
-        body_data = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": message}],
-            "response_format": {"type": "json_object"},
-            "temperature": 0,
-        }
-        if self.model_profile is not None:
-            body_data["max_tokens"] = self.model_profile.reserved_output_tokens
-        return self._request(context, message, body_data, native=False)
+        def prepare():
+            current = context.model_copy(update={"runtime_status": current_budget_status()})
+            message = "\n\n".join(part for part in (
+                current.text, current.runtime_status, self._action_instruction(action_type),
+            ) if part)
+            current = current.model_copy(update={
+                "estimated_tokens": ContextComposer.estimate_tokens(message),
+            })
+            if (self.model_profile is not None
+                    and current.estimated_tokens > self.model_profile.input_budget(
+                        schema_tokens=0, component_limit=self.model_profile.context_window)):
+                raise ContextBudgetExceeded("structured request exceeds the total input budget")
+            body_data = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": message}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0,
+            }
+            if self.model_profile is not None:
+                body_data["max_tokens"] = self.model_profile.reserved_output_tokens
+            return current, message, body_data
+
+        current, message, body_data = prepare()
+        return self._request(current, message, body_data, native=False, prepare=prepare)
 
     def _request(
         self,
@@ -472,6 +519,7 @@ class OpenAICompatibleClient:
         *,
         native: bool,
         text: bool = False,
+        prepare: Callable[[], tuple[ComposedContext, str, dict]] | None = None,
     ):
         """One transport/retry/accounting implementation for both output protocols."""
         if native and text:
@@ -485,27 +533,17 @@ class OpenAICompatibleClient:
         ):
             return self._request_attempts(
                 context, message, body_data,
-                native=native, text=text, attempt_limit=attempt_limit,
+                native=native, text=text, attempt_limit=attempt_limit, prepare=prepare,
             )
 
     def _request_attempts(
-        self, context, message, body_data, *, native, text, attempt_limit,
+        self, context, message, body_data, *, native, text, attempt_limit, prepare=None,
     ):
         budget = current_budget()
         assert budget is not None
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable {self.api_key_env}")
-        body = json.dumps(body_data).encode("utf-8")
-        request = httpx.Request(
-            "POST",
-            self.endpoint,
-            content=body,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-        )
         call_id = uuid.uuid4().hex
         created_at = datetime.now(UTC).isoformat()
         self._last_call_id = call_id
@@ -517,8 +555,26 @@ class OpenAICompatibleClient:
             for attempt in range(attempt_limit):
                 budget.check()
                 if attempt:
-                    time.sleep(budget.remaining_timeout(1.0))
+                    wait = budget.remaining_timeout(1.0)
+                    cancellation = current_cancellation()
+                    if cancellation is not None:
+                        cancellation.wait(wait)
+                    else:
+                        time.sleep(wait)
+                check_cancelled()
+                if prepare is not None:
+                    prepared_context, prepared_message, prepared_body = prepare()
+                else:
+                    prepared_context, prepared_message, prepared_body = context, message, body_data
+                request = httpx.Request(
+                    "POST", self.endpoint,
+                    content=json.dumps(prepared_body).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                )
                 budget.charge(call_id, attempt)
+                # Preparation can outlive the deadline or fail to persist a charge.
+                # Only a reserved attempt owns this input in the response trace.
+                context, message, body_data = prepared_context, prepared_message, prepared_body
                 self.last_attempts = attempt + 1
                 # Never attribute an earlier response to a later transport failure.
                 raw_response_text = None
@@ -559,6 +615,13 @@ class OpenAICompatibleClient:
                     if not native and not text and content.startswith("```"):
                         content = content.removeprefix("```json").removeprefix("```")
                         content = content.removesuffix("```").strip()
+                except OperationCancelled as error:
+                    last_error = error
+                    raise
+                except httpx.DecodingError as error:
+                    outcome = "failed"
+                    last_error = error
+                    raise
                 except httpx.HTTPStatusError as error:
                     detail = error.response.content[:2000].decode("utf-8", errors="replace")
                     outcome = "failed"
@@ -608,6 +671,9 @@ class OpenAICompatibleClient:
                     budget.usage.complete(call_id, attempt, outcome)
                     attempts.append({
                         "retry_number": attempt,
+                        "estimated_tokens": context.estimated_tokens,
+                        **({"request_text": message} if self.trace_level == "full" else
+                           {"request_sha256": self._sha256(message)}),
                         **self._response_trace_fields(
                             parsed_action, raw_response_text, raw_reasoning_text,
                             str(last_error) if last_error is not None else None,

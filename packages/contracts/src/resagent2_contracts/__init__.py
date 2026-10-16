@@ -1,13 +1,13 @@
 """Stable public imports for ResAgent2 cross-module contracts."""
 
 from .evidence import latest_command_results, missing_required_evidence_kinds
-from .identifiers import scientific_session_id, task_session_id
+from .identifiers import new_artifact_id, scientific_session_id, task_session_id
 from .models import (
-    WorkAttemptRecord, ResearchArtifactEntry, ResearchIndexGroup, ResearchIndex, WorkRecord,
+    ArtifactIndexEntry, ControlOrigin, WorkResult, WorkTaskResult, WorkAttemptResult,
     SCHEMA_VERSION,
     SCIENTIFIC_ARTIFACT_KINDS, SYSTEM_ARTIFACT_KINDS, SYSTEM_ARTIFACT_PROVENANCE,
     SYSTEM_GENERATED_ARTIFACT_KINDS,
-    ActionSnapshot, AgentOwner, AgentPermissions, AgentRequest, AgentResult,
+    ActionSnapshot, AgentOwner, AgentPermissions, AgentRequest, AgentResult, BusinessInput,
     AnswerFieldName, ArtifactCandidate, ArtifactId, ArtifactImport,
     ArtifactOutput, ArtifactRef, Attempt, AttemptStatus,
     ConclusionRequirements, ControlSignal, DatasetRef, EnvironmentSpec, ExecutionLimits,
@@ -19,18 +19,18 @@ from .models import (
     TaskId, TaskProposal, TaskStatus, UserAnswer, VerificationResult,
     WarningRecord, Workflow, WorkflowAgentDefinition, WorkflowAgentKind,
     WorkflowAgentRegistry, WorkflowPatch, WorkflowProposal, WorkflowTask,
-    WorkFeedback, WorkOutcome, WorkRequest, WorkRequestDraft, WorkRequestId,
-    WorkRequestStatus, WorkTaskOutcome, WorkspaceDescriptor, WorkspaceGrant,
+    WorkRequest, WorkRequestDraft, WorkRequestId, WorkTaskDraft, WorkTaskArtifactBinding,
+    WorkRequestStatus, WorkspaceDescriptor, WorkspaceGrant,
     WorkspaceId, WorkspaceAccess, WorkspaceRecord, WorkspaceSourceKind,
     WorkspaceSpec,
 )
 
 __all__ = [
-    "WorkAttemptRecord", "ResearchArtifactEntry", "ResearchIndexGroup", "ResearchIndex", "WorkRecord",
+    "new_artifact_id", "ArtifactIndexEntry", "ControlOrigin", "WorkResult", "WorkTaskResult", "WorkAttemptResult",
     "SCHEMA_VERSION", "latest_command_results", "missing_required_evidence_kinds", "scientific_session_id",
     "SCIENTIFIC_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_KINDS", "SYSTEM_ARTIFACT_PROVENANCE",
     "SYSTEM_GENERATED_ARTIFACT_KINDS",
-    "task_session_id", "ActionSnapshot", "AgentOwner", "AgentPermissions", "AgentRequest",
+    "task_session_id", "ActionSnapshot", "AgentOwner", "AgentPermissions", "AgentRequest", "BusinessInput",
     "AgentResult", "AnswerFieldName", "ArtifactCandidate", "ArtifactId",
     "ArtifactImport", "ArtifactOutput", "ArtifactRef", "Attempt", "AttemptStatus",
     "ConclusionRequirements", "ControlSignal", "DatasetRef", "EnvironmentSpec", "ExecutionLimits",
@@ -42,9 +42,9 @@ __all__ = [
     "TaskAcceptanceSpec", "TaskBudget", "TaskId", "TaskProposal", "TaskStatus",
     "UserAnswer", "VerificationResult", "WarningRecord", "Workflow",
     "WorkflowAgentDefinition", "WorkflowAgentKind", "WorkflowAgentRegistry",
-    "WorkflowPatch", "WorkflowProposal", "WorkflowTask", "WorkFeedback",
-    "WorkOutcome", "WorkRequest", "WorkRequestDraft", "WorkRequestId",
-    "WorkRequestStatus", "WorkTaskOutcome", "WorkspaceDescriptor", "WorkspaceGrant",
+    "WorkflowPatch", "WorkflowProposal", "WorkflowTask",
+    "WorkRequest", "WorkRequestDraft", "WorkRequestId", "WorkTaskDraft", "WorkTaskArtifactBinding",
+    "WorkRequestStatus", "WorkspaceDescriptor", "WorkspaceGrant",
     "WorkspaceId", "WorkspaceAccess", "WorkspaceRecord", "WorkspaceSourceKind",
     "WorkspaceSpec",
 ]

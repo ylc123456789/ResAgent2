@@ -13,6 +13,7 @@ from resagent2_cli.composition import CliApplication, build_application
 from resagent2_cli.main import EXIT_COMPLETED, EXIT_PAUSED, cli
 from resagent2_contracts import (
     WorkflowAgentKind,
+    ActionSnapshot,
     DatasetRef,
     EnvironmentSpec,
     PendingQuestion,
@@ -23,7 +24,7 @@ from resagent2_contracts import (
     WorkspaceSourceKind,
     WorkspaceSpec,
 )
-from resagent2_orchestrator import InMemoryRunStore, ResearchRun
+from resagent2_orchestrator import InMemoryRunStore, JsonRunStore, ResearchRun
 from resagent2_runtime import AgentAction
 from resagent2_cli.main import _parser, _specs_for_existing_run
 
@@ -58,7 +59,7 @@ class _Controller:
         self.answered = (run_id, answer)
         return self.result
 
-    def run_until_stable(self, run_id):
+    def resume_run(self, run_id):
         self.resumed = run_id
         return self.result
 
@@ -99,26 +100,25 @@ def test_agents_and_compiler_share_default_with_independent_overrides(monkeypatc
 
 
 def test_compiler_reuses_context_composer_without_agent_loop(monkeypatch):
+    from resagent2_orchestrator.compiler import RouteTasks
+    from e2e.native_fixtures import tool_turn
+
     class _Client:
         last_attempts = 1
 
-        def context_budget(self, action_type, component_limit):
-            return component_limit
-
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.context = context
-            return {"tool": "finish"}
+            assert [schema["function"]["name"] for schema in schemas] == ["route_tasks"]
+            assert not turns
+            return tool_turn("route_tasks", {"routes": [{"task_key": "work", "workflow_agent_kind": "experiment"}]})
 
     runtime_client = _Client()
     monkeypatch.setattr(composition, "_client", lambda: runtime_client)
     compiler_client = composition._compiler_client(max_context_tokens=512)
 
-    compiler_client.next_action("Compile this objective", AgentAction)
+    compiler_client.next_action("Route these tasks", RouteTasks)
 
-    assert runtime_client.context.included_sections == [
-        "system",
-        "compiler_request",
-    ]
+    assert runtime_client.context.included_sections == ["system", "compiler_request"]
     assert runtime_client.context.estimated_tokens > 0
 
 
@@ -204,6 +204,7 @@ def test_goal_file_is_read_explicitly(tmp_path: Path):
 def test_answer_uses_persisted_question(tmp_path: Path, answer: str):
     run = _run(RunStatus.PAUSED)
     run.pending_question = PendingQuestion(
+        session_id="session_test",
         id="question_metric",
         run_id=run.run_id,
         text="Choose the primary metric",
@@ -236,6 +237,7 @@ def test_answer_uses_persisted_question(tmp_path: Path, answer: str):
 def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
     run = _run(RunStatus.PAUSED)
     run.pending_question = PendingQuestion(
+        session_id="session_test",
         id="question_mode", run_id=run.run_id, text="Which mode?",
         requested_fields=["mode"], created_at=datetime.now(UTC),
     )
@@ -254,9 +256,54 @@ def test_answer_rejects_invalid_key_before_calling_controller(tmp_path: Path):
     assert store.load(run.run_id).pending_question == run.pending_question
 
 
-def test_show_reads_store_without_building_application(tmp_path: Path, capsys):
+@pytest.mark.parametrize("decision", ["yes", "no"])
+def test_operation_answer_loads_disk_snapshot_and_passes_separate_comment(tmp_path: Path, decision):
+    run = _run(RunStatus.PAUSED)
+    action = ActionSnapshot(action_id="action_train", tool="run_shell",
+        arguments={"command": "python train.py"}, context={"cwd": "/workspace", "environment": "/env"},
+        run_id=run.run_id, session_id="session_coding", task_id="task_train", attempt_number=1)
+    run.pending_question = PendingQuestion(id="question_operation", run_id=run.run_id,
+        session_id=action.session_id, task_id=action.task_id, attempt_number=1,
+        text="Confirm this command", requested_fields=["approve"], action=action, created_at=datetime.now(UTC))
+    data_root = tmp_path / "data"
+    store = JsonRunStore(data_root / "state")
+    store.save(run)
+    before = (data_root / "state" / f"{run.run_id}.json").read_bytes()
+    controller = _Controller(_run())
+    comment = "  使用原任务指定的顺序。\n不要提前评估。  "
+
+    assert cli(["answer", run.run_id, decision, "--comment", comment, "--data-root", str(data_root)],
+        application_builder=_Builder(controller)) == EXIT_COMPLETED
+
+    assert controller.answered[1].values == {"approve": decision}
+    assert controller.answered[1].comment == comment
+    assert controller.answered[1].question_id == run.pending_question.id
+    assert (data_root / "state" / f"{run.run_id}.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("is_approval, field, heading", [
+    (False, "metric", "Pending user question:"),
+    (False, "approve", "Pending user question:"),
+    (True, "approve", "Pending operation approval:"),
+])
+def test_show_reads_store_without_building_application(
+    tmp_path: Path, capsys, is_approval, field, heading,
+):
+    run = _run(RunStatus.PAUSED)
+    action = ActionSnapshot(
+        action_id="action_train", tool="run_shell",
+        arguments={"command": "python train.py"},
+        context={"cwd": "/workspace", "environment": "/env"},
+        run_id=run.run_id, session_id="session_coding",
+        task_id="task_train", attempt_number=1,
+    ) if is_approval else None
+    run.pending_question = PendingQuestion(
+        session_id="session_test",
+        id="question_next", run_id=run.run_id, text="Choose the next step",
+        requested_fields=[field], created_at=datetime.now(UTC), action=action,
+    )
     store = InMemoryRunStore()
-    store.save(_run(RunStatus.PAUSED))
+    store.save(run)
 
     result = cli(
         ["show", "run_test", "--data-root", str(tmp_path / "data")],
@@ -265,7 +312,11 @@ def test_show_reads_store_without_building_application(tmp_path: Path, capsys):
     )
 
     assert result == EXIT_COMPLETED
-    assert "Status: paused" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Status: paused" in output
+    assert heading in output
+    assert "Choose the next step" in output
+    assert f"Fields: {field}" in output
 
 
 def test_resume_uses_controller_and_returns_paused_exit(tmp_path: Path):

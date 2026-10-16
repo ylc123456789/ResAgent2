@@ -36,11 +36,9 @@ class DeepSeekWebSearchBackend:
     def set_trace_context(self, **kwargs) -> None:
         self.client.set_trace_context(**kwargs)
 
-    def search(self, query: str, *, max_results: int) -> WebSearchResult:
+    def search(self, query: str) -> WebSearchResult:
         if not isinstance(query, str) or not query.strip():
             raise WebSearchError("web query must not be empty", error_type="invalid_query")
-        if type(max_results) is not int or not 1 <= max_results <= 10:
-            raise WebSearchError("max_results must be between 1 and 10", error_type="invalid_query")
         query = query.strip()
         try:
             payload = self.client.request({
@@ -90,7 +88,7 @@ def _search_items(payload: dict) -> tuple[list[WebSearchItem], str | None]:
                 continue
             url, excerpt = citation.get("url"), citation.get("cited_text")
             if isinstance(url, str) and isinstance(excerpt, str) and excerpt and url not in snippets:
-                snippets[url] = excerpt[:MAX_WEB_SNIPPET_CHARS]
+                snippets[url] = excerpt
 
     seen: set[str] = set()
     results = []
@@ -133,8 +131,9 @@ def _search_items(payload: dict) -> tuple[list[WebSearchItem], str | None]:
             results.append(WebSearchItem(
                 title=title.strip() if isinstance(title, str) and title.strip() else url,
                 url=url,
-                snippet=snippets.get(url, ""),
+                snippet=snippets.get(url, "")[:MAX_WEB_SNIPPET_CHARS],
                 published_at=age if isinstance(age, str) else None,
+                snippet_truncated=len(snippets.get(url, "")) > MAX_WEB_SNIPPET_CHARS,
             ))
     if incomplete_reason and not results:
         raise WebSearchError(

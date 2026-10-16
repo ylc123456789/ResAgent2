@@ -17,6 +17,7 @@ from resagent2_orchestrator import (
     InMemoryRunStore, ModuleBinding, ResearchRun, WorkflowScheduler,
 )
 from resagent2_runtime import NativeToolCall, ToolCallTurn
+from resagent2_runtime.tool_calling import native_input
 
 
 def output(path="metrics.json", **fields):
@@ -32,10 +33,12 @@ class NativeClient:
         self.prepare = prepare
         self.statuses = statuses or ["completed"] * len(submissions)
         self.contexts = []
+        self.wires = []
 
     def next_tool_call(self, context, schemas, turns, **kwargs):
         index = len(self.contexts)
         self.contexts.append(context)
+        self.wires.append(native_input(context, schemas, turns))
         if self.prepare:
             self.prepare(index)
         return ToolCallTurn(tool_calls=[NativeToolCall(
@@ -114,8 +117,11 @@ def test_finish_correction_reaches_registration_in_same_attempt(tmp_path, kind, 
     run, task, state, client = execute(tmp_path, kind, [mistake, [output()]])
     assert task.status == state.status == "completed"
     assert len(client.contexts) == 2
-    assert code in client.contexts[1].text
-    assert state.runtime_feedback is None
+    assert code in json.dumps(client.wires[1])
+    first_receipt = json.loads(state.tool_turns[0].tool_results["finish_0"])
+    assert first_receipt["ok"] is False
+    assert first_receipt["value"]["completion_check"] == "rejected"
+    assert code in first_receipt["summary"]
     assert len(state.tool_turns) == 2
     assert all(len(turn.tool_results) == 1 for turn in state.tool_turns)
     refs = [run.artifacts[key] for key in task.attempts[0].artifact_ids]
@@ -146,7 +152,9 @@ def test_invalid_finish_keeps_feedback_when_budget_exhausts(tmp_path, kind):
     run, task, state, client = execute(tmp_path, kind, [[output("absent.json")]], budget=1)
     assert task.status == state.status == "failed"
     assert task.attempts[0].error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert "artifact_path_missing" in state.runtime_feedback.summary
+    receipt = json.loads(state.tool_turns[0].tool_results["finish_0"])
+    assert receipt["ok"] is False
+    assert "artifact_path_missing" in receipt["summary"]
     assert not task.attempts[0].artifact_ids
     assert len(state.tool_turns) == 1
     assert "absent.json" in state.tool_turns[0].tool_calls[0].arguments
@@ -194,8 +202,8 @@ def test_failed_finish_still_corrects_invalid_artifacts_in_same_session(tmp_path
     assert task.status == state.status == "failed"
     assert task.attempts[0].error.code == ErrorCode.AGENT_REPORTED_FAILURE
     assert len(client.contexts) == 2
-    assert "artifact_path_missing" in client.contexts[1].text
-    assert state.runtime_feedback is None
+    assert "artifact_path_missing" in json.dumps(client.wires[1])
+    assert json.loads(state.tool_turns[0].tool_results["finish_0"])["ok"] is False
     assert len(state.tool_turns) == 2
     assert all(len(turn.tool_results) == 1 for turn in state.tool_turns)
     assert len(task.attempts[0].artifact_ids) == 1

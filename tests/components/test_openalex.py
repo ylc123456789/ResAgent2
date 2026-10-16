@@ -134,28 +134,20 @@ class Failing:
         raise self.error
 
 
-def test_source_switch_preserves_bounds_and_actual_source_in_artifact(caplog, tmp_path):
+def test_source_switch_preserves_bounds_and_actual_source_in_receipt(caplog, tmp_path):
     paper = OpenAlexLiteratureBackend()._paper(work())
     other = _FakeBackend([paper])
     backend = MultiSourceLiteratureBackend(Failing(LiteratureUnavailableError("arXiv HTTP 429")), other)
     register = _FakeRegister(tmp_path)
-    observation = LiteratureSearchTool(backend, register).execute(
+    observation = LiteratureSearchTool(backend).execute(
         state(), LiteratureSearchToolInput(query="x", max_results=2, start_year=2020, end_year=2024),
     )
     assert other.last_kwargs == dict(query="x", max_results=2, source="peer", scope="topic", page=1, start_year=2020, end_year=2024)
     assert "arXiv HTTP 429" in caplog.text
-    from resagent2_components import RegisteredArtifactReader
-    paper_ref = register.refs[observation.value["papers"][0]["artifact_id"]]
-    reader = RegisteredArtifactReader(list(register.refs.values()), run_id=state().run_id)
-    body = reader.read_text(paper_ref.id)["content"]
-    assert paper_ref.media_type == "text/markdown"
-    assert "https://openalex.org/W123" in body
-    assert "not paper full text" in body
-    assert paper_ref.metadata["paper"]["paper_id"] == "openalex:W123"
     assert observation.value["papers"][0]["source_url"] == paper.source_url
-    receipt = json.loads(register.last_candidate.content)
-    assert receipt["paper_artifact_ids"] == [paper_ref.id]
-    assert receipt["status"] == "results"
+    assert observation.value["papers"][0]["fetch_source"] == "openalex:W123"
+    assert observation.value["status"] == "results"
+    assert observation.memory_updates == {} and register.refs == {}
 
 
 def test_empty_result_does_not_trigger_source_switch():
@@ -178,16 +170,13 @@ def test_both_sources_failing_records_failure_without_registering_papers(tmp_pat
         Failing(LiteratureUnavailableError("OpenAlex TimeoutError"), "openalex"),
     )
     register = _FakeRegister(tmp_path)
-    result = LiteratureSearchTool(backend, register).execute(state(), LiteratureSearchToolInput(query="x"))
+    result = LiteratureSearchTool(backend).execute(state(), LiteratureSearchToolInput(query="x"))
     assert not result.ok
     assert result.value["status"] == "failed"
     assert "arXiv HTTP 429" in result.value["error"]
     assert "OpenAlex TimeoutError" in result.value["error"]
-    assert {ref.kind for ref in register.refs.values()} == {"literature_search"}
-    receipt = json.loads(register.last_candidate.content)
-    assert receipt["paper_artifact_ids"] == []
-    assert receipt["status"] == "failed"
-    assert receipt["error"] == result.value["error"]
+    assert register.refs == {} and result.memory_updates == {}
+    assert result.value["papers"] == []
 
 
 @pytest.mark.parametrize("remaining,reset,retry_after,expected", [

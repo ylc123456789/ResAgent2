@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pydantic import ValidationError
 
 from resagent2_contracts import (
-    AgentOwner, ArtifactCandidate, ArtifactRef, ScientificOpinion, WorkTaskOutcome,
+    AgentOwner, ArtifactCandidate, ArtifactRef, ScientificOpinion, WorkTaskResult,
     missing_required_evidence_kinds, SCIENTIFIC_ARTIFACT_KINDS,
     SYSTEM_GENERATED_ARTIFACT_KINDS,
 )
@@ -42,15 +42,16 @@ def cited_artifacts(cited_ids: list[str], *, run_id: str,
 
 class ScientificCompletionCheck:
     def __init__(
-        self, unresolved_task_outcomes: list[WorkTaskOutcome],
+        self, unresolved_task_outcomes: list[WorkTaskResult],
         required_evidence_kinds: list[str] | None = None, *,
         required_artifacts: list[str] | None = None,
         resolve_artifact: Callable[[str], ArtifactRef | None] | None = None,
         reader: RegisteredArtifactReader | None = None,
         input_artifact_ids: list[str] | None = None,
         registered_artifacts: Callable[[], list[ArtifactRef]] | None = None,
+        failed_work: bool = False,
     ) -> None:
-        self._unresolved = unresolved_task_outcomes
+        self._has_unresolved_work = bool(unresolved_task_outcomes) or failed_work
         self._required_evidence_kinds = required_evidence_kinds or []
         self._required_artifacts = required_artifacts or []
         self._resolve_artifact = resolve_artifact
@@ -111,7 +112,7 @@ class ScientificCompletionCheck:
             available_ids = [
                 *sorted(self._input_artifact_ids),
                 *[item.id for item in registered if item.run_id == state.run_id],
-                *[entry["artifact_id"] for entry in state.memory.get("artifact_index", [])],
+                *state.authorized_artifact_ids,
                 *opinion.evidence_artifact_ids,
                 *[item.id for item in candidate.artifacts if isinstance(item, ArtifactRef)],
             ]
@@ -134,10 +135,10 @@ class ScientificCompletionCheck:
                     ) + "\nRequest the missing work or ask the user how to proceed; "
                     "delivery requires a registered artifact with that exact output_name.",
                 )
-        if self._unresolved and not opinion.limitations:
+        if self._has_unresolved_work and not opinion.limitations:
             return CompletionDecision(
                 complete=False,
-                report="State at least one limitation because failed or blocked execution work remains",
+                report="State at least one limitation because failed or blocked requested work remains",
             )
         return CompletionDecision(
             complete=True, report=candidate.report, artifacts=list(candidate.artifacts),

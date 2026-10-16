@@ -1,5 +1,7 @@
 """Resource refresh uses artifact inputs and persisted Sessions across processes."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions
 
 import json
@@ -35,14 +37,10 @@ def _system_artifact(registry, kind, content, *, run_id="run_resources", session
         kind=kind, path=kind + ".json", media_type="application/json", summary=kind,
         content=json.dumps(content),
     )
-    kwargs = {}
-    if kind == "answer":
-        kwargs = {"session_id": session_id} if scientific else {"task_id": "task_resources", "attempt_number": 1}
     return registry.register_system_artifact(
-        candidate, run_id=run_id,
-        source_type="dataset_catalog" if kind == "dataset_catalog" else "controller_answer",
-        **kwargs,
+        candidate, run_id=run_id, source_type="dataset_catalog",
     )
+
 
 
 def _probe(root, kind, phase):
@@ -56,23 +54,30 @@ def _probe(root, kind, phase):
     actions = [_ask(scientific)]
     if phase and not scientific:
         actions.insert(0, {"tool": "read_file", "arguments": {"path": "util.py"}})
-    client = ScriptedLLMClient(actions)
+    client = ScriptedLLMClient(tool_turns(actions))
     registry = ArtifactRegistry(root / "artifacts")
     refs = [_system_artifact(registry, "dataset_catalog", {"datasets": [ref.model_dump(mode="json") for ref in datasets]})]
     resume = []
+    answers = []
     if phase:
+        question = before.pending_control.question
+        saved = root / "answers.json"
+        answers = json.loads(saved.read_text()) if saved.exists() else []
         answer = RecordedAnswer(
-            question_id=f"question_ready_{phase}", question_text=_ask(scientific)["arguments"]["text"],
-            requested_fields=["dataset_ready"], values={"dataset_ready": f"yes, reply_phase_{phase}"},
-            answered_at=datetime.now(UTC), run_id="run_resources",
-            **({"session_id": session_id} if scientific else {"task_id": "task_resources", "attempt_number": 1}),
+            question_id=question.id, question_text=question.text,
+            requested_fields=question.requested_fields, options=question.options,
+            values={"dataset_ready": f"yes, reply_phase_{phase}"},
+            answered_at=datetime.now(UTC), run_id="run_resources", session_id=session_id,
+            **({} if scientific else {"task_id": "task_resources", "attempt_number": 1}),
         )
-        ref = _system_artifact(registry, "answer", answer.model_dump(mode="json"), session_id=session_id, scientific=scientific)
-        refs.append(ref)
-        resume = [ref.id]
+        resume = [answer]
+        answers.append(answer.model_dump(mode="json"))
+        saved.write_text(json.dumps(answers))
     common = dict(
         run_id="run_resources", agent=AgentOwner(kind), input_artifacts=refs,
-        resume_artifact_ids=resume, parent_session_id=session_id if phase else None,
+        resume_answers=resume, user_answers=answers,
+        control_ack=before.pending_control.origin if phase else None,
+        parent_session_id=session_id if phase else None,
         budget=TaskBudget(max_llm_calls=10, timeout_seconds=30),
     )
     if scientific:
@@ -95,16 +100,14 @@ def _probe(root, kind, phase):
     assert shared["missing_dataset_guidance"] in text
     for context in client.contexts:
         if phase:
-            assert f"reply_phase_{phase}" in context.text
-            assert f"reply_phase_{phase - 1}" not in context.text
-            section_name = "research" if scientific else "task"
-            task_text = context.text.split(f"## {section_name}\n", 1)[1].split("\n\n## ", 1)[0]
-            answers = json.loads(task_text)["user_answers"]
-            assert answers == [{
-                "artifact_id": ref.id, "question_id": answer.question_id,
-                "question": answer.question_text, "values": answer.values,
-                "answered_at": answer.model_dump(mode="json")["answered_at"],
-            }]
+            task = json.loads(context.task_context.split("\n", 1)[-1])
+            expected_answers = [
+                RecordedAnswer.model_validate(value).model_dump(mode="json", exclude_none=True)
+                for value in answers
+            ]
+            assert [event["record"] for event in task["business_dialogue"] if event["type"] == "answer"] == expected_answers
+            for previous in range(1, phase + 1):
+                assert f"reply_phase_{previous}" in context.task_context
             assert not any(name.startswith("material_") for name in context.included_sections)
     after = sessions.load(session_id)
     assert after.attempt_number == (None if scientific else 1)
@@ -130,7 +133,7 @@ def test_native_agents_recheck_resources_across_processes(tmp_path, kind):
             (dataset_root / "catalog.json").write_text('{"demo": "demo"}')
         if phase == 2:
             (dataset_root / "demo").mkdir()
-        code = ("import runpy; " + f"ns = runpy.run_path({str(Path(__file__).resolve())!r}); "
+        code = (f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r}); import runpy; " + f"ns = runpy.run_path({str(Path(__file__).resolve())!r}); "
                 + f"ns['_probe']({str(tmp_path)!r}, {kind!r}, {phase})")
         proc = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, timeout=30)
         assert proc.returncode == 0, proc.stdout + proc.stderr

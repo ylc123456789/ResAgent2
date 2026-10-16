@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from resagent2_runtime import AgentState, ToolObservation
 from resagent2_runtime.models import NonEmptyStr, RuntimeModel
 from resagent2_runtime.budget import DeadlineExceededError
+from resagent2_runtime.cancellation import OperationCancelled
 
 import hashlib
 import shlex
@@ -243,6 +244,12 @@ class RunVerificationTool:
                     argv_prefix=argv_prefix,
                     extra_env=self.extra_env,
                 )
+            except OperationCancelled as error:
+                # Current runner facts and earlier completed commands belong to
+                # the same native receipt, including when stop is unconfirmed.
+                raise OperationCancelled(error.reason, stopped=error.stopped, details={
+                    **error.details, "results": [item.model_dump(mode="json") for item in results],
+                }) from None
             except (DeadlineExceededError, OSError) as error:
                 if not results:
                     raise

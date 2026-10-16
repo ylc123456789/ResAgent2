@@ -15,7 +15,7 @@ def _messages(name: str):
     return [
         (QuestionDraft, dict(text=text, requested_fields=[name])),
         (PendingQuestion, dict(
-            id="question_mode", run_id="run_test", text=text,
+            id="question_mode", run_id="run_test", session_id="session_test", text=text,
             requested_fields=[name], created_at=now,
         )),
         (UserAnswer, dict(
@@ -60,3 +60,10 @@ def test_public_question_and_answer_json_schemas_share_the_key_pattern():
         assert set(values["patternProperties"]) == {question_items["pattern"]}
         assert values["propertyNames"]["description"] == question_items["description"]
     assert "machine-readable" in question_items["description"]
+
+
+@pytest.mark.parametrize("comment", ["", "  ", "不同于选项的业务补充\n原文"])
+def test_business_feedback_must_use_answer_values_instead_of_operation_comment(comment):
+    data = dict(_messages("choice")[-1][1], comment=comment)
+    with pytest.raises(ValidationError, match="business feedback belongs in values"):
+        RecordedAnswer.model_validate(data)

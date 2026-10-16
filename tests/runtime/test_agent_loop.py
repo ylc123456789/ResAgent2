@@ -1,3 +1,5 @@
+import json
+from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import AgentPermissions
 from resagent2_contracts import ArtifactCandidate, QuestionDraft
@@ -43,7 +45,7 @@ class NeverFinish:
 class BudgetedScriptedLLM(ScriptedLLMClient):
     """Scripted client exposing the optional model-aware budget hook."""
 
-    def context_budget(self, action_type, component_limit: int) -> int:
+    def tool_input_limit(self, component_limit: int) -> int:
         return 1
 
 
@@ -52,13 +54,10 @@ def build_context(request, state, max_context_tokens) -> list[ContextSection]:
         ContextSection(
             name="task",
             content=f"Instruction: {request.instruction}",
-            priority=100,
-            required=True,
         ),
         ContextSection(
             name="memory",
             content=str(state.memory),
-            priority=50,
         ),
     ]
 
@@ -93,13 +92,13 @@ def test_same_loop_respects_different_tool_grants() -> None:
     read_definition = definition(
         name="reader",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(tool="read_value", arguments={"key": "answer"}),
                 AgentAction(
                     tool="finish",
                     arguments={'report': '{"answer": 42}'},
                 ),
-            ]
+            ])
         ),
         tools=(ReadValueTool(), FinishTool()),
         allowed_tools={"read_value", "finish"},
@@ -107,7 +106,7 @@ def test_same_loop_respects_different_tool_grants() -> None:
     write_definition = definition(
         name="writer",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(
                     tool="write_value",
                     arguments={"key": "verified", "value": True},
@@ -116,7 +115,7 @@ def test_same_loop_respects_different_tool_grants() -> None:
                     tool="finish",
                     arguments={'report': '{"written": true}'},
                 ),
-            ]
+            ])
         ),
         tools=(WriteValueTool(), FinishTool()),
         allowed_tools={"write_value", "finish"},
@@ -141,9 +140,9 @@ def test_same_loop_respects_different_tool_grants() -> None:
     assert type(loop) is AgentLoop
 
 
-def test_loop_injects_tool_contracts_section() -> None:
+def test_loop_uses_native_schema_without_json_contract_section() -> None:
     client = ScriptedLLMClient(
-        [AgentAction(tool="finish", arguments={'report': '{"answer": 42}'})]
+        tool_turns([AgentAction(tool="finish", arguments={'report': '{"answer": 42}'})])
     )
     result = AgentLoop(store=InMemorySessionStore()).run(
         definition(
@@ -158,36 +157,27 @@ def test_loop_injects_tool_contracts_section() -> None:
 
     assert result.status == ModuleStatus.COMPLETED
     assert client.contexts
-    assert "tool_contracts" in client.contexts[0].included_sections
-    assert "finish: report" in client.contexts[0].text
+    assert "tool_contracts" not in client.contexts[0].included_sections
+    assert "finish: report" not in client.contexts[0].text
+    assert client.schemas[0][0]["function"]["parameters"]["required"] == ["report"]
 
 
-def test_loop_rejects_removed_reasoning_summary_field() -> None:
-    client = ScriptedLLMClient(
-        [
-            {
-                "tool": "finish",
-                "arguments": {'report': '{"answer": 42}'},
-                "reasoning_summary": "legacy dead field",
-            }
-        ]
+def test_agent_loop_rejects_json_only_client_without_model_call() -> None:
+    class JsonOnlyClient:
+        def next_action(self, *args):
+            raise AssertionError("JSON Agent action fallback must not execute")
+
+    result = AgentLoop().run(
+        definition(name="json-only", llm=JsonOnlyClient(), tools=(FinishTool(),),
+                   allowed_tools={"finish"}),
+        request(AgentOwner.CODING), session_id="session_json_only",
     )
-    result = AgentLoop(store=InMemorySessionStore()).run(
-        definition(
-            name="legacy",
-            llm=client,
-            tools=(FinishTool(),),
-            allowed_tools={"finish"},
-        ),
-        request(AgentOwner.CODING),
-        session_id="session_legacy",
-    )
-
-    assert result.status == ModuleStatus.FAILED
+    assert result.error.code == ErrorCode.CONTRACT_ERROR
+    assert result.llm_calls == 0
 
 
 def test_loop_uses_model_aware_context_budget_when_client_provides_it() -> None:
-    llm = BudgetedScriptedLLM([AgentAction(tool="finish", arguments={})])
+    llm = BudgetedScriptedLLM(tool_turns([AgentAction(tool="finish", arguments={})]))
     result = AgentLoop(store=InMemorySessionStore()).run(
         definition(
             name="budgeted",
@@ -211,7 +201,7 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
     ask_definition = definition(
         name="needs-input",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(
                     tool="ask_user",
                     arguments={
@@ -219,7 +209,7 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
                         "requested_fields": ["dataset"],
                     },
                 )
-            ]
+            ])
         ),
         tools=(AskUserTool(),),
         allowed_tools={"ask_user"},
@@ -234,8 +224,8 @@ def test_ask_user_returns_signal_without_reading_a_terminal() -> None:
 
     assert result.status == ModuleStatus.NEEDS_USER_INPUT
     assert result.control is not None and result.control.action == "ask_user"
-    assert result.artifacts[result.control.candidate_index].kind == "question"
-    question = QuestionDraft.model_validate_json(result.artifacts[result.control.candidate_index].content)
+    assert result.artifacts == []
+    question = result.control.question
     assert question.requested_fields == ["dataset"]
     assert result.session is not None
     assert result.session.status.value == "paused"
@@ -261,11 +251,11 @@ def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> No
     profile = definition(
         name="recover-finish",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
                 AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
                 AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-            ]
+            ])
         ),
         tools=(WriteValueTool(), FinishTool()),
         allowed_tools={"write_value", "finish"},
@@ -282,18 +272,18 @@ def test_completion_rejected_then_corrective_action_then_finish_succeeds() -> No
     assert store.load("session_recover_finish").memory["ready"] is True
 
 
-def test_runtime_feedback_survives_an_intervening_observation() -> None:
+def test_rejection_receipt_survives_an_intervening_observation() -> None:
     """A rejection must remain visible even after an ordinary observation
     (read_value) overwrites last_observation; the durable slot is separate."""
     store = InMemorySessionStore()
     loop = AgentLoop(store=store)
     llm = ScriptedLLMClient(
-        [
+        tool_turns([
             AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
             AgentAction(tool="read_value", arguments={"key": "missing"}),
             AgentAction(tool="write_value", arguments={"key": "ready", "value": True}),
             AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-        ]
+        ])
     )
     profile = definition(
         name="feedback-persists",
@@ -310,16 +300,14 @@ def test_runtime_feedback_survives_an_intervening_observation() -> None:
     )
 
     assert result.status == ModuleStatus.COMPLETED
-    assert "runtime_feedback" in llm.contexts[1].included_sections
-    assert "runtime_feedback" in llm.contexts[2].included_sections
-    assert "runtime_feedback" in llm.contexts[3].included_sections
-    assert "Run the write_value tool before finishing" in llm.contexts[2].text
-    assert store.load("session_feedback_persists").runtime_feedback is None
+    assert all("runtime_feedback" not in context.included_sections for context in llm.contexts)
+    assert "Run the write_value tool before finishing" in json.dumps(llm.histories[2][0].tool_results)
+    assert store.load("session_feedback_persists").last_observation.ok
 
 
 def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     """A Tool that raises (recoverable) must not kill the session immediately:
-    it becomes runtime_feedback and the next scripted action still runs."""
+    it becomes a historical rejection receipt and the next scripted action still runs."""
     from resagent2_runtime import ToolObservation
 
     class FailingOnceTool:
@@ -341,11 +329,11 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     profile = definition(
         name="recover-tool",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(tool="flaky", arguments={'report': '{"ok": true}'}),
                 AgentAction(tool="flaky", arguments={'report': '{"ok": true}'}),
                 AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-            ]
+            ])
         ),
         tools=(flaky, FinishTool()),
         allowed_tools={"flaky", "finish"},
@@ -360,7 +348,7 @@ def test_recoverable_tool_error_sets_feedback_and_continues() -> None:
     assert result.status == ModuleStatus.COMPLETED
     assert flaky.calls == 2
     # The first failure was recorded as durable feedback before the recovery.
-    assert store.load("session_recover_tool").runtime_feedback is None
+    assert store.load("session_recover_tool").last_observation.ok
 
 
 def test_consecutive_failures_stop_before_budget() -> None:
@@ -378,7 +366,7 @@ def test_consecutive_failures_stop_before_budget() -> None:
     profile = definition(
         name="always-fail",
         llm=ScriptedLLMClient(
-            [AgentAction(tool="always_fail", arguments={'report': '{}'})] * 50
+            tool_turns([AgentAction(tool="always_fail", arguments={'report': '{}'})] * 50)
         ),
         tools=(AlwaysFailTool(), FinishTool()),
         allowed_tools={"always_fail", "finish"},
@@ -392,14 +380,14 @@ def test_consecutive_failures_stop_before_budget() -> None:
     assert store.load("session_fail").step < 50
 
 
-def test_recent_observations_are_injected() -> None:
+def test_native_tool_receipts_are_passed_without_preview_section() -> None:
     store = InMemorySessionStore()
     loop = AgentLoop(store=store)
     llm = ScriptedLLMClient(
-        [
+        tool_turns([
             AgentAction(tool="write_value", arguments={"key": "a", "value": 1}),
             AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-        ]
+        ])
     )
     profile = definition(
         name="recent",
@@ -409,8 +397,11 @@ def test_recent_observations_are_injected() -> None:
     )
     loop.run(profile, request(AgentOwner.CODING), session_id="session_recent")
 
-    # The second turn's context carries the recent tool history.
-    assert "recent_observations" in llm.contexts[1].included_sections
+    # Receipts reach the next native request through paired history.
+    assert "recent_observations" not in llm.contexts[1].included_sections
+    previous = llm.histories[1][0]
+    assert previous.tool_calls[0].name == "write_value"
+    assert json.loads(previous.tool_results[previous.tool_calls[0].id])["value"] == 1
 
 
 class RejectWithReason:
@@ -430,7 +421,7 @@ def test_completion_rejection_counts_as_failure() -> None:
     profile = definition(
         name="reject-finish",
         llm=ScriptedLLMClient(
-            [AgentAction(tool="finish", arguments={'report': '{"ok": true}'})] * 50
+            tool_turns([AgentAction(tool="finish", arguments={'report': '{"ok": true}'})] * 50)
         ),
         tools=(FinishTool(),),
         allowed_tools={"finish"},
@@ -446,15 +437,14 @@ def test_completion_rejection_counts_as_failure() -> None:
     # Every rejection was persisted as a failed observation, not ok=True.
     rejections = [
         event.data for event in state.events
-        if event.type == "observation" and event.tool == "completion_check"
+        if event.type == "observation" and event.tool == "finish"
     ]
     assert rejections
     assert all(not data.get("ok") for data in rejections if isinstance(data, dict))
 
 
-def test_recent_observations_preserve_error_bodies() -> None:
-    """Two distinct command errors must both remain readable in the next turn,
-    even when a long value forces the recent-history trim."""
+def test_native_history_preserves_all_error_bodies() -> None:
+    """Full paired history preserves both errors without a second preview path."""
     from resagent2_runtime import ToolObservation
 
     pad = "x" * 600
@@ -477,11 +467,11 @@ def test_recent_observations_preserve_error_bodies() -> None:
             )
 
     llm = ScriptedLLMClient(
-        [
+        tool_turns([
             AgentAction(tool="flaky", arguments={'report': '{}'}),
             AgentAction(tool="flaky", arguments={'report': '{}'}),
             AgentAction(tool="flaky", arguments={'report': '{}'}),
-        ]
+        ])
     )
     profile = definition(
         name="errors",
@@ -493,9 +483,10 @@ def test_recent_observations_preserve_error_bodies() -> None:
     loop = AgentLoop(store=InMemorySessionStore())
     loop.run(profile, request(AgentOwner.CODING), session_id="session_errors")
 
-    assert "recent_observations" in llm.contexts[2].included_sections
-    assert errors[0] in llm.contexts[2].text
-    assert errors[1] in llm.contexts[2].text
+    assert "recent_observations" not in llm.contexts[2].included_sections
+    receipts = [json.loads(turn.tool_results[turn.tool_calls[0].id]) for turn in llm.histories[2]]
+    assert [receipt["value"]["stderr_tail"] for receipt in receipts] == errors
+    assert all(receipt["value"]["stdout_tail"] == pad for receipt in receipts)
 
 
 class VerifiedFailure:
@@ -527,12 +518,12 @@ def test_deterministic_failure_exit_returns_failed() -> None:
     profile = definition(
         name="verified-failure",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 AgentAction(
                     tool="finish",
                     arguments={'report': '{}'},
                 )
-            ]
+            ])
         ),
         tools=(FinishTool(),),
         allowed_tools={"finish"},
@@ -555,40 +546,17 @@ def test_deterministic_failure_exit_returns_failed() -> None:
     assert store.load("session_verified_failure").status.value == "failed"
 
 
-def test_failure_details_keep_both_feedback_and_observation() -> None:
-    """An older completion rejection must not mask the newest command failure."""
+def test_failure_details_preserve_latest_observation_and_historical_receipt():
+    from resagent2_runtime import AgentState, ToolObservation
     from datetime import UTC, datetime
-
-    from resagent2_runtime import ToolObservation
-    from resagent2_runtime.models import AgentState
-
     now = datetime.now(UTC)
-    state = AgentState(
-        session_id="session_details",
-        agent_name="test",
-        owner=AgentOwner.CODING,
-        run_id="run_details",
-        created_at=now,
-        updated_at=now,
-    )
-    state.runtime_feedback = ToolObservation(
-        summary="Run a successful experiment command before finishing", ok=False
-    )
-    state.last_observation = ToolObservation(
-        summary="Command exited with code 1",
-        ok=False,
-        value={
-            "command": "python train.py",
-            "exit_code": 1,
-            "stderr_tail": "NameError: totla",
-        },
-    )
+    state = AgentState(session_id="session_failure", agent_name="coding", owner=AgentOwner.CODING,
+                       run_id="run_runtime", created_at=now, updated_at=now,
+                       last_observation=ToolObservation(summary="command failed", ok=False, value={"stderr":"failure"}))
+    assert AgentLoop._failure_details(state)["last_observation"]["value"] == {"stderr":"failure"}
+    assert "runtime_feedback" not in AgentLoop._failure_details(state)
 
-    details = AgentLoop._failure_details(state)
 
-    assert "runtime_feedback" in details
-    assert "last_observation" in details
-    assert details["last_observation"]["value"]["stderr_tail"] == "NameError: totla"
 
 
 def test_malformed_action_is_recoverable() -> None:
@@ -597,14 +565,13 @@ def test_malformed_action_is_recoverable() -> None:
     profile = definition(
         name="recover-invalid-action",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 {
                     "tool": "finish",
-                    "arguments": {'report': '{}'},
-                    "undocumented_field": True,
+                    "arguments": {'report': '{}', "undocumented_field": True},
                 },
                 AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-            ]
+            ])
         ),
         tools=(FinishTool(),),
         allowed_tools={"finish"},
@@ -626,14 +593,13 @@ def test_llm_calls_counts_malformed_actions() -> None:
     profile = definition(
         name="count-calls",
         llm=ScriptedLLMClient(
-            [
+            tool_turns([
                 {
                     "tool": "finish",
-                    "arguments": {'report': '{}'},
-                    "undocumented_field": True,
+                    "arguments": {'report': '{}', "undocumented_field": True},
                 },
                 AgentAction(tool="finish", arguments={'report': '{"ok": true}'}),
-            ]
+            ])
         ),
         tools=(FinishTool(),),
         allowed_tools={"finish"},
@@ -652,7 +618,7 @@ def test_llm_calls_counts_malformed_actions() -> None:
 def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
     class BudgetAwareLLM(ScriptedLLMClient):
         def __init__(self) -> None:
-            super().__init__([AgentAction(tool="finish", arguments={'report': '{}'})])
+            super().__init__(tool_turns([AgentAction(tool="finish", arguments={'report': '{}'})]))
             self.attempt_limits: list[int] = []
 
         def set_attempt_limit(self, max_attempts: int) -> None:
@@ -680,3 +646,11 @@ def test_agent_loop_passes_remaining_call_budget_to_client() -> None:
 
     assert result.status == ModuleStatus.COMPLETED
     assert llm.attempt_limits == [1]
+
+
+def test_scripted_agent_client_rejects_json_action_fixture() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ScriptedLLMClient([{"tool": "finish", "arguments": {"report": "done"}}])

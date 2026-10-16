@@ -18,6 +18,7 @@ from .budget import (
     execution_budget,
 )
 from .http import ResponseTooLargeError, send_request
+from .cancellation import OperationCancelled, check_cancelled
 from ._trace import write_trace_record
 
 
@@ -142,6 +143,7 @@ class ModelRequestClient:
     def request(self, body: dict) -> dict:
         """Return one JSON object or raise a safe, categorized transport error."""
         self.last_attempts = 0
+        check_cancelled()
         if not isinstance(body, dict):
             raise TypeError("model request body must be an object")
         request_text = json.dumps(body, ensure_ascii=False, allow_nan=False)
@@ -189,6 +191,11 @@ class ModelRequestClient:
                     ) from None
                 outcome = "succeeded"
                 return payload
+            except OperationCancelled:
+                # A provider may still be computing; retain the charged request
+                # as unknown, with an explicit local-interruption trace reason.
+                error_type, validation_error = "interrupted", "local model request interrupted"
+                raise
             except httpx.HTTPStatusError as error:
                 outcome = "failed"
                 status_code = error.response.status_code
@@ -215,6 +222,10 @@ class ModelRequestClient:
                         error_type = "deadline_exceeded"
                         validation_error = "model request execution limit exceeded"
                         raise error from None
+                raise ModelRequestError(validation_error, error_type=error_type) from None
+            except httpx.DecodingError:
+                outcome = "failed"
+                error_type, validation_error = "invalid_response", "model response body could not be decoded"
                 raise ModelRequestError(validation_error, error_type=error_type) from None
             except httpx.TransportError:
                 error_type, validation_error = "network_error", "model request transport failed"

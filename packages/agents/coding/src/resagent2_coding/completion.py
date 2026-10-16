@@ -8,7 +8,9 @@ import json
 from pydantic import ValidationError
 
 from resagent2_contracts import ArtifactCandidate, VerificationResult, SYSTEM_GENERATED_ARTIFACT_KINDS
-from resagent2_components import EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, media_type_for
+from resagent2_components import (
+    EnvironmentBinding, GitBaseline, GitWorkspace, WorkspaceBoundary, execution_record, media_type_for,
+)
 from resagent2_components.artifacts import ArtifactCandidateError, check_task_output_artifacts
 from resagent2_runtime import AgentState, CompletionDecision, FinishCandidate
 
@@ -38,6 +40,9 @@ class CodingCompletionCheck:
                 complete=False,
                 report="Patches and verification records are generated from actual execution",
             )
+        record = execution_record(state)
+        if record is not None:
+            artifacts.insert(0, record)
         if changed:
             deleted = self.repository.deleted_paths_since(self.baseline)
             artifacts.append(ArtifactCandidate(
@@ -110,9 +115,15 @@ def _verification_status(
     return results, None
 
 
-def derive_control_state(state: AgentState, binding: EnvironmentBinding | None) -> dict:
-    """Expose execution facts without imposing a business mode or mandatory edit."""
+def derive_control_state(
+    state: AgentState, binding: EnvironmentBinding | None, *, diff: str | None = None,
+) -> dict:
+    """Expose recorded verification and its current validity through a tool."""
     results, issue = _verification_status(state, binding)
+    if results and issue is None and diff is not None:
+        digest = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+        if state.memory.get("verification_diff_sha256") != digest:
+            issue = "Workspace changed after verification"
     passed = (not state.memory.get("verification_unrecorded_commands")
               and all(item.exit_code == 0 and not item.timed_out for item in results)) if results else None
     return {

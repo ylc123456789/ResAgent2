@@ -9,10 +9,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 
 from resagent2_contracts import VerificationResult
 from resagent2_runtime.budget import current_budget, remaining_timeout
+from resagent2_runtime.cancellation import OperationCancelled, check_cancelled
 
 from .workspace import WorkspaceBoundary
 
@@ -154,22 +155,220 @@ def _kill_process_tree(pid: int) -> None:
             pass
 
 
+
+def _process_identity(pid: int) -> str | None:
+    """Use Linux start time to prevent an observed PID being reused for cleanup."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _remember_descendants(process: subprocess.Popen, identities: dict[int, str]) -> None:
+    # After reaping, this bare PID can be reused. Only remembered identities and
+    # this invocation's output pipes may identify children from that point on.
+    if process.returncode is not None:
+        return
+    for pid in _descendant_pids(process.pid):
+        identity = _process_identity(pid)
+        if identity is not None:
+            identities.setdefault(pid, identity)
+
+
+def _remember_pipe_owners(process: subprocess.Popen, identities: dict[int, str]) -> None:
+    """Find this command's inherited pipes even after its parent has exited.
+
+    These pipe identities are unique to this Popen invocation. A detached child
+    can retain them and keep communicate() waiting after being reparented, when
+    walking the original parent's current descendants can no longer find it.
+    """
+    targets = set()
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            target = os.readlink(f"/proc/self/fd/{stream.fileno()}")
+        except (OSError, ValueError):
+            continue
+        if target.startswith("pipe:["):
+            targets.add(target)
+    if not targets:
+        return
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        pid = int(entry)
+        identity = _process_identity(pid)
+        if identity is None:
+            continue
+        try:
+            descriptors = os.listdir(f"/proc/{pid}/fd")
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = os.readlink(f"/proc/{pid}/fd/{descriptor}")
+            except OSError:
+                continue
+            if target in targets:
+                try:
+                    info = Path(f"/proc/{pid}/fdinfo/{descriptor}").read_text()
+                    flags = next(line.split()[1] for line in info.splitlines()
+                                 if line.startswith("flags:"))
+                    writable = int(flags, 8) & os.O_ACCMODE in {os.O_WRONLY, os.O_RDWR}
+                except (OSError, ValueError, IndexError, StopIteration):
+                    continue
+                # Only inherited writers own the command output; a reader must
+                # never be stopped. Recheck identity after scanning descriptors.
+                if writable and _process_identity(pid) == identity:
+                    identities.setdefault(pid, identity)
+                if writable:
+                    break
+
+
+def _owned_process_running(pid: int, identity: str) -> bool:
+    return _process_identity(pid) == identity and _running_pid(pid)
+
+
+def _running_pid(pid: int) -> bool:
+    """A zombie cannot execute; the owner/init will reap it separately."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+
+def _stop_process(process: subprocess.Popen, identities: dict[int, str] | None = None) -> bool:
+    """Stop the session and remembered/pipe-owning descendants, then confirm."""
+    identities = identities if identities is not None else {}
+    if os.name == "posix":
+        _remember_descendants(process, identities)
+        _remember_pipe_owners(process, identities)
+        # The original group is safe while its unreaped leader is active or an
+        # identified owned member still belongs to it. Do not signal a recycled
+        # bare PID/group once all original members have disappeared.
+        group_owned = process.poll() is None
+        if not group_owned:
+            for pid, identity in identities.items():
+                try:
+                    if _process_identity(pid) == identity and os.getpgid(pid) == process.pid:
+                        group_owned = True
+                        break
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+        if group_owned:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        for pid, identity in identities.items():
+            if _process_identity(pid) == identity:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+    else:
+        process.kill()
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        return False
+    until = monotonic() + 3
+    while any(_owned_process_running(pid, identity) for pid, identity in identities.items()):
+        if monotonic() >= until:
+            return False
+        sleep(0.01)
+    return True
+
+
+def _wait_process(process: subprocess.Popen, timeout: float, identities: dict[int, str]) -> int:
+    deadline = monotonic() + timeout
+    while True:
+        _remember_descendants(process, identities)
+        # Once the operation completed, retain its real result even when an
+        # interrupt arrives concurrently at the next dispatch boundary.
+        if process.poll() is not None:
+            return process.returncode
+        check_cancelled()
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            return process.wait(timeout=min(0.05, remaining))
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def run_process(command, *, timeout: float = 3600, cwd=None, env=None,
                 capture_output: bool = True, text: bool = True, check: bool = False):
-    """Bound fixed framework commands by the same deadline and process cleanup."""
+    """Bound fixed framework commands by the shared deadline/cancellation scope."""
+    check_cancelled()
     timeout = remaining_timeout(timeout)
-    with subprocess.Popen(command, cwd=cwd, env=env, text=text,
-                          stdout=subprocess.PIPE if capture_output else None,
-                          stderr=subprocess.PIPE if capture_output else None,
-                          start_new_session=os.name == "posix") as process:
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, text=text,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        start_new_session=os.name == "posix",
+    )
+    deadline = monotonic() + timeout
+    identities: dict[int, str] = {}
+    try:
         try:
-            stdout, stderr = process.communicate(timeout=remaining_timeout(timeout))
+            while True:
+                _remember_descendants(process, identities)
+                process.poll()  # Reap an exited parent even if inherited pipes remain open.
+                check_cancelled()
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.05, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
         except BaseException as error:
-            if os.name == "posix":
-                _kill_process_tree(process.pid)
-            else:
-                process.kill()
-            process.communicate()
+            stopped = _stop_process(process, identities)
+            stdout, stderr = None, None
+            cleanup_error = None
+            if stopped:
+                try:
+                    stdout, stderr = process.communicate(timeout=3)
+                except subprocess.TimeoutExpired as drain_error:
+                    # Inherited pipes still being held means cessation was not
+                    # confirmed. Preserve the original cancellation and its
+                    # truthful failure status instead of masking it with timeout.
+                    stopped = False
+                    stdout, stderr = drain_error.output, drain_error.stderr
+                    cleanup_error = "command output pipes did not close after cleanup"
+            if isinstance(error, OperationCancelled):
+                def tail(value):
+                    if isinstance(value, bytes):
+                        value = value.decode("utf-8", errors="replace")
+                    return (value or "")[-2000:]
+
+                raise OperationCancelled(error.reason, stopped=stopped, details={
+                    "operation": "process", "command": command, "pid": process.pid,
+                    "exit_code": process.returncode,
+                    "stdout_tail": tail(stdout), "stderr_tail": tail(stderr),
+                    "files_retained": True,
+                    **({"cleanup_error": cleanup_error} if cleanup_error else {}),
+                    "unconfirmed_processes": [pid for pid, identity in identities.items()
+                                              if _owned_process_running(pid, identity)],
+                }) from None
             if isinstance(error, subprocess.TimeoutExpired) and current_budget() is not None:
                 current_budget().remaining_timeout()
             raise
@@ -177,6 +376,12 @@ def run_process(command, *, timeout: float = 3600, cwd=None, env=None,
         if check:
             result.check_returncode()
         return result
+    finally:
+        # Popen.__exit__ waits without a bound. If stop confirmation failed,
+        # return that fact to the Controller instead of hanging in __exit__.
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
 
 class ProcessRunner:
@@ -234,6 +439,7 @@ class ProcessRunner:
         extra_env: dict[str, str] | None,
         shell: bool = False,
     ) -> VerificationResult:
+        check_cancelled()
         timeout_seconds = remaining_timeout(timeout_seconds)
         stdout_path, stderr_path = self._log_paths(log_dir, index)
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -253,8 +459,9 @@ class ProcessRunner:
                 env=environment,
                 start_new_session=os.name == "posix",
             )
+            identities: dict[int, str] = {}
             try:
-                exit_code = process.wait(timeout=remaining_timeout(timeout_seconds))
+                exit_code = _wait_process(process, remaining_timeout(timeout_seconds), identities)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 if os.name == "posix":
@@ -262,12 +469,18 @@ class ProcessRunner:
                 else:
                     process.kill()
                 exit_code = process.wait()
-            except BaseException:
-                if os.name == "posix":
-                    _kill_process_tree(process.pid)
-                else:
-                    process.kill()
-                process.wait()
+            except BaseException as error:
+                stopped = _stop_process(process, identities)
+                if isinstance(error, OperationCancelled):
+                    raise OperationCancelled(error.reason, stopped=stopped, details={
+                        "operation": "process", "command": command, "pid": process.pid,
+                        "exit_code": process.returncode,
+                        "unconfirmed_processes": [pid for pid, identity in identities.items()
+                                                  if _owned_process_running(pid, identity)],
+                        "stdout_path": str(stdout_path), "stderr_path": str(stderr_path),
+                        "duration_seconds": monotonic() - started,
+                        "files_retained": True,
+                    }) from None
                 raise
         return VerificationResult(
             command=command,

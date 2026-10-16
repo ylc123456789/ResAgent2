@@ -17,7 +17,7 @@ from resagent2_components import (
     EnvironmentManager, ProcessRunner, RegisteredArtifactReader,
     RepoMaterializer, RepoMaterializerError, ResourceLayout,
     WorkspaceBoundary, WorkspacePermissionError,
-    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs,
+    dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
     DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
@@ -27,7 +27,6 @@ from resagent2_runtime import (
 
 from .completion import ExperimentCompletionCheck
 from .context import EXPERIMENT_PROMPT, build_context
-from .models import ExperimentAction
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
@@ -62,6 +61,9 @@ class NativeExperimentAgent:
             report=message,
             error=ModuleError(code=ErrorCode.INVALID_INPUT, message=message, retryable=False),
         )
+
+    def terminate_session(self, session_id: str, reason: str) -> None:
+        self.loop.terminate_session(session_id, reason)
 
     def invoke(self, request: AgentRequest) -> AgentResult:
         try:
@@ -126,29 +128,14 @@ class NativeExperimentAgent:
             name="experiment", owner=AgentOwner.EXPERIMENT,
             system_prompt=EXPERIMENT_PROMPT, tools=tools, llm_client=self.llm_client,
             context_builder=lambda request, state, limit: build_context(
-                request, state, binding=binding, datasets=datasets, max_context_tokens=limit,
+                request, state, datasets=datasets,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
             completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),
-            action_type=ExperimentAction, max_context_tokens=self.max_context_tokens,
+            max_context_tokens=self.max_context_tokens,
         )
         result = self.loop.run(
             definition, request,
             session_id=task_session_id(request.run_id, request.task_id, request.attempt_number),
         )
-        if (result.status != ModuleStatus.FAILED or result.session is None
-                or any(item.kind == "execution_record" for item in result.artifacts)):
-            return result
-        try:
-            state = self.loop.store.load(result.session.id)
-        except (OSError, ValueError, KeyError) as error:
-            # Recovering command evidence must not replace the original failure.
-            return result.model_copy(update={"error": result.error.model_copy(update={
-                "details": {**result.error.details, "execution_record_error": str(error)},
-            })})
-        execution_record = ExperimentCompletionCheck.execution_record(state)
-        if execution_record is None:
-            return result
-        return result.model_copy(update={
-            "artifacts": [execution_record, *result.artifacts],
-        })
+        return preserve_execution_record(result, self.loop.store)

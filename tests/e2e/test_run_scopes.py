@@ -1,5 +1,7 @@
 """Deterministic checks for shared application state across multiple Runs."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimits
 
 import hashlib
@@ -29,8 +31,8 @@ from resagent2_contracts import (
     ResearchRequest,
     RunBudget,
     RunStatus,
-    AgentRequest,
     SessionId,
+    RecordedAnswer,
     TaskBudget,
     WorkspaceGrant,
     WorkspaceAccess,
@@ -83,9 +85,9 @@ def test_long_run_id_uses_one_valid_scientific_session_through_controller(tmp_pa
             pytest.fail("direct conclusion must not compile a workflow")
 
     sessions = JsonSessionStore(tmp_path / "sessions")
-    agent = ScientificAgent(ScriptedLLMClient([
+    agent = ScientificAgent(ScriptedLLMClient(tool_turns([
         {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "No evidence requested"})}]}},
-    ]), store=sessions)
+    ])), store=sessions)
     scheduler = WorkflowScheduler(
         bindings={}, store=JsonRunStore(tmp_path / "runs"),
         artifact_root=tmp_path / "artifacts",
@@ -122,7 +124,7 @@ def test_native_agents_share_store_without_cross_run_session_collision(
     }
     store = JsonSessionStore(tmp_path / "sessions")
     agent = agent_type(
-        ScriptedLLMClient([ask, ask, ask]), store=store,
+        ScriptedLLMClient(tool_turns([ask, ask, ask])), store=store,
         resource_layout=ResourceLayout(resource_root=tmp_path / "resources"),
     )
     coding = agent_type is NativeCodingAgent
@@ -147,7 +149,7 @@ def _artifact(tmp_path):
     content = b"private evidence"
     path.write_bytes(content)
     return ArtifactRef(
-        id="artifact_private", kind="literature_search", producer=AgentOwner.SCIENTIFIC,
+        id="artifact_private", kind="literature_paper", producer=AgentOwner.SCIENTIFIC,
         run_id="run_a", session_id="session_a", uri=path.as_uri(),
         sha256=hashlib.sha256(content).hexdigest(), media_type="text/plain",
         summary="private evidence",
@@ -180,14 +182,15 @@ def test_scientific_does_not_observe_another_runs_live_artifact(tmp_path, monkey
     artifact = _artifact(tmp_path)
 
     class WrongResolver:
-        def resolve(self, artifact_id, *, run_id):
+        def resolve(self, artifact_id, *, run_id, session_id):
             assert run_id == "run_b"
+            assert session_id == scientific_session_id("run_b")
             return artifact  # Even a misbehaving injected resolver cannot bypass the reader.
 
-    client = ScriptedLLMClient([
+    client = ScriptedLLMClient(tool_turns([
         {"tool": "read_artifact", "arguments": {"artifact_id": artifact.id}},
         {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Evidence unavailable"})}]}},
-    ])
+    ]))
     monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("must not read"))
     agent = ScientificAgent(client, registration_port=WrongResolver())
     result = agent.invoke(AgentRequest(agent=AgentOwner.SCIENTIFIC, run_id='run_b', instruction='Check Run isolation', budget=TaskBudget(max_llm_calls=3, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True)))
@@ -213,19 +216,25 @@ def registration(tmp_path, request):
 
 def test_live_registration_binds_identity_and_content_to_run_scope(registration):
     candidate = ArtifactCandidate(
-        kind="literature_search", path="literature.json", media_type="application/json",
-        summary="shared query", metadata={"papers": []},
+        kind="literature_paper", path="paper.json", media_type="application/json",
+        summary="shared source", metadata={"paper": _paper().model_dump(mode="json")},
     )
-    first = registration.register_scientific(candidate, run_id="run_a", session_id="session_a")
+    first = registration.register_scientific(candidate, run_id="run_a", session_id="session_a",
+                                               operation_key="session:session_a:turn:0:call:fetch", output_position=0)
     assert registration._store.load("run_a").artifacts[first.id] == first
     assert first.session_id == "session_a"
-    assert registration.resolve(first.id, run_id="run_b") is None
-    second = registration.register_scientific(candidate, run_id="run_b", session_id="session_b")
+    assert registration.resolve(first.id, run_id="run_a", session_id="session_a") is None
+    registration.acknowledge_registration(run_id="run_a", operation_key="session:session_a:turn:0:call:fetch")
+    assert registration.resolve(first.id, run_id="run_b", session_id="session_a") is None
+    assert registration.resolve(first.id, run_id="run_a", session_id="session_other") is None
+    second = registration.register_scientific(candidate, run_id="run_b", session_id="session_b",
+                                                operation_key="session:session_b:turn:0:call:fetch", output_position=0)
+    registration.acknowledge_registration(run_id="run_b", operation_key="session:session_b:turn:0:call:fetch")
     assert first.id != second.id
     assert registration._store.load("run_b").artifacts[second.id] == second
     assert first.uri != second.uri
-    assert registration.resolve(first.id, run_id="run_a") == first
-    assert registration.resolve(second.id, run_id="run_b") == second
+    assert registration.resolve(first.id, run_id="run_a", session_id="session_a") == first
+    assert registration.resolve(second.id, run_id="run_b", session_id="session_b") == second
 
 
 def _paper():
@@ -237,12 +246,16 @@ def _paper():
 
 
 def _paper_ref(registration):
-    return next(ref for ref in registration.list_artifacts(run_id="run_a")
+    return next(ref for ref in registration.list_artifacts(run_id="run_a", session_id=scientific_session_id("run_a"))
                 if ref.kind == "literature_paper")
 
 
 def test_scientific_reads_new_literature_in_the_same_turn(registration):
     class Backend:
+        def resolve(self, source):
+            assert source == _paper().fetch_source
+            return _paper()
+
         def search(self, query, **kwargs):
             return LiteratureSearchResult(
                 papers=[_paper()], source="arxiv", executed_query=query,
@@ -250,25 +263,32 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
             )
 
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
         artifact_id = None
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "scope test"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "scope test"}}])[0]
             if self.step == 2:
+                assert registration.list_artifacts(run_id="run_a", session_id=scientific_session_id("run_a")) == []
+                assert _paper().abstract in json.loads(turns[-1].tool_results[turns[-1].tool_calls[0].id])["value"]["papers"][0]["abstract"]
+                return tool_turns([{"tool": "fetch_literature", "arguments": {"source": _paper().fetch_source}}])[0]
+            if self.step == 3:
                 self.artifact_id = _paper_ref(registration).id
-                return {"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}
-            assert self.step == 3
-            assert "artifact_reads" in context.included_sections
-            section = context.text.split("## artifact_reads\n", 1)[1].split("\n\n## ", 1)[0]
-            snippets = json.loads(section.split("\n", 1)[1])["snippets"]
-            assert len(snippets) == 1
-            assert snippets[0]["artifact_id"] == self.artifact_id
-            assert _paper().abstract in snippets[0]["content"]
-            return {"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
-                            "evidence_artifact_ids": [self.artifact_id]})}]}}
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": self.artifact_id}}])[0]
+            assert self.step == 4
+            assert "artifact_reads" not in context.included_sections
+            receipt = json.loads(turns[-1].tool_results[turns[-1].tool_calls[0].id])
+            assert receipt["value"]["artifact_id"] == self.artifact_id
+            assert _paper().abstract in receipt["value"]["content"]
+            directory = json.loads(context.artifact_index.split("\n", 1)[1])
+            assert [entry["artifact_id"] for entry in directory["materials"]["literature"]] == [self.artifact_id]
+            assert _paper().abstract not in context.artifact_index
+            return tool_turns([{"tool": "finish", "arguments": {"report": "Scientific conclusion", "artifacts": [{"kind": "scientific_opinion", "path": "opinion.json", "media_type": "application/json", "summary": "Scientific conclusion", "content": json.dumps({"verdict": "inconclusive", "statement": "Only abstract-level evidence is available",
+                            "evidence_artifact_ids": [self.artifact_id]})}]}}])[0]
 
     client = Client()
     agent = ScientificAgent(client, literature_backend=Backend(), registration_port=registration)
@@ -280,11 +300,15 @@ def test_scientific_reads_new_literature_in_the_same_turn(registration):
     assert len(reads) == 1
     assert _paper().abstract in reads[0].data["value"]["content"]
     assert "read_artifact_summaries" not in state.memory
-    assert registration.resolve(client.artifact_id, run_id="run_b") is None
+    assert registration.resolve(client.artifact_id, run_id="run_b", session_id=scientific_session_id("run_a")) is None
 
 
 def test_resumed_scientific_does_not_return_historical_input_refs(registration):
     class Backend:
+        def resolve(self, source):
+            assert source == _paper().fetch_source
+            return _paper()
+
         def search(self, query, **kwargs):
             return LiteratureSearchResult(
                 papers=[_paper()], source="arxiv", executed_query=query,
@@ -292,22 +316,26 @@ def test_resumed_scientific_does_not_return_historical_input_refs(registration):
             )
 
     class Client:
+        tool_session_key = "test-native-tools/v1"
+
         step = 0
 
-        def next_action(self, context, action_type):
+        def next_tool_call(self, context, schemas, turns, *, max_input_tokens):
             self.step += 1
             if self.step == 1:
-                return {"tool": "literature_search", "arguments": {"query": "history"}}
+                return tool_turns([{"tool": "literature_search", "arguments": {"query": "history"}}])[0]
             if self.step == 2:
-                return {"tool": "read_artifact", "arguments": {"artifact_id": _paper_ref(registration).id}}
+                return tool_turns([{"tool": "fetch_literature", "arguments": {"source": _paper().fetch_source}}])[0]
             if self.step == 3:
-                return {"tool": "ask_user", "arguments": {
+                return tool_turns([{"tool": "read_artifact", "arguments": {"artifact_id": _paper_ref(registration).id}}])[0]
+            if self.step == 4:
+                return tool_turns([{"tool": "ask_user", "arguments": {
                     "assessment": {"statement": "Need permission to conclude"},
                     "text": "Proceed with this evidence?", "requested_fields": ["approve"],
-                }}
-            assert self.step == 4
-            assert _paper().abstract in context.text
-            return {"tool": "finish", "arguments": {
+                }}])[0]
+            assert self.step == 5
+            assert any(_paper().abstract in receipt for turn in turns for receipt in turn.tool_results.values())
+            return tool_turns([{"tool": "finish", "arguments": {
                 "report": "Only abstract-level evidence is available",
                 "artifacts": [{
                     "kind": "scientific_opinion", "path": "opinion.json",
@@ -317,17 +345,24 @@ def test_resumed_scientific_does_not_return_historical_input_refs(registration):
                         "evidence_artifact_ids": [_paper_ref(registration).id],
                     }),
                 }],
-            }}
+            }}])[0]
 
     agent = ScientificAgent(Client(), literature_backend=Backend(), registration_port=registration)
     request = AgentRequest(run_id='run_a', agent=AgentOwner.SCIENTIFIC, instruction='Review evidence', budget=TaskBudget(max_llm_calls=5, timeout_seconds=30), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
     first = agent.invoke(request)
     assert first.status == "needs_user_input", first.model_dump(mode="json")
     historical_refs = [item for item in first.artifacts if isinstance(item, ArtifactRef)]
-    assert {ref.kind for ref in historical_refs} == {"literature_paper", "literature_search"}
+    assert {ref.kind for ref in historical_refs} == {"literature_paper"}
     ref = next(item for item in historical_refs if item.kind == "literature_paper")
+    question = first.control.question
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text, requested_fields=question.requested_fields,
+        options=question.options, values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=question.run_id, session_id=question.session_id,
+    )
     second = agent.invoke(request.model_copy(update={
         "parent_session_id": first.session.id, "input_artifacts": historical_refs,
+        "user_answers": [answer], "resume_answers": [answer], "control_ack": first.control.origin,
     }))
     assert second.status == "completed", second.report
     assert second.session.id == first.session.id

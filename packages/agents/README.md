@@ -13,4 +13,4 @@
 下游只接收正式 ArtifactRef。原生 Agent 不相互调用。
 
 Scientific 的 Session 属于 Run；Coding/Experiment 的 Session 属于 Task/Attempt。
-恢复仍走 invoke，回答和工作反馈从系统指定的 artifact 投影到必需上下文。
+恢复仍走 invoke，业务回答和工作反馈从系统指定的 artifact 投影到必需上下文；操作批准由待执行动作及权限策略处理，不累积为任务需求。

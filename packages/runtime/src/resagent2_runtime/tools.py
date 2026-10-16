@@ -21,28 +21,6 @@ class Tool(Protocol):
         """Execute validated arguments without mutating state directly."""
 
 
-def tool_contracts_text(tools: tuple[Tool, ...]) -> str:
-    """Render a compact per-tool argument contract for the model.
-
-    The action schema exposes ``arguments`` as a free-form object, so the model
-    would otherwise have to guess each tool's required top-level fields. This
-    derives them from each tool's existing ``input_model`` and injects a short,
-    deterministic contract so the model knows what ``arguments`` must contain.
-    """
-    lines = ["Tool argument contracts (required arguments):"]
-    for tool in tools:
-        required = [
-            name
-            for name, field in tool.input_model.model_fields.items()
-            if field.is_required()
-        ]
-        lines.append(f"- {tool.name}: {', '.join(required)}")
-        guidance = getattr(tool, "model_guidance", None)
-        if guidance:
-            lines.append(f"  {guidance}")
-    return "\n".join(lines)
-
-
 class ToolNotFoundError(LookupError):
     """Raised when an action names a Tool outside its Agent definition."""
 
@@ -72,7 +50,9 @@ class ToolRegistry:
     ) -> ToolObservation:
         """Validate raw arguments and execute the selected Tool."""
 
+        from .cancellation import check_cancelled
         parsed = self.validate(name, arguments)
+        check_cancelled()
         if prepared is not None:
             return self._tools[name].execute_prepared(state, parsed, prepared)
         return self._tools[name].execute(state, parsed)
@@ -116,8 +96,9 @@ class FinishTool:
 class AskUserToolInput(RuntimeModel):
     """Input schema for AskUserTool."""
 
+    related_question_id: str | None = Field(default=None, description="When escalating your direct child question, reference its exact question ID")
     text: NonEmptyStr = Field(
-        description="Self-contained question shown to the user. Include the "
+        description="Self-contained question shown to your direct superior (root asks the user). Include the "
         "background needed to answer in this text."
     )
     requested_fields: list[AnswerFieldName] = Field(min_length=1)
@@ -125,7 +106,7 @@ class AskUserToolInput(RuntimeModel):
 
 
 class AskUserTool:
-    """Request user input with a self-contained question and named answer fields."""
+    """Request direct-superior input with a self-contained question and named answer fields."""
 
     name = "ask_user"
     input_model = AskUserToolInput

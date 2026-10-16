@@ -45,12 +45,14 @@ def test_search_uses_isolated_query_and_url_matched_citations():
         result_block(source("https://example.test/uncited")),
     ])
     backend = DeepSeekWebSearchBackend(client)
-    result = backend.search("  a query  ", max_results=2)
+    result = backend.search("  a query  ")
 
     assert result.provider == "deepseek" and result.query == "a query"
     assert len(result.results) == 2
     assert result.incomplete_reason is None
     assert result.results[0].snippet == "x" * 2000
+    assert result.results[0].snippet_truncated
+    assert not result.results[1].snippet_truncated
     assert result.results[0].published_at == "2026-10-01"
     assert result.results[1].snippet == ""
     body, = client.requests
@@ -64,12 +66,12 @@ def test_search_uses_isolated_query_and_url_matched_citations():
     assert body["tools"] == [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
 
 
-def test_preview_limit_does_not_discard_later_native_results():
+def test_all_native_batches_remain_in_one_receipt():
     client = Client([
         result_block(source("https://example.test/a", title="")),
         result_block(source("https://example.test/a"), source("https://example.test/b")),
     ])
-    result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
+    result = DeepSeekWebSearchBackend(client).search("q")
     assert [item.url for item in result.results] == [
         "https://example.test/a", "https://example.test/b",
     ]
@@ -78,20 +80,20 @@ def test_preview_limit_does_not_discard_later_native_results():
 
 
 def test_explicit_native_empty_result_is_successful_empty():
-    result = DeepSeekWebSearchBackend(Client([result_block()])).search("q", max_results=1)
+    result = DeepSeekWebSearchBackend(Client([result_block()])).search("q")
     assert result.results == []
 
 
 def test_prose_urls_without_native_results_are_not_search_evidence():
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client([{"type": "text", "text": URL}])).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client([{"type": "text", "text": URL}])).search("q")
     assert raised.value.error_type == "search_not_executed"
 
 
 @pytest.mark.parametrize("stop_reason", ["max_tokens", "pause_turn", None])
 def test_incomplete_model_response_is_failure(stop_reason):
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client([result_block(source())], stop_reason=stop_reason)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client([result_block(source())], stop_reason=stop_reason)).search("q")
     assert raised.value.error_type == "incomplete_response"
 
 
@@ -104,7 +106,7 @@ def test_incomplete_model_response_is_failure(stop_reason):
 ])
 def test_malformed_results_are_not_successful_empty(content):
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(content)).search("q")
     assert raised.value.error_type == "invalid_response"
 
 
@@ -114,13 +116,13 @@ def test_native_tool_error_is_not_empty(code, expected):
         "type": "web_search_tool_result_error", "error_code": code,
     }}])
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(client).search("q", max_results=1)
+        DeepSeekWebSearchBackend(client).search("q")
     assert raised.value.error_type == expected
 
 
 def test_http_limit_preserves_retry_after():
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(error=ModelRequestHTTPError(429, "4"))).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(error=ModelRequestHTTPError(429, "4"))).search("q")
     assert raised.value.error_type == "rate_limited"
     assert raised.value.retry_after == 4
 
@@ -128,21 +130,21 @@ def test_http_limit_preserves_retry_after():
 @pytest.mark.parametrize("error_type", ["network_error", "timeout", "invalid_response", "response_too_large", "missing_credentials"])
 def test_transport_error_preserves_classification(error_type):
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(error=ModelRequestError("failure", error_type=error_type))).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(error=ModelRequestError("failure", error_type=error_type))).search("q")
     assert raised.value.error_type == error_type
 
 
 @pytest.mark.parametrize("error", [BudgetExhaustedError("exhausted"), DeadlineExceededError("expired")])
 def test_run_limits_propagate_to_runtime(error):
     with pytest.raises(type(error)):
-        DeepSeekWebSearchBackend(Client(error=error)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(error=error)).search("q")
 
 
-@pytest.mark.parametrize("query,count", [("", 1), ("q", 0), ("q", 11), ("q", True)])
-def test_invalid_query_does_not_dispatch(query, count):
+@pytest.mark.parametrize("query", ["", "   ", None, True])
+def test_invalid_query_does_not_dispatch(query):
     client = Client([])
     with pytest.raises(WebSearchError):
-        DeepSeekWebSearchBackend(client).search(query, max_results=count)
+        DeepSeekWebSearchBackend(client).search(query)
     assert client.requests == []
 
 
@@ -169,7 +171,7 @@ def test_search_limit_keeps_all_unique_sources_across_batches(shape, error_first
         {"url": URL, "cited_text": "A native source excerpt"},
     ]})
     client = Client(content)
-    result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
+    result = DeepSeekWebSearchBackend(client).search("q")
 
     assert result.incomplete_reason == "max_uses_exceeded"
     assert [item.url for item in result.results] == [URL, "https://example.test/later"]
@@ -182,7 +184,7 @@ def test_search_limit_inside_source_list_keeps_later_sources():
     client = Client([result_block(
         source(), tool_error(), source(), source("https://example.test/after"),
     )])
-    result = DeepSeekWebSearchBackend(client).search("q", max_results=1)
+    result = DeepSeekWebSearchBackend(client).search("q")
     assert result.incomplete_reason == "max_uses_exceeded"
     assert [item.url for item in result.results] == [URL, "https://example.test/after"]
 
@@ -194,7 +196,7 @@ def test_search_limit_without_sources_is_failure(shape, with_empty_batch):
     if with_empty_batch:
         content.insert(0, result_block())
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(content)).search("q")
     assert raised.value.error_type == "search_limit_exceeded"
 
 
@@ -207,7 +209,7 @@ def test_search_limit_without_sources_is_failure(shape, with_empty_batch):
 def test_other_provider_errors_still_fail_after_valid_partial_results(shape, code, expected):
     content = [result_block(source()), error_block("dict"), error_block(shape, code)]
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(content)).search("q")
     assert raised.value.error_type == expected
 
 
@@ -220,7 +222,7 @@ def test_other_provider_errors_still_fail_after_valid_partial_results(shape, cod
 def test_malformed_sources_still_fail_after_valid_partial_results(bad_item):
     content = [result_block(source()), error_block("dict"), result_block(bad_item)]
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(content)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(content)).search("q")
     assert raised.value.error_type == "invalid_response"
 
 
@@ -229,5 +231,5 @@ def test_malformed_sources_still_fail_after_valid_partial_results(bad_item):
 def test_limit_does_not_relax_completed_response_requirement(stop_reason, shape):
     content = [result_block(source()), error_block(shape)]
     with pytest.raises(WebSearchError) as raised:
-        DeepSeekWebSearchBackend(Client(content, stop_reason=stop_reason)).search("q", max_results=1)
+        DeepSeekWebSearchBackend(Client(content, stop_reason=stop_reason)).search("q")
     assert raised.value.error_type == "incomplete_response"

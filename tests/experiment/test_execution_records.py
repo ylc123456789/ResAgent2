@@ -1,5 +1,7 @@
 """Actual command receipts remain machine-readable across completion outcomes."""
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import AgentPermissions, ErrorCode
 
 from datetime import UTC, datetime
@@ -63,11 +65,10 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
     binding = SimpleNamespace(current=None, hard_constraint=None)
     definition = AgentDefinition(
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
-        tools=tools, llm_client=ScriptedLLMClient([
-            {"tool": "run_shell", "arguments": {"command": "python train.py"}},
+        tools=tools, llm_client=ScriptedLLMClient(tool_turns([
             {"tool": "run_shell", "arguments": {"command": "python train.py"}},
             {"tool": "finish", "arguments": {"status": status, "report": "Recorded the outcome"}},
-        ]),
+        ])),
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary, binding=binding, request=req,
@@ -78,23 +79,17 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
     first = loop.run(definition, req, session_id="session_records")
     assert first.status == "needs_user_input"
     assert not any(item.kind == "execution_record" for item in first.artifacts)
-    question = QuestionDraft.model_validate_json(first.artifacts[0].content)
+    question = first.control.question
     answer = RecordedAnswer(
-        question_id=f"question_{question.action.action_id}", question_text=question.text,
+        question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
         run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
-        action=question.action,
-    )
-    ref = ArtifactRegistry(tmp_path / "artifacts").register_system_artifact(
-        ArtifactCandidate(kind="answer", path="answer.json", media_type="application/json",
-                          summary="Approve the pending shell command", content=answer.model_dump_json()),
-        run_id=req.run_id, source_type="controller_answer",
-        task_id=req.task_id, attempt_number=req.attempt_number,
+        session_id=first.session.id, action=question.action,
     )
     resumed = req.model_copy(update={
         "parent_session_id": first.session.id,
-        "input_artifacts": [ref], "resume_artifact_ids": [ref.id],
+        "resume_answers": [answer], "control_ack": first.control.origin,
     })
     definition = replace(definition, permission_policy=OperationPermissionPolicy(
         tools, boundary=boundary, binding=binding, request=resumed,
@@ -122,7 +117,8 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
      ("python train.py", 0, False)],
 ])
 def test_command_history_is_preserved_without_inferred_task_failure(tmp_path, commands):
-    from resagent2_runtime import AgentEvent
+    from resagent2_runtime.models import NativeToolCall, ToolCallTurn
+    from resagent2_runtime.tool_calling import tool_receipt
     now = datetime.now(UTC)
     state = AgentState(
         session_id="session_test", agent_name="experiment", owner=AgentOwner.EXPERIMENT,
@@ -132,9 +128,10 @@ def test_command_history_is_preserved_without_inferred_task_failure(tmp_path, co
         observation = Command(exit_code).execute(state, CommandInput())
         observation.value.update(command=command, timed_out=timed_out,
                                  stdout_path=f"{sequence}.stdout", stderr_path=f"{sequence}.stderr")
-        state.events.append(AgentEvent(
-            sequence=sequence, step=sequence, type="observation", tool="run_shell",
-            data=observation.model_dump(mode="json"), created_at=now,
+        call_id = f"command_{sequence}"
+        state.tool_turns.append(ToolCallTurn(
+            tool_calls=[NativeToolCall(id=call_id, name="run_shell", arguments=json.dumps({"command": command}))],
+            tool_results={call_id: tool_receipt(observation)},
         ))
     boundary = WorkspaceBoundary(WorkspaceGrant(root=str(tmp_path), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=[])))
     decision = ExperimentCompletionCheck(boundary).evaluate(

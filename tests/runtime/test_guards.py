@@ -1,3 +1,4 @@
+from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import AgentPermissions
 import pytest
@@ -27,7 +28,7 @@ class NeverFinish:
 
 
 def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
-    return [ContextSection(name="instruction", content=request.instruction, required=True)]
+    return [ContextSection(name="instruction", content=request.instruction)]
 
 
 def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> AgentRequest:
@@ -40,7 +41,7 @@ def definition(actions, *, allowed_tools: set[str]) -> AgentDefinition:
         owner=AgentOwner.CODING,
         system_prompt="Test runtime guards.",
         tools=(WriteValueTool(), FinishTool()),
-        llm_client=ScriptedLLMClient(actions),
+        llm_client=ScriptedLLMClient(tool_turns(actions)),
         context_builder=context_builder,
         permission_policy=AllowListPermissionPolicy(allowed_tools),
         completion_check=NeverFinish(),
@@ -66,7 +67,7 @@ def test_permission_is_checked_before_tool_execution() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert "not allowed" in store.load("session_denied").runtime_feedback.summary
+    assert "not allowed" in store.load("session_denied").last_observation.summary
     assert "forbidden" not in store.load("session_denied").memory
 
 
@@ -88,7 +89,7 @@ def test_tool_arguments_are_validated_before_execution() -> None:
     # the original actionable rejection remains persisted for diagnosis.
     assert result.error.code == ErrorCode.TOOL_FAILED
     assert store.load("session_invalid_input").memory == {}
-    assert store.load("session_invalid_input").runtime_feedback is not None
+    assert store.load("session_invalid_input").last_observation is not None
 
 
 def test_llm_action_must_match_the_typed_action_schema() -> None:
@@ -98,8 +99,7 @@ def test_llm_action_must_match_the_typed_action_schema() -> None:
             [
                 {
                     "tool": "finish",
-                    "arguments": {'report': '{}'},
-                    "undocumented_field": True,
+                    "arguments": {'report': '{}', "undocumented_field": True},
                 }
             ],
             allowed_tools={"finish"},
@@ -113,8 +113,8 @@ def test_llm_action_must_match_the_typed_action_schema() -> None:
     assert result.status == ModuleStatus.FAILED
     assert result.error is not None
     state = store.load("session_invalid_action")
-    assert state.runtime_feedback is not None
-    assert "undocumented_field" in state.runtime_feedback.summary
+    assert state.last_observation is not None
+    assert "undocumented_field" in state.last_observation.summary
 
 
 def test_rejected_finish_exhausts_budget_instead_of_completing() -> None:
@@ -175,22 +175,17 @@ def test_timeout_is_returned_as_structured_error() -> None:
     assert result.error.code == ErrorCode.TIMEOUT
 
 
-def test_context_composer_respects_total_budget_and_priority() -> None:
+def test_context_composer_retains_every_section_or_reports_capacity():
     composer = ContextComposer()
-    context = composer.compose(
-        "system",
-        [
-            ContextSection(name="required", content="must keep", required=True),
-            ContextSection(name="high", content="important", priority=10),
-            ContextSection(name="low", content="x" * 100, priority=1),
-        ],
-        max_tokens=15,
-    )
+    sections = [ContextSection(name="task", content="must keep"),
+                ContextSection(name="artifact_index", content="x" * 100)]
+    result = composer.compose("system", sections, max_tokens=1000)
+    assert result.omitted_sections == []
+    assert result.included_sections == ["system", "task", "artifact_index"]
+    with pytest.raises(ContextBudgetExceeded):
+        composer.compose("system", sections, max_tokens=15)
 
-    assert context.included_sections == ["system", "required", "high"]
-    assert context.omitted_sections == ["low"]
-    # The rendered text, including headings and separators, is 58 characters.
-    assert context.estimated_tokens == composer.estimate_tokens(context.text) == 15
+
 
 
 def test_required_context_cannot_silently_overflow_budget() -> None:

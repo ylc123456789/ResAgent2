@@ -1,4 +1,6 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,11 +59,9 @@ from resagent2_runtime import (
 )
 
 from resagent2_capabilities.permissions import OperationPermissionPolicy
-from resagent2_orchestrator.handoffs import system_artifact
 
 from resagent2_experiment.completion import ExperimentCompletionCheck
 from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
-from resagent2_experiment.models import ExperimentAction
 from resagent2_capabilities import RunShellTool
 
 
@@ -151,11 +151,12 @@ class _NativeExperimentPort:
             system_prompt=EXPERIMENT_PROMPT,
             tools=tools,
             llm_client=ScriptedLLMClient(
-                ([] if request.parent_session_id else [
+                tool_turns(([] if request.parent_session_id else [
                     {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
                     {"tool": "audit_env", "arguments": {}},
-                ]) + [
+                ]) + ([] if request.parent_session_id else [
                     {"tool": "run_shell", "arguments": {"command": "python train.py"}},
+                ]) + [
                     {
                         "tool": "finish",
                         "arguments": {
@@ -166,16 +167,15 @@ class _NativeExperimentPort:
                             }],
                         },
                     },
-                ]
+                ])
             ),
-            context_builder=lambda request, state, limit: build_context(request, state, binding=binding, max_context_tokens=limit),
+            context_builder=lambda request, state, limit: build_context(request, state),
             permission_policy=OperationPermissionPolicy(
                 tools, boundary=boundary, binding=binding, request=request,
             ),
             completion_check=ExperimentCompletionCheck(
                 boundary,
             ),
-            action_type=ExperimentAction,
         )
         return self._loop.run(
             definition,
@@ -222,14 +222,10 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
         question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
-        run_id=run.run_id, task_id="task_experiment_native", attempt_number=1,
+        run_id=run.run_id, session_id=question.session_id, task_id="task_experiment_native", attempt_number=1,
         action=question.action,
     )
     run.answers.append(answer)
-    system_artifact(
-        scheduler.artifact_registry, run, "answer", answer,
-        task_id="task_experiment_native", attempt_number=1,
-    )
     run.pending_question = None
     run.status = RunStatus.RUNNING
     scheduler.resume_task_in_place(run, "task_experiment_native")
@@ -241,6 +237,6 @@ def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     assert run.workflow.tasks[0].attempts[0].session.id == session_id
     artifacts = list(run.artifacts.values())
     assert {artifact.kind for artifact in artifacts} == {
-        "experiment_result", "execution_record", "acceptance_requirements", "question", "answer",
+        "experiment_result", "execution_record", "module_report", "acceptance_requirements",
     }
     assert all(len(artifact.sha256) == 64 for artifact in artifacts)

@@ -16,10 +16,10 @@ from resagent2_contracts import (
     SYSTEM_ARTIFACT_PROVENANCE,
     ScientificOpinion,
     SessionRef,
-    WorkOutcome,
+    WorkResult,
     WorkRequest,
     WorkRequestDraft,
-    WorkTaskOutcome,
+    WorkTaskResult,
     Workflow,
     WorkflowAgentDefinition,
     WorkflowAgentRegistry,
@@ -86,7 +86,7 @@ def test_required_evidence_depends_on_registration_and_citation_only(prepared, r
     registry, run, gate = prepared
     ref = evidence(prepared)
     run.conclusion_requirements_ref = system_artifact(registry, run, "conclusion_requirements",
-        ConclusionRequirements(required_evidence_kinds=["literature_paper"]))
+        ConclusionRequirements(required_evidence_kinds=["literature_paper"]),operation_key="test:required_evidence")
     result, refs = registered_result(prepared, cited=[ref.id] if cited else [], observed=[ref.id] if trace_observed else [])
     actual = gate.validate(run, result, refs)
     assert actual.ok is cited
@@ -119,7 +119,7 @@ def test_nonterminal_task_prevents_completion(prepared, status):
 def test_active_work_request_prevents_completion(prepared):
     _, run, gate = prepared
     run.work_requests = [WorkRequest(id="work_test", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-        request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]), created_at=run.created_at, updated_at=run.updated_at)]
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), created_at=run.created_at, updated_at=run.updated_at)]
     result, refs = registered_result(prepared)
     assert not gate.validate(run, result, refs).ok
 
@@ -136,17 +136,37 @@ def test_completed_task_requires_terminal_attempt_history(prepared):
 
 def test_failed_task_requires_limitations_and_is_reported(prepared):
     _, run, gate = prepared
-    issue = WorkTaskOutcome(task_id="task_failed", status="failed", summary="Command failed",
+    issue = WorkTaskResult(task_id="task_failed", status="failed", instruction="Command failed", workflow_agent_kind="experiment",
         error=ModuleError(code="tool_failed", message="exit 1", retryable=False))
     run.work_requests = [WorkRequest(id="work_test", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
-        request=WorkRequestDraft(objective="Measure", expected_evidence=["metric"]), status="consumed", workflow_revision=1,
-        outcome=WorkOutcome(work_request_id="work_test", workflow_revision=1, summary="Failed", tasks=[issue]),
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), status="consumed", workflow_revision=1,
+        outcome=WorkResult(run_id=run.run_id, session_id=run.scientific_session.id, objective="Measure", status="stable", work_request_id="work_test", workflow_revision=1, tasks=[issue]),
         created_at=run.created_at, updated_at=run.updated_at)]
     result, refs = registered_result(prepared)
     assert not gate.validate(run, result, refs).ok
     result, refs = registered_result(prepared, limitations=["Execution failed"])
     actual = gate.validate(run, result, refs)
     assert actual.ok and actual.report.execution_issues == [issue]
+
+
+def test_compilation_failure_without_tasks_requires_limitations_and_is_reported(prepared):
+    _, run, gate = prepared
+    error = ModuleError(code="contract_error", message="Compilation did not produce a valid graph", retryable=False)
+    run.work_requests = [WorkRequest(
+        id="work_uncompiled", run_id=run.run_id, scientific_session_id=run.scientific_session.id,
+        request=WorkRequestDraft(objective='Measure', tasks=[{'key': 'work', 'instruction': 'Measure'}]), status="failed", error=error,
+        outcome=WorkResult(run_id=run.run_id, session_id=run.scientific_session.id, work_request_id="work_uncompiled",
+                           objective="Measure", status="failed", error=error),
+        created_at=run.created_at, updated_at=run.updated_at,
+    )]
+    result, refs = registered_result(prepared)
+    assert CompletionViolationCode.MISSING_LIMITATIONS in {item.code for item in gate.validate(run, result, refs).violations}
+    result, refs = registered_result(prepared, limitations=["No measurement was possible because compilation failed"])
+    validation = gate.validate(run, result, refs)
+    assert validation.ok
+    assert validation.report.execution_issues == []
+    rendered = FinalReportRenderer().render(validation.report).content
+    assert "work_uncompiled" in rendered and error.message in rendered
 
 
 @pytest.mark.parametrize("fault", ["missing_requirement", "missing_opinion", "foreign_session", "corrupt_opinion"])
@@ -169,16 +189,16 @@ def test_renderer_and_registration_are_deterministic(prepared):
     assert first == FinalReportRenderer().render(accepted.report)
     one = registry.register_final_report(first.candidate, first.content, run_id=run.run_id)
     two = registry.register_final_report(first.candidate, first.content, run_id=run.run_id)
-    assert one == two and len(one.sha256) == 64
+    assert one.id != two.id and one.sha256 == two.sha256
 
 
 def test_scientific_registration_is_idempotent_and_rejects_system_kind(prepared):
     registry, run, _ = prepared
     first = evidence(prepared)
-    assert first == evidence(prepared)
+    assert first.id != evidence(prepared).id
     assert first.task_id is None and first.producer == AgentOwner.SCIENTIFIC
     with pytest.raises(ArtifactRegistrationError):
-        registry.register_scientific(candidate("answer", {}), run_id=run.run_id, session_id=run.scientific_session.id)
+        registry.register_scientific(candidate("acceptance_requirements", {}), run_id=run.run_id, session_id=run.scientific_session.id)
 
 
 @pytest.mark.parametrize("kind", sorted(SYSTEM_ARTIFACT_PROVENANCE))
@@ -188,7 +208,7 @@ def test_each_system_kind_supports_its_defined_scope_and_replay(prepared, kind):
     for scope in scopes:
         fields = {"run": {}, "task": {"task_id": "task_test"}, "attempt": {"task_id": "task_test", "attempt_number": 1}, "session": {"session_id": run.scientific_session.id}}[scope]
         first = registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type=source, **fields)
-        assert first == registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type=source, **fields)
+        assert first.id != registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type=source, **fields).id
         with pytest.raises(ValueError):
             registry.register_system_artifact(candidate(kind, {}), run_id=run.run_id, source_type="forged", **fields)
 
@@ -196,7 +216,7 @@ def test_each_system_kind_supports_its_defined_scope_and_replay(prepared, kind):
 def require_outputs(prepared, names):
     registry, run, _ = prepared
     run.conclusion_requirements_ref = system_artifact(
-        registry, run, "conclusion_requirements", ConclusionRequirements(required_artifacts=names),
+        registry, run, "conclusion_requirements", ConclusionRequirements(required_artifacts=names),operation_key="test:required_outputs",
     )
 
 
@@ -204,7 +224,7 @@ def named_delivery(prepared, *, name="metrics", run_id=None, path="measurements.
     registry, run, _ = prepared
     ref = registry.register_scientific(
         ArtifactCandidate(
-            kind="module_report", path=path, media_type="application/json",
+            kind="web_page", path=path, media_type="application/json",
             summary="Delivered report", content='{"measurement": 1}', output_name=name,
         ),
         run_id=run_id or run.run_id, session_id=run.scientific_session.id,
@@ -276,7 +296,7 @@ def test_registered_deliveries_from_different_rounds_can_share_a_required_name(p
             summary="Later measured metrics", content='{"measurement": 2}', output_name="metrics",
         ),
         grant=None, producer=AgentOwner.EXPERIMENT, run_id=run.run_id,
-        task_id="task_later", attempt_number=1, index=1, existing_ids=set(run.artifacts),
+        task_id="task_later", attempt_number=1, index=1,
     )
     run.artifacts[later.id] = later
     result, refs = registered_result(prepared)
@@ -287,7 +307,7 @@ def test_pending_scientific_output_only_counts_after_receiving_registration(prep
     registry, run, gate = prepared
     require_outputs(prepared, ["analysis"])
     pending = ArtifactCandidate(
-        kind="module_report", path="analysis.md", media_type="text/markdown",
+        kind="web_page", path="analysis.md", media_type="text/markdown",
         summary="Requested analysis", content="The completed analysis", output_name="analysis",
     )
     result, refs = registered_result(prepared)

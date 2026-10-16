@@ -29,7 +29,7 @@ def scheduler(tmp_path, proposals, results, *, store=None):
     run = engine.accept_proposal(run.run_id, WorkflowProposal(work_request_id="work_test", tasks=proposals))
     run.work_requests.append(WorkRequest(
         id="work_test", run_id=run.run_id, scientific_session_id="session_test",
-        request=WorkRequestDraft(objective="Evaluate the task results", expected_evidence=["analysis"]), status="executing",
+        request=WorkRequestDraft(objective='Evaluate the task results', tasks=[{'key': 'work', 'instruction': 'Evaluate the task results'}]), status="executing",
         workflow_revision=run.workflow.revision, created_at=now, updated_at=now,
     ))
     engine.store.save(run)
@@ -71,7 +71,10 @@ def test_boundary_exceptions_persist_failed_attempt(tmp_path, monkeypatch, stage
     assert attempt.status == "failed"
     assert attempt.finished_at is not None
     assert attempt.error.message == (str(error).strip() or type(error).__name__)
-    assert attempt.error.message in attempt.report
+    if stage == "reception":
+        assert attempt.report == "Task completed" and attempt.reception_error is not None
+    else:
+        assert attempt.error.message in attempt.report
     expected_code = "artifact_missing" if stage == "reception" and isinstance(error, OSError) else "contract_error"
     assert attempt.error.code == expected_code
     assert not attempt.error.retryable
@@ -103,7 +106,8 @@ def test_empty_reception_error_preserves_original_agent_failure(tmp_path, monkey
         "stderr_tail": "Diagnostic", "artifact_registration_error": "RuntimeError",
     }
     assert attempt.error.retryable is False
-    assert "reception failed: RuntimeError" in attempt.report
+    assert attempt.report == "Training failed"
+    assert attempt.reception_error.details["artifact_registration_error"] == "RuntimeError"
 
 
 @pytest.mark.parametrize("fault", ["missing", "ambiguous"])
@@ -124,7 +128,7 @@ def test_future_artifact_binding_failure_persists_failed_attempt(tmp_path, fault
                if run.artifacts[key].output_name == "analysis")
     # Fault-inject the persisted output registry after the producer was accepted.
     if fault == "missing":
-        del run.artifacts[ref.id]
+        run.artifacts[ref.id] = ref.model_copy(update={"output_name": "unavailable"})
     else:
         duplicate = ref.model_copy(update={"id": "artifact_duplicate"})
         run.artifacts[duplicate.id] = duplicate

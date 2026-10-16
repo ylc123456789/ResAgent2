@@ -1,9 +1,11 @@
+from datetime import UTC, datetime
+from resagent2_runtime import AgentState
 """Native wire protocol, Session continuation and existing execution boundaries."""
 
 import json
 from dataclasses import replace
 from io import BytesIO
-from httpx import TransportError
+from httpx import DecodingError, TransportError
 
 import pytest
 
@@ -46,7 +48,8 @@ class _Completion:
 
 
 def _context(request, state, limit):
-    return [ContextSection(name="task", content=request.instruction, required=True)]
+    return [ContextSection(name="task", content=request.instruction),
+            ContextSection(name="artifact_index", content='{"artifacts":[]}')]
 
 
 def _request(*, parent=None, calls=10, goal="current task"):
@@ -125,10 +128,11 @@ def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
     assert "response_format" not in requests[0]
     assert "tool_choice" not in requests[0]  # provider-specific force mode is not assumed
     messages = requests[1]["messages"]
-    assert [m["role"] for m in messages] == ["system", "assistant", "tool", "user"]
-    assert messages[1]["reasoning_content"] == "PRIVATE_REASONING"
-    assert messages[2]["tool_call_id"] == "call_write"
-    receipt = json.loads(messages[2]["content"])
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool", "user", "user"]
+    assert messages[-2]["content"].startswith("Runtime status (")
+    assert messages[2]["reasoning_content"] == "PRIVATE_REASONING"
+    assert messages[3]["tool_call_id"] == "call_write"
+    receipt = json.loads(messages[3]["content"])
     assert receipt["ok"] and receipt["value"] == 7
     assert "memory_updates" not in receipt
     assert "recent_observations" not in messages[-1]["content"]
@@ -144,7 +148,7 @@ def test_native_schema_calls_receipts_and_reasoning_reach_next_request(setup):
     assert "tool_history" in records[-1]["included_sections"]
 
 
-@pytest.mark.parametrize("failure", ["bad_arguments", "prose", "multiple", "schema", "duplicate_ids", "missing_id", "length"])
+@pytest.mark.parametrize("failure", ["bad_arguments", "prose", "multiple", "schema", "duplicate_ids", "missing_id", "length", "unknown", "unknown_batch"])
 def test_rejected_native_response_never_executes_and_recovers_in_same_session(setup, failure):
     definition, store, requests, install = setup
     call = _call("write_value", {"key": "unsafe", "value": 99}, call_id="call_bad")
@@ -163,13 +167,20 @@ def test_rejected_native_response_never_executes_and_recovers_in_same_session(se
         del call["id"]
     elif failure == "length":
         bad["choices"][0]["finish_reason"] = "length"
+    elif failure == "unknown":
+        bad = _reply([_call("unregistered", call_id="call_unknown")])
+    elif failure == "unknown_batch":
+        bad = _reply([call, _call("unregistered", call_id="call_unknown")])
     install([bad, _reply()])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     state = store.load("session_native")
     assert result.status == ModuleStatus.COMPLETED
     assert result.llm_calls == state.llm_calls_used == 2
     assert "unsafe" not in state.memory
-    assert requests[1]["messages"][-1]["content"].count("## runtime_feedback") == 1
+    assert "runtime_feedback" not in _rows(definition)[1]["included_sections"]
+    assert any(message["role"] in {"tool", "user"} and (
+        '"ok": false' in message["content"] or "Runtime protocol feedback" in message["content"]
+    ) for message in requests[1]["messages"])
     # Every retained native call has exactly one receipt, even a rejected batch.
     for turn in state.tool_turns:
         assert set(turn.tool_results) == {c.id for c in turn.tool_calls}
@@ -193,22 +204,22 @@ def test_invalid_question_key_recovers_before_pause_in_same_session(setup):
     ])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
-    question = json.loads(first.artifacts[first.control.candidate_index].content)
+    question = first.control.question.model_dump(mode="json")
     assert question["text"] == text
     assert question["requested_fields"] == ["mode"]
     assert first.llm_calls == 2
     state = store.load("session_native")
     assert not json.loads(state.tool_turns[0].tool_results["call_bad_key"])["ok"]
     assert json.loads(state.tool_turns[1].tool_results["call_question"])["ok"]
-    feedback = requests[1]["messages"][-1]["content"]
-    assert feedback.count("## runtime_feedback") == 1
+    feedback = json.dumps(requests[1]["messages"])
+    assert "runtime_feedback" not in _rows(definition)[1]["included_sections"]
     assert "requested_fields" in feedback and "String should match pattern" in feedback
     schema = next(t["function"]["parameters"] for t in requests[0]["tools"]
                   if t["function"]["name"] == "ask_user")
     assert schema["properties"]["requested_fields"]["items"]["pattern"] == r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
 
     second = AgentLoop(store=store).run(
-        definition, _request(parent="session_native", goal="User selected mode=mul"),
+        definition, _request(parent="session_native", goal="User selected mode=mul").model_copy(update={"resume_answers": [_answer(first.control.question)], "control_ack": first.control.origin}),
         session_id="session_native",
     )
     assert second.status == ModuleStatus.COMPLETED
@@ -226,7 +237,8 @@ def test_empty_native_replies_exhaust_existing_failure_limit_without_steps(setup
     assert result.error.code == ErrorCode.TOOL_FAILED
     assert result.llm_calls == len(requests) == 5
     state = store.load("session_native")
-    assert state.step == 0 and state.tool_turns == []
+    assert state.step == 0 and all(not turn.tool_calls for turn in state.tool_turns)
+    assert all(turn.protocol_error for turn in state.tool_turns)
     assert all(not row["action_valid"] and row["validation_error"] for row in _rows(definition))
 
 
@@ -275,15 +287,15 @@ def test_disk_pause_resume_uses_session_not_trace(setup, tmp_path, trace_level):
     )
     second = AgentLoop(store=JsonSessionStore(disk.root)).run(
         replace(definition, llm_client=next_client),
-        _request(parent="session_native", goal="NEW_GOAL answer=mul"), session_id="session_native",
+        _request(parent="session_native", goal="NEW_GOAL answer=mul").model_copy(update={"resume_answers": [_answer(first.control.question)], "control_ack": first.control.origin}), session_id="session_native",
     )
     assert second.status == ModuleStatus.COMPLETED
     assert second.llm_calls == first.llm_calls == 1
     messages = requests[1]["messages"]
-    assert messages[1]["reasoning_content"] == "PRIVATE_CONTINUATION"
-    assert messages[2]["tool_call_id"] == "call_question"
-    assert json.loads(messages[2]["content"])["control"] == "question_issued_not_answered"
-    assert "NEW_GOAL answer=mul" in messages[-1]["content"]
+    assert messages[2]["reasoning_content"] == "PRIVATE_CONTINUATION"
+    assert messages[3]["tool_call_id"] == "call_question"
+    assert json.loads(messages[3]["content"])["value"]["status"] == "question_issued"
+    assert "NEW_GOAL answer=mul" in json.dumps(messages)
     assert "OLD_GOAL" not in json.dumps(messages)  # no repeated old full context
     assert (disk.root.stat().st_mode & 0o777) == 0o700
     path = disk.root / "session_native.json"
@@ -303,6 +315,7 @@ def test_interrupted_call_is_not_replayed_and_gets_unknown_outcome_receipt(setup
     AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     state = store.load("session_native")
     state.status = SessionStatus.ACTIVE
+    state.pending_control = None
     state.tool_turns.append(ToolCallTurn(tool_calls=[NativeToolCall(
         id="call_interrupted", name="write_value", arguments='{"key":"unsafe","value":99}',
         )], reasoning_content="pending reasoning", executing_call_id="call_interrupted"))
@@ -337,7 +350,7 @@ def test_native_history_and_schema_cannot_escape_input_budget(setup):
 def test_composer_accounts_for_json_escaping_in_native_request(setup):
     definition, store, requests, install = setup
     schemas = native_tool_schemas(definition.tools)
-    required = "## system\n" + definition.system_prompt + "\n\n## task\ncurrent task"
+    required = AgentLoop()._fixed_context(definition, _request(), AgentState(session_id="session_cost",agent_name="native",owner=AgentOwner.CODING,run_id="run_native",created_at=datetime.now(UTC),updated_at=datetime.now(UTC)), 10000)
     required_cost = ContextComposer.estimate_tokens(native_input_text(required, schemas, []))
 
     def build(request, state, limit):
@@ -346,9 +359,9 @@ def test_composer_accounts_for_json_escaping_in_native_request(setup):
     definition = replace(definition, context_builder=build, max_context_tokens=required_cost + 10)
     install([_reply()])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
-    assert result.status == ModuleStatus.COMPLETED
-    assert _rows(definition)[0]["omitted_sections"] == ["optional"]
-    assert _rows(definition)[0]["estimated_tokens"] <= required_cost + 10
+    assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
+    assert result.llm_calls == 0
+    assert requests == []
 
 
 def test_native_model_profile_reserves_output_before_input(setup):
@@ -372,6 +385,26 @@ def test_completed_tool_values_reach_history_without_preview_truncation(setup):
     assert json.loads(receipt["content"])["value"] == value
 
 
+@pytest.mark.parametrize("value", [None, 7, "raw text", [1, {"nested": "value"}]])
+def test_user_comment_preserves_arbitrary_tool_value_in_native_model_input(setup, value):
+    definition, store, requests, install = setup
+    comment = "  用户原文\nDo not reinterpret this as an execution result.  "
+
+    class CommentedTool(WriteValueTool):
+        def execute(self, state, arguments):
+            return ToolObservation(summary="Recorded result", value=value, user_comment=comment)
+
+    definition = replace(definition, tools=(CommentedTool(), *definition.tools[1:]))
+    install([_reply([_call("write_value", {"key": "x", "value": 7}, call_id="call_comment")]), _reply()])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert result.status == ModuleStatus.COMPLETED
+    receipts = [m for m in requests[1]["messages"] if m.get("tool_call_id") == "call_comment"]
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0]["content"])
+    assert receipt["value"] == value
+    assert receipt["user_comment"] == comment
+
+
 def test_request_work_pause_is_not_a_completed_execution(setup):
     definition, store, requests, install = setup
 
@@ -379,7 +412,9 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
         name = "request_work"
 
         def execute(self, state, arguments):
-            return ToolObservation(summary="Requested work", request_work=json.loads(arguments.report))
+            return ToolObservation(summary="Requested work", request_work={
+                "work_request": {'objective': 'measure', 'tasks': [{'key': 'work', 'instruction': 'measure'}]},
+            })
 
     definition = replace(
         definition, owner=AgentOwner.SCIENTIFIC, tools=(WorkTool(), FinishTool()),
@@ -390,14 +425,19 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
     first = AgentLoop(store=store).run(definition, request, session_id="session_native")
     assert first.status == ModuleStatus.REQUEST_WORK
     assert first.control.action == "request_work"
-    assert json.loads(first.artifacts[first.control.candidate_index].content) == {"objective": "measure"}
+    assert first.artifacts == []
+    assert first.control.work_request.request.objective == "measure"
+    from resagent2_contracts import WorkResult
+    result = WorkResult(run_id=request.run_id, session_id=first.session.id,
+                        work_request_id=first.control.work_request.id, objective="measure", status="stable")
     second = AgentLoop(store=store).run(
-        definition, request.model_copy(update={"parent_session_id": "session_native", "instruction": "Fresh work outcome"}), session_id="session_native",
+        definition, request.model_copy(update={"parent_session_id": "session_native", "instruction": "Fresh work outcome",
+                                               "work_results": [result], "control_ack": first.control.origin}), session_id="session_native",
     )
     assert second.status == ModuleStatus.COMPLETED
     receipt = next(m for m in requests[1]["messages"] if m.get("tool_call_id") == "call_work")
-    assert json.loads(receipt["content"])["control"] == "work_requested_not_executed"
-    assert "Fresh work outcome" in requests[1]["messages"][-1]["content"]
+    assert json.loads(receipt["content"])["value"]["work_request_id"] == first.control.work_request.id
+    assert "Fresh work outcome" in json.dumps(requests[1]["messages"])
 
 
 def test_finish_rejection_remains_visible_until_real_completion(setup):
@@ -418,9 +458,9 @@ def test_finish_rejection_remains_visible_until_real_completion(setup):
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert result.status == ModuleStatus.COMPLETED and result.llm_calls == 3
     for body in requests[1:]:
-        assert "Verify before finish" in body["messages"][-1]["content"]
+        assert "Verify before finish" in json.dumps(body["messages"])
     receipt = next(m for m in requests[1]["messages"] if m.get("tool_call_id") == "call_rejected_finish")
-    assert json.loads(receipt["content"])["control"] == "finish_proposed_not_yet_accepted"
+    assert json.loads(receipt["content"])["value"]["completion_check"] == "rejected"
 
 
 def test_crash_after_side_effect_before_receipt_does_not_replay(setup, tmp_path):
@@ -454,7 +494,7 @@ def test_crash_after_side_effect_before_receipt_does_not_replay(setup, tmp_path)
 
 def test_history_exhaustion_stops_before_next_http_request(setup):
     definition, store, requests, install = setup
-    definition = replace(definition, max_context_tokens=2000)
+    definition = replace(definition, max_context_tokens=3000)
     install([_reply([_call("write_value", {"key": "large", "value": "x" * 10000}, call_id="call_large")])])
     result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
@@ -474,7 +514,7 @@ def test_historical_call_id_is_rejected_without_duplicate_execution(setup):
     assert result.status == ModuleStatus.COMPLETED
     state = store.load("session_native")
     assert state.memory["x"] == 1 and state.step == 2 and state.llm_calls_used == 3
-    assert "historical tool call ID" in requests[2]["messages"][-1]["content"]
+    assert "historical tool call ID" in json.dumps(requests[2]["messages"])
     assert sum(c.id == "call_same" for t in state.tool_turns for c in t.tool_calls) == 1
 
 
@@ -483,8 +523,13 @@ def test_native_session_cannot_resume_with_json_only_client(setup):
     install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
-    from resagent2_runtime import ScriptedLLMClient
-    scripted = ScriptedLLMClient([])
+    class JsonOnlyClient:
+        contexts = []
+
+        def next_action(self, *args):
+            raise AssertionError("JSON action fallback must not run")
+
+    scripted = JsonOnlyClient()
     result = AgentLoop(store=store).run(
         replace(definition, llm_client=scripted), _request(parent="session_native"), session_id="session_native",
     )
@@ -492,8 +537,8 @@ def test_native_session_cannot_resume_with_json_only_client(setup):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("changed", ["endpoint", "model", "old_json"])
-def test_session_rejects_silent_protocol_or_provider_migration(setup, changed):
+@pytest.mark.parametrize("changed", ["endpoint", "model", "old_json", "native_rules"])
+def test_session_rejects_silent_protocol_or_provider_migration(setup, changed, monkeypatch):
     definition, store, requests, install = setup
     install([_reply([_call("ask_user", {"text": "Which?", "requested_fields": ["answer"]})])])
     first = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
@@ -507,6 +552,9 @@ def test_session_rejects_silent_protocol_or_provider_migration(setup, changed):
         store.save(AgentState.model_validate(old))
     elif changed == "endpoint":
         definition.llm_client.endpoint = "https://different-provider.invalid/chat/completions"
+    elif changed == "native_rules":
+        from resagent2_runtime import tool_calling
+        monkeypatch.setattr(tool_calling, "NATIVE_TOOL_INSTRUCTION", "Updated fixed execution rules")
     else:
         definition.llm_client.model = "different-model"
     before = store.load("session_native")
@@ -538,8 +586,8 @@ def test_native_reply_cannot_forge_an_execution_receipt(setup):
     result = AgentLoop(store=store).run(definition, _request(calls=1), session_id="session_native")
     state = store.load("session_native")
     assert result.error.code == ErrorCode.BUDGET_EXHAUSTED
-    assert "unsafe" not in state.memory and state.tool_turns == []
-    assert "cannot provide tool execution receipts" in state.runtime_feedback.summary
+    assert "unsafe" not in state.memory and not any(turn.tool_calls for turn in state.tool_turns)
+    assert "cannot provide tool execution receipts" in state.last_observation.summary
 
 
 def _writes(*values):
@@ -587,7 +635,10 @@ def test_later_invalid_parameters_prevent_all_batch_side_effects(setup):
     assert state.memory == {}
     assert not any(e.tool == "write_value" and e.type == "action" for e in state.events)
     assert all(not json.loads(r)["ok"] for r in state.tool_turns[0].tool_results.values())
-    assert requests[1]["messages"][-1]["content"].count("## runtime_feedback") == 1
+    assert all("runtime_feedback" not in row.get("included_sections", []) for row in _rows(definition))
+    assert any(message["role"] in {"tool", "user"} and (
+        '"ok": false' in message["content"] or "Runtime protocol feedback" in message["content"]
+    ) for message in requests[1]["messages"])
 
 
 @pytest.mark.parametrize("deny_after_first", [False, True])
@@ -727,3 +778,36 @@ def test_reported_client_usage_cannot_replace_shared_accounting(setup, reported)
     assert result.llm_calls == store.load("session_native").llm_calls_used == 1
     definition.llm_client.next_tool_call.assert_called_once()
     assert store.load("session_native").step == 1
+
+
+def test_unknown_tools_use_existing_bounded_feedback_limit(setup):
+    definition, store, requests, install = setup
+    install([_reply([_call("unregistered", call_id=f"call_unknown_{i}")]) for i in range(6)])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    state = store.load("session_native")
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert not result.error.retryable
+    assert result.llm_calls == len(requests) == 5
+    assert "Unknown tool" in state.last_observation.summary
+    assert all(len(turn.tool_results) == len(turn.tool_calls) for turn in state.tool_turns)
+    assert all(not json.loads(receipt)["ok"] for turn in state.tool_turns
+               for receipt in turn.tool_results.values())
+    tool_messages(state.tool_turns)
+
+
+def test_decoding_failure_preserves_diagnostics_without_provider_retry(setup):
+    definition, store, requests, install = setup
+    install([DecodingError("corrupt gzip response")])
+    result = AgentLoop(store=store).run(definition, _request(), session_id="session_native")
+    assert result.error.code == ErrorCode.TOOL_FAILED
+    assert result.llm_calls == len(requests) == definition.llm_client.last_attempts == 1
+    row, = _rows(definition)
+    assert len(row["attempts"]) == 1
+    assert row["validation_error"] == "corrupt gzip response"
+    assert not row["action_valid"]
+    assert store.load("session_native").tool_turns == []
+
+
+def _answer(question):
+    from tests.runtime.test_resume import _answer as answer
+    return answer(question)

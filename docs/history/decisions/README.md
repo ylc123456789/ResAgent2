@@ -38,4 +38,12 @@ proposed / accepted / superseded / rejected 是各记录自己的决策状态；
 
 - [ADR-0025：通用网页工具与已有文献能力并存](0025-general-web-capability.md)（可选搜索 provider、按需抓取网页，Scientific 自主选择材料入口）
 
+- [ADR-0026：统一原生 Agent 动作与工具事实回执](0026-native-agent-protocol-and-tool-receipts.md)（移除正文 JSON 动作路径，保留独立尝试问答作用域，补齐回执与分段读取）
+
+- [ADR-0027：只维护 DeepSeek 托管网页搜索](0027-deepseek-only-web-search.md)（删除 Tavily 支持，保留搜索接口和独立网页抓取）
+
+- [ADR-0028：工具历史与完整工件目录各司其职](0028-tool-history-and-complete-artifact-directory.md)（schema 25：仅工具历史可压缩，搜索不产工件，直接控制交接，Task 原报告与统一 UUID）
+
 阶段实施与验收保存在 [reviews](../reviews/)；[DEVELOPMENT_PLAN](../DEVELOPMENT_PLAN.md) 是早期开发历程，不再用作当前入口说明。
+
+- [ADR-0029：有序上级输入、纯任务路由与 Run 打断](0029-upstream-correction-routing-interruption.md)（schema 27.0）

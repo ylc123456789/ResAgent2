@@ -5,19 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import shlex
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 import httpx
 
 from defusedxml import ElementTree
-from pydantic import ValidationError
 
 from resagent2_runtime.http import send_request
-from .records import LiteraturePaper, render_paper
+from .records import LiteraturePaper, parse_literature_source
 from ._http import (
     USER_AGENT, LiteratureHTTP, LiteratureSearchError, LiteratureUnavailableError,
 )
@@ -111,6 +111,9 @@ class LiteratureSearchBackend(Protocol):
     ) -> LiteratureSearchResult:
         """Return one normalized provider page and execution facts."""
 
+    def resolve(self, source: str) -> LiteraturePaper:
+        """Resolve exactly one namespaced provider identity for fetch."""
+
 
 class ArxivLiteratureBackend:
     """Query the arXiv API and normalize Atom entries into LiteraturePaper.
@@ -189,6 +192,26 @@ class ArxivLiteratureBackend:
         return send_request(httpx.Request("GET", url, headers={"User-Agent": USER_AGENT}),
                             timeout=self.timeout_seconds)
 
+    def resolve(self, source: str) -> LiteraturePaper:
+        namespace, identity = parse_literature_source(source)
+        if namespace != self.name:
+            raise LiteratureSearchError("arXiv resolution requires arxiv:<ID>", error_type="invalid_query")
+        try:
+            papers = self._parse(self._fetch(f"{self._endpoint}?{urlencode({'id_list': identity})}"))
+            if len(papers) != 1:
+                raise LiteratureSearchError("arXiv did not return one exact paper", error_type="not_found")
+            paper = papers[0]
+            returned = paper.paper_id
+            # An unversioned identity must resolve to an explicit actual version.
+            valid = returned == identity if re.search(r"v[1-9][0-9]*$", identity) else (
+                re.fullmatch(re.escape(identity) + r"v[1-9][0-9]*", returned) is not None)
+            if not valid:
+                raise LiteratureSearchError("arXiv returned a different paper/version", error_type="identity_mismatch")
+            return paper
+        except LiteratureSearchError as error:
+            error.source_attempts = [_attempt(self.name, error)]
+            raise
+
     def _fetch(self, url: str) -> bytes:
         return _ARXIV_HTTP.fetch(
             lambda: self._request(url), max_attempts=self.max_retries
@@ -209,7 +232,7 @@ class ArxivLiteratureBackend:
                 raise LiteratureSearchError("arXiv returned an error or invalid entry")
             try:
                 paper = self._paper(entry)
-            except ValidationError as error:
+            except ValueError as error:
                 raise LiteratureSearchError("arXiv returned an invalid paper") from error
             if paper.paper_id in seen:
                 continue
@@ -220,6 +243,7 @@ class ArxivLiteratureBackend:
     def _paper(self, entry: ElementTree.Element) -> LiteraturePaper:
         id_url = self._text(entry, "id")
         paper_id = self._paper_id(id_url)
+        parse_literature_source("arxiv:" + paper_id)
         abstract = self._text(entry, "summary")
         abstract = " ".join(abstract.split())
         authors = [
@@ -303,6 +327,14 @@ class MultiSourceLiteratureBackend:
             'All literature sources unavailable: ' + '; '.join(item['error'] for item in attempts),
             source_attempts=attempts)
 
+    def resolve(self, source: str) -> LiteraturePaper:
+        namespace, _ = parse_literature_source(source)
+        provider = "openalex" if namespace == "doi" else namespace
+        backend = self._sources.get(provider)
+        if backend is None:
+            raise LiteratureSearchError("No configured provider resolves this source", error_type="invalid_query")
+        return backend.resolve(source)
+
 
 class OpenAlexLiteratureBackend:
     """Normalize indexed records/abstracts, without fetching or inventing full text."""
@@ -374,6 +406,30 @@ class OpenAlexLiteratureBackend:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return send_request(httpx.Request("GET", url, headers=headers),
                             timeout=self.timeout_seconds)
+
+    def resolve(self, source: str) -> LiteraturePaper:
+        namespace, identity = parse_literature_source(source)
+        if namespace not in {"doi", "openalex"}:
+            raise LiteratureSearchError("OpenAlex resolution requires doi:<DOI> or openalex:<W-ID>",
+                                        error_type="invalid_query")
+        lookup = "https://doi.org/" + identity if namespace == "doi" else identity
+        try:
+            body = _OPENALEX_HTTP.fetch(
+                lambda: self._request(f"{self._endpoint}/{quote(lookup, safe=':/')}"),
+                max_attempts=self.max_retries, quota_cooldown=self._quota_cooldown,
+            )
+            try:
+                paper = self._paper(json.loads(body))
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                raise LiteratureSearchError("OpenAlex returned invalid bibliographic data") from error
+            returned = (paper.doi.lower().removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+                        if namespace == "doi" and paper.doi else paper.paper_id.removeprefix("openalex:"))
+            if returned != identity:
+                raise LiteratureSearchError("OpenAlex returned a different paper identity", error_type="identity_mismatch")
+            return paper
+        except LiteratureSearchError as error:
+            error.source_attempts = [_attempt(self.name, error)]
+            raise
 
     @staticmethod
     def _quota_cooldown(response: httpx.Response) -> float:

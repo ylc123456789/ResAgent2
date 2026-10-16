@@ -96,18 +96,31 @@ def slice_text_lines(
     end_char: int | None = None,
     max_chars: int = MAX_READ_CHARS,
 ) -> dict:
-    """Select physical lines, then a character window, then bound tool output."""
+    """Select physical lines, then a character window, then bound tool output.
+
+    Request coordinates remain unchanged. ``next_start_char`` identifies the
+    next source character in the same line selection, regardless of truncation.
+    ``total_lines`` counts all physical lines in the source and
+    ``selected_chars`` counts characters in the selected line range before
+    applying the character window.
+    """
     validate_text_window(
         start_line=start_line, end_line=end_line,
         start_char=start_char, end_char=end_char,
     )
     lines = text.splitlines(keepends=True)
-    selected = "".join(lines[(start_line or 1) - 1 : end_line])[start_char:end_char]
+    selected_lines = "".join(lines[(start_line or 1) - 1 : end_line])
+    selected = selected_lines[start_char:end_char]
+    content = selected[:max_chars]
+    returned_end = start_char + len(content)
     return {
         "start_line": start_line,
         "end_line": end_line,
         "start_char": start_char,
         "end_char": end_char,
-        "content": selected[:max_chars],
+        "total_lines": len(lines),
+        "selected_chars": len(selected_lines),
+        "content": content,
         "truncated": len(selected) > max_chars,
+        "next_start_char": returned_end if returned_end < len(selected_lines) else None,
     }

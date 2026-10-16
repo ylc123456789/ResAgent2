@@ -591,3 +591,30 @@ def test_loop_persists_real_verification_receipt_when_shared_deadline_expires(
     event = next(e for e in state.events if e.type == "observation" and e.tool == tool.name)
     assert event.data["value"]["results"][0]["exit_code"] == 0
     assert len(state.tool_turns[0].tool_results) == 1
+
+
+@pytest.mark.parametrize("stopped", [True, False])
+def test_verification_interruption_preserves_earlier_actual_commands(setup, stopped):
+    from resagent2_runtime.cancellation import OperationCancelled
+
+    class InterruptedRunner(Runner):
+        calls = 0
+        def run(self, command, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                raise OperationCancelled("Stop second verification", stopped=stopped, details={
+                    "operation": "process", "command": command, "pid": 456,
+                    "exit_code": None, "files_retained": True,
+                })
+            return super().run(command, **kwargs)
+
+    tool = RunVerificationTool(InterruptedRunner(setup.boundary), setup.repository,
+        log_root=str(setup.root / "verify"), timeout_seconds=30, baseline=setup.baseline,
+        env_binding=setup.binding)
+    with pytest.raises(OperationCancelled) as caught:
+        tool.execute(setup.state, tool.input_model(commands=["python -m unittest first", "python -m unittest second"]))
+    assert caught.value.stopped is stopped
+    assert len(caught.value.details["results"]) == 1
+    assert "unittest first" in caught.value.details["results"][0]["command"]
+    assert "unittest second" in caught.value.details["command"]
+    assert caught.value.details["results"][0]["exit_code"] == 0

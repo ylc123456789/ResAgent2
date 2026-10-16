@@ -8,9 +8,15 @@ import tempfile
 from pathlib import Path
 from typing import Protocol
 
+from pydantic import ValidationError
+
 from resagent2_contracts import SCHEMA_VERSION, SessionId
 
 from .models import AgentState
+
+
+class SessionLoadError(ValueError):
+    """A persisted session cannot be read as a valid current snapshot."""
 
 
 class SessionStore(Protocol):
@@ -84,10 +90,17 @@ class JsonSessionStore:
                 temporary.unlink()
 
     def load(self, session_id: SessionId) -> AgentState:
-        value = json.loads(self._path(session_id).read_text(encoding="utf-8"))
-        if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
-            raise ValueError(f"Session schema_version must be {SCHEMA_VERSION}; old sessions cannot be resumed")
-        return AgentState.model_validate(value)
+        try:
+            value = json.loads(self._path(session_id).read_text(encoding="utf-8"))
+            if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
+                raise SessionLoadError(f"Session schema_version must be {SCHEMA_VERSION}; old sessions cannot be resumed")
+            return AgentState.model_validate(value)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+            # Do not include corrupt record contents or validation input values
+            # in a model-visible diagnostic; keep the cause for local inspection.
+            raise SessionLoadError(
+                f"Session record could not be loaded ({type(error).__name__})"
+            ) from error
 
     def exists(self, session_id: SessionId) -> bool:
         return self._path(session_id).is_file()

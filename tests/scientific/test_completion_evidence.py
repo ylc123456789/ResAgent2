@@ -56,7 +56,8 @@ def _registered_artifact(tmp_path, *, kind="literature_paper", run_id="run_r") -
     path.write_bytes(content)
     return ArtifactRef(
         id="artifact_lit_1", kind=kind, run_id=run_id,
-        producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": "import"},
+        producer=AgentOwner.ORCHESTRATOR, metadata={"source_type": "task_report"} if kind == "module_report" else {"source_type": "import"},
+        task_id="task_report" if kind == "module_report" else None, attempt_number=1 if kind == "module_report" else None,
         uri=path.as_uri(), sha256=hashlib.sha256(content).hexdigest(),
         media_type="application/json", summary="Imported evidence",
     )
@@ -142,7 +143,7 @@ def _named_output(tmp_path, *, output_name="metrics", run_id="run_r"):
     registry = ArtifactRegistry(tmp_path / "artifacts")
     return registry.register_scientific(
         ArtifactCandidate(
-            kind="module_report", path="report.md", media_type="text/markdown",
+            kind="web_page", path="report.md", media_type="text/markdown",
             summary="Output report", content="Delivered report", output_name=output_name,
         ),
         run_id=run_id, session_id="session_s",
@@ -157,7 +158,9 @@ def test_required_output_does_not_require_observation_or_citation(tmp_path, avai
     reader = RegisteredArtifactReader(
         [ref] if available_as == "input" else [], run_id="run_r", resolve=lambda _: ref,
     )
-    state = _state({"artifact_index": [{"artifact_id": ref.id, "kind": ref.kind, "summary": ref.summary}]} if available_as == "tool_output" else {})
+    state = _state({})
+    if available_as == "tool_output":
+        state.authorized_artifact_ids = [ref.id]
     before = state.model_dump(mode="json")
     check = ScientificCompletionCheck(
         [], required_artifacts=["metrics"], resolve_artifact=reader.resolve_ref, reader=reader,
@@ -199,17 +202,12 @@ def test_required_output_cannot_be_self_certified_by_observation_memory():
 
 def test_valid_scientific_candidate_can_await_receiving_registration():
     from resagent2_components import RegisteredArtifactReader
-
     candidate = _finish([], verdict="inconclusive")
-    candidate.artifacts.append(ArtifactCandidate(
-        kind="module_report", path="analysis.md", media_type="text/markdown",
-        summary="Requested analysis", content="Analysis of the supplied material",
-        output_name="analysis",
-    ))
-    check = ScientificCompletionCheck(
-        [], required_artifacts=["analysis"], reader=RegisteredArtifactReader([], run_id="run_r"),
-    )
+    candidate.artifacts[0].output_name = "opinion"
+    check = ScientificCompletionCheck([], required_artifacts=["opinion"], reader=RegisteredArtifactReader([],run_id="run_r"))
     assert check.evaluate(_state({}), candidate).complete
+
+
 
 
 def test_unsupported_pending_candidate_cannot_satisfy_delivery():

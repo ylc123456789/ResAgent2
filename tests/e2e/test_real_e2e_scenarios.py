@@ -1,4 +1,6 @@
 
+from e2e.native_fixtures import tool_turns
+
 from resagent2_contracts import RunPermissions, ExecutionLimits
 import json
 """Local ScriptedLLM validation of the Phase 7 real E2E scenario acceptance.
@@ -93,7 +95,7 @@ def _ask_user() -> dict:
 
 def test_direct_inconclusive(tmp_path) -> None:
     scientific = ScientificAgent(
-        ScriptedLLMClient([_finish_inconclusive()]),
+        ScriptedLLMClient(tool_turns([_finish_inconclusive()])),
         store=JsonSessionStore(tmp_path / "sci"),
     )
     controller = _controller(tmp_path, scientific)
@@ -109,7 +111,7 @@ def test_ask_start_then_resume(tmp_path) -> None:
     sci_dir = tmp_path / "sci"
     controller1 = _controller(
         tmp_path,
-        ScientificAgent(ScriptedLLMClient([_ask_user()]), store=JsonSessionStore(sci_dir)),
+        ScientificAgent(ScriptedLLMClient(tool_turns([_ask_user()])), store=JsonSessionStore(sci_dir)),
     )
     request = ResearchRequest(goal='Compare two methods and report accuracy.', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=2))
     run = controller1.create_run("run_ask", request)
@@ -119,7 +121,7 @@ def test_ask_start_then_resume(tmp_path) -> None:
     # Second process: a fresh controller and session store over the same dir.
     controller2 = _controller(
         tmp_path,
-        ScientificAgent(ScriptedLLMClient([_finish_inconclusive()]), store=JsonSessionStore(sci_dir)),
+        ScientificAgent(ScriptedLLMClient(tool_turns([_finish_inconclusive()])), store=JsonSessionStore(sci_dir)),
     )
     answer = UserAnswer(
         question_id=run.pending_question.id,

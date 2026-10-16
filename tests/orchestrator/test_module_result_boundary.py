@@ -1,4 +1,7 @@
 """The replaceable ModulePort must obey both envelope and Agent routing contracts."""
+from control_fixtures import question_signal, ScopedScriptedModulePort
+
+from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import RunPermissions, ExecutionLimits
 from resagent2_runtime.budget import current_budget
@@ -44,7 +47,7 @@ def _session(status=SessionStatus.COMPLETED):
 
 
 def _execute(tmp_path, result, agent_kind=WorkflowAgentKind.EXPERIMENT, *, charged_calls=0):
-    class MeteredPort(ScriptedModulePort):
+    class MeteredPort(ScopedScriptedModulePort):
         def invoke(self, request):
             budget = current_budget()
             for index in range(charged_calls):
@@ -116,7 +119,7 @@ def test_failure_and_pause_use_shared_envelope(tmp_path, status):
     if status == ModuleStatus.NEEDS_USER_INPUT:
         result = AgentResult(
             status=status, report="Need an answer", session=_session(SessionStatus.PAUSED),
-            artifacts=[ArtifactCandidate(kind="question", path="question.json", media_type="application/json", summary="Question", content=QuestionDraft(text='Which metric?', requested_fields=['metric']).model_dump_json())], control=ControlSignal(action="ask_user", candidate_index=0),
+            artifacts=[], control=question_signal("session_boundary", 'Which metric?', ['metric']),
         )
     else:
         result = AgentResult(
@@ -157,7 +160,8 @@ def test_registration_failure_preserves_diagnostics_calls_and_prior_artifact(tmp
     assert attempt.report.startswith(result.report)
     assert run.workflow.tasks[0].warnings == result.warnings
     assert attempt.error.retryable is False
-    assert len(attempt.artifact_ids) == len(run.artifacts) == 1
+    assert len(attempt.artifact_ids) == 1
+    assert len(run.artifacts) == 2 and attempt.report_artifact_id in run.artifacts
     assert attempt.artifact_ids[0] in run.artifacts
     if failed:
         assert attempt.error.code == original.code
@@ -213,8 +217,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
 
     monkeypatch.setattr("resagent2_experiment.agent.EnvironmentBinding", prepared_binding)
     command = f"{shlex.quote(sys.executable)} train.py"
-    agent = NativeExperimentAgent(ScriptedLLMClient([
-        {"tool": "run_shell", "arguments": {"command": command}},
+    agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
         {"tool": "run_shell", "arguments": {"command": command}},
         {"tool": "finish", "arguments": {
             "status": "failed", "report": "Training failed before producing metrics",
@@ -223,7 +226,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
                 "summary": "Requested but absent output",
             }] if missing_output else [],
         }},
-    ]))
+    ])))
     results = []
 
     class Port:
@@ -245,7 +248,7 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
         run_id="run_boundary", status="running",
         request=ResearchRequest(
             goal="Run the provided experiment", permissions=RunPermissions(execute_commands=True),
-            budget=RunBudget(max_llm_calls=3, timeout_seconds=30),
+            budget=RunBudget(max_llm_calls=2, timeout_seconds=30),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2),
         ), workspaces=engine._resolve_workspaces("run_boundary"),
         created_at=now, updated_at=now,
@@ -268,14 +271,10 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
         question_id=question.id, question_text=question.text,
         requested_fields=question.requested_fields, options=question.options,
         values={"approve": "yes"}, answered_at=datetime.now(UTC),
-        run_id=run.run_id, task_id="task_boundary", attempt_number=1,
+        run_id=run.run_id, task_id="task_boundary", attempt_number=1, session_id=paused_session_id,
         action=question.action,
     )
     run.answers.append(answer)
-    system_artifact(
-        engine.artifact_registry, run, "answer", answer,
-        task_id="task_boundary", attempt_number=1,
-    )
     run.pending_question = None
     run.status = RunStatus.RUNNING
     engine.resume_task_in_place(run, "task_boundary")
@@ -294,14 +293,12 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     assert attempt.error == result.error
     assert attempt.session == result.session
     assert attempt.report == result.report
-    assert run.llm_calls_used == state.llm_calls_used == sum(item.llm_calls for item in results) == 3
-    assert result.llm_calls == 2
+    assert run.llm_calls_used == state.llm_calls_used == sum(item.llm_calls for item in results) == 2
+    assert result.llm_calls == 1
     assert attempt.error.retryable is False
     if missing_output:
-        assert "artifact_path_missing" in state.runtime_feedback.summary
-        assert "absent.json" in state.runtime_feedback.summary
-    else:
-        assert state.runtime_feedback is None
+        assert "artifact_path_missing" in state.tool_turns[-1].model_dump_json()
+        assert "absent.json" in state.tool_turns[-1].model_dump_json()
     observations = [event.data["value"] for event in state.events
                     if event.type == "observation" and event.tool == "run_shell"
                     and isinstance(event.data.get("value"), dict)
@@ -310,8 +307,9 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     assert observations[0]["exit_code"] == 7
     assert observations[0]["stderr_tail"].strip() == "training failed"
     assert len(result.artifacts) == 1
-    assert len(attempt.artifact_ids) == 2
-    assert {item.kind for item in run.artifacts.values()} == {"question", "answer", "execution_record"}
+    assert len(attempt.artifact_ids) == 1
+    assert attempt.report_artifact_id not in attempt.artifact_ids
+    assert {item.kind for item in run.artifacts.values()} == {"module_report", "execution_record"}
     records = [run.artifacts[key] for key in attempt.artifact_ids
                if run.artifacts[key].kind == "execution_record"]
     assert len(records) == 1

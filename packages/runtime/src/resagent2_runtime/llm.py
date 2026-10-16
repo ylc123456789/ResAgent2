@@ -169,6 +169,7 @@ class PromptLLMClient:
                 context = context.model_copy(update={"estimated_tokens": estimated})
                 if self._output_tool_name is None:
                     return invoke_model(self._client, "next_action", context, action_type)
+                context = context.model_copy(update={"protocol_mode": "output"})
                 schemas = [{"type": "function", "function": {
                     "name": self._output_tool_name,
                     "description": "Return the requested structured result using this sole output tool.",

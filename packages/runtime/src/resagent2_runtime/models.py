@@ -54,6 +54,7 @@ class ComposedContext(RuntimeModel):
     """Complete fixed input, protocol summary and capacity measurement."""
 
     text: str
+    protocol_mode: Literal["agent", "output"] = "agent"
     system_prompt: str = ""
     task_context: str = ""
     runtime_context: str = ""  # Derived execution facts, separate from business requirements.
@@ -136,8 +137,14 @@ class CompletionDecision(RuntimeModel):
 class ApprovalReviewVerdict(RuntimeModel):
     """Untrusted model judgment; the runtime binds it to the prepared operation."""
 
-    decision: Literal["allow", "ask"]
-    reason: NonEmptyStr
+    reason: NonEmptyStr = Field(description=(
+        "Briefly state the supplied evidence for actual effects and any material unknowns, "
+        "then assess authorization and scope. User intent is not implementation evidence."
+    ))
+    decision: Literal["allow", "ask"] = Field(description=(
+        "allow only when actual effects are established and authorization and scope are clear; "
+        "ask when either is unresolved."
+    ))
 
 
 class PermissionDecision(RuntimeModel):

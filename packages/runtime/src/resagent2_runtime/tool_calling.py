@@ -172,7 +172,9 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
         context = ComposedContext(
             text=context, task_context=context, included_sections=[], omitted_sections=[], estimated_tokens=0,
         )
-    messages = [{"role": "system", "content": _native_system_prompt(context.system_prompt)}]
+    system_prompt = (context.system_prompt if context.protocol_mode == "output"
+                     else _native_system_prompt(context.system_prompt))
+    messages = [{"role": "system", "content": system_prompt}]
     if context.task_context:
         messages.append({"role": "user", "content": context.task_context})
     if context.history_summary:

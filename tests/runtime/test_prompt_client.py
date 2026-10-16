@@ -153,3 +153,128 @@ def test_plain_prompt_forwards_retry_limit_trace_and_real_attempt_count(
         adapter.next_action("x" * 10000, AgentAction)
     assert adapter.last_attempts == 0
     assert client.last_attempts == 2
+
+
+class _OutputDecision(BaseModel):
+    value: int
+
+
+def _output_response(calls):
+    from io import BytesIO
+
+    return BytesIO(json.dumps({"choices": [{"finish_reason": "tool_calls", "message": {
+        "tool_calls": [{"id": f"output_{index}", "type": "function", "function": {
+            "name": name, "arguments": json.dumps(arguments),
+        }} for index, (name, arguments) in enumerate(calls)],
+    }}]}).encode())
+
+
+@pytest.mark.parametrize("stateless_output", [False, True])
+def test_native_output_and_agent_wire_have_distinct_protocols_with_shared_retry_budget(monkeypatch, tmp_path, stateless_output):
+    from resagent2_runtime import ComposedContext
+    from resagent2_runtime.budget import execution_budget
+    from resagent2_runtime.tool_calling import NATIVE_TOOL_INSTRUCTION
+
+    monkeypatch.setenv("PROMPT_TEST_KEY", "dummy-test-key")
+    monkeypatch.setattr("resagent2_runtime.llm.time.sleep", lambda _: None)
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.invalid/v1", api_key_env="PROMPT_TEST_KEY",
+        trace_dir=tmp_path / "traces", trace_level="full",
+    )
+    caller_system = "Return the requested decision with return_decision."
+    adapter = PromptLLMClient(client, system_prompt=caller_system, max_context_tokens=4096,
+                              output_tool_name="return_decision")
+    bodies = []
+
+    def respond(request, **kwargs):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if len(bodies) == 1:
+            raise TransportError("transient")
+        return _output_response([("return_decision", {"value": 7})])
+
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
+    with execution_budget(max_llm_calls=9, timeout_seconds=60) as budget:
+        budget.charge("earlier_request", 0)
+        if stateless_output:
+            adapter.set_attempt_limit(2)
+            assert adapter.next_action("Assess the supplied data", _OutputDecision).value == 7
+            assert adapter.last_attempts == 2
+        else:
+            client.set_attempt_limit(2)
+            context = ComposedContext(text="Assess the supplied data", system_prompt=caller_system,
+                                      task_context="Assess the supplied data", included_sections=[], estimated_tokens=1)
+            schemas = [{"type": "function", "function": {
+                "name": "return_decision", "parameters": _OutputDecision.model_json_schema(),
+            }}]
+            assert len(client.next_tool_call(context, schemas, [], max_input_tokens=4096).tool_calls) == 1
+        assert budget.usage.used == 3
+    assert client.last_attempts == len(bodies) == 2
+    for body in bodies:
+        expected_system = caller_system if stateless_output else caller_system + "\n\n" + NATIVE_TOOL_INSTRUCTION
+        assert body["messages"][0] == {"role": "system", "content": expected_system}
+        assert [tool["function"]["name"] for tool in body["tools"]] == ["return_decision"]
+        assert body["tools"][0]["function"]["parameters"] == _OutputDecision.model_json_schema()
+        assert "response_format" not in body
+    statuses = [next(message["content"].split("\n", 1)[1] for message in body["messages"]
+                     if message["content"].startswith("Runtime status (")) for body in bodies]
+    facts = [json.loads(status.splitlines()[1]) for status in statuses]
+    assert [item["max_llm_calls"] for item in facts] == [9, 9]
+    assert [item["llm_calls_used"] for item in facts] == [1, 2]
+    row = json.loads((client.trace_dir / "llm_traces.jsonl").read_text())
+    for body, attempt in zip(bodies, row["attempts"]):
+        assert attempt["request_text"] == json.dumps({"messages": body["messages"], "tools": body["tools"]}, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("calls,error", [
+    ([], "tool"),
+    ([("return_decision", {"value": 7}), ("return_decision", {"value": 8})], "tool"),
+    ([("other_output", {"value": 7})], "tool"),
+    ([("return_decision", {"missing_value": True})], "schema"),
+])
+def test_native_output_keeps_exactly_one_named_typed_result_validation(monkeypatch, calls, error):
+    from pydantic import ValidationError
+    from resagent2_runtime.budget import execution_budget
+    from resagent2_runtime.tool_calling import NativeToolCallError
+
+    monkeypatch.setenv("PROMPT_TEST_KEY", "dummy-test-key")
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.invalid/v1", api_key_env="PROMPT_TEST_KEY",
+    )
+    adapter = PromptLLMClient(client, system_prompt="Return one typed result.", max_context_tokens=4096,
+                              output_tool_name="return_decision")
+    bodies = []
+
+    def respond(request, **kwargs):
+        bodies.append(json.loads(request.content))
+        return _output_response(calls)
+
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
+    expected_error = NativeToolCallError if error == "tool" else ValidationError
+    with execution_budget(max_llm_calls=3, timeout_seconds=60) as budget:
+        with pytest.raises(expected_error):
+            adapter.next_action("Assess the supplied data", _OutputDecision)
+        assert budget.usage.used == 1
+    assert adapter.last_attempts == len(bodies) == 1
+    assert bodies[0]["messages"][0]["content"] == "Return one typed result."
+
+
+def test_native_output_schema_and_budget_are_counted_before_transport(monkeypatch):
+    from pydantic import Field
+    from resagent2_runtime.budget import execution_budget
+
+    class LargeOutput(BaseModel):
+        value: str = Field(description="Complete output contract. " * 1000)
+
+    monkeypatch.setenv("PROMPT_TEST_KEY", "dummy-test-key")
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.invalid/v1", api_key_env="PROMPT_TEST_KEY",
+    )
+    adapter = PromptLLMClient(client, system_prompt="Return one typed result.", max_context_tokens=1000,
+                              output_tool_name="return_decision")
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", lambda *a, **kw: pytest.fail("must not send"))
+    with execution_budget(max_llm_calls=3, timeout_seconds=60) as budget:
+        with pytest.raises(ContextBudgetExceeded):
+            adapter.next_action("Assess the supplied data", LargeOutput)
+        assert budget.usage.used == 0
+    assert adapter.last_attempts == client.last_attempts == 0

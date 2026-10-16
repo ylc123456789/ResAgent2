@@ -341,7 +341,7 @@ ToolRegistry 按动作名找 Tool，以 input_model 完整校验 arguments，再
 | StructuredLLMClient.next_action(context, action_type) | 可选 JSON 结构化输出接口，不作为生产 Compiler 路径 |
 | OpenAICompatibleClient.next_tool_call(context, schemas, turns, ...) | AgentLoop 原生工具调用；返回一轮 assistant/tool-call 协议数据，不自行执行 Tool |
 | OpenAICompatibleClient.summarize_history(prompt, max_input_tokens=...) | 可选纯文本历史交接；共用传输/trace/attempts，不执行工具，输出配置仍来自 ModelProfile |
-| PromptLLMClient.next_action(prompt, action_type) | 复用 Composer/计量；配置 output_tool_name 时仅提供该原生输出工具；无工具执行、Session 或 Loop |
+| PromptLLMClient.next_action(prompt, action_type) | 复用 Composer/计量；配置 output_tool_name 时仅提供该原生输出工具，仅使用调用方 system prompt，不附加 AgentLoop 行动/完成/上下文协议；无工具执行、Session 或 Loop |
 | ModelRequestClient.request(body) | 注入的单次模型 JSON 请求；共享用量/截止时间/trace，无重试、Tool 执行或 Agent/Session；供应商语义由调用组件解析 |
 | PermissionPolicy.check(action, state, request) | 派发前返回 allow / ask / deny；共享操作规则位于 Capabilities，组合 Components 提供的基础边界；不是 OS 沙箱 |
 | SessionStore | 内部状态/事件持久化；上层仅持有引用 |

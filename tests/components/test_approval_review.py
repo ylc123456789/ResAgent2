@@ -186,8 +186,6 @@ def test_exact_denial_and_reason_are_separate_history_not_new_authorization(oper
     assert record["values"] == {"approve": "no"}
     assert record["comment"] == original_reason
     assert "question_denied" not in json.dumps(payload["current_task"])
-    assert "a new native call does not erase that decision" in context.system_prompt
-    assert "An old yes authorizes only its original" in context.system_prompt
 
 
 def test_cancellation_during_context_loading_stops_before_provider_dispatch(operation, agent_request):

@@ -5,10 +5,9 @@ import pytest
 from pydantic import BaseModel
 
 from resagent2_capabilities import (
-    AuditEnvTool, PrepareEnvironmentTool, ReplaceTextTool, RunSetupTool,
+    ReplaceTextTool,
 )
 
-from resagent2_coding.verification import RunVerificationTool
 from resagent2_capabilities import RunShellTool
 from resagent2_runtime import AgentAction, AskUserTool, FinishTool
 from resagent2_scientific.tools import (
@@ -77,9 +76,9 @@ def test_tool_contracts_include_optional_model_guidance() -> None:
 
 
 @pytest.mark.parametrize("tool_class", [
-    PrepareEnvironmentTool, AuditEnvTool, RunSetupTool, ReplaceTextTool,
+    ReplaceTextTool,
     RequestWorkTool, ScientificAskUserTool, FinishTool, AskUserTool,
-    RunVerificationTool, RunShellTool,
+    RunShellTool,
 ])
 def test_operational_guidance_reaches_native_tool_schema(tool_class) -> None:
     # Guidance is class-level. Rendering it needs no environment or filesystem.

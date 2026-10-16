@@ -8,9 +8,13 @@
 - Coding：理解、解释和修改代码，按需执行验证。
 - Experiment：分析已有结果、准备环境并执行实验。
 
-所有 Agent 使用 `finish(report, artifacts)`。问题和工作请求由工具产生内容，Runtime
-将内容封装为候选 artifact，控制信号只引用该候选。Controller/Scheduler 登记后，
-下游只接收正式 ArtifactRef。原生 Agent 不相互调用。
+所有 Agent 使用 `finish(report, artifacts)`。Scientific 使用 request_work 提出明确任务，
+Compiler 仅匹配 Agent；Controller/Scheduler 处理控制、派发和工件登记。ask_user 问答不产生
+工件，按直接上下级路由。原生 Agent 不相互调用。
+
+Coding/Experiment 命令执行只使用 run_shell。环境发现、选择、创建和依赖安装由模型按
+任务及授权自行完成，没有固定环境绑定或认证；模型明确使用目标解释器，每次 Shell 独立。
+固定组件负责进程、日志、超时、中断与执行事实，公共 AgentResult 交接 execution_record。
 
 Scientific 的 Session 属于 Run；Coding/Experiment 的 Session 属于 Task/Attempt。
-恢复仍走 invoke，业务回答和工作反馈从系统指定的 artifact 投影到必需上下文；操作批准由待执行动作及权限策略处理，不累积为任务需求。
+恢复仍走 invoke，业务回答按来源进入第二部分；工作反馈进入第三部分通知和第四部分完整工件目录。操作批准由待执行动作及权限策略处理，不累积为任务需求。

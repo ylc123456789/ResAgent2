@@ -31,7 +31,7 @@ from resagent2_orchestrator import (
 
 
 def _request() -> ResearchRequest:
-    return ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    return ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def _proposal(workspace_id: str | None = None) -> WorkflowProposal:
@@ -195,14 +195,14 @@ def test_managed_workspace_root_is_under_data_root(tmp_path) -> None:
     assert run.workspaces["ws_a"].managed is True
 
 
-def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -> None:
-    from resagent2_contracts import (DatasetRef, EnvironmentSpec, ArtifactCandidate, ControlSignal)
+def test_workspace_and_run_datasets_reach_module_request(tmp_path) -> None:
+    from resagent2_contracts import (DatasetRef, ArtifactCandidate, ControlSignal)
 
     port = ScriptedModulePort(
         [AgentResult(status=ModuleStatus.COMPLETED, report="ok")]
     )
-    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=port)}, store=InMemoryRunStore(), workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(tmp_path), environment=EnvironmentSpec(python_version='3.10'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
-    request = ResearchRequest(goal='Run', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    engine = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=port)}, store=InMemoryRunStore(), workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(tmp_path), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
+    request = ResearchRequest(goal='Run', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     proposal = WorkflowProposal(
         work_request_id="work_1",
         tasks=[
@@ -227,6 +227,7 @@ def test_workspace_environment_and_run_datasets_reach_module_request(tmp_path) -
     engine.run_until_stable("run_env")
 
     req = port.requests[0]
-    assert req.environment_spec.python_version == "3.10"
+    assert req.workspace_id == "ws_main"
+    assert "environment_spec" not in req.model_dump()
     catalog = next(ref for ref in req.input_artifacts if ref.kind == "dataset_catalog")
     assert read_json(catalog)["datasets"][0]["dataset_id"] == "cifar10"

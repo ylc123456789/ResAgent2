@@ -132,5 +132,5 @@ def test_native_coding_recursive_delete_resumes_from_approved_snapshot(tmp_path,
     assert second.status == ModuleStatus.COMPLETED, second.report
     assert not target.exists() and (repo/"keep.txt").read_text() == "keep\n"
     state = JsonSessionStore(tmp_path/"sessions").load(second.session.id)
-    assert state.pending_action is None and state.memory["edit_revision"] == 1
+    assert state.pending_action is None
     assert len([event for event in state.events if event.tool == "delete_path" and event.type == "observation"]) == 1

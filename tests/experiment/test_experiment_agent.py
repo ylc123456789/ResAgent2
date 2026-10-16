@@ -13,7 +13,6 @@ from resagent2_contracts import (
     ModuleStatus, QuestionDraft, RecordedAnswer, TaskBudget, VerificationResult,
     WorkspaceGrant, WorkspaceAccess, WorkspaceSourceKind,
 )
-from resagent2_components import PreparedEnvironment
 from resagent2_experiment import NativeExperimentAgent
 from resagent2_orchestrator import ArtifactRegistry
 from resagent2_runtime import ScriptedLLMClient
@@ -22,7 +21,7 @@ from resagent2_runtime import ScriptedLLMClient
 def request(root, *, writable=False, **updates):
     values = dict(run_id='run_experiment', task_id='task_experiment', attempt_number=1, agent=AgentOwner.EXPERIMENT, instruction='Analyze the existing results', budget=TaskBudget(max_llm_calls=8, timeout_seconds=30), workspace=WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])), workspace_id='ws_test', output_dir=str(root.parent / 'out'))
     values.update(updates)
-    values.setdefault("permissions", AgentPermissions(execute_commands=True, prepare_environment=True))
+    values.setdefault("permissions", AgentPermissions(execute_commands=True))
     return AgentRequest(**values)
 
 
@@ -55,24 +54,14 @@ def test_generic_finish_delivers_named_file(tmp_path):
     assert result.artifacts[0].output_name == "metrics"
 
 
-def test_command_permission_denied_before_environment_access(tmp_path):
-    result = NativeExperimentAgent(ScriptedLLMClient(tool_turns([{'tool': 'run_shell', 'arguments': {'command': 'python train.py'}}]))).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
+def test_command_permission_denied_before_execution(tmp_path):
+    result = NativeExperimentAgent(ScriptedLLMClient(tool_turns([{'tool': 'run_shell', 'arguments': {'command': 'python train.py'}}]))).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False)))
     assert result.status == ModuleStatus.FAILED
 
 
 @pytest.mark.parametrize("confirm_commands", [False, True])
-def test_shell_always_requires_approval_before_audit_or_execution(tmp_path, monkeypatch, confirm_commands):
+def test_shell_always_requires_approval_before_execution(tmp_path, monkeypatch, confirm_commands):
     calls = []
-    environment = PreparedEnvironment(
-        env_id="resenv_test", prefix=tmp_path / "environment", python_version="3.12",
-    )
-    manager = SimpleNamespace(conda_exe="conda", inspect=lambda **_: environment)
-
-    def audit(current):
-        assert current == environment
-        calls.append("audit")
-        return {"success": True}
-
     def run_shell(self, command, **kwargs):
         calls.append(command)
         return VerificationResult(
@@ -80,8 +69,6 @@ def test_shell_always_requires_approval_before_audit_or_execution(tmp_path, monk
             stdout_path="out.stdout", stderr_path="out.stderr", duration_seconds=0.1,
         )
 
-    manager.audit = audit
-    monkeypatch.setattr("resagent2_experiment.agent.EnvironmentManager", lambda **_: manager)
     monkeypatch.setattr("resagent2_components.ProcessRunner.run_shell", run_shell)
     action = {"tool": "run_shell", "arguments": {"command": "ls | sort"}}
     agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
@@ -105,7 +92,7 @@ def test_shell_always_requires_approval_before_audit_or_execution(tmp_path, monk
     }))
     assert resumed.status == ModuleStatus.COMPLETED, resumed.report
     assert resumed.session.id == first.session.id
-    assert calls == ["audit", "ls | sort"]
+    assert calls == ["ls | sort"]
     state = agent.loop.store.load(resumed.session.id)
     assert state.pending_action is None
     executed = [event for event in state.events if event.tool == "run_shell"

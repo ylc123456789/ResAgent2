@@ -84,7 +84,7 @@ def _run_dispatch(stage, elapsed, *, should_execute):
         tools=(tool,), llm_client=Client(), context_builder=lambda request, state, limit: [],
         permission_policy=Policy(), completion_check=AcceptCompletion(),
     )
-    request = AgentRequest(run_id='run_deadline', task_id='task_deadline', attempt_number=1, agent=AgentOwner.CODING, instruction='Write once', budget=TaskBudget(max_llm_calls=3, timeout_seconds=10), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    request = AgentRequest(run_id='run_deadline', task_id='task_deadline', attempt_number=1, agent=AgentOwner.CODING, instruction='Write once', budget=TaskBudget(max_llm_calls=3, timeout_seconds=10), permissions=AgentPermissions(execute_commands=True))
 
     result = AgentLoop(store=store, clock=clock).run(
         definition, request, session_id="session_deadline"

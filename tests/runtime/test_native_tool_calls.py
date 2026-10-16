@@ -53,7 +53,7 @@ def _context(request, state, limit):
 
 
 def _request(*, parent=None, calls=10, goal="current task"):
-    return AgentRequest(run_id='run_native', task_id='task_native', attempt_number=1, agent=AgentOwner.CODING, instruction=goal, parent_session_id=parent, budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    return AgentRequest(run_id='run_native', task_id='task_native', attempt_number=1, agent=AgentOwner.CODING, instruction=goal, parent_session_id=parent, budget=TaskBudget(max_llm_calls=calls, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
 
 
 @pytest.fixture
@@ -421,7 +421,7 @@ def test_request_work_pause_is_not_a_completed_execution(setup):
         permission_policy=AllowListPermissionPolicy({"request_work", "finish"}),
     )
     install([_reply([_call("request_work", {'report': '{"objective": "measure"}'}, call_id="call_work")]), _reply()])
-    request = _request().model_copy(update={'agent': AgentOwner.SCIENTIFIC, 'task_id': None, 'attempt_number': None, 'permissions': AgentPermissions(request_work=True, execute_commands=True, prepare_environment=True)})
+    request = _request().model_copy(update={'agent': AgentOwner.SCIENTIFIC, 'task_id': None, 'attempt_number': None, 'permissions': AgentPermissions(request_work=True, execute_commands=True)})
     first = AgentLoop(store=store).run(definition, request, session_id="session_native")
     assert first.status == ModuleStatus.REQUEST_WORK
     assert first.control.action == "request_work"

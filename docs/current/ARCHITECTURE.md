@@ -2,7 +2,7 @@
 
 ResAgent2 把一次研究任务分成三件事：**Scientific 判断需要什么证据，Orchestrator 把执行工作组织起来，Coding 和 Experiment 完成专业工作。** 三个 Agent 都使用 LLM，但研究目标、任务状态、工具执行和证据登记分别有明确的负责人。
 
-本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **27.0**，旧 Run/Session（包括 26.0）不迁移、不兼容恢复。
+本页先说明这些角色，再沿一次研究任务走完整条交接链，最后解释模块如何装配、状态和材料放在哪里。字段及校验规则见 [模块接口与契约](CONTRACTS.md)，模型具体看到什么见 [上下文说明](CONTEXT.md)，修改时应保持什么见 [设计原则](DESIGN_PRINCIPLES.md)。这些文档只描述当前代码；公共 schema 为 **28.0**，旧 Run/Session（包括 27.0）不迁移、不兼容恢复。
 
 <a id="overview"></a>
 
@@ -83,7 +83,7 @@ Compiler 只匹配职责：代码实现和正确性验证交 Coding，研究测�
 | `agents/experiment` | 解读已有结果、准备环境、执行实验、交付原始证据 | 修改产品代码、用自报数值代替测量 | [agent.py](../../packages/agents/experiment/src/resagent2_experiment/agent.py) |
 | `runtime` | 通用 AgentLoop、模型客户端、工具协议、Session、上下文和预算机制 | 研究规划、Workflow 调度、具体文件/环境操作 | [包入口](../../packages/runtime/src/resagent2_runtime/) |
 | `capabilities` | 模型 Tool、输入 schema、局部工具逻辑与操作权限适配 | 普通组件的转发出口、Agent 工作策略 | [工具目录](../../packages/capabilities/README.md) |
-| `components` | 普通 Python 操作与共享呈现：工作区、Git、进程、环境、数据集、工件、文献和网页 | 启动工具循环、决定领域流程 | [组件目录](../../packages/components/README.md) |
+| `components` | 普通 Python 操作与共享呈现：工作区、Git、进程、数据集、工件、文献和网页 | 启动工具循环、决定领域流程 | [组件目录](../../packages/components/README.md) |
 | `contracts` | 公共请求、结果、身份和记录类型，以及纯组合判据 | LLM、IO、运行状态迁移 | [models.py](../../packages/contracts/src/resagent2_contracts/models.py) |
 
 ### 依赖倒置与组合根
@@ -115,7 +115,7 @@ CLI 的 `build_application` 是产品组合根，创建模型客户端、状态�
 | `orchestrator` | `contracts`；`runtime.budget/cancellation/lifecycle`；`components.workspace/artifacts/materials/literature` | 不 import 具体 Agent 或模型 Tool |
 | CLI 组合根 / E2E 场景入口 | CLI 装配所需各包，真实 E2E 复用已装配应用 | 具体行为仍调用拥有者接口；mock 保留确定性测试替身 |
 
-Components 可以直接被 Agent 的准备/完成步骤或组合根调用，不要求先经过 Tool；其共享内容投影可以使用 Runtime。Capabilities 与 Components 没有一一对应关系，不建立逐项配对的类或自动映射。通用 `run_shell`、安装和 Coding 的领域 `run_verification` 共用 ProcessRunner，但专业验证规则仍留在 Coding。
+Components 可以直接被 Agent 的准备/完成步骤或组合根调用，不要求先经过 Tool；其共享内容投影可以使用 Runtime。Capabilities 与 Components 没有一一对应关系，不建立逐项配对的类或自动映射。命令执行的模型入口只有 Capabilities 的 `run_shell`；环境检查、创建、依赖安装、验证和实验都由模型提交普通脚本。固定 Git/仓库操作直接复用 Components 的进程能力，不另设环境管理或命令 Tool。模型负责判断环境选择和检查充分性，Components 保存实际执行事实。
 
 Runtime 的 `finish/ask_user` 和 Scientific 的控制工具留在职责所属模块；不是所有 Tool 都必须搬进 Capabilities。具体 import 约束由 [包边界测试](../../tests/README.md)验证，扩展时的原则见 [设计原则](DESIGN_PRINCIPLES.md)。
 
@@ -179,18 +179,20 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 
 | 能力 | 归属及工作方式 | 详细参考 |
 | --- | --- | --- |
-| 文件、Git、环境与进程 | Components 执行普通操作，Tool 提供模型入口；执行前检查路径和操作授权，领域规则留在所属 Agent | [Components](../../packages/components/README.md)、[Tools](../../packages/capabilities/README.md) |
+| 文件、Git与进程 | Components 执行普通操作；命令统一通过 run_shell，执行前检查路径和操作授权，领域判断留在所属 Agent | [Components](../../packages/components/README.md)、[Tools](../../packages/capabilities/README.md) |
 | 数据集 | 部署 catalog 提供登记，Controller 保存 Run 引用，Agent 检查实际可用性；缺所需资源时问用户 | [资源契约](CONTRACTS.md#resources) |
 | 文献 | arXiv/OpenAlex 查询临时线索；显式 fetch 获取并登记元信息、PDF 和解析文本，不固定检索阶段 | [文献流程](CONTEXT.md#literature) |
 | 网页 | 独立 `web_search` 寻找来源，`web_fetch` 获取单页；默认可用 DeepSeek 托管搜索，也可关闭搜索 | [联网组件](../../packages/components/README.md#web) |
 | 模型请求 | Agent 原生 function call、Compiler 无状态原生任务路由、托管搜索独立请求共用 Run 用量和截止时间 | [Runtime](CONTRACTS.md#tools) |
 | 上下文 | Agent builder 完整重建任务和目录，Composer 组织固定输入，Loop 接入原生历史并计量整包；只压缩旧工具回合 | [上下文构造](CONTEXT.md) |
 
+环境由执行 Agent 通过 `run_shell` 自行发现、选择、创建和维护。版本与协作要求沿原始任务指令、共同限制和业务澄清传递；系统不固定共享环境路径，不维护绑定、认证或环境代次。每次 Shell 是新进程，上一调用的 activate/export 不延续；需在同一脚本中激活，或明确选择解释器。环境安装、修改和删除仍须经过本次准确操作批准，系统不自动接管、清理或重建已有环境。
+
 网页和文献使用同一登记、目录与读取体系，但各自保留来源格式和操作。网页不会自动成为论文，搜索不会自动下载全部正文。Scientific 根据用户需要选择工具；读取正文不创建新工件，抓取新材料则登记来源与内容。
 
 模型输入统一分四部分：固定契约；完整任务需求；原生 assistant/tool 配对历史；完整工件目录。第二、第四部分每轮从权威事实完整重建；正文只在第三部分，原生历史按 call ID 成对续传；容量不足时可以压缩较早完整回合的模型投影，原始历史仍保留。必需输入和完整目录装不下明确失败，不静默截断或猜模型容量。具体段落、刷新时机和压缩规则集中维护在 [CONTEXT](CONTEXT.md)。
 
-授权与预算贯穿这些能力：子调用只能继承或收紧 Run 上限；模型每次 HTTP 尝试发送前占用共享调用预算，失败或 unknown 消耗不退款。用户等待不重置既有用量。Tool 的 allow/ask/deny、WorkspaceBoundary、实际环境检查分别核对自己的边界，审批不能绕过它们。可选 trace 是诊断输出，其写盘失败不替代业务结果；权威状态保存失败仍需传播。
+授权与预算贯穿这些能力：子调用只能继承或收紧 Run 上限；模型每次 HTTP 尝试发送前占用共享调用预算，失败或 unknown 消耗不退款。用户等待不重置既有用量。Tool 的 allow/ask/deny、WorkspaceBoundary 和进程派发分别核对自己的边界，审批不能绕过它们。可选 trace 是诊断输出，其写盘失败不替代业务结果；权威状态保存失败仍需传播。
 
 模型每次发送前在第三部分看到同一 Run 总账的最新预算，而非当前 Agent 的专属配额。中断后的执行明细也沿原公开交接链返回：Agent 从自己的工具回执生成 execution_record，Scheduler 登记，Task 报告关联，父 Agent 通过通知和完整目录取得真实工件入口；Controller 不读取子 Agent 的私有 Session。已发生的文件修改保留，执行记录不把半成品认作已验证交付。
 

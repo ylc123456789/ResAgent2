@@ -36,7 +36,7 @@ def accepted(tmp_path, outputs, *, spec=None):
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
     now = datetime.now(UTC)
-    run = ResearchRun(run_id='run_acceptance', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=2)), created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_acceptance', status='running', request=ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=2)), created_at=now, updated_at=now)
     scheduler.store.save(run)
     proposal = WorkflowProposal(work_request_id="work_1", tasks=[TaskProposal(
         id="task_measure", work_request_id="work_1", instruction="Measure accuracy",

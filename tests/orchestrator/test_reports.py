@@ -24,7 +24,7 @@ from resagent2_orchestrator import (
 
 
 def request() -> ResearchRequest:
-    return ResearchRequest(goal='Record a report and metrics', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    return ResearchRequest(goal='Record a report and metrics', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def proposal() -> WorkflowProposal:

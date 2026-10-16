@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from resagent2_runtime.budget import execution_budget
 from resagent2_runtime.cancellation import OperationCancelled, check_cancelled
 from resagent2_contracts import (
-    AgentOwner, AgentPermissions, AgentRequest, AgentResult, Attempt, AttemptStatus, EnvironmentSpec,
+    AgentOwner, AgentPermissions, AgentRequest, AgentResult, Attempt, AttemptStatus,
     ErrorCode, ModuleError, ModuleStatus, RunStatus, ArtifactCandidate,
     TaskAcceptanceSpec, TaskBudget, TaskStatus, Workflow, WorkflowAgentKind,
     WorkflowPatch, WorkflowProposal, WorkflowTask, WorkRequestStatus,
@@ -235,7 +235,6 @@ class WorkflowScheduler:
                               timeout_seconds=max(1, int(run.remaining_timeout_seconds(datetime.now(UTC))))),
             workspace=self._grant(record) if record else None, workspace_id=task.workspace_id,
             workspace_spec=record.source if record else None,
-            environment_spec=record.source.environment or EnvironmentSpec() if record else EnvironmentSpec(),
             output_dir=str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number)),
             permissions=AgentPermissions(**run.request.permissions.model_dump(exclude={"schema_version"})),
             confirm_commands=run.request.confirm_commands,

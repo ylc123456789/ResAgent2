@@ -40,7 +40,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "27.0"
+SCHEMA_VERSION = "28.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -94,7 +94,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["27.0"] = SCHEMA_VERSION
+    schema_version: Literal["28.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,6 @@ class ErrorCode(StrEnum):
     TIMEOUT = "timeout"
     BUDGET_EXHAUSTED = "budget_exhausted"
     CONTRACT_ERROR = "contract_error"
-    ENVIRONMENT_UNAVAILABLE = "environment_unavailable"
     ARTIFACT_MISSING = "artifact_missing"
     INTERRUPTED = "interrupted"
 
@@ -271,7 +270,7 @@ SCIENTIFIC_ARTIFACT_KINDS = frozenset({
     "observation_trace", "module_report",
 })
 SYSTEM_GENERATED_ARTIFACT_KINDS = SYSTEM_ARTIFACT_KINDS | frozenset({
-    "code_patch", "verification_result", "execution_record", "observation_trace",
+    "code_patch", "execution_record", "observation_trace",
     "web_page",
     "literature_paper", "literature_pdf", "literature_fulltext", "final_report",
 })
@@ -416,7 +415,6 @@ class RunPermissions(ContractModel):
     """Trusted caller grants; omitted operations are not authorized."""
 
     execute_commands: bool = False
-    prepare_environment: bool = False
 
 
 class TaskBudget(ContractModel):
@@ -583,7 +581,7 @@ class RecordedAnswer(UserAnswer):
 
 
 class VerificationResult(ContractModel):
-    """Auditable outcome of one verification command.
+    """Auditable command outcome; exit zero does not establish task correctness.
 
     ``stdout_path``/``stderr_path`` may be workspace-relative or absolute; they
     locate a durable log file produced by the ProcessRunner (which may live in
@@ -596,6 +594,11 @@ class VerificationResult(ContractModel):
     stdout_path: NonEmptyStr
     stderr_path: NonEmptyStr
     duration_seconds: float = Field(ge=0)
+    cwd: NonEmptyStr | None = None
+    shell: NonEmptyStr | None = None
+    shell_args: list[str] | None = None
+    pipefail: bool | None = None
+    environment_fingerprint: NonEmptyStr | None = None
 
 
 class DatasetRef(ContractModel):
@@ -613,18 +616,6 @@ class DatasetRef(ContractModel):
     @classmethod
     def validate_relative(cls, value: str) -> str:
         return _validate_relative_path(value)
-
-
-class EnvironmentSpec(ContractModel):
-    """Environment constraints declared for one task.
-
-    ``python_version`` is a hard constraint when set: the Agent must not
-    silently override a version the user/upstream chose. When it is ``None`` the
-    Agent infers a compatible version from the project (``.python-version``,
-    ``requires-python``, ``environment.yml``, README) and the system default.
-    """
-
-    python_version: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -879,7 +870,6 @@ class WorkspaceSpec(ContractModel):
     workspace_id: WorkspaceId
     source_kind: WorkspaceSourceKind
     location: str | None = None
-    environment: EnvironmentSpec | None = None
     access: WorkspaceAccess
 
     @model_validator(mode="after")
@@ -942,7 +932,6 @@ class AgentRequest(ContractModel):
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None
-    environment_spec: EnvironmentSpec = Field(default_factory=EnvironmentSpec)
     output_dir: NonEmptyStr | None = None
     parent_session_id: SessionId | None = None
     upstream_session_id: SessionId | None = None

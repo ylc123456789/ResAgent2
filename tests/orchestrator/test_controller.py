@@ -344,7 +344,7 @@ def test_run_rejects_invalid_user_wait(invalid):
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
 
 
 def registry() -> WorkflowAgentRegistry:
@@ -474,7 +474,6 @@ def test_run_creation_freezes_grants_before_any_work_request(tmp_path):
     assert received.workspace.access.write_paths == []
     assert received.workspace.access.denied_paths == ["src/private"]
     assert not received.permissions.execute_commands
-    assert not received.permissions.prepare_environment
 
 
 def test_first_scientific_turn_recovers_from_bound_session_checkpoint() -> None:
@@ -870,7 +869,7 @@ def test_task_question_resumes_same_attempt_via_controller() -> None:
 
 def test_task_question_resume_does_not_consume_attempt_budget() -> None:
     """max_attempts_per_task=1 must still allow a pause/resume round-trip."""
-    request = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=1))
+    request = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=1))
     scheduler = WorkflowScheduler(
         bindings={
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
@@ -1211,7 +1210,7 @@ def test_untrusted_reading_log_does_not_control_run_completion() -> None:
 
 def test_run_total_llm_budget_exhaustion() -> None:
     # A tiny run budget so the accumulated Scientific turns exceed it.
-    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     actions = [request_work_action(), request_work_action()]
     scheduler = WorkflowScheduler(
         bindings={
@@ -1439,7 +1438,7 @@ def test_paired_answers_keep_task_and_scientific_scopes():
 
 def test_budget_overrun_does_not_complete(tmp_path) -> None:
     """A final turn that pushes llm_calls past the budget must not complete."""
-    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
+    tiny = ResearchRequest(goal='Evaluate', budget=RunBudget(max_llm_calls=1, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2))
     # First request_work consumes 1 LLM call; a second turn would overrun.
     actions = [request_work_action(), finish_action()]
     scheduler = WorkflowScheduler(

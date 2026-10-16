@@ -205,7 +205,7 @@ def test_single_agent_stage_invokes_its_production_binding(tmp_path, monkeypatch
     assert len(requests) == 1
     request = requests[0]
     assert request.agent == AgentOwner(kind.value)
-    assert request.permissions.execute_commands and request.permissions.prepare_environment
+    assert request.permissions.execute_commands
     assert not request.permissions.request_work
     assert request.workspace.root == str(repo)
     assert request.workspace_id == "ws_main"

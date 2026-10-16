@@ -23,7 +23,7 @@ def _state():
     return AgentState(
         session_id="session_text", agent_name="coding", owner=AgentOwner.CODING,
         run_id="run_text", task_id="task_text", attempt_number=1,
-        created_at=now, updated_at=now, memory={"edit_revision": 7},
+        created_at=now, updated_at=now,
     )
 
 
@@ -60,7 +60,7 @@ def test_default_workspace_limit_accepts_large_research_text_across_tools(tmp_pa
             path="log.txt", old_text="needle", new_text="target",
         ),
     )
-    assert replaced.memory_updates["edit_revision"] == 8
+    assert replaced.ok
     assert (tmp_path / "log.txt").read_bytes() == text.replace(
         "needle", "target", 1,
     ).encode("utf-8")
@@ -153,7 +153,7 @@ def test_create_rejects_invalid_or_large_text_before_creating_parents(
     with pytest.raises(ValueError, match=error):
         tool.execute(state, tool.input_model(path="nested/new.txt", content=content))
     assert not (tmp_path / "nested").exists()
-    assert state.memory == {"edit_revision": 7}
+    assert state.memory == {}
 
 
 def test_create_limit_uses_encoded_bytes_and_preserves_newlines(tmp_path):
@@ -191,7 +191,7 @@ def test_replace_rejection_leaves_bytes_mode_revision_and_directory_unchanged(
         tool.execute(state, tool.input_model(path=path.name, old_text=old, new_text=new))
     assert path.read_bytes() == original
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
-    assert state.memory == {"edit_revision": 7}
+    assert state.memory == {}
     assert list(tmp_path.iterdir()) == [path]
 
 
@@ -205,7 +205,7 @@ def test_replace_preserves_unmodified_newlines_and_permissions(tmp_path):
     ))
     assert path.read_bytes() == b"head\r\nchanged\r\nnext\rtail\n"
     assert stat.S_IMODE(path.stat().st_mode) == 0o750
-    assert result.memory_updates["edit_revision"] == 8
+    assert result.ok
     assert list(tmp_path.iterdir()) == [path]
 
 

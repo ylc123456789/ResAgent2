@@ -207,7 +207,7 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
-    schema_version: Literal["27.0"] = SCHEMA_VERSION
+    schema_version: Literal["28.0"] = SCHEMA_VERSION
     session_id: SessionId
     upstream_session_id: SessionId | None = None
     agent_name: NonEmptyStr

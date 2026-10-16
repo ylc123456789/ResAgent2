@@ -34,7 +34,7 @@ def test_run_deadline_terminates_child_tree(tmp_path, framework):
             with pytest.raises(DeadlineExceededError):
                 run_process([sys.executable, str(script)], cwd=tmp_path, timeout=30)
         else:
-            result = ProcessRunner(boundary).run(
+            result = ProcessRunner(boundary).run_shell(
                 f"{shlex.quote(sys.executable)} parent.py", log_dir=".resagent2/log",
                 index=1, timeout_seconds=30,
             )

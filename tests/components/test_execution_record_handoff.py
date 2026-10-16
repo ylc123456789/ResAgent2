@@ -41,7 +41,7 @@ def test_interrupted_record_preserves_unknown_fields_without_inventing_success(c
 
 @pytest.mark.parametrize("value,tool", [
     ({"execution_status": "not_executed"}, "run_shell"),
-    ({"blocked": True, "reason": "no_environment"}, "run_shell"),
+    ({"execution_status": "unknown"}, "run_shell"),
     ({"execution_status": "interrupted", "stop_confirmed": True}, "run_shell"),
     ({"execution_status": "interrupted", "stop_confirmed": True}, "ask_user"),
     ({"results": [completed()]}, "read_artifact"),
@@ -50,12 +50,6 @@ def test_unstarted_commands_model_waits_and_materials_do_not_create_execution(va
     assert execution_record(state_and_receipt(value=value, tool=tool)) is None
 
 
-def test_verified_batch_keeps_completed_commands_before_interrupted_command():
-    facts = dict(operation="process", command="python -m unittest second", pid=234,
-        execution_status="interrupted", stop_confirmed=True, files_retained=True)
-    state = state_and_receipt(value={**facts, "results": [completed("python -m unittest first")]},
-                              tool="run_verification")
-    assert json.loads(execution_record(state).content) == {"results": [completed("python -m unittest first"), facts]}
 
 
 def test_compaction_does_not_remove_original_receipts_from_frozen_record():
@@ -63,6 +57,34 @@ def test_compaction_does_not_remove_original_receipts_from_frozen_record():
     state.tool_turns.append(ToolCallTurn(runtime_notice="Later model interaction"))
     state.history_checkpoint = HistoryCheckpoint(history_start=1, summary="Old command summary")
     assert json.loads(execution_record(state).content)["results"][0] == completed(code=1)
+
+
+def test_record_keeps_completed_command_before_later_interruption():
+    first = completed("python first.py")
+    state = state_and_receipt(value=first)
+    facts = dict(operation="process", command="python second.py", pid=234,
+        execution_status="interrupted", stop_confirmed=True, files_retained=True)
+    turn = state_and_receipt(value=facts).tool_turns[0]
+    state.tool_turns.append(turn)
+    assert json.loads(execution_record(state).content) == {"results": [first, facts]}
+
+
+def test_record_keeps_observed_startup_and_code_without_validation_verdict():
+    facts = {**completed(), "cwd": "/workspace", "shell": "/bin/bash",
+        "shell_args": ["--noprofile", "--norc", "-o", "pipefail", "-c"],
+        "pipefail": True, "environment_fingerprint": "actual-startup-fingerprint",
+        "code_before": "first-tree", "code_after": "second-tree", "changed_paths": ["check.py"]}
+    record = json.loads(execution_record(state_and_receipt(value=facts)).content)["results"][0]
+    assert record == facts
+    assert "passed" not in record and "environment_certified" not in record
+
+
+def test_record_keeps_completed_script_when_later_git_stop_is_unconfirmed():
+    first = completed("python actual.py")
+    diagnostic = dict(operation="process", command=["git", "diff"],
+        execution_status="unknown", stop_confirmed=False, unconfirmed_processes=[123])
+    state = state_and_receipt(value={**diagnostic, "completed_command": first})
+    assert json.loads(execution_record(state).content) == {"results": [first, diagnostic]}
 
 
 @pytest.mark.parametrize("status,session_status", [("completed", "completed"), ("failed", "failed"),

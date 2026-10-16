@@ -143,7 +143,7 @@ def test_analysis_reaches_dependent_agent_and_scientific_through_frozen_artifact
             description="Read-only code analysis",
         )]),
     )
-    run = controller.create_run('run_handoffs', ResearchRequest(goal='Explain the code, with the analysis available to subsequent work', budget=RunBudget(max_llm_calls=30, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=1)))
+    run = controller.create_run('run_handoffs', ResearchRequest(goal='Explain the code, with the analysis available to subsequent work', budget=RunBudget(max_llm_calls=30, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=1)))
 
     assert run.status == RunStatus.COMPLETED, run.model_dump(mode="json")
     report_id = next(

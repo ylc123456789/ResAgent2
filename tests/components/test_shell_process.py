@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from resagent2_components.process import ProcessRunner, UnsafeCommandError, output_tail
+from resagent2_components.process import ProcessRunner, output_tail
 from resagent2_components.workspace import WorkspaceBoundary
 from resagent2_contracts import WorkspaceAccess, WorkspaceGrant
 from resagent2_runtime.budget import execution_budget
@@ -49,17 +49,16 @@ def test_multiline_heredoc_and_receipt_preserve_script_bytes(runner, tmp_path):
     assert result.command == script
 
 
-def test_workspace_bound_prefix_and_environment_filtering(runner, tmp_path):
+def test_workspace_and_environment_filtering(runner, tmp_path):
     result = run_shell(
         runner,
         "printf '%s\\n' \"$PWD\" \"$RESAGENT_TEST_VALUE\" \"$RESAGENT_PREFIX\" "
         "\"${RESAGENT_TEST_API_KEY-unset}\"",
-        argv_prefix=["/usr/bin/env", "RESAGENT_PREFIX=bound"],
-        extra_env={"RESAGENT_TEST_VALUE": "available", "RESAGENT_TEST_API_KEY": "hidden"},
+        extra_env={"RESAGENT_TEST_VALUE": "available", "RESAGENT_PREFIX": "explicit", "RESAGENT_TEST_API_KEY": "hidden"},
     )
     assert result.exit_code == 0
     assert Path(result.stdout_path).read_text().splitlines() == [
-        str(tmp_path), "available", "bound", "unset",
+        str(tmp_path), "available", "explicit", "unset",
     ]
 
 
@@ -103,10 +102,6 @@ def test_shell_obeys_shared_deadline_and_keeps_partial_logs(runner, tmp_path):
         time.sleep(0.01)
 
 
-@pytest.mark.parametrize("script", ["printf hi | cat", "printf hi\nprintf bye", "echo $(pwd)"])
-def test_existing_argv_entry_still_rejects_shell_features(runner, script):
-    with pytest.raises(UnsafeCommandError):
-        runner.run(script, log_dir=".resagent2/plain", index=1, timeout_seconds=5)
 
 
 def test_shell_rejects_non_linux_before_starting_process(runner, monkeypatch):

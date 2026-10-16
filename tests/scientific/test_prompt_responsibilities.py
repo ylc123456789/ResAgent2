@@ -1,7 +1,6 @@
 """Check published guidance, not whether a real model will follow it."""
 
 from resagent2_capabilities import ReplaceTextTool
-from resagent2_coding.verification import RunVerificationTool
 from resagent2_contracts import ScientificVerdict
 from resagent2_scientific.context import SCIENTIFIC_PROMPT
 
@@ -53,7 +52,17 @@ def test_reports_carry_relevant_limits_without_becoming_independent_measurements
     assert "Read historical reports only when needed" in SCIENTIFIC_GUIDANCE
 
 
-def test_verification_guidance_does_not_offer_forbidden_inline_python() -> None:
-    guidance = RunVerificationTool.model_guidance
-    assert "write a unittest with meaningful assertions" in guidance
-    assert "python -c and arbitrary scripts are not allowed verification commands" in guidance
+
+def test_execution_agents_keep_environment_choice_in_general_task_guidance() -> None:
+    from resagent2_coding.context import CODING_PROMPT
+    from resagent2_experiment.context import EXPERIMENT_PROMPT
+    for prompt in (CODING_PROMPT, EXPERIMENT_PROMPT):
+        guidance = " ".join(prompt.split())
+        assert "discover, select and reuse" in guidance
+        assert "user-specified versions and authorization" in guidance
+        assert "each run_shell starts a fresh shell" in guidance
+        assert "do not carry into the next call" in guidance
+        assert "prepare_environment" not in guidance
+        assert "run_setup" not in guidance
+        assert "run_verification" not in guidance
+        assert "audit_env" not in guidance

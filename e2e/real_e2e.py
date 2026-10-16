@@ -2,9 +2,9 @@
 
 Uses the production CLI application builder for every stage. Full-system
 scenarios drive its ResearchController; direct stages invoke its bound Agent.
-Environments are bound to run_id + workspace_id (ADR-0009); set
-RESAGENT2_ENV_ROOT to a stable directory to reuse conda envs across runs
-(RESAGENT2_CONDA_EXE overrides conda, RESAGENT2_DATASET_ROOT points at datasets).
+Execution agents inspect, select and manage environments through run_shell
+(ADR-0030); pass version or environment requirements in task instructions.
+RESAGENT2_DATASET_ROOT points at the deployment dataset catalog and files.
 
 Stages: ``python -m e2e.real_e2e direct|code-experiment|repair|ask-start|ask-resume|literature``
 (``full`` aliases ``code-experiment``; ``code`` and ``experiment`` invoke one agent).
@@ -470,7 +470,7 @@ def run_code(workdir: Path) -> AgentResult:
         workspace=_grant(repo),
         workspace_id="ws_main",
         output_dir=str(workdir / "out"),
-        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
+        permissions=AgentPermissions(execute_commands=True),
     )
     return agent.invoke(request)
 
@@ -495,7 +495,7 @@ def run_experiment(workdir: Path) -> AgentResult:
         workspace=_grant(repo),
         workspace_id="ws_main",
         output_dir=str(workdir / "out"),
-        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
+        permissions=AgentPermissions(execute_commands=True),
     )
     return agent.invoke(request)
 
@@ -523,7 +523,7 @@ def run_full(workdir: Path) -> bool:
         budget=RunBudget(
             max_llm_calls=200, timeout_seconds=3600
         ),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=2),
     )
     controller = _application(workdir, repo).controller
@@ -614,7 +614,7 @@ def run_direct(workdir: Path) -> bool:
         budget=RunBudget(
             max_llm_calls=30, timeout_seconds=600
         ),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     run = controller.create_run("run_direct", request)
@@ -635,7 +635,7 @@ def run_repair(workdir: Path) -> bool:
         budget=RunBudget(
             max_llm_calls=200, timeout_seconds=3600
         ),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=4, max_attempts_per_task=3),
     )
     controller = _application(workdir, repo).controller
@@ -667,7 +667,7 @@ def run_ask_start(workdir: Path) -> bool:
         budget=RunBudget(
             max_llm_calls=20, timeout_seconds=600
         ),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     controller = _application(workdir).controller
@@ -716,7 +716,7 @@ def run_literature(workdir: Path) -> bool:
         budget=RunBudget(
             max_llm_calls=60, timeout_seconds=900
         ),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=True),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     )
     run = controller.create_run("run_literature", request)

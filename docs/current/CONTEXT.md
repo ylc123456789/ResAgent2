@@ -1,6 +1,6 @@
 # 模型实际会看到什么：上下文说明
 
-三个 Agent 使用同一套上下文。Scientific 负责研究判断，Coding 和 Experiment 负责专业执行；它们的差别主要是身份提示、工具和领域完成检查，不是另一套记忆架构。本文从模型输入讲起，再说明工具、工件、压缩和恢复。职责见 [ARCHITECTURE](ARCHITECTURE.md)，字段见 [CONTRACTS](CONTRACTS.md)，取舍见 [DESIGN_PRINCIPLES](DESIGN_PRINCIPLES.md)。当前 schema 为 **27.0**。
+三个 Agent 使用同一套上下文。Scientific 负责研究判断，Coding 和 Experiment 负责专业执行；它们的差别主要是身份提示、工具和领域完成检查，不是另一套记忆架构。本文从模型输入讲起，再说明工具、工件、压缩和恢复。职责见 [ARCHITECTURE](ARCHITECTURE.md)，字段见 [CONTRACTS](CONTRACTS.md)，取舍见 [DESIGN_PRINCIPLES](DESIGN_PRINCIPLES.md)。当前 schema 为 **28.0**。
 
 <a id="basics"></a>
 
@@ -45,7 +45,7 @@ Session 保存协议身份及固定契约指纹。指纹涵盖实际 system 内�
 
 ## 3. 任务需求和问答
 
-第二部分来自 `AgentRequest.instruction`、`task_context`、`upstream_inputs` 和同作用域业务回答；模型投影只保留一份按时间排列的 `business_dialogue`，不再并列复制输入/答案数组。它只接收上级要求：主 Scientific 的上级是真实用户，执行 Agent 的上级由 `upstream_session_id` 明确指定。`parent_session_id` 仍表示恢复自身的旧 Session，不用于判断上下级。必要的工作区、环境、权限、数据集和验收事实保留；自然指令和共同限制逐字符传递，不交给 Compiler 改述。
+第二部分来自 `AgentRequest.instruction`、`task_context`、`upstream_inputs` 和同作用域业务回答；模型投影只保留一份按时间排列的 `business_dialogue`，不再并列复制输入/答案数组。它只接收上级要求：主 Scientific 的上级是真实用户，执行 Agent 的上级由 `upstream_session_id` 明确指定。`parent_session_id` 仍表示恢复自身的旧 Session，不用于判断上下级。必要的工作区、权限、数据集和验收事实保留；环境和版本要求沿自然指令及共同限制原文传递，不再投影系统绑定或认证状态；自然指令和共同限制逐字符传递，不交给 Compiler 改述。
 
 `business_dialogue` 按原事件时间与身份排列输入和答案。原记录与来源完整保留；后来的同作用域明确修改覆盖被修改的选择，其余要求继续有效。转发旧用户记录保留原时间和身份，不把转发时间当成用户重新发出指令。父 Agent 的解释标为 parent，不能冒充用户原话或覆盖明确用户要求。代码保证记录和顺序，通用提示词负责语义；含义或优先级不清楚时向直接上级提问。
 
@@ -55,9 +55,9 @@ Session 保存协议身份及固定契约指纹。指纹涵盖实际 system 内�
 
 问答在原 Task、Attempt、Session 继续，失败 retry 才建立下一 Attempt。选项只是提示，业务字段可自由输入；权限 comment 仍是另一用途。用户普通补充不是待答问题的答案。普通补充立即保存；当前模型请求及已采纳工具批次正常完成后，在下一次模型判断前由 Scientific 处理，不能等整项 WorkRequest 结束。暂停的 Run 收到补充也不会自行恢复。
 
-操作批准也使用暂停、回答入口，但有不同用途。它绑定准确工具、参数、目录、环境和作用域，权限策略消费它；决定及可选 comment 不进入第二部分，也不生成工件。comment 按原文保存在答案中，仅随匹配动作的原工具回执以顶层 `user_comment` 交给模型，原业务 value 不变：拒绝同时说明 `execution_status=not_executed`，批准说明则随实际执行成功或失败返回。说明本身不授予权限或改变任务，模型结合它与已有需求决定后续行动。
+操作批准也使用暂停、回答入口，但有不同用途。它绑定准确工具、参数、目录、进程启动配置和作用域，权限策略消费它；决定及可选 comment 不进入第二部分，也不生成工件。comment 按原文保存在答案中，仅随匹配动作的原工具回执以顶层 `user_comment` 交给模型，原业务 value 不变：拒绝同时说明 `execution_status=not_executed`，批准说明则随实际执行成功或失败返回。说明本身不授予权限或改变任务，模型结合它与已有需求决定后续行动。
 
-原操作的 native call 保持待回执，恢复后重新检查权限与快照，执行或拒绝后为原调用保存唯一最终回执，不追加另一条说明回执。无需模型重新发一次命令。批准在副作用前持久消费；批准后派发期间期限中断，原回执仍保留说明，以 `execution_status=unknown` 表示可能存在部分执行，不能写成拒绝时的 not_executed，也不自动重放。快照变化后的动作重新询问，不套用旧动作的说明。CLI 的 `answer --comment` 和 shell 的 `/answer` 交互入口沿同一回答链路提交，完整使用方式见 [CLI README](../../apps/cli/README.md)。
+原操作的 native call 保持待回执，恢复后重新检查权限与快照，执行或拒绝后为原调用保存唯一最终回执，不追加另一条说明回执。无需模型重新发一次命令。批准在副作用前持久消费；批准后派发期间期限中断，原回执仍保留说明，以 `execution_status=unknown` 表示可能存在部分执行，不能写成拒绝时的 not_executed，也不自动重放。快照变化后的动作重新询问，不套用旧动作的说明。批准消费后仍在进程启动前复验 cwd、Shell flags 及过滤后启动环境指纹；不一致时原调用明确 not_executed，不沿新配置执行。CLI 的 `answer --comment` 和 shell 的 `/answer` 交互入口沿同一回答链路提交，完整使用方式见 [CLI README](../../apps/cli/README.md)。
 
 <a id="index"></a>
 
@@ -123,7 +123,7 @@ WorkRequest 没有总体报告；每个真实终态 Attempt 的报告和实际�
 
 Scientific 的工具用于获取材料、提问、委托和形成意见；它不直接编辑工作区或训练。Coding 用同一套工具完成分析、修改和验证；Experiment 分析已有结果或执行测量。它们没有显式工作模式。
 
-动态环境、命令诊断、读取和完成拒绝由对应工具回执提供；代码仍保存验证新鲜度和环境认证事实，并据真实事实检查 finish。它们不成为另一个第四部分状态工作集。完成拒绝先得到判断，再保存本次 finish 的唯一 accepted/rejected 回执；不会先写成功再修改旧回执。
+环境检查、安装、验证和实验统一由 run_shell 执行；实际命令诊断、读取和完成拒绝由对应工具回执提供。环境选择与维护由模型依据任务要求判断，没有绑定、认证或验证代次状态。代码保存真实执行记录和文件变化，校验实际交付；模型解释检查充分性与局限。它们不成为另一个第四部分状态工作集。完成拒绝先得到判断，再保存本次 finish 的唯一 accepted/rejected 回执；不会先写成功再修改旧回执。
 
 Scientific 的 `request_work` 明确给出 Task 列表，每个 Task 仍是自然 `instruction` 加依赖、输入、未来输出绑定、交付名和工作区等控制字段。Compiler 是无状态 LLM 路由，只能通过唯一原生 `route_tasks` 工具为每个现有任务匹配注册 Agent；不能改写、增删、合并或拆分任务。固定代码校验任务图并复制原指令、共享目标和限制，保持真实来源。Interpreter 仍只组织实际状态和 Ref，不拼总体报告。
 
@@ -155,7 +155,7 @@ Scientific 的 `request_work` 明确给出 Task 列表，每个 Task 仍是自�
 
 活动 WorkRequest 是打断的特殊处理：确认其当前执行结束后，将旧委派和未完成 Task/Attempt 设为 cancelled，取消其待答与批准关系，子 Session 保留审计但不复活。已完成 Task、冻结工件与实际文件保留。继续恢复 Scientific 原 Session，由它按需创建新的 WorkRequest，可明确复用原材料和逻辑工作区。普通输入/业务问答则继续原子会话。
 
-Coding/Experiment 用同一执行记录生成逻辑处理正常完成、失败、中断和问答/让出暂停：从本 Agent 的原始工具回执提取实际命令结果，作为既有 `execution_record` 随公开 AgentResult.artifacts 交接。未执行或被拒绝的命令不生成执行事实；中断记录保留真实停止确认、退出码（若已知）、耗时和日志位置，不补造成功或推断半成品可用。同一 Task/Attempt 的相同来源、相同冻结内容快照经完整性复验后复用原工件；新增真实执行结果则保留新快照。Task 报告关联这些工件，父方第三部分的中断通知提供实际工件 ID；第四部分仍在原 WorkRequest → Task 下直接列出报告和执行记录。父 Agent 无需读取子 Session，也不增加总体报告、控制工件或第二份原生回执。
+Coding/Experiment 用同一执行记录生成逻辑处理正常完成、失败、中断和问答/让出暂停：从本 Agent 的原始工具回执提取实际命令结果，作为既有 `execution_record` 随公开 AgentResult.artifacts 交接。未执行或被拒绝的命令不生成执行事实；中断记录保留真实停止确认、退出码（若已知）、耗时和日志位置，不补造成功或推断半成品可用。若脚本已完成、后续 Git 诊断才被打断，同一唯一回执以 completed_command 保留脚本结果，并保留诊断的真实 stop_confirmed；执行工件分别记录两项事实，不把诊断未知等同于脚本未执行。同一 Task/Attempt 的相同来源、相同冻结内容快照经完整性复验后复用原工件；新增真实执行结果则保留新快照。Task 报告关联这些工件，父方第三部分的中断通知提供实际工件 ID；第四部分仍在原 WorkRequest → Task 下直接列出报告和执行记录。父 Agent 无需读取子 Session，也不增加总体报告、控制工件或第二份原生回执。
 
 原报告和执行事实保持真实；中断通知说明已完成内容、未完成任务和可复用工作区。没有 WorkRequest 总报告或控制工件。运行中输入在最终模型回复期间到达，也必须先处理，再提交 Run 完成。输入发布与最终提交共享短发布边界；完成检查期间的输入使当前完成候选延后，已经冻结的候选意见仍留在目录中，之后的新候选按独立完成快照登记，最终只接受当前一份意见并形成一份最终报告。
 
@@ -167,7 +167,7 @@ Coding/Experiment 用同一执行记录生成逻辑处理正常完成、失败�
 
 工件登记先分配统一 UUID 并保存恢复记录，再冻结和登记；可续接的原交付恢复使用相同 ID 和字节。Scientific 返回产物后，Session 保存实际授权 ID 和唯一回执，再确认清理 Run 中待接收登记；确认中断只补确认，不重写回执。只分配身份但未冻结的网络调用不能自动重发，保留中断回执并清理未完成分配；已冻结文件损坏则报错，不能当作未产生材料跳过。初始化导入先保存声明和进度，恢复先补完导入再调用模型。Compiler 路由后固定代码建立的任务图先落盘，再冻结任务要求，接收中断不重新编译。
 
-RunStore 和 SessionStore 分别原子保存快照，不构成跨存储事务，也不保证网络请求或命令恰好执行一次。授权内冻结登记可恢复，不等于可以安全重放所有外部操作。schema 27.0 明确拒绝旧 Run/Session，包括 26.0，不迁移或兼容；旧证据原样保留。
+RunStore 和 SessionStore 分别原子保存快照，不构成跨存储事务，也不保证网络请求或命令恰好执行一次。授权内冻结登记可恢复，不等于可以安全重放所有外部操作。schema 28.0 明确拒绝旧 Run/Session，包括 27.0，不迁移或兼容；旧证据原样保留。
 
 <a id="verification"></a>
 
@@ -177,4 +177,4 @@ RunStore 和 SessionStore 分别原子保存快照，不构成跨存储事务，
 
 验收应覆盖：搜索无新工件；fetch 部分成功和复用；第三部分正文不重复进入第四部分；完整目录在压缩前后不丢项；业务回答累计、批准及说明隔离；原调用配对；编译零 Task 失败和任务失败报告；登记/接收中断后的同身份恢复。工具上下文基础检查见 [schema 25 测试计划](../history/reviews/TOOL_CONTEXT_IMPLEMENTATION_TEST_PLAN_2026-10-11.md)，前轮权限说明、CLI 与提示词检查见 [schema 26 测试计划](../history/reviews/PERMISSION_FEEDBACK_TEST_PLAN_2026-10-12.md)。
 
-本轮 schema 27 验证见 [纠正与路由验收计划](../history/reviews/CORRECTION_ROUTING_TEST_PLAN_2026-10-14.md)。
+此前 schema 27 的验证范围见 [纠正与路由验收计划](../history/reviews/CORRECTION_ROUTING_TEST_PLAN_2026-10-14.md)。

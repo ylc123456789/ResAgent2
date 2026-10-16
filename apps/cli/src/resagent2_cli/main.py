@@ -11,7 +11,6 @@ from typing import Callable, Sequence
 from uuid import uuid4
 
 from resagent2_contracts import (
-    EnvironmentSpec,
     ExecutionLimits,
     ResearchRequest,
     RunBudget,
@@ -68,7 +67,6 @@ def _workspace_args(parser: argparse.ArgumentParser) -> None:
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument("--workspace", help="existing local workspace directory")
     sources.add_argument("--git", help="Git repository URL to clone into the Run")
-    parser.add_argument("--python-version", help="hard Python major.minor constraint")
     parser.add_argument("--read-path", action="append", help="readable workspace prefix; default: .")
     writes = parser.add_mutually_exclusive_group()
     writes.add_argument("--write-path", action="append", help="writable workspace prefix; default: .")
@@ -78,7 +76,7 @@ def _workspace_args(parser: argparse.ArgumentParser) -> None:
 
 def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
     if not args.workspace and not args.git:
-        if (args.python_version or args.read_path is not None or args.write_path is not None
+        if (args.read_path is not None or args.write_path is not None
                 or args.read_only or args.deny_path):
             raise ValueError("workspace options require --workspace or --git")
         return {}
@@ -86,11 +84,6 @@ def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
         read_paths=args.read_path if args.read_path is not None else ["."],
         write_paths=[] if args.read_only else (args.write_path if args.write_path is not None else ["."]),
         denied_paths=args.deny_path,
-    )
-    environment = (
-        EnvironmentSpec(python_version=args.python_version)
-        if args.python_version
-        else None
     )
     if args.workspace:
         root = Path(args.workspace).expanduser().resolve()
@@ -101,7 +94,6 @@ def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
                 workspace_id="ws_main",
                 source_kind=WorkspaceSourceKind.LOCAL,
                 location=str(root),
-                environment=environment,
                 access=access,
             )
         }
@@ -111,7 +103,6 @@ def _workspace_specs(args: argparse.Namespace) -> dict[str, WorkspaceSpec]:
                 workspace_id="ws_main",
                 source_kind=WorkspaceSourceKind.GIT,
                 location=args.git,
-                environment=environment,
                 access=access,
             )
         }
@@ -137,10 +128,6 @@ def _specs_for_existing_run(
                 proposed.source_kind != existing.source_kind
                 or proposed.location != existing.location
                 or proposed.access != existing.access
-                or (
-                    proposed.environment is not None
-                    and proposed.environment != existing.environment
-                )
             ):
                 raise ValueError(
                     "supplied workspace does not match the persisted Run workspace"
@@ -197,8 +184,7 @@ def _request_from_args(args: argparse.Namespace) -> ResearchRequest:
             timeout_seconds=args.timeout_seconds,
         ),
         execution_limits=ExecutionLimits(max_tasks=args.max_tasks, max_attempts_per_task=args.max_attempts),
-        permissions=RunPermissions(execute_commands=args.execute_commands,
-                                   prepare_environment=args.prepare_environment),
+        permissions=RunPermissions(execute_commands=args.execute_commands),
         confirm_commands=args.confirm_commands,
     )
 
@@ -248,7 +234,7 @@ def _parser(
     run.add_argument("--hypothesis")
     run.add_argument("--context", default="")
     run.add_argument("--literature-file", help="JSON paper manifest with optional local PDFs")
-    run.add_argument("--constraint", action="append", default=[])
+    run.add_argument("--constraint", action="append", default=[], help="task requirement, such as a Python version")
     run.add_argument(
         "--required-artifact", action="append", default=[], metavar="NAME",
         help="require an exact, case-sensitive registered output_name; repeat for multiple names",
@@ -258,7 +244,6 @@ def _parser(
     run.add_argument("--max-llm-calls", type=int, default=200)
     run.add_argument("--timeout-seconds", type=int, default=7200)
     run.add_argument("--execute-commands", action=argparse.BooleanOptionalAction, default=True)
-    run.add_argument("--prepare-environment", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--confirm-commands", action="store_true")
     _workspace_args(run)
 

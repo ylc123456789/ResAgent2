@@ -10,10 +10,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from resagent2_capabilities.environment.prepare_environment import (
-    PrepareEnvironmentInput, PrepareEnvironmentTool,
-)
-from resagent2_components.environment import EnvironmentBinding, EnvironmentManager
 from resagent2_components.process import ProcessRunner, run_process
 from resagent2_components.workspace import WorkspaceBoundary
 from resagent2_contracts import WorkspaceAccess, WorkspaceGrant
@@ -51,7 +47,7 @@ def test_explicit_interrupt_stops_detached_descendant_and_keeps_file(tmp_path, f
             if framework:
                 run_process([sys.executable, str(script)], cwd=tmp_path, timeout=30)
             else:
-                ProcessRunner(boundary).run(
+                ProcessRunner(boundary).run_shell(
                     f"{shlex.quote(sys.executable)} parent.py", log_dir=".resagent2/log",
                     index=1, timeout_seconds=30,
                 )
@@ -77,41 +73,8 @@ def test_cancel_before_process_does_not_create_file(tmp_path):
     assert not marker.exists()
 
 
-def test_cancelled_prepare_withdraws_readiness_but_preserves_prefix(tmp_path):
-    token = CancellationToken()
-
-    class Manager(EnvironmentManager):
-        def prepare(self, *, run_id, workspace_id, python_version):
-            prefix = self.prefix(run_id=run_id, workspace_id=workspace_id)
-            prefix.mkdir(parents=True)
-            (prefix / ".resagent2_base_ready").write_text("{}")
-            (prefix / "partial-install").write_text("retained")
-            token.cancel()
-            check_cancelled()
-
-    manager = Manager(env_root=tmp_path, conda_exe="conda")
-    binding = EnvironmentBinding(manager, run_id="run", workspace_id="workspace")
-    binding.certified = True
-    with bind_cancellation(token), pytest.raises(OperationCancelled):
-        PrepareEnvironmentTool(binding).execute(SimpleNamespace(memory={}), PrepareEnvironmentInput())
-    prefix = manager.prefix(run_id="run", workspace_id="workspace")
-    assert not binding.certified
-    assert binding.current is None
-    assert not (prefix / ".resagent2_base_ready").exists()
-    assert (prefix / "partial-install").exists()
 
 
-def test_cancelled_optional_environment_probe_does_not_erase_completed_result(monkeypatch):
-    from resagent2_components import environment_info
-
-    def interrupted(*args, **kwargs):
-        raise OperationCancelled()
-
-    monkeypatch.setattr(environment_info, "run_process", interrupted)
-    output, diagnostic = environment_info._query(["probe"], timeout=1)
-    assert output is None
-    assert diagnostic["status"] == "unavailable"
-    assert "interrupted" in diagnostic["error"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="managed process trees are POSIX")

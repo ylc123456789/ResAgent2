@@ -12,7 +12,7 @@ NOW = datetime(2026, 8, 26, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(goal='Evaluate the proposed method', context='A small reference implementation is available.', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
+    return ResearchRequest(goal='Evaluate the proposed method', context='A small reference implementation is available.', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
 
 
 def task(task_id: str, depends_on: list[str] | None = None) -> WorkflowTask:
@@ -97,7 +97,7 @@ def test_research_request_does_not_accept_deployment_resources() -> None:
 
     assert "dataset_refs" not in ResearchRequest.model_fields
     with pytest.raises(ValidationError, match="dataset_refs"):
-        ResearchRequest(goal='Discover resources during execution', budget=RunBudget(max_llm_calls=5, timeout_seconds=60), dataset_refs=[], permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
+        ResearchRequest(goal='Discover resources during execution', budget=RunBudget(max_llm_calls=5, timeout_seconds=60), dataset_refs=[], permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
 
 
 def test_future_artifact_binding_requires_direct_dependency() -> None:
@@ -184,7 +184,7 @@ def test_schema_round_trip_preserves_contract() -> None:
     restored = Workflow.model_validate_json(workflow.model_dump_json())
 
     assert restored == workflow
-    assert restored.schema_version == '27.0'
+    assert restored.schema_version == '28.0'
 
 
 @pytest.mark.parametrize("schema_version", ["3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "12.0", "13.0", "14.0", "15.0", "16.0", "17.0", "18.0", "19.0", "20.0", "21.0", "22.0", "23.0", "24.0", "25.0"])
@@ -218,7 +218,7 @@ def test_user_answer_requires_at_least_one_value() -> None:
 
 def test_unsupported_evidence_kind_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        ResearchRequest(goal='Evaluate the method', required_evidence_kinds=['code_change'], budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
+        ResearchRequest(goal='Evaluate the method', required_evidence_kinds=['code_change'], budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
 
 
 @pytest.mark.parametrize(

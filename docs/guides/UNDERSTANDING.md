@@ -13,7 +13,7 @@ ResAgent2 可以先用一句话理解：**让模型决定科研上需要什么�
 | Coding Agent | 程序员 | 代码分析、修改、验证记录和工件 |
 | Experiment Agent | 实验执行者 | 已有结果分析、真实命令记录和证据工件 |
 
-ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有四个分工：Controller 管整个过程，Compiler 把当前需求翻成任务图，Scheduler 执行图中的任务，Interpreter 用固定代码整理目录和已记录报告。
+ResAgent2 是项目名，不是额外的第五个 Agent。Orchestrator 内有四个分工：Controller 管整个过程，Compiler 为原任务匹配 Agent，固定代码组装任务图，Scheduler 执行图中的任务，Interpreter 用固定代码整理目录和已记录报告。
 
 <a id="walkthrough"></a>
 
@@ -36,11 +36,11 @@ Controller 将元信息与可选本地 PDF 冻结，放入同一材料登记表�
 
 Scientific 关心：“为了回答这个研究问题，还缺什么证据？”它可以先检索文献、读工件；需要修改和比较时，提出 WorkRequestDraft。
 
-它说清目标、期望证据、约束，但不决定 task_id、执行器、依赖图和物理路径。自然语言在这里表达科学意图，不是要求下游猜所有控制信息。
+它说清共同目标、约束以及分开的 Tasks，每项写出自然指令、必要依赖和交付绑定；不决定正式 task_id、执行 Agent 或物理路径。自然语言表达业务意图，控制字段明确必要结构。
 
-### 第三步：Compiler 翻译，Scheduler 接受
+### 第三步：Compiler 匹配，Scheduler 接受
 
-Compiler 可能生成候选：
+Scientific 的原任务经 Compiler 匹配后，例如：
 
 ```text
 实现改动并验证 [coding]
@@ -48,21 +48,21 @@ Compiler 可能生成候选：
 运行正式比较 [experiment]
 ```
 
-LLM 生成一个包含 instruction 的任务草图，代码分配正式身份、绑定工作区并校验；结构错误最多纠正一次。Scheduler 再检查路由、授权、预算和图版本，接受后才执行。若下游需要某份尚未生成的产物，上游声明 output_name，下游用 FutureArtifactBinding 选择它，执行时才解析成真实工件 ID。
+Compiler 的 LLM 只给原任务匹配注册 Agent，不改写、拆分或合并任务。固定代码原文复制 instruction、共同目标和限制，分配正式身份、解析工作区并校验；结构错误最多纠正一次。Scheduler 再检查路由、授权、预算和图版本，接受后才执行。若下游需要某份尚未生成的产物，上游声明 output_name，下游用 FutureArtifactBinding 选择它，执行时才解析成真实工件 ID。
 
-所以 Scientific 不需要知道每个任务怎么调度：翻译和接收由 Orchestrator 承担。
+所以 Scientific 不需要知道每个任务怎么调度：路由、组装和接收由 Orchestrator 承担。
 
 ### 第四步：Coding 改代码，但不能只说“改好了”
 
 三个 Agent 都通过 ModulePort.invoke 接收 AgentRequest：一条 instruction、授权 input_artifacts，以及工作区、权限、预算和恢复身份。Coding 没有“理解/修改”两种接口；一次调用可以先读代码，再根据任务决定是否修改。可写权限允许修改，并不要求为了完成任务必须修改。
 
-Coding 内部运行共享 AgentLoop：读取 → 按需修改 → 调工具 → 看真实结果 → 验证。完成检查从本 Attempt 基线、工具回执和环境代次生成 patch 与验证工件，标明验证是否覆盖当前代码。任务是否完成由 Agent 根据目标与证据声明；Scheduler 按冻结的 acceptance_requirements 检查显式产物要求，不判断任务语义。
+Coding 内部运行共享 AgentLoop：读取 → 按需修改 → 调工具 → 看真实结果 → 验证。模型通过 run_shell 自行选择检查；固定代码从本 Attempt 基线和实际工具回执生成 patch 与 execution_record，不维护环境认证或验证代次。命令记录可关联执行前后的代码身份，报告说明检查范围、结果和局限；退出零本身不等于检查充分。任务是否完成由 Agent 根据目标与证据声明；Scheduler 按冻结的 acceptance_requirements 检查显式产物要求，不判断任务语义。
 
 AgentResult 的业务输出只有 report 和 artifacts，另有机器状态、消费、Session 引用及必要控制信号。报告解释过程，不能替代真实执行记录。长说明可作为 module_report 工件交给下游按需读取。
 
 ### 第五步：Experiment 按任务分析或执行
 
-上游成功后，Experiment 收到同样形状的请求。这个例子需要新实验，所以它准备或复用环境，再申请执行命令。操作获准后，执行工具会自动核验尚未认证的环境，通过才运行；模型不必另发 audit_env 才能继续。仅分析已有结果的任务可以直接读工件并交付报告，无需新命令或额外文件。
+上游成功后，Experiment 收到同样形状的请求。这个例子需要新实验，所以它通过 run_shell 检查并选择环境，必要时提出创建或安装命令，再运行实验。每条脚本都先得到准确操作批准；系统不自动绑定、探测、认证或重建环境。版本与协作要求来自原任务输入，使用目标解释器由模型在命令中明确表达。每次 Shell 是新进程，activate/export 不跨调用保留。仅分析已有结果的任务可以直接读工件并交付报告，无需新命令或额外文件。
 
 实验脚本写出的 JSON 指标文件是证据来源，execution_record 来自真实命令回执。精确要求通过 acceptance_requirements 传入；验收检查要求的数值键、文件、工件种类和命名输出。
 
@@ -104,7 +104,7 @@ Scientific 用同一个 finish 提交 report 和 scientific_opinion 工件；代
 
 例如先读代码，才发现需要数据集 demo：已有就用；缺少就 ask_user，用户放好并在 catalog 登记，回答后系统重新检查，再继续原 Session/Attempt。仅仅回答“好了”不等于目录已经存在。等待用户不会吃掉运行超时，但安装、推理、执行仍会计时。
 
-依赖则沿用已有安装与审计，下载缓存归 pip/conda。数据集登记表、运行环境、包下载缓存是三件事，不需要为了“都是资源”塞进同一个类。具体操作见 [CLI 资源库](../../apps/cli/README.md#4-数据集资源库)。
+环境和依赖由模型通过 run_shell 检查、选择和维护，下载缓存归 pip/conda；发现已有环境不等于获准修改它，系统也不会自动清理。数据集登记表、运行环境、包下载缓存是三件事，不需要为了“都是资源”塞进同一个类。具体操作见 [CLI 资源库](../../apps/cli/README.md#4-数据集资源库)。
 
 ### 五个运行身份
 
@@ -122,7 +122,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 用户给整个 Run 设定模型请求次数、可用时间和操作授权。三个 Agent、Compiler、历史压缩与模型重试共用同一本用量账和剩余时间；固定 Interpreter 不消耗模型调用，交接仍受 Run 时间边界限制。新任务、问答恢复、格式纠正和模型重试都不能重新获得一份总预算。任务数与每任务尝试数是另外的执行限制，step 仅记录动作顺序，不再有一份独立步数预算。
 
-工作区通过可读、可写和排除路径控制范围，内部任务只能继承或收紧；执行命令与准备环境另有权限开关。固定安全规则检查具体操作，结果可以是允许、询问或拒绝。开启确认不会让被拒绝的操作变成可执行；当前没有 OS 沙箱，通用脚本只对完整授权的可信工作区开放。
+工作区通过可读、可写和排除路径控制范围，内部任务只能继承或收紧；执行命令另有 execute_commands 授权，环境命令使用同一权限与准确批准入口，没有单独的环境准备开关。固定安全规则检查具体操作，结果可以是允许、询问或拒绝。开启确认不会让被拒绝的操作变成可执行；当前没有 OS 沙箱，通用脚本只对完整授权的可信工作区开放。
 
 例如 Run 限制 20 次模型请求，第一个任务用了 6 次，后面所有任务和总结合计只剩 14 次。用户回答问题不会刷新余额，显式等待回答的时间不占执行时长；安装、下载和真正执行仍计时。数据集与依赖缓存继续按各自机制复用，不是每个子任务重新分配一份资源。
 
@@ -130,7 +130,7 @@ Artifact 也容易混淆：Candidate 是“请登记这个文件”，Ref 是登
 
 它们都需要请求模型、调工具、记录观测、处理失败，所以复用 runtime.AgentLoop，只装配不同 prompt、工具、权限、上下文和完成检查。
 
-工作区/文件、Git、进程、环境事实和工件校验放在 components；Capabilities 的 OperationPermissionPolicy 组合 Run 授权与这些执行边界，模型工具入口和共享 Tool 指引也放在 capabilities。Agent 的普通代码可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
+工作区/文件、Git、进程执行与工件校验放在 components；Capabilities 的 OperationPermissionPolicy 组合 Run 授权与这些执行边界，唯一命令 Tool run_shell 和其他模型工具入口放在 capabilities。Agent 的普通代码可以直接用组件，不必经过 Tool。文件与工件复用按行读取，三个 Agent 复用片段机制，但 Scientific 不因此获得写文件或运行命令的权力。
 
 Compiler 复用模型客户端、上下文和共享执行预算，不运行 AgentLoop。**复用能力不等于采用同一个业务流程。**
 

@@ -11,28 +11,29 @@
 | [repo.py](src/resagent2_components/repo.py) | 仓库物化 |
 | [process.py](src/resagent2_components/process.py) | 直接 argv / Linux Bash 执行、凭据过滤、有界日志尾部、进程树超时终止 |
 | [execution_records.py](src/resagent2_components/execution_records.py) | 从本 Agent 的原生工具回执冻结正常、失败、中断命令事实，沿统一 report + artifacts 交回 |
-| [environment.py](src/resagent2_components/environment.py) | 环境准备/绑定/认证、安装命令规则和显式环境清理 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
-| [context.py](src/resagent2_components/context.py) | 环境事实、读取/诊断投影 |
+| [context.py](src/resagent2_components/context.py) | 读取/诊断投影 |
 | [text.py](src/resagent2_components/text.py) | 共享工作区文本大小与编码规则、有界读入、写入前验证、行字符窗口与长行呈现 |
 | [materials.py](src/resagent2_components/materials.py) | 通用工件读取、作用域与冻结 hash 校验；Scientific 专用反馈呈现在 Scientific 上下文 |
 | [literature/](src/resagent2_components/literature/) | 规范化论文、本地导入清单、平级文献来源、共用 HTTP 节奏、全文获取与 PDF 文本提取 |
 | [web.py](src/resagent2_components/web.py) | provider-neutral 网页搜索适配、单页 HTML/text 抓取、严格编码与响应边界 |
 
-`process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Coding 的验证命令策略和 revision 配对在 [Coding verification](../agents/coding/src/resagent2_coding/verification.py)，Shell 是 Capabilities 的共享模型入口，Experiment 从实际执行回执生成实验记录。多个 Tool 可以共用同一 ProcessRunner；没有“一个 Tool 配一个服务”的规则。
+`process.py` 不决定“该做训练还是测试”：它运行已获准的命令并返回事实。Capabilities 的 run_shell 是唯一模型命令入口；环境创建、安装、检查和实验都由模型选择普通命令。Git、仓库物化等固定操作直接复用进程组件。Coding/Experiment 从实际执行回执生成 execution_record，不维护专用验证命令策略、环境绑定、认证或 generation。没有“一个 Tool 配一个服务”的规则。
 
 ## 依赖与状态
 
 公开导入入口为 `resagent2_components`；实现内部小函数跟随相关文件，不为单个辅助函数建文件。基础操作只使用实际需要的依赖；共享上下文投影和现有论文模型可使用 Runtime 的类型/选择函数。不得 import Capabilities、具体 Agent 或 Orchestrator，不启动 AgentLoop 或创建 Agent/Session。供应商托管搜索的模型请求经组合根注入的 Runtime `ModelRequestClient` 执行；组件只构造供应商请求和归一化结果，不自行管理模型传输、Run 预算或研究决策。
 
-不要求所有组件纯函数：环境绑定、资源 IO 和文献来源索引保持既有状态；但不新建一份 Run/Session，不替代 Controller/Scheduler 的状态归属。ArtifactRegistrationPort 由组合根注入，登记实现仍在 Orchestrator；Components 不反向依赖它。
+不要求所有组件纯函数：资源 IO 和文献来源索引保持必要状态；但不新建一份 Run/Session，不替代 Controller/Scheduler 的状态归属。ArtifactRegistrationPort 由组合根注入，登记实现仍在 Orchestrator；Components 不反向依赖它。
 
 WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denied_paths 均为相对前缀，空允许列表拒绝全部，排除项优先。每次文件操作检查解析路径；写范围是读范围的子集。`.git`、`.resagent2` 受保护，普通可重建缓存只是展示时忽略，可按写权限清理。prepare_delete/delete_prepared 先快照准确删除集合，再重验执行；只 unlink 最终链接自身，内容变化或中断时保留部分完成记录。
 
-底层工作区、进程和环境边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。run_shell 每次精确审批；验证和安装分别由各自 Capability 策略限定范围。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；shell-free 和路径 Tool 都不是 OS 沙箱。
+底层工作区和进程边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。run_shell 每次精确人工审批；安装、环境维护和验证使用同一真实脚本批准链路。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；shell-free 和路径 Tool 都不是 OS 沙箱。
 
-ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化、环境准备也使用这一执行路径。LOCAL/COPY 来源须是实际 Git 仓库根；COPY 拒绝外部 .git 指针或链接，LOCAL 仍可绑定 linked worktree。可读范围中的 submodule 不在当前快照支持范围，明确报错，避免遗漏内容后声称工作区未变。数据集/环境身份和缓存机制不变，不新增通用资源配额或镜像预检。
+ProcessRunner 的 Shell 启动快照包含真实 cwd、shell、shell_args、pipefail 和过滤后启动环境的 SHA256；批准消费后、实际启动前再次比较，不一致则脚本不执行，不保存完整继承变量值。命令完成后 Git 诊断被打断时，原唯一回执保留 completed_command 和诊断真实停止状态，execution_record 分别冻结两项事实。
+
+ProcessRunner 与内部 run_process 将操作超时裁到共享 Run 截止时间，批量操作逐次计算余量；到期终止受控进程树。Git、仓库物化也使用这一执行路径，模型的环境命令通过 run_shell 进入同一执行器。LOCAL/COPY 来源须是实际 Git 仓库根；COPY 拒绝外部 .git 指针或链接，LOCAL 仍可绑定 linked worktree。可读范围中的 submodule 不在当前快照支持范围，明确报错，避免遗漏内容后声称工作区未变。数据集身份与包缓存职责不变；环境不再有系统分配身份或自动清理机制，不新增环境服务、通用资源配额或镜像预检。
 
 DatasetCatalog 读取部署登记，resolve_dataset_refs 区分登记与目录可用性；上下文和脚本映射使用同次结果。不下载数据集，目录存在也不保证内容完整。包缓存仍归 pip/conda，不归 DatasetCatalog。
 

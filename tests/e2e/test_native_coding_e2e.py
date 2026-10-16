@@ -5,6 +5,7 @@ from resagent2_contracts import AgentPermissions, RunPermissions, ExecutionLimit
 import json
 from pathlib import Path
 import subprocess
+import shlex
 import sys
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -38,38 +39,6 @@ from resagent2_orchestrator import (
 from resagent2_runtime import ScriptedLLMClient
 
 
-def _fake_conda(tmp_path) -> str:
-    fake = tmp_path / "conda"
-    fake.write_text(
-        f"#!{sys.executable}\n"
-        "import json, os, sys\n"
-        "args = sys.argv[1:]\n"
-        "if 'create' in args and '-p' in args:\n"
-        "    prefix = args[args.index('-p') + 1]\n"
-        "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
-        "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
-        "    open(os.path.join(prefix, 'bin', 'pip'), 'a').close()\n"
-        "    print('created', flush=True)\n"
-        "elif 'run' in args and '-p' in args:\n"
-        "    prefix = args[args.index('-p') + 1]\n"
-        "    if '-c' in args:\n"
-        "        print(json.dumps({'sys_executable': os.path.join(prefix, 'bin', 'python'), 'sys_prefix': prefix, 'python_version': '3.12.4', 'pip_available': True}), flush=True)\n"
-        "    else:\n"
-        "        print('ok', flush=True)\n",
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-    return str(fake)
-
-
-def _setup_env(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RESAGENT2_CONDA_EXE", _fake_conda(tmp_path))
-    monkeypatch.setenv("RESAGENT2_ENV_ROOT", str(tmp_path / "envs"))
-
-
-_PREPARE = {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}}
-_AUDIT = {"tool": "audit_env", "arguments": {}}
-
 
 def _create_run(engine, run_id, request, proposal):
     now = datetime.now(UTC)
@@ -95,12 +64,10 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
     (repo / "util.py").write_text("VALUE = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "util.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
-    _setup_env(tmp_path, monkeypatch)
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
             tool_turns([
-                _PREPARE, _AUDIT,
                 {
                     "tool": "replace_text",
                     "arguments": {
@@ -110,8 +77,8 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
                     },
                 },
                 {
-                    "tool": "run_verification",
-                    "arguments": {"commands": ["python -m py_compile util.py"]},
+                    "tool": "run_shell",
+                    "arguments": {"command": f"{shlex.quote(sys.executable)} -m py_compile util.py"},
                 },
                 {
                     "tool": "finish",
@@ -121,7 +88,7 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
         )
     )
     scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.CODING: ModuleBinding(owner=AgentOwner.CODING, port=coding)}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
-    request = ResearchRequest(goal='Update one constant', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
+    request = ResearchRequest(goal='Update one constant', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[
@@ -136,13 +103,28 @@ def test_scheduler_registers_native_coding_artifacts(tmp_path, monkeypatch) -> N
 
     _create_run(scheduler, "run_native_e2e", request, proposal)
     run = scheduler.run_until_stable("run_native_e2e")
+    assert run.status == RunStatus.PAUSED
+    question = run.pending_question
+    from resagent2_contracts import RecordedAnswer
+    run.answers.append(RecordedAnswer(
+        question_id=question.id, question_text=question.text,
+        requested_fields=question.requested_fields, options=question.options,
+        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=run.run_id, session_id=question.session_id,
+        task_id=question.task_id, attempt_number=question.attempt_number,
+        action=question.action,
+    ))
+    run.pending_question = None
+    run.status = RunStatus.RUNNING
+    scheduler.resume_task_in_place(run, "task_code_native")
+    scheduler.store.save(run)
+    run = scheduler.run_until_stable(run.run_id)
 
     assert run.workflow.tasks[0].status == TaskStatus.COMPLETED
     assert {artifact.kind for artifact in run.artifacts.values()} == {
         "module_report",
         "code_patch",
         "code_change",
-        "verification_result",
         "execution_record",
     }
     assert all(len(artifact.sha256) == 64 for artifact in run.artifacts.values())
@@ -168,13 +150,10 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
     (repo / "util.py").write_text("VALUE = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "util.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
-    _setup_env(tmp_path, monkeypatch)
 
     coding = NativeCodingAgent(
         ScriptedLLMClient(
             tool_turns([
-                _PREPARE,
-                _AUDIT,
                 {
                     "tool": "replace_text",
                     "arguments": {
@@ -190,10 +169,9 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
                         "requested_fields": ["approve"],
                     },
                 },
-                _AUDIT,
                 {
-                    "tool": "run_verification",
-                    "arguments": {"commands": ["python -m py_compile util.py"]},
+                    "tool": "run_shell",
+                    "arguments": {"command": f"{shlex.quote(sys.executable)} -m py_compile util.py"},
                 },
                 {
                     "tool": "finish",
@@ -203,7 +181,7 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
         )
     )
 
-    request = AgentRequest(run_id='run_resume', task_id='task_code', attempt_number=1, agent=AgentOwner.CODING, instruction='Change VALUE from 1 to 2', budget=TaskBudget(max_llm_calls=20, timeout_seconds=60), workspace=WorkspaceGrant(root=str(repo), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), workspace_id='ws_main', workspace_spec=WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), output_dir=str(tmp_path / 'out'), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    request = AgentRequest(run_id='run_resume', task_id='task_code', attempt_number=1, agent=AgentOwner.CODING, instruction='Change VALUE from 1 to 2', budget=TaskBudget(max_llm_calls=20, timeout_seconds=60), workspace=WorkspaceGrant(root=str(repo), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), workspace_id='ws_main', workspace_spec=WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(repo), access=WorkspaceAccess(read_paths=['.'], write_paths=['.'])), output_dir=str(tmp_path / 'out'), permissions=AgentPermissions(execute_commands=True))
 
     first = coding.invoke(request)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
@@ -220,7 +198,20 @@ def test_coding_resume_preserves_attempt_baseline(tmp_path, monkeypatch) -> None
         "parent_session_id": first.session.id, "control_ack": first.control.origin,
         "user_answers": [answer], "resume_answers": [answer],
     })
-    second = coding.invoke(resume_request)
+    approval = coding.invoke(resume_request)
+    assert approval.status == ModuleStatus.NEEDS_USER_INPUT
+    question = approval.control.question
+    answer = RecordedAnswer(
+        question_id=question.id, question_text=question.text,
+        requested_fields=question.requested_fields, options=question.options,
+        values={"approve": "yes"}, answered_at=datetime.now(UTC),
+        run_id=question.run_id, session_id=question.session_id,
+        task_id=question.task_id, attempt_number=question.attempt_number,
+        action=question.action,
+    )
+    second = coding.invoke(resume_request.model_copy(update={
+        "resume_answers": [answer], "control_ack": approval.control.origin,
+    }))
 
     assert second.status == ModuleStatus.COMPLETED
     assert [item.path for item in second.artifacts if item.kind == "code_change"] == ["util.py"]

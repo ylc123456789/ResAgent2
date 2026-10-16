@@ -40,11 +40,11 @@ def test_json_session_round_trip_records_current_schema(tmp_path):
     store = JsonSessionStore(tmp_path)
     store.save(state)
     value = json.loads((tmp_path / "session_schema.json").read_text(encoding="utf-8"))
-    assert value["schema_version"] == SCHEMA_VERSION == "27.0"
+    assert value["schema_version"] == SCHEMA_VERSION == "28.0"
     assert store.load(state.session_id) == state
 
 
-@pytest.mark.parametrize("version", [None, "24.0", "25.0", "26.0"])
+@pytest.mark.parametrize("version", [None, "24.0", "25.0", "26.0", "27.0"])
 def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_path, version):
     now = datetime.now(UTC)
     state = AgentState(
@@ -60,7 +60,7 @@ def test_json_session_rejects_old_or_missing_schema_without_changing_file(tmp_pa
     path.write_text(json.dumps(value), encoding="utf-8")
     before = path.read_bytes()
     store = JsonSessionStore(tmp_path)
-    with pytest.raises(ValueError, match="Session schema_version must be 27.0"):
+    with pytest.raises(ValueError, match="Session schema_version must be 28.0"):
         store.load(state.session_id)
     assert path.read_bytes() == before
 
@@ -81,7 +81,7 @@ class _AcceptFinish:
 
 
 def _request(*, attempt: int, parent: str | None = None) -> AgentRequest:
-    return AgentRequest(run_id='run_resume', task_id='task_experiment', attempt_number=attempt, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id=parent, permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    return AgentRequest(run_id='run_resume', task_id='task_experiment', attempt_number=attempt, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id=parent, permissions=AgentPermissions(execute_commands=True))
 
 
 def test_ask_user_resume_reuses_session_and_resets_budget() -> None:
@@ -281,7 +281,7 @@ def test_resume_rejects_mismatched_task() -> None:
     first = loop.run(definition, _request(attempt=1), session_id="session_child")
     assert first.status == ModuleStatus.NEEDS_USER_INPUT
 
-    other = AgentRequest(run_id='run_resume', task_id='task_other', attempt_number=2, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id='session_child', permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    other = AgentRequest(run_id='run_resume', task_id='task_other', attempt_number=2, agent=AgentOwner.CODING, instruction='Which dataset?', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), parent_session_id='session_child', permissions=AgentPermissions(execute_commands=True))
     result = loop.run(definition, other, session_id="session_child")
 
     assert result.status == ModuleStatus.FAILED
@@ -329,7 +329,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     if damage == "old_schema":
         value["schema_version"] = "23.0"
     elif damage == "future_schema":
-        value["schema_version"] = "28.0"
+        value["schema_version"] = "999.0"
     elif damage == "missing_schema":
         value.pop("schema_version")
     elif damage == "invalid_state":
@@ -355,7 +355,7 @@ def test_resume_persisted_load_error_is_structured_without_rewriting_record(tmp_
     assert result.report == result.error.message
     assert "cannot resume session" in result.report
     if damage in {"old_schema", "future_schema", "missing_schema", "non_object"}:
-        assert "schema_version must be 27.0" in result.report
+        assert "schema_version must be 28.0" in result.report
     assert result.llm_calls == 0
     assert result.session is None
     assert definition.llm_client.contexts == []

@@ -3,14 +3,13 @@
 import json
 import subprocess
 import sys
+import shlex
 from datetime import UTC, datetime
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from e2e.native_fixtures import tool_turns, ParentQuestionClient
-from resagent2_components import PreparedEnvironment, ResourceLayout
+from resagent2_components import ResourceLayout
 from resagent2_contracts import (
     AgentOwner, ExecutionLimits, ResearchRequest, RunBudget, RunPermissions,
     TaskProposal, UserAnswer, WorkflowAgentDefinition, WorkflowAgentKind,
@@ -45,35 +44,7 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     ]:
         subprocess.run(["git", *args], cwd=repo, check=True)
 
-    # Environment discovery is isolated; the actual approved command runs a
-    # real Python process and appends an observable, exact-once marker.
-    conda = tmp_path / "conda"
-    conda.write_text(
-        f"#!{sys.executable}\nimport os, sys\n"
-        "args = sys.argv[1:]\ncommand = args[args.index('-p') + 2:]\n"
-        "os.environ['PATH'] = os.path.dirname(sys.executable) + os.pathsep + os.environ['PATH']\n"
-        "os.execvp(command[0], command)\n"
-    )
-    conda.chmod(0o755)
-    environment = PreparedEnvironment(
-        env_id="resenv_test", prefix=Path(sys.prefix),
-        python_version=".".join(map(str, sys.version_info[:3])),
-    )
-    audits = []
-
-    def audit(current):
-        assert current == environment
-        audits.append(current)
-        return {
-            "success": True, "prefix_match": True, "pip_available": True,
-            "python_version": current.python_version, "sys_prefix": str(current.prefix),
-        }
-
-    manager = SimpleNamespace(
-        conda_exe=str(conda), inspect=lambda **kwargs: environment, audit=audit,
-    )
-    monkeypatch.setattr(f"resagent2_{kind}.agent.EnvironmentManager", lambda **kwargs: manager)
-    command = {"tool": "run_shell", "arguments": {"command": "python measure.py"}}
+    command = {"tool": "run_shell", "arguments": {"command": f"{shlex.quote(sys.executable)} measure.py"}}
     business_text = "Should this task continue? This answer is task guidance, not an operation approval."
     worker_client = ScriptedLLMClient(tool_turns([
         {"tool": "ask_user", "arguments": {
@@ -142,7 +113,7 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     run = controller().create_run("run_approval_context", ResearchRequest(
         goal="Record one local execution after business guidance and exact operation approval",
         budget=RunBudget(max_llm_calls=20, timeout_seconds=60),
-        permissions=RunPermissions(execute_commands=True, prepare_environment=False),
+        permissions=RunPermissions(execute_commands=True),
         execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
     ))
     assert run.status == "paused", run.terminal_error
@@ -156,7 +127,6 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     assert run.pending_question.action.tool == "run_shell"
     assert run.pending_question.action.arguments == command["arguments"]
     assert not (repo / "executed.marker").exists()
-    assert audits == []  # Ordinary yes does not authorize an external effect.
     action = run.pending_question.action
     comment = "  只执行本次操作。\nKeep this explanation separate from task guidance.  "
     run = controller().answer_question(run.run_id, UserAnswer(
@@ -165,7 +135,6 @@ def test_business_yes_and_operation_approval_keep_distinct_consumers(
     ))
     assert run.status == "completed", run.terminal_error
     assert (repo / "executed.marker").read_text() == "executed\n"
-    assert len(audits) == 1
     task = run.workflow.tasks[0]
     assert len(task.attempts) == 1 and task.attempts[0].session.id == session_id
     assert len(run.answers) == 3

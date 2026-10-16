@@ -12,15 +12,11 @@ from pydantic import ValidationError
 from resagent2_components import (
     DatasetCatalog,
     DatasetResolutionError,
-    EnvironmentManager,
-    EnvironmentManagerError,
-    PreparedEnvironment,
     RepoMaterializer,
     RepoMaterializerError,
     ResourceLayout,
     dataset_context,
     dataset_env_overrides,
-    find_conda,
     resolve_dataset_refs,
 )
 from resagent2_components.process import _descendant_pids
@@ -311,29 +307,24 @@ def test_resource_layout_defaults_derive_from_resource_root(tmp_path) -> None:
     layout = ResourceLayout(resource_root=tmp_path / "resources")
 
     assert layout.dataset_root == tmp_path / "resources" / "datasets"
-    assert layout.env_root == tmp_path / "resources" / "envs"
 
 
 def test_resource_layout_accepts_independent_roots(tmp_path) -> None:
     layout = ResourceLayout(
         resource_root=tmp_path / "resources",
         dataset_root=tmp_path / "elsewhere" / "datasets",
-        env_root=tmp_path / "envs",
     )
 
     assert layout.dataset_root == tmp_path / "elsewhere" / "datasets"
-    assert layout.env_root == tmp_path / "envs"
 
 
 def test_resource_layout_env_vars_override(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("RESAGENT2_DATASET_ROOT", str(tmp_path / "ds"))
-    monkeypatch.setenv("RESAGENT2_ENV_ROOT", str(tmp_path / "env"))
 
     layout = ResourceLayout.from_env(data_root=tmp_path / "data")
 
     assert layout.resource_root == tmp_path / "data" / "resources"
     assert layout.dataset_root == tmp_path / "ds"
-    assert layout.env_root == tmp_path / "env"
 
 
 def test_resource_layout_reads_data_root_env(tmp_path, monkeypatch) -> None:
@@ -343,399 +334,13 @@ def test_resource_layout_reads_data_root_env(tmp_path, monkeypatch) -> None:
     layout = ResourceLayout.from_env()
 
     assert layout.resource_root == tmp_path / "data" / "resources"
-    assert layout.env_root == tmp_path / "data" / "resources" / "envs"
 
 
 def test_resource_layout_defaults_to_data_root_resources(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("RESAGENT2_RESOURCE_ROOT", raising=False)
     monkeypatch.delenv("RESAGENT2_DATASET_ROOT", raising=False)
-    monkeypatch.delenv("RESAGENT2_ENV_ROOT", raising=False)
 
     layout = ResourceLayout.from_env(data_root=tmp_path / "data")
 
     assert layout.resource_root == tmp_path / "data" / "resources"
     assert layout.dataset_root == tmp_path / "data" / "resources" / "datasets"
-    assert layout.env_root == tmp_path / "data" / "resources" / "envs"
-
-
-def test_find_conda_prefers_configured_exe(tmp_path, monkeypatch) -> None:
-    fake = tmp_path / "conda"
-    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fake.chmod(0o755)
-    monkeypatch.setenv("RESAGENT2_CONDA_EXE", str(fake))
-
-    assert find_conda() == str(fake)
-
-
-# ── EnvironmentManager ─────────────────────────────────────────────
-
-
-def _fake_conda(tmp_path: Path) -> Path:
-    fake = tmp_path / "conda"
-    fake.write_text(
-        f"#!{sys.executable}\n"
-        "import os, sys\n"
-        "args = sys.argv[1:]\n"
-        "if '-p' in args:\n"
-        "    prefix = args[args.index('-p') + 1]\n"
-        "    os.makedirs(os.path.join(prefix, 'bin'), exist_ok=True)\n"
-        "    open(os.path.join(prefix, 'bin', 'python'), 'a').close()\n"
-        "    open(os.path.join(prefix, 'bin', 'pip'), 'a').close()\n"
-        "print('created', flush=True)\n",
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-    return fake
-
-
-def _probe_result(prefix: Path, version: str, *, pip: bool = True, prefix_ok: bool = True) -> dict:
-    return {
-        "returncode": 0,
-        "error": None,
-        "sys_executable": str(prefix / "bin" / "python"),
-        "sys_prefix": str(prefix) if prefix_ok else "/elsewhere",
-        "python_version": version,
-        "pip_available": pip,
-        "prefix_match": prefix_ok,
-        "stderr_tail": "",
-    }
-
-
-def _manager(tmp_path: Path, monkeypatch, *, probe=None) -> EnvironmentManager:
-    manager = EnvironmentManager(
-        env_root=tmp_path / "resources" / "envs", conda_exe=str(_fake_conda(tmp_path))
-    )
-    if probe is not None:
-        monkeypatch.setattr(manager, "_probe", probe)
-    return manager
-
-
-def test_env_id_is_hash_derived_and_scope_bound() -> None:
-    manager = EnvironmentManager(env_root=Path("/tmp/envs"), conda_exe="conda")
-
-    same = manager.env_id(run_id="run_a", workspace_id="ws_main")
-    other_ws = manager.env_id(run_id="run_a", workspace_id="ws_other")
-    other_run = manager.env_id(run_id="run_b", workspace_id="ws_main")
-
-    assert same == manager.env_id(run_id="run_a", workspace_id="ws_main")
-    assert same != other_ws
-    assert same != other_run
-    assert same.startswith("resenv_")
-    assert len(same.split("_")[-1]) == 12
-
-
-def test_prefix_is_under_env_root(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-
-    prefix = manager.prefix(run_id="run_a", workspace_id="ws_main")
-
-    assert prefix == manager.env_root / manager.env_id(
-        run_id="run_a", workspace_id="ws_main"
-    )
-
-
-def test_inspect_returns_none_for_missing_env(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-
-    assert manager.inspect(run_id="run_a", workspace_id="ws_main") is None
-
-
-def test_prepare_creates_audited_env(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch, probe=lambda p: _probe_result(p, "3.12.4"))
-
-    prepared = manager.prepare(run_id="run_a", workspace_id="ws_main", python_version="3.12")
-
-    assert prepared.python_version == "3.12.4"
-    assert (prepared.prefix / ".resagent2_base_ready").is_file()
-    marker = json.loads(
-        (prepared.prefix / ".resagent2_base_ready").read_text(encoding="utf-8")
-    )
-    assert marker["python_version"] == "3.12.4"  # actual, not the request
-
-
-def test_prepare_reuses_matching_version(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch, probe=lambda p: _probe_result(p, "3.12.4"))
-
-    first = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
-    (first.prefix / "sentinel.txt").write_text("keep")
-
-    second = manager.prepare(run_id="r", workspace_id="w", python_version="3.12")
-
-    assert second.python_version == "3.12.4"
-    assert (first.prefix / "sentinel.txt").exists()  # reused, not recreated
-
-
-def test_prepare_recreates_on_version_mismatch(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-    prefix = manager.prefix(run_id="r", workspace_id="w")
-    # A pre-existing env whose actual interpreter is 3.12 but whose marker lied.
-    prefix.mkdir(parents=True)
-    (prefix / "bin").mkdir()
-    (prefix / "bin" / "python").write_text("")
-    (prefix / "bin" / "pip").write_text("")
-    (prefix / ".resagent2_base_ready").write_text(
-        json.dumps({"python_version": "3.12.4", "env_id": "x", "prefix": str(prefix)})
-    )
-    (prefix / "junk.txt").write_text("old")
-
-    versions = iter(["3.12.4", "3.10.16"])
-    def probe(p):
-        return _probe_result(p, next(versions, "3.10.16"))
-    monkeypatch.setattr(manager, "_probe", probe)
-
-    prepared = manager.prepare(run_id="r", workspace_id="w", python_version="3.10")
-
-    assert prepared.python_version == "3.10.16"
-    assert not (prefix / "junk.txt").exists()  # deleted + recreated
-    marker = json.loads((prefix / ".resagent2_base_ready").read_text(encoding="utf-8"))
-    assert marker["python_version"] == "3.10.16"
-
-
-def test_prepare_corrects_stale_marker_on_reuse(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-    prefix = manager.prefix(run_id="r", workspace_id="w")
-    # Env whose actual interpreter is 3.10 but whose marker still says 3.12.
-    prefix.mkdir(parents=True)
-    (prefix / "bin").mkdir()
-    (prefix / "bin" / "python").write_text("")
-    (prefix / "bin" / "pip").write_text("")
-    (prefix / ".resagent2_base_ready").write_text(
-        json.dumps({"python_version": "3.12.4", "env_id": "x", "prefix": str(prefix)})
-    )
-    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.10.16"))
-
-    prepared = manager.prepare(run_id="r", workspace_id="w", python_version="3.10")
-
-    assert prepared.python_version == "3.10.16"
-    marker = json.loads((prefix / ".resagent2_base_ready").read_text(encoding="utf-8"))
-    assert marker["python_version"] == "3.10.16"  # corrected, not 3.12.4
-
-
-def test_audit_requires_pip(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-    env = PreparedEnvironment(
-        env_id="resenv_x",
-        prefix=manager.prefix(run_id="r", workspace_id="w"),
-        python_version="3.12",
-    )
-    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.12.4", pip=False))
-
-    audit = manager.audit(env)
-
-    assert audit["success"] is False
-    assert audit["pip_available"] is False
-
-
-def test_audit_requires_version_match(tmp_path, monkeypatch) -> None:
-    manager = _manager(tmp_path, monkeypatch)
-    env = PreparedEnvironment(
-        env_id="resenv_x",
-        prefix=manager.prefix(run_id="r", workspace_id="w"),
-        python_version="3.10",
-    )
-    monkeypatch.setattr(manager, "_probe", lambda p: _probe_result(p, "3.12.4"))
-
-    audit = manager.audit(env)
-
-    assert audit["success"] is False
-    assert audit["version_match"] is False
-
-
-def test_delete_if_managed_refuses_outside_env_root(tmp_path) -> None:
-    manager = EnvironmentManager(env_root=tmp_path / "envs", conda_exe="conda")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    with pytest.raises(EnvironmentManagerError, match="outside"):
-        manager._delete_if_managed(outside)
-
-
-# ── Dataset catalog ───────────────────────────────────────────────
-
-
-def test_resolve_dataset_refs_resolves_multiple_read_only_paths(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    (root / "cifar10").mkdir(parents=True)
-    (root / "mnist").mkdir(parents=True)
-    refs = [
-        DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
-        DatasetRef(dataset_id="mnist", relative_path="mnist"),
-    ]
-
-    resolved = resolve_dataset_refs(root, refs)
-
-    assert [entry["dataset_id"] for entry in resolved.available] == ["cifar10", "mnist"]
-    assert resolved.available[0]["path"] == str((root / "cifar10").resolve())
-    assert resolved.available[1]["path"] == str((root / "mnist").resolve())
-    assert all(entry["access"] == "read_only" for entry in resolved.available)
-    assert resolved.unavailable_ids == []
-
-
-def test_dataset_catalog_loads_registered_directories(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    (root / "cifar-10").mkdir(parents=True)
-    (root / "mnist").mkdir()
-    (root / "catalog.json").write_text(
-        json.dumps({"mnist": "mnist", "cifar10": "cifar-10"}),
-        encoding="utf-8",
-    )
-
-    refs = DatasetCatalog(root).references()
-
-    assert refs == [
-        DatasetRef(dataset_id="cifar10", relative_path="cifar-10"),
-        DatasetRef(dataset_id="mnist", relative_path="mnist"),
-    ]
-
-
-def test_dataset_catalog_is_empty_until_resources_are_registered(tmp_path) -> None:
-    assert DatasetCatalog(tmp_path / "datasets").references() == []
-
-
-def test_dataset_catalog_keeps_missing_registered_directory(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    root.mkdir()
-    (root / "catalog.json").write_text('{"cifar10": "missing"}', encoding="utf-8")
-
-    refs = DatasetCatalog(root).references()
-    assert refs == [DatasetRef(dataset_id="cifar10", relative_path="missing")]
-    assert resolve_dataset_refs(root, refs).unavailable_ids == ["cifar10"]
-
-
-def test_dataset_context_has_one_shared_missing_resource_policy(tmp_path) -> None:
-    (tmp_path / "cifar-10").mkdir()
-    context = dataset_context(
-        resolve_dataset_refs(
-            tmp_path, [DatasetRef(dataset_id="cifar10", relative_path="cifar-10")]
-        )
-    )
-
-    assert context["available_dataset_ids"] == ["cifar10"]
-    assert context["missing_dataset_action"] == "ask_user"
-    assert context["download_allowed"] is False
-    assert context["substitution_allowed"] is False
-
-
-@pytest.mark.parametrize("phase", ["unregistered", "missing", "available"])
-def test_dataset_context_explains_readiness_without_a_negative_list_gate(tmp_path, phase):
-    if phase != "unregistered":
-        (tmp_path / "catalog.json").write_text('{"demo": "demo"}', encoding="utf-8")
-    if phase == "available":
-        (tmp_path / "demo").mkdir()
-    checked = resolve_dataset_refs(tmp_path, DatasetCatalog(tmp_path).references())
-    context = dataset_context(checked)
-
-    assert context["available_dataset_ids"] == (["demo"] if phase == "available" else [])
-    assert context["unavailable_dataset_ids"] == (["demo"] if phase == "missing" else [])
-    assert "registered directories that exist; contents not validated" in context["availability_basis"]
-    assert "registered IDs whose directories do not exist" in context["availability_basis"]
-    assert "neither list is unregistered in this view, not confirmed available" in context["availability_basis"]
-    guidance = context["missing_dataset_guidance"]
-    assert "not in available_dataset_ids, call ask_user" in guidance
-    assert "before work that needs it" in guidance
-    assert "still not in available_dataset_ids after a reply, ask_user again" in guidance
-    assert "having asked once is not permission to run without it" in guidance
-    assert "Earlier command results describe the earlier resource state" in guidance
-    assert "Do not block on unrelated missing datasets" in guidance
-    assert "catalog.json under that root" in guidance
-    assert "RESAGENT2_DATASETS_JSON contains the ID-to-path JSON for scripts, not a catalog file path" in guidance
-
-
-def test_resolve_dataset_refs_reports_missing_path(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    root.mkdir()
-
-    checked = resolve_dataset_refs(
-        root, [DatasetRef(dataset_id="x", relative_path="missing")]
-    )
-    assert checked.available == []
-    assert checked.unavailable_ids == ["x"]
-
-
-def test_dataset_ref_rejects_escaping_relative_path() -> None:
-    with pytest.raises(ValidationError, match="relative"):
-        DatasetRef(dataset_id="x", relative_path="../escape")
-
-
-def test_missing_dataset_does_not_hide_ready_datasets_or_enter_script_map(tmp_path):
-    (tmp_path / "ready").mkdir()
-    refs = [
-        DatasetRef(dataset_id="ready", relative_path="ready"),
-        DatasetRef(dataset_id="later", relative_path="later"),
-    ]
-    checked = resolve_dataset_refs(tmp_path, refs)
-    context = dataset_context(checked)
-    mapping = json.loads(dataset_env_overrides(tmp_path, checked)["RESAGENT2_DATASETS_JSON"])
-    assert context["available_dataset_ids"] == list(mapping) == ["ready"]
-    assert context["unavailable_dataset_ids"] == ["later"]
-    (tmp_path / "later").mkdir()
-    assert dataset_context(resolve_dataset_refs(tmp_path, refs))["unavailable_dataset_ids"] == []
-    # An earlier check is a snapshot, not silently mutated state.
-    assert checked.unavailable_ids == ["later"]
-
-
-@pytest.mark.parametrize("raw", ["[]", "{", '{"x": "../outside"}', '{"x": 12}'])
-def test_catalog_configuration_errors_are_not_missing_resources(tmp_path, raw):
-    (tmp_path / "catalog.json").write_text(raw, encoding="utf-8")
-    with pytest.raises(DatasetResolutionError):
-        DatasetCatalog(tmp_path).references()
-
-
-def test_dataset_catalog_rejects_symlink_escape_even_when_target_missing(tmp_path):
-    root = tmp_path / "datasets"
-    root.mkdir()
-    (root / "link").symlink_to(tmp_path / "outside", target_is_directory=True)
-    (root / "catalog.json").write_text('{"x": "link"}', encoding="utf-8")
-    with pytest.raises(DatasetResolutionError, match="escapes"):
-        DatasetCatalog(root).references()
-
-
-def test_descendant_pids_finds_child_process() -> None:
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-    )
-    try:
-        assert child.pid in _descendant_pids(os.getpid())
-    finally:
-        child.terminate()
-        child.wait()
-
-
-def test_resolve_dataset_refs_rejects_duplicate_id(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    (root / "cifar10").mkdir(parents=True)
-
-    with pytest.raises(DatasetResolutionError, match="duplicate"):
-        resolve_dataset_refs(
-            root,
-            [
-                DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
-                DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
-            ],
-        )
-
-
-def test_dataset_env_overrides_are_generic(tmp_path) -> None:
-    root = tmp_path / "datasets"
-    (root / "cifar10").mkdir(parents=True)
-    (root / "mnist").mkdir(parents=True)
-    resolved = resolve_dataset_refs(
-        root,
-        [
-            DatasetRef(dataset_id="cifar10", relative_path="cifar10"),
-            DatasetRef(dataset_id="mnist", relative_path="mnist"),
-        ],
-    )
-
-    overrides = dataset_env_overrides(root, resolved)
-
-    assert "TORCHVISION_DATASETS" not in overrides
-    assert "TORCH_HOME" not in overrides
-    assert "HF_HOME" not in overrides
-    assert "HUGGINGFACE_HUB_CACHE" not in overrides
-    assert "TORCH_HUB" not in overrides
-    assert overrides["RESAGENT2_DATASET_ROOT"] == str(root.resolve())
-    assert json.loads(overrides["RESAGENT2_DATASETS_JSON"]) == {
-        "cifar10": str((root / "cifar10").resolve()),
-        "mnist": str((root / "mnist").resolve()),
-    }

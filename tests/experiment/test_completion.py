@@ -107,7 +107,7 @@ def test_report_does_not_self_certify_command_failure(tmp_path):
 
 @pytest.mark.parametrize("exit_code,timed_out", [(1, False), (-9, True)])
 @pytest.mark.parametrize("status", ["completed", "failed"])
-@pytest.mark.parametrize("tool_name", ["run_shell", "run_setup"])
+@pytest.mark.parametrize("tool_name", ["run_shell"])
 def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, exit_code, timed_out, status, tool_name):
     current = state()
     command_receipt(current, tool_name, {
@@ -132,7 +132,7 @@ def test_finish_preserves_verified_execution_without_inferred_failure(tmp_path, 
     assert "artifact_path_missing" in rejected.report
 
 
-@pytest.mark.parametrize("tool_name", ["run_shell", "run_setup"])
+@pytest.mark.parametrize("tool_name", ["run_shell"])
 def test_unexecuted_failure_text_is_not_command_evidence(tmp_path, tool_name):
     current = state()
     command_receipt(current, tool_name, {"blocked": True, "reason": "No environment"}, ok=False)
@@ -141,16 +141,16 @@ def test_unexecuted_failure_text_is_not_command_evidence(tmp_path, tool_name):
     assert decision.artifacts == []
 
 
-def test_setup_and_shell_execution_facts_are_delivered_in_receipt_order(tmp_path):
+def test_installation_and_experiment_execution_facts_are_delivered_in_receipt_order(tmp_path):
     current = state()
-    commands = [("run_setup", "python -m pip install -r requirements.txt", 1),
-                ("run_setup", "python -m pip install numpy", 0),
+    commands = [("run_shell", "python -m pip install -r requirements.txt", 1),
+                ("run_shell", "python -m pip install numpy", 0),
                 ("run_shell", "python train.py", 0)]
     for sequence, (tool, command, exit_code) in enumerate(commands, start=1):
         command_receipt(current, tool, {
             "command": command, "exit_code": exit_code, "timed_out": False,
             "stdout_path": f"{sequence}.stdout", "stderr_path": f"{sequence}.stderr",
-            "duration_seconds": 0.1, "environment_information": {"prepared": True},
+            "duration_seconds": 0.1,
         }, ok=exit_code == 0)
     decision = check(tmp_path).evaluate(current, FinishCandidate(report="Recorded all outcomes"))
     assert decision.complete

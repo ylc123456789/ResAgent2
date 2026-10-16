@@ -74,7 +74,7 @@ def _controller(tmp_path, client, papers):
 def _request(kind):
     return ResearchRequest(goal="Locate, preserve and read the relevant comparison", required_evidence_kinds=[kind],
                            budget=RunBudget(max_llm_calls=8, timeout_seconds=30),
-                           permissions=RunPermissions(execute_commands=False, prepare_environment=False))
+                           permissions=RunPermissions(execute_commands=False))
 
 
 def test_search_pagination_returns_leads_then_only_chosen_fetch_is_preserved(tmp_path, monkeypatch):

@@ -3,42 +3,25 @@
 from resagent2_runtime import AllowListPermissionPolicy, PermissionDecision
 
 
-_PROCESS_TOOLS = frozenset({"run_shell", "run_setup", "run_verification", "audit_env"})
-_ENVIRONMENT_TOOLS = frozenset({"prepare_environment", "run_setup"})
-
-
 class OperationPermissionPolicy(AllowListPermissionPolicy):
     """Prepare a bounded operation without performing or approving its effects."""
 
-    def __init__(self, tools, *, boundary, binding, request):
+    def __init__(self, tools, *, boundary, request):
         super().__init__({tool.name for tool in tools})
         self.tools = {tool.name: tool for tool in tools}
         self.boundary = boundary
-        self.binding = binding
         self.answers = request.resume_answers
 
     def check(self, action, state, request):
         decision = super().check(action, state, request)
         if decision.outcome == "deny":
             return decision
-        process = action.tool in _PROCESS_TOOLS
-        environment = action.tool in _ENVIRONMENT_TOOLS
-        if process and not request.permissions.execute_commands:
+        if action.tool == "run_shell" and not request.permissions.execute_commands:
             return PermissionDecision(outcome="deny", reason="Process execution is not authorized")
-        if environment and not request.permissions.prepare_environment:
-            return PermissionDecision(outcome="deny", reason="Environment preparation is not authorized")
-        if action.tool in {"run_shell", "run_setup", "run_verification"} and not self.boundary.grant.access.unrestricted:
+        if action.tool == "run_shell" and not self.boundary.grant.access.unrestricted:
             return PermissionDecision(outcome="deny", reason="Script execution requires a fully readable/writable trusted workspace; scoped execution needs an isolation backend")
         tool = self.tools[action.tool]
         arguments = tool.input_model.model_validate(action.arguments)
-        if action.tool == "run_verification":
-            workflow = tool.permission_policy.check(arguments.commands)
-            if not workflow.allowed:
-                return PermissionDecision(outcome="deny", reason=workflow.reason)
-        if action.tool == "run_setup":
-            workflow = tool.policy.check(arguments.command)
-            if not workflow.allowed:
-                return PermissionDecision(outcome="deny", reason=workflow.reason)
         context = {"cwd": str(self.boundary.root)}
         prepared = None
         if action.tool == "delete_path":
@@ -47,17 +30,9 @@ class OperationPermissionPolicy(AllowListPermissionPolicy):
             if prepared["requires_confirmation"]:
                 decision = PermissionDecision(outcome="ask", reason=f"Confirm deletion of {prepared['path']} ({len(prepared['entries'])} entries)")
         elif action.tool == "run_shell":
-            context["shell"] = "/bin/bash"
-            context["pipefail"] = True
+            context.update(tool.approval_context())
+            prepared = dict(context)
             decision = PermissionDecision(outcome="ask", reason="Confirm this Bash script before execution")
-        if process or environment:
-            current = self.binding.current
-            context["environment"] = str(current.prefix) if current is not None else None
-            context["python_version"] = current.python_version if current is not None else self.binding.hard_constraint
-            if request.confirm_commands:
-                decision = PermissionDecision(outcome="ask", reason="This Run requires confirmation before external operations")
-        if action.tool == "run_verification" and decision.outcome == "ask" and len(arguments.commands) != 1:
-            return PermissionDecision(outcome="deny", reason="Submit one verification command at a time when confirmation is required")
         decision = decision.model_copy(update={"context": context, "prepared": prepared})
         if decision.outcome != "ask":
             return decision

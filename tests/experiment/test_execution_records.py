@@ -39,6 +39,14 @@ class Command:
     def __init__(self, exit_code):
         self.exit_code = exit_code
 
+    def approval_context(self):
+        return {"shell": "/bin/bash", "execution_backend": "host"}
+
+    def execute_prepared(self, state, arguments, prepared):
+        assert all(prepared[key] == value for key, value in self.approval_context().items())
+        assert "cwd" in prepared
+        return self.execute(state, arguments)
+
     def execute(self, state, arguments):
         return ToolObservation(
             summary="Real command result", ok=self.exit_code == 0,
@@ -60,9 +68,8 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
         agent=AgentOwner.EXPERIMENT, instruction="Run",
         budget=TaskBudget(max_llm_calls=5, timeout_seconds=10),
         workspace=boundary.grant,
-        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
+        permissions=AgentPermissions(execute_commands=True),
     )
-    binding = SimpleNamespace(current=None, hard_constraint=None)
     definition = AgentDefinition(
         name="experiment", owner=AgentOwner.EXPERIMENT, system_prompt="Run experiment",
         tools=tools, llm_client=ScriptedLLMClient(tool_turns([
@@ -71,7 +78,7 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
         ])),
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
-            tools, boundary=boundary, binding=binding, request=req,
+            tools, boundary=boundary, request=req,
         ),
         completion_check=ExperimentCompletionCheck(boundary),
     )
@@ -92,7 +99,7 @@ def test_loop_preserves_command_facts_independently_of_task_status(tmp_path, exi
         "resume_answers": [answer], "control_ack": first.control.origin,
     })
     definition = replace(definition, permission_policy=OperationPermissionPolicy(
-        tools, boundary=boundary, binding=binding, request=resumed,
+        tools, boundary=boundary, request=resumed,
     ))
     result = loop.run(definition, resumed, session_id="session_records")
     assert result.status == result.session.status == status

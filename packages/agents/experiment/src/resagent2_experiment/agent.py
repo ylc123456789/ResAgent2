@@ -9,12 +9,10 @@ from resagent2_contracts import (
     task_session_id,
 )
 from resagent2_capabilities import (
-    AuditEnvTool, ListFilesTool, PrepareEnvironmentTool, ReadArtifactTool,
-    ReadFileTool, RunSetupTool, RunShellTool, SearchTextTool,
+    ListFilesTool, ReadArtifactTool, ReadFileTool, RunShellTool, SearchTextTool,
 )
 from resagent2_components import (
-    ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
-    EnvironmentManager, ProcessRunner, RegisteredArtifactReader,
+    ArtifactReadError, DatasetResolutionError, ProcessRunner, RegisteredArtifactReader,
     RepoMaterializer, RepoMaterializerError, ResourceLayout,
     WorkspaceBoundary, WorkspacePermissionError,
     dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
@@ -97,26 +95,13 @@ class NativeExperimentAgent:
         except (OSError, ValueError, WorkspacePermissionError, RepoMaterializerError,
                 DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
-        workspace_id = request.workspace_id or (
-            request.workspace_spec.workspace_id if request.workspace_spec else "workspace"
-        )
-        binding = EnvironmentBinding(
-            EnvironmentManager(env_root=self.resource_layout.env_root),
-            run_id=request.run_id, workspace_id=workspace_id,
-            hard_constraint=request.environment_spec.python_version,
-        )
         output_root = request.output_dir or str(boundary.root / ".resagent2" / request.task_id)
         runner = ProcessRunner(boundary)
         tools = (
             ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
-            PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
-            RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
-                         timeout_seconds=request.budget.timeout_seconds,
-                         allowed=request.permissions.execute_commands and request.permissions.prepare_environment),
-            AuditEnvTool(binding, allowed=request.permissions.execute_commands),
             RunShellTool(
-                runner, binding,
+                runner,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
                 log_dir=f"{output_root}/commands",
@@ -130,7 +115,7 @@ class NativeExperimentAgent:
             context_builder=lambda request, state, limit: build_context(
                 request, state, datasets=datasets,
             ),
-            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
+            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, request=request),
             completion_check=ExperimentCompletionCheck(boundary, output_dir=request.output_dir),
             max_context_tokens=self.max_context_tokens,
         )

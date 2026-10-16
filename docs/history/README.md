@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-16：统一命令入口第一阶段
+
+从已推送的 `main@2bcde651` 新建 `feat/unified-run-shell`：Capabilities 只保留 `run_shell` 执行命令，删除专用安装、环境、验证工具及环境生命周期管理，由模型通过命令管理环境。固定代码继续负责准确批准、进程、中断、日志、执行记录和真实代码差异，四部分上下文与共享预算沿用原架构。schema 升为 28.0，旧 Run/Session 明确拒绝，不迁移证据。本地全量 **2126 passed / 1 skipped**、mock completed/8 工件、pip/diff clean；脚本模型驱动真实 venv 创建、离线装包、明确解释器执行，32 项断言及独立 12 项核对通过。真实 DeepSeek、服务器、GPU 和 L3 未运行；自动 reviewer 与沙箱留到后续阶段，本阶段不合并主线。见 [ADR-0030](decisions/0030-unified-shell-model-managed-environments.md) 与[实施和本地验证](reviews/UNIFIED_RUN_SHELL_STAGE1_2026-10-16.md)。
+
 ## 2026-10-16：原生工具、上下文与纠正链路合并收尾
 
 用户授权检查通过后将 `fix/native-agent-receipts` 合入本地 main，权限整体梳理留到后续分支。合并前发现并修复重复打断覆盖暂停起点、问答与手动暂停重叠计时的问题：三个新增用例在旧实现上失败，修复后本地 **2291 passed / 1 skipped**、mock completed/8 工件、pip/diff clean。已复核原 schema27 L3及机制补测、87002b6 的真实交接/预算短场景与原 E40 同条件 31/40 完成；不将旧 L3 或一个 E 样本当作最新版本科研质量/稳定性提升证明。schema 27 不迁移旧 Run/Session，保留所有历史与开发分支，不推送。范围、初始失败与勘误、后续权限事项及恢复边界见[采用与验收记录](reviews/NATIVE_AGENT_RECEIPTS_MERGE_CLOSEOUT_2026-10-16.md)。下文阶段记录保留当时状态。

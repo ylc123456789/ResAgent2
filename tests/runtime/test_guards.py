@@ -32,7 +32,7 @@ def context_builder(request, state, max_context_tokens) -> list[ContextSection]:
 
 
 def request(*, max_llm_calls: int = 2, timeout_seconds: int = 60) -> AgentRequest:
-    return AgentRequest(run_id='run_guard', task_id='task_guard', attempt_number=1, agent=AgentOwner.CODING, instruction='Can the action run?', budget=TaskBudget(max_llm_calls=max_llm_calls, timeout_seconds=timeout_seconds), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    return AgentRequest(run_id='run_guard', task_id='task_guard', attempt_number=1, agent=AgentOwner.CODING, instruction='Can the action run?', budget=TaskBudget(max_llm_calls=max_llm_calls, timeout_seconds=timeout_seconds), permissions=AgentPermissions(execute_commands=True))
 
 
 def definition(actions, *, allowed_tools: set[str]) -> AgentDefinition:

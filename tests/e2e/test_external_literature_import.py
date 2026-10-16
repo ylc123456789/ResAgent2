@@ -104,7 +104,7 @@ def test_imported_pdf_is_read_offline_and_can_complete(tmp_path, monkeypatch):
             required_evidence_kinds=["literature_fulltext"],
             budget=RunBudget(max_llm_calls=8, timeout_seconds=60),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
-            permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+            permissions=RunPermissions(execute_commands=False),
         ),
         literature=load_literature_manifest(_manifest(tmp_path)),
     )
@@ -139,7 +139,7 @@ def test_paused_run_import_refreshes_index_without_resuming(tmp_path):
             goal="Wait for imported source",
             budget=RunBudget(max_llm_calls=4, timeout_seconds=60),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
-            permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+            permissions=RunPermissions(execute_commands=False),
         ),
     )
     assert run.status.value == "paused"
@@ -206,7 +206,7 @@ def test_paused_import_then_answer_continues_same_scientific_session(tmp_path, m
             required_evidence_kinds=["literature_fulltext"],
             budget=RunBudget(max_llm_calls=8, timeout_seconds=60),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
-            permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+            permissions=RunPermissions(execute_commands=False),
         ),
     )
     assert run.status.value == "paused"
@@ -248,7 +248,7 @@ def test_repeated_import_reuses_snapshot_and_replaced_pdf_creates_new_chain(tmp_
             goal="Wait for supplied papers",
             budget=RunBudget(max_llm_calls=5, timeout_seconds=60),
             execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1),
-            permissions=RunPermissions(execute_commands=False, prepare_environment=False),
+            permissions=RunPermissions(execute_commands=False),
         ),
     )
     manifest = _manifest(tmp_path)

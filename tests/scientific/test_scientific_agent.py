@@ -330,3 +330,16 @@ def _search_result(papers):
                                       "source": "arxiv", "status": "success",
                                       "error_type": None, "error": None,
                                   }])
+
+
+def test_standalone_role_permissions_do_not_imply_a_run_execution_grant():
+    client = ScriptedLLMClient(tool_turns([finish()]))
+    result = ScientificAgent(client).invoke(request())
+    assert result.status == "completed", result.report
+    context = client.contexts[0]
+    task = json.loads(context.task_context.split("\n", 1)[1])
+    assert task["instruction"] == "Evaluate the method"
+    assert "permissions" not in task
+    authority = json.loads(context.runtime_context.split("\n", 1)[1])
+    assert authority["current_agent_permissions"]["execute_commands"] is True
+    assert authority["run_execution_permissions"] is None

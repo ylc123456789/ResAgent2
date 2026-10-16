@@ -56,6 +56,7 @@ class ComposedContext(RuntimeModel):
     text: str
     system_prompt: str = ""
     task_context: str = ""
+    runtime_context: str = ""  # Derived execution facts, separate from business requirements.
     artifact_index: str = ""
     pending_notifications: str = ""
     runtime_status: str = ""

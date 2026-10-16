@@ -129,7 +129,7 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | instruction | 本次唯一自然语言任务指令 |
 | input_artifacts | 已登记、同 Run 且 ID 唯一的输入材料 |
 | budget | TaskBudget：本次调用的 max_llm_calls、timeout_seconds |
-| permissions | 必填 AgentPermissions：execute_commands、approval_mode、request_work；审批模式沿 Run 继承 |
+| permissions | 必填 AgentPermissions：只约束当前 Agent 的 execute_commands、approval_mode、request_work；执行子任务由 Scheduler 继承 Run 授权 |
 | workspace、workspace_id、workspace_spec | 物理授权、逻辑工作区身份和来源声明 |
 | output_dir | 系统指定的输出位置 |
 | parent_session_id | 继续哪个本 Agent Session；不是直接父关系 |
@@ -141,7 +141,9 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | user_answers、resume_answers | 累计业务问答、本次恢复实际答案（可含操作批准） |
 | work_results、control_ack | 已接收 WorkResult 导航、此次确认的原控制调用身份 |
 
-permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。当前 Controller 只给 Scientific `request_work=True`，不授予命令执行或源工作区；Scheduler 给 Coding/Experiment 继承 Run 的命令执行授权和确认开关，并从已保存的工作区记录派生文件授权。任务图不携带自行扩权字段。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
+AgentRequest.permissions 仅约束当前 Agent；Scientific 无命令工具时的 false/manual 不能外推为整个 Run 的执行策略。Controller 从 Run 提供只读 run_permissions 事实，Scientific 与本角色权限一起在第三部分 runtime_authority 展示；该投影不是模型可填写的授权控制字段，不作为委派目标/限制。执行 Agent 的真实授权仍由 Scheduler 从 Run 复制并校验。
+
+permissions 是操作授权，WorkspaceGrant.access 是文件访问上限，都不构成业务模式。当前 Controller 只给 Scientific `request_work=True`，不授予命令执行或源工作区；Scheduler 给 Coding/Experiment 继承 Run 的命令执行授权和审批模式，并从已保存的工作区记录派生文件授权。任务图不携带自行扩权字段。可写工作区不强制修改，只读源目录也不禁止通过受控工件通道交付分析。工作区声明与授权必须一致，解析后的范围不能大于声明。
 
 恢复控制数据必须有 parent_session_id，并校验 Run、Task/Attempt 和 Session。业务问答不能带操作 action；工作结果只给 Scientific，并要求其实际 Ref 已显式授权为 input_artifacts。没有旧 resume_artifact_ids 别名。
 
@@ -350,7 +352,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具与参数错误一样进入有界纠错，并为对应调用保存未执行回执；整批预检发现未知工具时不执行批内任何项。Action 不忽略其他未知字段。
 
-`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。Coding/Experiment 的命令执行只通过共享 `run_shell`；安装、测试、训练、评测和环境命令使用同一入口。每次都审核精确脚本、起始目录和真实进程启动配置。manual 默认交人工；auto_review 由无状态模型返回 allow/ask，明确允许才执行，否则交人工。批准不能扩大 Run 授权；没有沙箱后端。
+`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。Coding/Experiment 的命令执行只通过共享 `run_shell`；安装、测试、训练、评测和环境命令使用同一入口。每次都审核精确脚本、起始目录和真实进程启动配置。manual 默认交人工；auto_review 由无状态模型返回 allow/ask，明确允许才执行，否则交人工。用户的执行意图和所给资料能否证明实际效果分别判断；预期输出、安全声明或跳过检查要求不补足缺失代码，工作区授权也不等于隔离，效果未知时交人工。批准不能扩大 Run 授权；没有沙箱后端。
 
 它执行 Linux `/bin/bash --noprofile --norc -o pipefail -c`，保留脚本首尾空白，不隐式开启 errexit。每次调用是独立 Shell，不提供持久终端或后台任务管理；activate、export 和 cd 不延续到下次调用。使用目标环境应在同一脚本内激活并执行，或明确使用解释器路径、conda run 等。不存在绑定环境、自动探针或认证前置步骤，无环境时也可以提交检查和创建命令。
 

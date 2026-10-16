@@ -32,7 +32,7 @@ WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denie
 
 底层工作区和进程边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复的结构化 answer 与 Session 中的动作快照，不解析历史问题文案。`approval_mode=manual` 为默认值，需要确认的 run_shell 和递归删除沿准确操作人工批准；`auto_review` 由 Runtime 在派发前调用注入的 OperationReviewer，确定性 deny 不能被审核模型覆盖。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；模型审核、shell-free 和路径 Tool 都不是 OS 沙箱。
 
-`LLMPermissionReviewer` 复用 Runtime 的 PromptLLMClient，不创建 Session 或 AgentLoop，只有 `review_operation` 输出工具，返回 allow/ask 与理由；每个准确操作最多一次 HTTP 尝试。它完整接收当前任务原文及有序业务对话、工作区授权和操作快照；组合根通过 context_provider 另外提供根用户原始目标、限制及真实用户补充。既往准确操作的批准、拒绝和原说明单独标明为操作历史，不提升为业务要求，也不授予后续操作权限。根记录不可用、输出不合法或审核故障向上交给 Runtime，转人工而不放行；预算、截止时间和取消沿共享 Runtime 传播。没有读文件、运行脚本或获取外部内容的审核工具，脚本效果无法从所给资料确认或风险/授权不明时保守返回 ask。审核费用和 trace 沿同一 Run 的总预算及取消链路，不另开钱包。
+`LLMPermissionReviewer` 复用 Runtime 的 PromptLLMClient，不创建 Session 或 AgentLoop，只有 `review_operation` 输出工具，返回 allow/ask 与理由；每个准确操作最多一次 HTTP 尝试。它完整接收当前任务原文及有序业务对话、工作区授权和操作快照；组合根通过 context_provider 另外提供根用户原始目标、限制及真实用户补充。既往准确操作的批准、拒绝和原说明单独标明为操作历史，不提升为业务要求，也不授予后续操作权限。根记录不可用、输出不合法或审核故障向上交给 Runtime，转人工而不放行；预算、截止时间和取消沿共享 Runtime 传播。没有读文件、运行脚本或获取外部内容的审核工具。授权意图与实际效果证据分别判断：用户描述预期效果或要求跳过检查，不证明未提供脚本的真实行为；工作目录和工作区授权不构成宿主命令沙箱。无法从所给信息确认实际效果或风险/授权不明时返回 ask，不能以先执行再核对输出代替事前审核。审核费用和 trace 沿同一 Run 的总预算及取消链路，不另开钱包。
 
 ProcessRunner 的 Shell 启动快照包含真实 cwd、shell、shell_args、pipefail 和过滤后启动环境的 SHA256；批准消费后、实际启动前再次比较，不一致则脚本不执行，不保存完整继承变量值。命令完成后 Git 诊断被打断时，原唯一回执保留 completed_command 和诊断真实停止状态，execution_record 分别冻结两项事实。
 

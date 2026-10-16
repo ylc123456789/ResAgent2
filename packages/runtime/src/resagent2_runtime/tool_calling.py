@@ -183,6 +183,8 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
     messages.extend(tool_messages(turns))
     if context.pending_notifications:
         messages.append({"role": "user", "content": "Pending child questions (runtime facts):\n" + context.pending_notifications})
+    if context.runtime_context:
+        messages.append({"role": "user", "content": "Runtime facts (not task requirements):\n" + context.runtime_context})
     if context.runtime_status:
         messages.append({"role": "user", "content": "Runtime status (current shared limits, not task requirements):\n" + context.runtime_status})
     if context.artifact_index:

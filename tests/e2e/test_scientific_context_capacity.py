@@ -98,7 +98,21 @@ def _assert_composed(client, index=-1, limit=256_000):
     context = client.contexts[index]
     schemas = client.schemas[index]
     history = client.histories[index]
-    assert context.included_sections == ["system", "task", "artifact_index"]
+    assert context.included_sections == ["system", "task", "runtime_authority", "artifact_index"]
+    task = json.loads(context.task_context.split("\n", 1)[1])
+    assert "permissions" not in task and "run_permissions" not in task["task_context"]
+    authority = json.loads(context.runtime_context.split("\n", 1)[1])
+    assert authority["source"] == "runtime" and authority["current_agent"] == "scientific"
+    assert authority["current_agent_permissions"]["execute_commands"] is True
+    assert authority["run_execution_permissions"] is None  # Standalone role grant is not a Run grant.
+    wire = native_input(context, schemas, history)
+    authority_content = "Runtime facts (not task requirements):\n" + context.runtime_context
+    positions = [i for i, message in enumerate(wire["messages"]) if message.get("content") == authority_content]
+    assert len(positions) == 1
+    assert wire["messages"][1]["content"] == context.task_context
+    assert all(i < positions[0] for i, message in enumerate(wire["messages"]) if message["role"] == "tool")
+    assert positions[0] < len(wire["messages"]) - 1
+    assert wire["messages"][-1]["content"] == context.artifact_index
     assert "tool_contracts" not in context.included_sections
     assert "recent_observations" not in context.included_sections
     assert "evidence_control_state" not in context.included_sections
@@ -109,6 +123,8 @@ def _assert_composed(client, index=-1, limit=256_000):
         assert set(turn.tool_results) == {call.id for call in turn.tool_calls}
     measured = ContextComposer.estimate_tokens(native_input_text(context, schemas, history))
     assert measured == context.estimated_tokens
+    without_authority = context.model_copy(update={"runtime_context": ""})
+    assert measured > ContextComposer.estimate_tokens(native_input_text(without_authority, schemas, history))
     assert measured > ContextComposer.estimate_tokens(context.text)
     assert measured <= limit
 

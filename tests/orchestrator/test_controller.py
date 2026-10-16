@@ -1710,3 +1710,36 @@ def test_invalid_work_input_is_corrected_in_same_scientific_session():
     state = controller.scientific_port.store.load(run.scientific_session.id)
     assert state.run_id == run.run_id
     assert state.llm_calls_used == 3
+
+
+@pytest.mark.parametrize("execute_commands,approval_mode", [(True, "auto_review"), (True, "manual"), (False, "auto_review")])
+def test_scientific_sees_role_and_real_run_authority_without_rewriting_business_requirements(execute_commands, approval_mode):
+    constraints = ["Preserve the requested method and supplied source data"]
+    action = request_work_action()
+    action["arguments"]["work_request"]["constraints"] = list(constraints)
+    controller = build_controller(actions=[action, finish_action()])
+    request = research_request().model_copy(update={
+        "permissions": RunPermissions(execute_commands=execute_commands, approval_mode=approval_mode),
+        "constraints": list(constraints),
+    })
+    run = controller.create_run("run_scoped_authority", request)
+    assert run.status == RunStatus.COMPLETED, run.terminal_error
+    context = controller.scientific_port.llm_client.contexts[0]
+    task = json.loads(context.task_context.split("\n", 1)[1])
+    assert "permissions" not in task
+    assert "run_permissions" not in task["task_context"]
+    assert request.goal in task["instruction"] and constraints[0] in task["instruction"]
+    authority = json.loads(context.runtime_context.split("\n", 1)[1])
+    assert authority == {
+        "source": "runtime", "current_agent": "scientific",
+        "current_agent_permissions": {"execute_commands": False, "approval_mode": "manual", "request_work": True},
+        "run_execution_permissions": {"execute_commands": execute_commands, "approval_mode": approval_mode},
+    }
+    child = controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT].port.requests[0]
+    assert child.permissions.execute_commands is execute_commands
+    assert child.permissions.approval_mode == approval_mode
+    assert child.instruction == "Run the experiment"
+    assert child.task_context["shared_constraints"] == constraints
+    assert run.work_requests[0].request.constraints == constraints
+    assert run.request.constraints == request.constraints == constraints
+    assert run.request.permissions == request.permissions

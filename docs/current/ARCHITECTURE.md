@@ -192,7 +192,9 @@ Agent 装配不同工具与专业策略，通用执行机制由 Runtime/Componen
 
 模型输入统一分四部分：固定契约；完整任务需求；原生 assistant/tool 配对历史；完整工件目录。第二、第四部分每轮从权威事实完整重建；正文只在第三部分，原生历史按 call ID 成对续传；容量不足时可以压缩较早完整回合的模型投影，原始历史仍保留。必需输入和完整目录装不下明确失败，不静默截断或猜模型容量。具体段落、刷新时机和压缩规则集中维护在 [CONTEXT](CONTEXT.md)。
 
-准确操作审批默认 manual，也可在 Run 创建时选择 auto_review。Capabilities 的确定性权限检查先保留执行授权与可信工作区硬边界；Runtime 只在真正派发时对 ask 调用注入 reviewer，批次预检和人工批准恢复不重复调用。Components 的 LLMPermissionReviewer 以唯一 review_operation 输出 allow/ask，明确允许才派发；含义不明、无效返回或模型故障交原人工入口。取消、期限、总预算耗尽和权威预算保存失败不会冒充普通模型故障。自动允许后重验原准确操作上下文，变化则不执行；执行组件仍使用已审核的原准备快照。
+准确操作审批默认 manual，也可在 Run 创建时选择 auto_review。Capabilities 的确定性权限检查先保留执行授权与可信工作区硬边界；Runtime 只在真正派发时对 ask 调用注入 reviewer，批次预检和人工批准恢复不重复调用。Components 的 LLMPermissionReviewer 以唯一 review_operation 输出 allow/ask，明确允许才派发；授权、范围或实际效果不明、无效返回或模型故障交原人工入口；用户对预期效果的描述不替代代码行为证据，工作目录和授权不提供 OS 隔离，不能先执行再审核。取消、期限、总预算耗尽和权威预算保存失败不会冒充普通模型故障。自动允许后重验原准确操作上下文，变化则不执行；执行组件仍使用已审核的原准备快照。
+
+Controller 为 Scientific 分别提供当前角色权限和 Run 执行授权的只读事实；Scientific 上下文通过独立 runtime_authority 在第三部分展示，避免把本角色不可执行误说成整个 Run 禁止执行。Scheduler 仍从权威 Run 赋予执行子任务权限，不依赖 Scientific 在委派文字里携带配置。Runtime 的内部 ComposedContext 将这些完整运行时事实与每次请求刷新的预算分开保存，均显示在第三部分；不增加公共持久契约或第二套授权状态。
 
 CLI 组合根从 RunStore 读取原始用户目标、假设、限制、交付要求、有来源的业务对话和独立的历史人工操作决定，注入 reviewer，不要求执行 Agent 私有 Session。审核开始及决定保存在原发起 Session 的事件中，执行前持久化，再标记原调用派发；回执投影自动审核来源，不创建第二个批准库、用户回答、工件或控制链。完整输入、返回和准确操作身份可通过既有 trace 核对；不依赖供应商未公开的内部思考。
 

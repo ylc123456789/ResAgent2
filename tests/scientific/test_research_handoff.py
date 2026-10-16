@@ -19,7 +19,7 @@ def test_work_tasks_and_attempt_reports_are_fully_visible_without_report_bodies(
                          budget=TaskBudget(max_llm_calls=10,timeout_seconds=60),input_artifacts=[ref],work_results=[result])
     state=AgentState(session_id="session_handoff",agent_name="scientific",owner=AgentOwner.SCIENTIFIC,run_id="run_handoff",created_at=now,updated_at=now)
     sections=build_context(request,state)
-    assert [section.name for section in sections]==["task","artifact_index"]
+    assert [section.name for section in sections]==["task","runtime_authority","artifact_index"]
     directory=next(section.content for section in sections if section.name=="artifact_index")
     assert all(text in directory for text in ("work_a","Implement and evaluate","task_a",ref.id,ref.summary))
     assert "BODY_MUST_BE_READ" not in directory

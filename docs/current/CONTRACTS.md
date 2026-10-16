@@ -225,7 +225,7 @@ Scientific 的材料归属其 Session，支持 literature_paper/PDF/fulltext、w
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
-每次 run_shell 使用独立日志目录，保留该次 stdout/stderr，不覆盖旧日志。执行记录保留实际 command、exit_code、日志路径、耗时及已有超时/中断事实；启动事实包含 cwd、shell、shell_args、pipefail 和 environment_fingerprint。指纹是继承变量与显式注入配置合并、过滤后实际启动环境的 SHA256；Bash 自行重建的 SHLVL 和 _ 从实际传入环境及指纹输入一起移除，PATH 等影响执行的配置仍参与比较。不保存完整变量值，也不证明脚本内部解释器或依赖版本。Coding 可附 code_before/code_after 的 Git tree 身份及 changed_paths；模型据此解释检查对应的代码和范围，不由系统生成环境认证结论。
+每次 run_shell 使用独立日志目录，保留该次 stdout/stderr，不覆盖旧日志。执行记录保留实际 command、exit_code、日志路径、耗时及已有超时/中断事实；启动事实包含 cwd、shell、shell_args、pipefail 和 environment_fingerprint。指纹是继承变量与显式注入配置合并、过滤后实际启动环境的 SHA256；Bash 自行重建的 SHLVL/_ 以及描述 SSH 连接的 SSH_CLIENT/SSH_CONNECTION 从实际传入环境及指纹输入一起移除，连接来源端口变化不会改变受管命令环境；PATH 等影响执行的配置仍参与比较。不保存完整变量值，也不证明脚本内部解释器或依赖版本。Coding 可附 code_before/code_after 的 Git tree 身份及 changed_paths；模型据此解释检查对应的代码和范围，不由系统生成环境认证结论。
 
 命令已返回的真实结果不因后置 Git 检查失败而丢失；一般诊断失败保留 workspace_change_error，不把未知代码状态写成已验证。如果脚本已经完成，随后 Git 诊断被打断，同一个原调用仍只保存一个中断/未知回执：completed_command 嵌入已完成脚本的原始结果，顶层保存被打断诊断的实际进程事实与 stop_confirmed。execution_record 分别保留已完成命令和被打断诊断两项事实；不能因为脚本已完成就声称后续诊断已经停止，也不能因诊断中断抹去脚本结果。原生工具批次中断保留已完成命令及准确中断回执，未开始项明确未执行；Shell 内部部分完成的脚本不自动视为完整通过，不虚构退出码。Run 期限继续生效，超时后 Session 仍保留已执行回执，不为了保存回执延长预算。
 

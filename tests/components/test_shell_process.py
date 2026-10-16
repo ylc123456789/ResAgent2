@@ -64,8 +64,10 @@ def test_workspace_and_environment_filtering(runner, tmp_path):
 
 @pytest.mark.parametrize("name,first,second", [
     ("SHLVL", "1", "7"), ("_", "/first/launcher", "/second/launcher"),
+    ("SSH_CLIENT", "192.0.2.1 10001 22", "192.0.2.1 10002 22"),
+    ("SSH_CONNECTION", "192.0.2.1 10001 192.0.2.2 22", "192.0.2.1 10002 192.0.2.2 22"),
 ])
-def test_approval_stays_stable_across_bash_rebuilt_launch_state(
+def test_approval_stays_stable_across_launcher_metadata(
     runner, monkeypatch, name, first, second,
 ):
     import resagent2_components.process as component
@@ -85,6 +87,7 @@ def test_approval_stays_stable_across_bash_rebuilt_launch_state(
     assert result.environment_fingerprint == approved["environment_fingerprint"]
     assert Path(result.stdout_path).read_text() == "1\n"
     assert "SHLVL" not in launched[0] and "_" not in launched[0]
+    assert "SSH_CLIENT" not in launched[0] and "SSH_CONNECTION" not in launched[0]
 
 
 def test_approval_still_rejects_changed_path_before_execution(runner, monkeypatch):

@@ -36,7 +36,7 @@ def test_existing_result_analysis_finishes_without_new_execution(tmp_path, monke
         {"tool": "finish", "arguments": {"report": "The recorded accuracy is 0.9."}},
     ]))
     agent = NativeExperimentAgent(client)
-    result = agent.invoke(request(tmp_path, writable=writable, confirm_commands=True))
+    result = agent.invoke(request(tmp_path, writable=writable))
     assert result.status == ModuleStatus.COMPLETED, result.report
     persisted = agent.loop.store.load(result.session.id)
     assert not any(event.tool == "run_shell" for event in persisted.events)
@@ -59,8 +59,7 @@ def test_command_permission_denied_before_execution(tmp_path):
     assert result.status == ModuleStatus.FAILED
 
 
-@pytest.mark.parametrize("confirm_commands", [False, True])
-def test_shell_always_requires_approval_before_execution(tmp_path, monkeypatch, confirm_commands):
+def test_shell_default_mode_requires_approval_before_execution(tmp_path, monkeypatch):
     calls = []
     def run_shell(self, command, **kwargs):
         calls.append(command)
@@ -74,7 +73,7 @@ def test_shell_always_requires_approval_before_execution(tmp_path, monkeypatch, 
     agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
         action, {"tool": "finish", "arguments": {"report": "Inspected the files."}},
     ])))
-    req = request(tmp_path, writable=True, confirm_commands=confirm_commands)
+    req = request(tmp_path, writable=True)
     first = agent.invoke(req)
     assert first.status == ModuleStatus.NEEDS_USER_INPUT, first.report
     assert calls == []

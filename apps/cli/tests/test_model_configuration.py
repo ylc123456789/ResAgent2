@@ -29,6 +29,7 @@ def defaults(monkeypatch):
         "LLM_TIMEOUT_SECONDS", "MODEL", "API_BASE", "API_KEY_ENV", "LLM_TRACE_LEVEL",
         "LLM_TRACE_DIR", "SCIENTIFIC_CONTEXT_TOKENS", "CODING_CONTEXT_TOKENS",
         "EXPERIMENT_CONTEXT_TOKENS", "COMPILER_CONTEXT_TOKENS",
+        "PERMISSION_REVIEWER_CONTEXT_TOKENS",
     ):
         monkeypatch.delenv(f"RESAGENT2_{name}", raising=False)
     monkeypatch.setenv("RESAGENT2_API_KEY_ENV", "TEST_CONFIG_KEY")
@@ -38,6 +39,7 @@ def defaults(monkeypatch):
 @pytest.mark.parametrize("component,limit", [
     ("scientific", 256_000), ("coding", 256_000),
     ("experiment", 256_000), ("compiler", 256_000),
+    ("permission_reviewer", 256_000),
 ])
 def test_output_headroom_preserves_every_module_input_limit(defaults, component, limit):
     client = composition._client()
@@ -78,8 +80,8 @@ def test_composition_uses_fixed_interpreter_without_a_model_client(defaults, mon
         controller = real_e2e._application(tmp_path).controller
 
     assert isinstance(controller.interpreter, DeterministicWorkInterpreter)
-    # Scientific, Coding, Experiment and Compiler only.
-    assert len(clients) == 4
+    # Scientific, Coding, Experiment, Compiler and an independent permission reviewer.
+    assert len(clients) == 5
     assert controller.compiler._client._max_context_tokens == DEFAULT_AGENT_CONTEXT_TOKENS
 
 

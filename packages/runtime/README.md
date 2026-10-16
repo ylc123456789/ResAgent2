@@ -9,8 +9,8 @@
 - provider-neutral LLM client protocol、OpenAI-compatible 原生工具调用和 ScriptedLLMClient；
 - 有总 token 预算的 Context Composer，以及显式配置的 ModelProfile；
 - Tool registry/dispatcher；
-- PermissionPolicy；
-- action/observation/error/compaction event 和 session 快照持久化协议；
+- PermissionPolicy 与可注入的 OperationReviewer；
+- action/observation/error/compaction/permission_review event 和 session 快照持久化协议；
 - 确定性 completion check；
 - 共享 execution_budget、请求发送前用量接口、总截止时间及结构化错误（step 仅为动作序号）；
 - `needs_user_input` 信号。
@@ -27,7 +27,7 @@ Agentic Loop、上下文、LLM client、Session、Tool 协议与控制类 Tool�
 
 ContextComposer 完整组织固定契约、任务需求和工件目录；Loop 统一计量原生消息、工具 schema 与协议历史，只有较早完整 assistant/tool 回合可以摘要。正文和执行反馈只在原生回执，不再构造可伸缩材料工作集。固定契约指纹在恢复时校验 prompt/tools 不变。业务问答直接通过请求字段完整交付；权限批准继续原调用，不累积为任务需求，也不创建问答工件。细节见 [CONTEXT](../../docs/current/CONTEXT.md)。
 
-非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 使用它；Interpreter 用固定代码组织材料，不调用模型。runtime 不认识编译或解释业务。
+非循环调用方可用 `PromptLLMClient(client, system_prompt=..., max_context_tokens=...)`：传普通 prompt 和结果 schema，共用 Composer/模型容量/trace/attempt 计量，不需要 Session、Tool 或 AgentLoop。CLI 与 E2E 的 Compiler 使用它；无状态权限审核也复用它，以唯一 review_operation 原生工具输出 allow/ask。Interpreter 用固定代码组织材料，不调用模型。runtime 不认识编译、解释或命令风险业务。
 
 `ModelRequestClient.request(body)`供托管搜索等组件发送一次独立的模型JSON请求。调用方构造和解释供应商格式；Runtime只负责HTTP上限、发送前共享用量登记、总截止时间和私有trace，不增加Agent、Session或重试。full保留请求及可取得的JSON响应，metadata保留内容hash；HTTP失败只保留状态和Retry-After，认证header不进trace，当前key即使被回显也会遮蔽。`response_valid`只说明返回了JSON对象，业务成功由调用组件校验。
 
@@ -44,7 +44,9 @@ ContextComposer 完整组织固定契约、任务需求和工件目录；Loop �
   → action schema 校验
   → Tool 是否属于 Profile
   → Tool input schema 校验与 PermissionPolicy：allow / ask / deny
-  → 原生批次整体预检，再串行执行并逐项生成 ToolObservation
+  → 原生批次整体预检
+  → 逐项派发前复核；auto_review 对需要确认的准确操作审阅一次
+  → 串行执行并逐项生成 ToolObservation
   → 保存状态快照
   → CompletionCheck
 ```
@@ -52,6 +54,10 @@ ContextComposer 完整组织固定契约、任务需求和工件目录；Loop �
 `AgentAction.arguments` 保持通用对象，同一 Loop 复用不同 Tool 集；工具名及输入校验只由实际 ToolRegistry 决定。所有 Agent 客户端，包括 ScriptedLLMClient，都必须实现原生 `next_tool_call`；ScriptedLLMClient 接收 ToolCallTurn，不接收正文 JSON 动作。Compiler 通过独立 PromptLLMClient.next_action 请求唯一 route_tasks 原生调用，传输客户端保留供显式 JSON 调用方使用的独立 next_action 接口。两者共用既有传输、上下文容量与 Run 用量，Agent 的协议历史只属于 Session。
 
 PermissionDecision 的 outcome 只有 allow / ask / deny。Runtime 负责应用结果与暂停恢复，Capabilities 的 OperationPermissionPolicy 适配 Components 的固定规则与执行边界；工具实际操作前仍校验边界。deny 作为有界可恢复反馈，让模型可改用合法工具。ask 保存 ActionSnapshot 与 Session.pending_action，通过直接 PendingQuestion/RecordedAnswer 确认；批准绑定当前动作、参数、上下文及作用域，派发前先持久消费。不能用回答扩权或复用已消费批准。
+
+`approval_mode` 默认 manual；auto_review 仅处理确定性策略的 ask，不替代工具授权或覆盖 deny。AgentDefinition 注入 OperationReviewer，Runtime 在实际派发前提供准确 ActionSnapshot 和当前 AgentRequest；整批预检不调用审核，人工答复恢复也不重复审核。审核只返回 allow/ask；allow 后仍复核权限与原启动快照，变化则不执行。ask、审核不可用或输出不合法都回到原人工批准链路，不会因审核故障放行；共享预算耗尽、截止和取消保留各自真实终止语义。
+
+permission_review 审计事件记录准确操作、来源、状态及理由，原调用的唯一回执投影相应审核信息。它们属于第三部分执行事实，不伪装成人工批准，不加入第二部分业务需求或第四部分工件目录。审核组件取得根用户要求、当前任务及既往操作拒绝说明；原文和来源保留，旧批准不会成为新授权。Runtime 不读取下游私有历史或外部文件来补授权，也不包含 Shell 关键词白名单或沙箱实现。
 
 原生回复每轮接受 1–8 个 tool calls，按数组顺序串行执行；整批先校验参数和权限，逐个执行前仍复核权限及超时。`finish`、`ask_user`、`request_work`、`reply_to_task`、`abandon_work` 必须单独调用；工具说明、通用规则与拒绝反馈共用 `CONTROL_TOOLS` 定义。零个、超量或混入控制工具的批次整体拒绝，反馈点名实际控制工具并说明整批未执行、应单独重试，assistant `content` 不作为备用动作。中途失败时保留已执行结果，取消剩余调用，不回滚或自动重放。8 是共享的单批安全上限，不是任务步数预算。
 
@@ -77,7 +83,7 @@ AgentLoop 统一返回 `AgentResult`。业务提问和工作请求先保存稳�
 
 当前 RunBudget/TaskBudget 只含 max_llm_calls 和 timeout_seconds；任务数与每任务尝试数由 ExecutionLimits 单独限制。Controller/Scheduler 为执行绑定 [execution_budget](src/resagent2_runtime/budget.py)，注入持久 RunUsagePort；嵌套调用只能收紧调用上限和截止时间，共享同一个 UsagePort。独立 Agent 调用可使用同一机制的内存用量，不具有跨进程 Run 持久化保证。
 
-每次实际模型 HTTP 请求先 charge，再发送，最后 complete 为 succeeded/failed/unknown；重试、格式纠正和摘要都占用同一余额。Run 原子保存失败不发送，中断后的 unknown 不退款。AgentResult.llm_calls 与 Session 计数是用量差额投影，不再二次扣费；last_attempts 只是诊断。invoke_model 为最小客户端预扣一次，manages_usage 客户端须自行通过同一接口逐次登记传输。该占用不冒充供应商精确账单，也不是跨 Run/Session/Provider 的事务。
+每次实际模型 HTTP 请求先 charge，再发送，最后 complete 为 succeeded/failed/unknown；重试、格式纠正、摘要和权限审核都占用同一余额。Run 原子保存失败不发送，中断后的 unknown 不退款。AgentResult.llm_calls 与 Session 计数是用量差额投影，不再二次扣费；last_attempts 只是诊断。invoke_model 为最小客户端预扣一次，manages_usage 客户端须自行通过同一接口逐次登记传输。该占用不冒充供应商精确账单，也不是跨 Run/Session/Provider 的事务。
 
 [http.py](src/resagent2_runtime/http.py) 使用 httpx 与可取消的总超时覆盖完整响应读取；每次 HTTP/重试取操作超时与当前截止时间的较小值。Components 的进程与环境操作沿用该截止时间并在超时后终止进程树。显式等待用户的时间由 Run 扣除，安装、下载及普通停机不扣除；恢复不重置余额。step 只记动作时序，没有隐藏的 50 步/50 次上限。
 
@@ -98,4 +104,4 @@ conda activate ResAgent2
 python -m pytest tests/runtime
 ```
 
-稳定导入路径是 `resagent2_runtime`，当前包版本为 `0.1.0`。
+稳定导入路径是 `resagent2_runtime`，当前包版本为 `0.1.0`。公共 Run/Session schema 为 29.0；旧 schema 和已删除的 confirm_commands 字段不兼容。

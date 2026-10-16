@@ -37,14 +37,14 @@ delete_path 接受准确的相对 path 和 recursive=False；已授权文件、�
 
 
 
-测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 28.0，旧权限和确认字段不保留兼容解释。文献和网页工具登记的工件共同并入 Session 的 artifact_index；工具回执仍按原生协议保存，不把目录当成授权或正文。
+测试入口：[Tool 行为](../../tests/capabilities/)、[工具 schema/说明指纹](../../tests/e2e/test_tool_surface.py)、[依赖与导出边界](../../tests/capabilities/test_capabilities_boundary.py)。当前公共数据 schema 为 29.0，旧权限和 confirm_commands 字段不保留兼容解释。文献和网页工具登记的工件共同并入 Session 的 artifact_index；工具回执仍按原生协议保存，不把目录当成授权或正文。
 
 `run_shell` 是 Coding/Experiment 共用的唯一命令执行 Tool。环境检查、创建、安装、验证、训练和评测都通过普通脚本完成；旧的安装、环境准备/审计和 Coding 验证 Tool 已删除，没有兼容别名。
 执行能力与日志/超时/中断在 Components，Tool 负责模型参数和唯一回执，不新增运行循环。
-它需要 execute_commands 和完整可信工作区，每段脚本无条件单次人工审批；无需系统绑定环境、认证或自动探针。
+它需要 execute_commands 和完整可信工作区；默认 approval_mode=manual，每段脚本匹配准确操作的单次人工批准。auto_review 先经过相同固定授权检查，再由 Runtime 在派发前审阅一次；只有明确 allow 才执行，ask 或审核故障交人工。工具预检不触发审核，人工恢复不重复审核；无需系统绑定环境、认证或自动探针。
 每次执行采用独立非登录 Bash（pipefail，无隐式 errexit），不维护终端或后台任务；activate/export/cd 不跨调用保留，模型应在同一脚本里激活或明确指定目标解释器。
 环境由模型依据上级要求自行管理，多任务协作通过任务输入和公开结果传递环境信息，不固定共享路径。系统不自动接管、清理或重建用户环境，环境删除需要明确命令和正常批准。
 脚本原文保持不变；批准绑定真实 cwd、Shell flags 和过滤后启动环境指纹，实际启动前变化则返回 not_executed。结果及 execution_record 只说明实际执行。Coding 保留实际 changed_paths 和执行前后代码身份，失败也保留已发生变化；命令完成后 Git 诊断中断时，唯一回执同时保留 completed_command 和诊断停止事实，执行工件记录两者。完成检查不再依赖专用验证或环境认证状态。
-当前后端是受信宿主执行，人工审批不是 OS 沙箱；不通过命令分类猜脚本含义，Shell 输出不冒充工件正文访问记录。auto reviewer 和沙箱不属于当前实现。阅读记录只用于追溯，不作为语义完成门槛。
+当前后端是受信宿主执行，人工批准和模型审核都不是 OS 沙箱。固定代码不通过命令关键词白名单猜脚本含义；无状态 reviewer 完整核对原始用户要求、当前任务、历史拒绝说明和准确操作，脚本效果未知或授权/风险不明则交人工。审核模型没有执行或读取文件的工具，审核请求共享 Run 总预算与取消链路。审核来源、理由和结果留在第三部分审计/原调用回执，不伪装成人工回答，也不进入第二部分需求或第四部分工件。Shell 输出不冒充工件正文访问记录，阅读记录不作为语义完成门槛。
 
 当前接入规则：文献和网页搜索只返回临时线索；fetch_literature(source)/web_fetch 显式保存材料，read_artifact 按需读取。工具回执只进原生历史，实际 Ref 增量由共享 Loop 摄入完整目录。工作结果按 WorkRequest → Task → 原报告和实际产物展开，不生成总体报告。业务 ask_user 统一问直接父，根 Scientific 才问真实用户；子向上答复进入子第二部分、父收到下级问题进入父第三部分，不产生工件。操作批准续执行原调用，不进入需求/目录。工具通过共用取消上下文响应显式打断：未完成受管操作停止，准确回执保存；完成文件/结果保留，无自动回滚。规则以 [CONTEXT](../../docs/current/CONTEXT.md) 和 [CONTRACTS](../../docs/current/CONTRACTS.md) 为准。

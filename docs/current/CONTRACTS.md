@@ -1,6 +1,6 @@
 # 模块接口与契约
 
-当前公共契约为 **schema 28.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
+当前公共契约为 **schema 29.0**。三个 Agent 共用 `invoke(AgentRequest) -> AgentResult`：业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`。身份、权限、预算、状态、恢复和控制信号保持结构化。每个 Agent 只有一种调用和业务模式。
 
 本页说明调用边界、字段和接收规则。职责看 [架构](ARCHITECTURE.md)，模型可见内容看 [上下文](CONTEXT.md)，公共模型以 [models.py](../../packages/contracts/src/resagent2_contracts/models.py) 为准。当前入口为进程内 Python 方法。
 
@@ -65,14 +65,13 @@ Scheduler 只执行 Controller 接受的任务图，不创建第二条 Run 控�
 |---|---|
 | `budget: RunBudget` | 必填；`max_llm_calls`、`timeout_seconds` 均为正整数，控制模型请求次数和有效运行时长 |
 | `execution_limits: ExecutionLimits` | `max_tasks=8` 限制累计图节点数；`max_attempts_per_task=2` 包含首次执行，不是另加两次重试；均为正整数 |
-| `permissions: RunPermissions` | 必填；`execute_commands` 默认 False，可信入口负责明确授权 |
-| `confirm_commands: bool` | 默认 False；启用后，对权限允许的 Agent 顶层外部操作逐次询问 |
+| `permissions: RunPermissions` | 必填；`execute_commands` 默认 False；`approval_mode` 为 manual（默认）或 auto_review，可信入口负责选择 |
 
 明确等待用户的业务问答和手动暂停时间不计入超时；重复打断保留原等待起点，两种等待重叠时只计算一次，回答或继续时统一结算。安装、下载、命令、模型等待和普通进程停机仍计入。CLI 默认明确授权执行命令，可显式关闭；这不改变公共契约的默认拒绝语义。环境操作使用同一命令授权，不再有单独的环境准备权限。
 
 ### 共享预算与调用计量
 
-`ResearchRun.usage.requests` 按 `call_id:retry_index` 保存模型请求占用及 `succeeded / failed / unknown` 结果，`llm_calls_used` 从中计算。发送前先原子保存占用；保存失败不发送，登记后中断不退款。HTTP 重试、格式纠正、摘要、Compiler 和三个 Agent 共用此用量。结果中的 `llm_calls` 用于诊断，不再扣费。单个 Run 只支持一个执行者。
+`ResearchRun.usage.requests` 按 `call_id:retry_index` 保存模型请求占用及 `succeeded / failed / unknown` 结果，`llm_calls_used` 从中计算。发送前先原子保存占用；保存失败不发送，登记后中断不退款。HTTP 重试、格式纠正、摘要、Compiler、三个 Agent 和权限 reviewer 共用此用量。结果中的 `llm_calls` 用于诊断，不再扣费。单个 Run 只支持一个执行者。
 
 Controller/Scheduler 为调用绑定 `runtime.budget.execution_budget`，嵌套调用共享用量并取更早截止时间。TaskBudget 是当前余额的调用上限快照，不是第二份钱包。模型及文献 HTTP、退避、安装等受控子进程都受剩余时间约束；到期取消请求或终止进程树。本地取消不保证供应商停止计费，未知结果保留占用。
 
@@ -130,10 +129,9 @@ Controller 调用 Scientific，Scheduler 调用 Coding/Experiment。`ModuleBindi
 | instruction | 本次唯一自然语言任务指令 |
 | input_artifacts | 已登记、同 Run 且 ID 唯一的输入材料 |
 | budget | TaskBudget：本次调用的 max_llm_calls、timeout_seconds |
-| permissions | 必填 AgentPermissions：execute_commands、request_work |
+| permissions | 必填 AgentPermissions：execute_commands、approval_mode、request_work；审批模式沿 Run 继承 |
 | workspace、workspace_id、workspace_spec | 物理授权、逻辑工作区身份和来源声明 |
 | output_dir | 系统指定的输出位置 |
-| confirm_commands | 继承 Run 的逐次外部操作确认要求 |
 | parent_session_id | 继续哪个本 Agent Session；不是直接父关系 |
 | upstream_session_id | 真实直接父 Agent Session；根 Agent 为空 |
 | upstream_inputs | 有序完整上级补充；含原 event_id、原文、source、原时间 |
@@ -352,7 +350,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 参数错误、ok=False、PermissionPolicy 的 deny 和执行时 PermissionError 等可恢复错误进入反馈，允许在剩余额度内改用合法操作；连续失败仍受统一上限约束。ask 保存结构化待确认动作并暂停，allow 才派发。未知工具与参数错误一样进入有界纠错，并为对应调用保存未执行回执；整批预检发现未知工具时不执行批内任何项。Action 不忽略其他未知字段。
 
-`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。Coding/Experiment 的命令执行只通过共享 `run_shell`；安装、测试、训练、评测和环境命令使用同一入口。每次都要求精确脚本、起始目录和真实进程启动配置的单次人工确认，即使 confirm_commands=False；批准不能扩大 Run 授权。没有自动 reviewer 或沙箱后端。
+`OperationPermissionPolicy` 先检查模块 Tool 集、Run 操作权限和工作区范围。Coding/Experiment 的命令执行只通过共享 `run_shell`；安装、测试、训练、评测和环境命令使用同一入口。每次都审核精确脚本、起始目录和真实进程启动配置。manual 默认交人工；auto_review 由无状态模型返回 allow/ask，明确允许才执行，否则交人工。批准不能扩大 Run 授权；没有沙箱后端。
 
 它执行 Linux `/bin/bash --noprofile --norc -o pipefail -c`，保留脚本首尾空白，不隐式开启 errexit。每次调用是独立 Shell，不提供持久终端或后台任务管理；activate、export 和 cd 不延续到下次调用。使用目标环境应在同一脚本内激活并执行，或明确使用解释器路径、conda run 等。不存在绑定环境、自动探针或认证前置步骤，无环境时也可以提交检查和创建命令。
 
@@ -360,12 +358,24 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 
 | 操作 | 所需操作授权 | 额外边界 |
 |---|---|---|
-| `run_shell` | `execute_commands=True` | 完整可读写的可信工作区；每次准确操作人工批准；环境操作没有额外管理权限或隐式副作用 |
+| `run_shell` | `execute_commands=True` | 完整可读写的可信工作区；每次按 approval_mode 审核准确操作；环境操作没有额外管理权限或隐式副作用 |
 | 文件读取、创建、修改及 Coding 的 `delete_path` | 对应 WorkspaceAccess 范围 | 模块必须提供该工具；不依赖命令权限 |
 
-`confirm_commands` 保留原有外部操作确认开关，但 False 仍不免除 run_shell 和非空目录递归删除等固定要求的确认，不表示自动批准所有操作。脚本及启动配置变化不能复用旧批准；恢复时先匹配真实 cwd、shell、shell_args、pipefail 与 environment_fingerprint；已回答审批若不再匹配，原调用返回 not_executed 和原用户说明，由模型按需提交新 native call 重新审批，不复用原调用身份再发问题。消费批准后，ProcessRunner 在真正启动前用同一份过滤后的启动环境重建并比较快照；不一致时不启动脚本，原调用回执为 execution_status=not_executed，不能改用新配置执行。环境创建、安装、修改和删除必须出现在被批准的真实脚本中，系统不自动清理或重建环境。
+`confirm_commands` 已从 ResearchRequest/AgentRequest 和 CLI 删除；schema 29.0 不接受失效字段或旧旗标。脚本及启动配置变化不能复用旧批准；恢复时先匹配真实 cwd、shell、shell_args、pipefail 与 environment_fingerprint；已回答审批若不再匹配，原调用返回 not_executed 和原用户说明，由模型按需提交新 native call 重新审批，不复用原调用身份再发问题。消费批准后，ProcessRunner 在真正启动前用同一份过滤后的启动环境重建并比较快照；不一致时不启动脚本，原调用回执为 execution_status=not_executed，不能改用新配置执行。环境创建、安装、修改和删除必须出现在被批准的真实脚本中，系统不自动清理或重建环境。
 
 Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，不承诺原子回滚；代码变化以实际 Git 差异和命令快照为准，不维护旧验证所用的编辑代次。删除文件中的内容仍用 replace_text。
+
+### 自动准确操作审核
+
+Runtime 暴露 `OperationReviewer.review(ActionSnapshot, AgentRequest) -> ApprovalReviewVerdict`，通过 `AgentDefinition.operation_reviewer` 注入。结果只接受 `decision: allow|ask` 和非空 `reason`。确定性 PermissionPolicy.check 不调用模型；只在派发前 ask 且 Run 选择 auto_review 时调用一次，人工回答恢复直接沿原准确动作校验，不重新审核。拒绝硬授权的操作不会送给 reviewer。
+
+审核输入使用原操作与请求的深副本。`LLMPermissionReviewer` 在 Components，复用 PromptLLMClient、原生 `review_operation` schema、共享传输/预算/期限/取消/trace；没有可执行工具或 Session。组合根额外提供根用户原始业务要求和有序业务记录，历史人工操作决定单独呈现。旧 yes 不是新授权，旧 no 与说明不会因为新的 native call 而消失。材料/脚本/Agent 声称均为待核对数据；看不清脚本效果时应 ask。
+
+发起 Session 的 `permission_review` 事件按 operation_key 保存原 ActionSnapshot、source=auto_review、状态和原因。先保存 started，模型返回后保存 allow/ask/error/interrupted/invalidated，再保存执行标记并派发；持久化失败不执行。唯一原工具回执投影来源、action_id、状态、原因和 audit_sequence，不创建自动 RecordedAnswer，也不复制为第二部分需求或第四部分工件。
+
+无 reviewer、格式/容量/供应商异常一律回原人工审批，异常只暴露类型；预算耗尽、到期、取消、UsagePersistenceError 不转人工。RunUsagePort 将权威 load/save 失败标为 UsagePersistenceError，保留原因供诊断，阻止继续授权或发送。自动 allow 后重验硬授权和原启动上下文，不匹配以 not_executed 结算并要求按需发新调用；不会偷换成新 prepared 快照。底层 ProcessRunner 仍在真正启动前复验原配置。
+
+已经标记派发却未取得回执的调用，超时或恢复时记为 outcome unknown，即使没有用户说明也不能声称未执行。已知工具结果优先保留，未知副作用不自动重放。审核器可能误判；它不是 OS 隔离，也不证明研究结论正确。
 
 ### 原生调用批次与格式纠错
 
@@ -642,7 +652,7 @@ Coding 不再以专用 run_verification、环境认证或 generation 作为完�
 
 ### schema 版本
 
-Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **28.0**，旧 27.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写，旧证据原样保留。此版统一 run_shell，删除环境结构字段、环境准备权限及专用管理/验证 Tool，相关固定 prompt/schema 同步变化。原有准确操作批准及拒绝说明、UUID 工件身份、完整目录、运行中 input/interrupt 和同一 Run 总预算继续沿用；不恢复旧控制/搜索/index 工件或重复正文工作集。
+Python 包版本与 wire schema 独立演进。当前公共模型和 AgentState 只接受 **29.0**，旧 28.0 及更早 Run/Session 明确拒绝恢复，不迁移、不重写，旧证据原样保留。此版增加 RunPermissions.approval_mode、运行时审核接口及审计事件，删除失效的 confirm_commands；schema 28 已完成的统一 run_shell、移除环境管理/专用验证 Tool 继续沿用。原有准确操作批准及拒绝说明、UUID 工件身份、完整目录、运行中 input/interrupt 和同一 Run 总预算继续沿用；不恢复旧控制/搜索/index 工件或重复正文工作集。
 
 Run 顶层的嵌套公共 request 等带 schema；RunStore 重校验整个状态。SessionStore 先检查顶层 schema，再校验模型；缺版本不能靠默认值接受。恢复还检查协议、endpoint/model 和固定 prompt/tools 指纹。读取、解码、解析或状态校验失败返回明确 contract_error，不调用模型、不覆盖损坏记录，也不伪造 SessionRef。
 

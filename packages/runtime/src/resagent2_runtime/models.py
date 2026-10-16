@@ -132,6 +132,13 @@ class CompletionDecision(RuntimeModel):
         return self
 
 
+class ApprovalReviewVerdict(RuntimeModel):
+    """Untrusted model judgment; the runtime binds it to the prepared operation."""
+
+    decision: Literal["allow", "ask"]
+    reason: NonEmptyStr
+
+
 class PermissionDecision(RuntimeModel):
     """Permission result produced before a Tool can execute."""
 
@@ -141,6 +148,7 @@ class PermissionDecision(RuntimeModel):
     prepared: dict[str, JsonValue] | None = None
     approval_id: str | None = None
     user_comment: str | None = None
+    reviewed_action: ActionSnapshot | None = None
 
 
 class AgentEvent(RuntimeModel):
@@ -148,7 +156,7 @@ class AgentEvent(RuntimeModel):
 
     sequence: int = Field(ge=1)
     step: int = Field(ge=0)
-    type: Literal["action", "observation", "error", "compaction"]
+    type: Literal["action", "observation", "error", "compaction", "permission_review"]
     tool: str | None = None
     data: JsonValue
     created_at: datetime
@@ -207,7 +215,7 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
-    schema_version: Literal["28.0"] = SCHEMA_VERSION
+    schema_version: Literal["29.0"] = SCHEMA_VERSION
     session_id: SessionId
     upstream_session_id: SessionId | None = None
     agent_name: NonEmptyStr

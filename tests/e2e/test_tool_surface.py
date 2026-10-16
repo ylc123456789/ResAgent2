@@ -34,6 +34,8 @@ Later schema 27 guidance derives singleton hints for all five control tools
 from the enforced rule and describes declared logical workspace selection.
 Schema 28 retains only run_shell for command execution and removes dedicated
 environment management, setup and verification Tools.
+Schema 29 updates embedded contract versions and run_shell guidance for
+manual/auto_review; the permission reviewer is not an execution Agent Tool.
 """
 
 import hashlib

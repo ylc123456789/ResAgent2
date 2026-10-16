@@ -37,7 +37,7 @@ from .context import (
     DEFAULT_AGENT_CONTEXT_TOKENS, ContextBudgetExceeded, ContextComposer,
 )
 from .budget import (
-    BudgetExhaustedError, DeadlineExceededError, current_budget, current_budget_status,
+    BudgetExhaustedError, DeadlineExceededError, UsagePersistenceError, current_budget, current_budget_status,
     execution_budget, invoke_model,
 )
 from .compaction import plan_compaction
@@ -46,6 +46,7 @@ from .models import (
     AgentAction,
     AgentEvent,
     AgentState,
+    ApprovalReviewVerdict,
     CompletionDecision,
     ContextSection,
     FinishCandidate,
@@ -116,6 +117,16 @@ class PermissionPolicy(Protocol):
         """Return a structured allow, ask or deny decision."""
 
 
+class OperationReviewer(Protocol):
+    """Stateless model review, called only after deterministic permission checks.
+
+    Implementations use the shared budget, cancellation and model transport;
+    they do not execute tools or manufacture user answers.
+    """
+
+    def review(self, operation: ActionSnapshot, request: AgentRequest) -> ApprovalReviewVerdict: ...
+
+
 class AllowListPermissionPolicy:
     """Minimal policy that permits only an explicit set of Tool names."""
 
@@ -151,6 +162,7 @@ class AgentDefinition:
     max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS
     acknowledge_registration: Callable[..., None] | None = None
     recover_registration: Callable[..., list] | None = None
+    operation_reviewer: OperationReviewer | None = None
 
 
 class AgentLoop:
@@ -621,6 +633,9 @@ class AgentLoop:
                 try:
                     registry.validate(action.tool, action.arguments)
                     permission = definition.permission_policy.check(action, state, request)
+                    permission = self._review_permission(definition, registry, request, state, action, permission)
+                except BudgetExhaustedError as error:
+                    return self._failure(state, ErrorCode.BUDGET_EXHAUSTED, str(error), retryable=False)
                 except DeadlineExceededError as error:
                     return self._failure(state, ErrorCode.TIMEOUT, str(error), retryable=False)
                 except (ValidationError, PermissionError, ValueError) as error:
@@ -643,7 +658,8 @@ class AgentLoop:
                 if permission.outcome == "deny":
                     if permission.approval_id:
                         state.pending_action = None
-                    self._feedback(state, permission.reason or "Tool execution denied", tool=action.tool)
+                    self._feedback(state, permission.reason or "Tool execution denied", tool=action.tool,
+                                   value={"execution_status": "not_executed"})
                     failure = self._note_failure(state, consecutive_failures)
                     if failure is not None:
                         return failure
@@ -1011,7 +1027,7 @@ class AgentLoop:
     def _cancel_pending_calls(self, state: AgentState, reason: str = "an earlier call stopped the batch") -> None:
         if state.tool_turns and len(state.tool_turns[-1].tool_results) < len(state.tool_turns[-1].tool_calls):
             turn = state.tool_turns[-1]
-            if turn.executing_call_id is not None and turn.executing_user_comment is not None:
+            if turn.executing_call_id is not None:
                 record_tool_result(turn, turn.executing_call_id, tool_receipt(ToolObservation(
                     ok=False, summary=f"Execution interrupted: {reason}. Outcome is unknown.",
                     user_comment=turn.executing_user_comment,
@@ -1022,8 +1038,95 @@ class AgentLoop:
             self._save(state)
 
     def _save(self, state: AgentState) -> None:
+        # Audit events own the review facts. Receipts only project their latest
+        # status, including cancelled/recovered calls that never returned normally.
+        reviews = {event.data["operation_key"]: event for event in state.events
+                   if event.type == "permission_review"}
+        if reviews:
+            for ordinal, turn in enumerate(state.tool_turns):
+                for call_id, receipt in turn.tool_results.items():
+                    key = f"session:{state.session_id}:turn:{ordinal}:call:{call_id}"
+                    event = reviews.get(key)
+                    if event is not None:
+                        value = json.loads(receipt)
+                        value["permission_review"] = {
+                            "source": "auto_review", "action_id": event.data["operation"]["action_id"],
+                            "status": event.data["status"], "reason": event.data["reason"],
+                            "audit_sequence": event.sequence,
+                        }
+                        turn.tool_results[call_id] = json.dumps(value, ensure_ascii=False)
         state.updated_at = datetime.now(UTC)
         self.store.save(state)
+
+    def _review_permission(self, definition, registry, request, state, action, permission):
+        """Review once at dispatch; preflight and human resume remain deterministic."""
+        if permission.outcome != "ask" or request.permissions.approval_mode != "auto_review":
+            return permission
+        operation = ActionSnapshot(
+            action_id=f"action_{uuid4().hex}", tool=action.tool,
+            arguments=registry.validate(action.tool, action.arguments).model_dump(mode="json"),
+            context=permission.context, run_id=request.run_id, session_id=state.session_id,
+            task_id=request.task_id, attempt_number=request.attempt_number,
+        )
+
+        def record(status, reason):
+            self._append_event(state, event_type="permission_review", tool=action.tool, data={
+                "source": "auto_review", "operation_key": state.current_operation_key,
+                "operation": operation.model_dump(mode="json"), "status": status, "reason": reason,
+            })
+            self._save(state)
+
+        record("started", "Automatic review requested; the operation has not executed")
+        reviewer = definition.operation_reviewer
+        try:
+            if reviewer is None:
+                raise ValueError("No operation reviewer is configured")
+            tracer = getattr(reviewer, "set_trace_context", None)
+            if tracer is not None:
+                tracer(run_id=request.run_id, session_id=state.session_id, task_id=request.task_id,
+                       attempt_number=request.attempt_number, agent="permission_reviewer", step=state.step,
+                       operation_key=state.current_operation_key, action_id=operation.action_id)
+            verdict = ApprovalReviewVerdict.model_validate(
+                reviewer.review(operation.model_copy(deep=True), request.model_copy(deep=True)))
+            check_cancelled()
+        except OperationCancelled:
+            record("interrupted", "Automatic review interrupted; no operation was approved or executed")
+            raise
+        except (BudgetExhaustedError, DeadlineExceededError) as error:
+            record("error", f"Automatic review stopped: {type(error).__name__}; operation not executed")
+            raise
+        except UsagePersistenceError:
+            # The Run ledger is authoritative. A failed save must stop execution,
+            # rather than look like an unavailable model that a user can bypass.
+            raise
+        except Exception as error:
+            # Do not copy arbitrary provider exception text (possibly credentials)
+            # into the user's question. Persistence errors are outside this try.
+            reason = f"Automatic review unavailable ({type(error).__name__}); manual approval required"
+            record("error", reason)
+            return permission.model_copy(update={"reason": reason + ". " + permission.reason,
+                                                 "reviewed_action": operation})
+        finally:
+            self._sync_usage(state)
+
+        record(verdict.decision, verdict.reason)
+        if verdict.decision == "ask":
+            return permission.model_copy(update={"reason": "Automatic review requests your decision: " + verdict.reason,
+                                                 "reviewed_action": operation})
+
+        # A reviewer cannot waive a grant or refresh an already reviewed launch
+        # snapshot. The executor also checks the original prepared context.
+        try:
+            current = definition.permission_policy.check(action, state, request)
+        except Exception:
+            record("invalidated", "The operation could not be revalidated; it was not executed")
+            raise
+        if current.outcome == "deny" or current.context != operation.context:
+            reason = ("Automatic review snapshot changed or permission was withdrawn; operation not executed. "
+                      "Submit a new tool call if it is still needed.")
+            record("invalidated", reason)
+            return permission.model_copy(update={"outcome": "deny", "reason": reason})
+        return permission.model_copy(update={"outcome": "allow", "reviewed_action": operation})
 
     def _note_failure(
         self, state: AgentState, count: int
@@ -1125,7 +1228,7 @@ class AgentLoop:
                                  ToolObservation(summary=summary, value=value))
 
     def _pause_approval(self, registry, request, state, action, permission) -> None:
-        state.pending_action = ActionSnapshot(
+        state.pending_action = permission.reviewed_action or ActionSnapshot(
             action_id=f"action_{uuid4().hex}", tool=action.tool,
             arguments=registry.validate(action.tool, action.arguments).model_dump(mode="json"),
             context=permission.context, run_id=request.run_id, session_id=state.session_id,

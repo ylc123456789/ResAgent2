@@ -40,7 +40,7 @@ from pydantic import (
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_VERSION = "28.0"
+SCHEMA_VERSION = "29.0"
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -94,7 +94,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
-    schema_version: Literal["28.0"] = SCHEMA_VERSION
+    schema_version: Literal["29.0"] = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -412,9 +412,10 @@ class ExecutionLimits(ContractModel):
 
 
 class RunPermissions(ContractModel):
-    """Trusted caller grants; omitted operations are not authorized."""
+    """Trusted caller grants and operation-review selection."""
 
     execute_commands: bool = False
+    approval_mode: Literal["manual", "auto_review"] = "manual"
 
 
 class TaskBudget(ContractModel):
@@ -478,7 +479,6 @@ class ResearchRequest(ContractModel):
     budget: RunBudget
     execution_limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
     permissions: RunPermissions
-    confirm_commands: bool = False
 
 
 class ActionSnapshot(ContractModel):
@@ -928,7 +928,6 @@ class AgentRequest(ContractModel):
     input_artifacts: list[ArtifactRef] = Field(default_factory=list)
     budget: TaskBudget
     permissions: AgentPermissions
-    confirm_commands: bool = False
     workspace: WorkspaceGrant | None = None
     workspace_id: WorkspaceId | None = None
     workspace_spec: WorkspaceSpec | None = None

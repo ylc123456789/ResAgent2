@@ -56,7 +56,7 @@ def stable_run(controller):
     run.initialization.complete = True
     controller.scheduler.store.save(run)
     run.conclusion_requirements_ref = system_artifact(controller.scheduler.artifact_registry, run,
-        "conclusion_requirements", {"schema_version": "28.0", "required_artifacts": [], "required_evidence_kinds": []})
+        "conclusion_requirements", {"schema_version": "29.0", "required_artifacts": [], "required_evidence_kinds": []})
     output = controller.scheduler.artifact_registry.register(
         ArtifactCandidate(kind="metrics", path="metrics.json", media_type="application/json", summary="Accuracy measurement", content='{"accuracy":0.8}'),
         grant=None, producer=AgentOwner.EXPERIMENT, run_id=run.run_id, task_id="task_measure", attempt_number=1,

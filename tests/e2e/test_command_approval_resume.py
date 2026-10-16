@@ -57,7 +57,6 @@ def case(tmp_path, monkeypatch, request):
         agent=owner, instruction="Execute first then second, with separate approval",
         budget=TaskBudget(max_llm_calls=30, timeout_seconds=60),
         permissions=AgentPermissions(execute_commands=True),
-        confirm_commands=True,
         workspace=WorkspaceGrant(
             root=str(repo), source="local",
             access=WorkspaceAccess(read_paths=["."], write_paths=["."]),
@@ -76,14 +75,46 @@ def command(case, tag):
     }}
 
 
-def invoke(case, req, actions):
+def invoke(case, req, actions, *, reviewer=None):
     # Recreate both Agent and SessionStore on every invoke, as controller resume does.
     case.last_client = ScriptedLLMClient(tool_turns(actions))
     agent = case.agent_type(
         case.last_client, store=JsonSessionStore(case.root / "sessions"),
         resource_layout=ResourceLayout(resource_root=case.root / "resources"),
+        operation_reviewer=reviewer,
     )
     return agent.invoke(req)
+
+
+def test_auto_review_runs_actual_shell_commands_once_in_both_agents(case):
+    from resagent2_components.approval_review import LLMPermissionReviewer
+    from resagent2_runtime.budget import execution_budget
+
+    req = case.request.model_copy(update={
+        "permissions": AgentPermissions(execute_commands=True, approval_mode="auto_review"),
+    })
+    client = ScriptedLLMClient(tool_turns([
+        {"tool": "review_operation", "arguments": {"decision": "allow", "reason": "First marker is requested"}},
+        {"tool": "review_operation", "arguments": {"decision": "allow", "reason": "Second marker is requested"}},
+    ]))
+    reviewer = LLMPermissionReviewer(client, max_context_tokens=6000)
+    with execution_budget(max_llm_calls=5, timeout_seconds=60) as budget:
+        result = invoke(case, req, [command(case, "first"), command(case, "second"), FINISH], reviewer=reviewer)
+        assert budget.usage.used == 5  # Three Agent turns and two reviews, one wallet.
+    assert result.status == "completed", result.report
+    assert (case.repo / "first.marker").read_text() == "executed\n"
+    assert (case.repo / "second.marker").read_text() == "executed\n"
+    state = JsonSessionStore(case.root / "sessions").load(result.session.id)
+    assert state.pending_action is None
+    receipts = [json.loads(turn.tool_results[call.id]) for turn in state.tool_turns
+                for call in turn.tool_calls if call.name == "run_shell"]
+    assert len(receipts) == 2
+    assert all(receipt["ok"] and receipt["permission_review"]["status"] == "allow" for receipt in receipts)
+    reviews = [event for event in state.events if event.type == "permission_review"
+               and event.data["status"] == "allow"]
+    assert len(reviews) == 2
+    assert reviews[0].data["operation"]["action_id"] != reviews[1].data["operation"]["action_id"]
+    assert state.llm_calls_used == result.llm_calls == 5
 
 
 def approve(case, req, result, *, value="yes", comment=None):

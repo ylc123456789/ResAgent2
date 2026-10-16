@@ -19,7 +19,7 @@ from resagent2_components import (
     GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, OperationReviewer,
     AskUserTool, FinishTool,
     InMemorySessionStore, LLMClient, SessionStore,
 )
@@ -44,6 +44,7 @@ class NativeCodingAgent:
         self, llm_client: LLMClient, *, store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
         max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
+        operation_reviewer: OperationReviewer | None = None,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -51,6 +52,7 @@ class NativeCodingAgent:
         self.loop = AgentLoop(store=store or InMemorySessionStore())
         self.resource_layout = resource_layout or ResourceLayout.from_env()
         self.max_context_tokens = max_context_tokens
+        self.operation_reviewer = operation_reviewer
 
     @staticmethod
     def _failure(message: str, *, blocked: bool = False) -> AgentResult:
@@ -131,6 +133,7 @@ class NativeCodingAgent:
                 request, state, datasets=datasets,
             ),
             permission_policy=OperationPermissionPolicy(tools, boundary=boundary, request=request),
+            operation_reviewer=self.operation_reviewer,
             completion_check=CodingCompletionCheck(
                 repository, boundary, baseline=baseline, output_dir=request.output_dir,
             ),

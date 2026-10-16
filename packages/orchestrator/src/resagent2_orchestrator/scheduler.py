@@ -237,7 +237,6 @@ class WorkflowScheduler:
             workspace_spec=record.source if record else None,
             output_dir=str(self.run_layout.attempt_dir(run.run_id, task.id, attempt_number)),
             permissions=AgentPermissions(**run.request.permissions.model_dump(exclude={"schema_version"})),
-            confirm_commands=run.request.confirm_commands,
             parent_session_id=parent_session_id,
             upstream_session_id=run.scientific_session.id if run.scientific_session else None,
             upstream_inputs=run.task_inputs.get(task.id, []),

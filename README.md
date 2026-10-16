@@ -38,7 +38,7 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `28.0`（`SCHEMA_VERSION="28.0"`）；旧 schema 的 Run/Session 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `29.0`（`SCHEMA_VERSION="29.0"`）；旧 schema 的 Run/Session 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
 Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求和数据集目录通过现有任务字段及授权工件传递；业务问答保留原文、来源和时间，工作结果按真实 Task 报告和交付物交接。
 
@@ -46,9 +46,9 @@ Scientific、Coding、Experiment 都只有一个调用入口和一种业务模�
 
 Coding/Experiment 的命令工具只保留 `run_shell`。环境检查、安装、测试、训练和评测使用同一准确操作批准与执行链路；固定代码不创建、绑定、认证或重建环境。版本和共用环境要求由任务输入及 Agent 交接传递。每次新建 Shell，不延续上次的 activate/export；模型明确选择解释器或在同一脚本内激活。已有环境不会被系统自动清理。
 
-Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，任务数/尝试数单列为 ExecutionLimits；三个 Agent、Compiler、模型重试与历史压缩共用持久请求用量及截止时间，每次模型 HTTP 尝试发送前登记；固定 Interpreter 不消耗模型调用。工作区统一使用 read_paths/write_paths/denied_paths，操作权限显式继承。共享规则将操作判为允许、询问或拒绝；批准仅供本次动作使用，普通文件删除可直接进行，非空目录清理需确认目标快照。参数见 [CLI 运行控制](apps/cli/README.md#run-controls)。
+Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，任务数/尝试数单列为 ExecutionLimits；三个 Agent、Compiler、自动权限审核、模型重试与历史压缩共用持久请求用量及截止时间，每次模型 HTTP 尝试发送前登记；固定 Interpreter 不消耗模型调用。工作区统一使用 read_paths/write_paths/denied_paths，操作权限显式继承。共享规则将操作判为允许、询问或拒绝；批准仅供本次动作使用，普通文件删除可直接进行，非空目录清理需确认目标快照。参数见 [CLI 运行控制](apps/cli/README.md#run-controls)。
 
-路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集登记和包缓存保持原有职责，环境选择与维护由执行 Agent 负责；当前后端为受信宿主执行，没有 OS 沙箱或 auto reviewer。
+路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集登记和包缓存保持原有职责，环境选择与维护由执行 Agent 负责；当前后端为受信宿主执行，没有 OS 沙箱。默认 `manual` 逐次人工确认；创建 Run 时可用 `--approval-mode auto_review` 启用无状态模型审核，拿不准或模型不可用则转人工。审核不扩大操作授权，决定与准确快照保存于原 Session 事件和工具回执；旧人工拒绝及说明也供审核参考。
 
 Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Scientific 明确生成原任务，Compiler 只匹配注册 Agent，固定代码原文传递并组装图；结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，各提交的真实验证范围与记录限制见 [统一 IO 验收](docs/history/reviews/UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md) 和 [Run 控制验收](docs/history/reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。
 

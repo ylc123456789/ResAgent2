@@ -29,12 +29,14 @@ from .loop import (
     CompletionCheck,
     ContextBuilder,
     PermissionPolicy,
+    OperationReviewer,
 )
 from .model_request import ModelRequestClient, ModelRequestError, ModelRequestHTTPError
 from .models import (
     AgentAction,
     AgentEvent,
     AgentState,
+    ApprovalReviewVerdict,
     CompletionDecision,
     ComposedContext,
     ContextSection,
@@ -62,6 +64,7 @@ __all__ = [
     "AgentEvent",
     "AgentLoop",
     "AgentState",
+    "ApprovalReviewVerdict",
     "AllowListPermissionPolicy",
     "AskUserTool",
     "AskUserToolInput",
@@ -87,6 +90,7 @@ __all__ = [
     "OpenAICompatibleClient",
     "PermissionDecision",
     "PermissionPolicy",
+    "OperationReviewer",
     "PromptLLMClient",
     "ScriptedLLMClient",
     "StructuredLLMClient",

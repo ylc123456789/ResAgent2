@@ -60,7 +60,6 @@ def request(root, **changes):
         agent=AgentOwner.CODING, instruction="Do the authorized work",
         budget=TaskBudget(max_llm_calls=8, timeout_seconds=60),
         permissions=AgentPermissions(execute_commands=True),
-        confirm_commands=True,
         workspace=WorkspaceGrant(root=str(root), source="local",
                                  access=WorkspaceAccess(read_paths=["."], write_paths=["."])),
     )
@@ -149,7 +148,7 @@ def test_recursive_delete_requires_new_approval_if_target_changes(tmp_path):
     target = tmp_path / "cache"
     target.mkdir()
     (target / "old.txt").write_text("old")
-    req = request(tmp_path, confirm_commands=False)
+    req = request(tmp_path)
     store = JsonSessionStore(tmp_path / "sessions")
     tool = DeletePathTool(WorkspaceBoundary(req.workspace))
     action = {"tool": "delete_path", "arguments": {"path": "cache", "recursive": True}}
@@ -199,10 +198,8 @@ def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash
     assert all(turn.executing_user_comment is None for turn in restored.tool_turns)
 
 
-@pytest.mark.parametrize("confirm", [False, True])
-def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
-    req = request(tmp_path, confirm_commands=confirm,
-                  permissions=AgentPermissions(execute_commands=True))
+def test_shell_default_mode_asks_with_execution_only_permission(tmp_path):
+    req = request(tmp_path, permissions=AgentPermissions(execute_commands=True))
     tool, store = Command(), JsonSessionStore(tmp_path / "sessions")
     script = "  printf 'one\n' | cat\n"
     first = execute(req, [command(script)], tool, store)
@@ -217,7 +214,7 @@ def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
 
 
 def test_changed_shell_script_requires_its_own_approval(tmp_path):
-    req, tool = request(tmp_path, confirm_commands=False), Command()
+    req, tool = request(tmp_path), Command()
     store = JsonSessionStore(tmp_path / "sessions")
     first = execute(req, [command("printf first")], tool, store)
     result = execute(answer(tmp_path, req, first), [command("printf second")], tool, store)
@@ -228,7 +225,7 @@ def test_changed_shell_script_requires_its_own_approval(tmp_path):
 
 
 def test_shell_approval_does_not_follow_a_changed_startup_environment(tmp_path):
-    req, tool = request(tmp_path, confirm_commands=False), Command()
+    req, tool = request(tmp_path), Command()
     tool.extra_env = {"PATH": "/first/environment/bin"}
     store = JsonSessionStore(tmp_path / "sessions")
     action = command("python measure.py")

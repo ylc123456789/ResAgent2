@@ -541,3 +541,45 @@ def test_schema27_cli_recovery_refuses_without_mutating_evidence(tmp_path, comma
         cli(args, application_builder=builder)
     assert path.read_bytes() == old
     assert builder.calls == []
+
+
+@pytest.mark.parametrize("mode,execute_commands", [("manual", False), ("manual", True),
+                                                       ("auto_review", False), ("auto_review", True)])
+def test_run_persists_approval_mode_without_expanding_execute_grant(tmp_path, mode, execute_commands):
+    controller = _Controller(_run())
+    result = cli(
+        ["run", "--goal", "Inspect the repository", "--data-root", str(tmp_path),
+         "--approval-mode", mode,
+         "--execute-commands" if execute_commands else "--no-execute-commands"],
+        application_builder=_Builder(controller),
+    )
+    assert result == EXIT_COMPLETED
+    permissions = controller.created[1].permissions
+    assert permissions.approval_mode == mode
+    assert permissions.execute_commands is execute_commands
+
+
+def test_run_defaults_to_manual_approval_and_resume_cannot_override_it():
+    from resagent2_cli.main import _request_from_args
+
+    request = _request_from_args(_parser().parse_args(["run", "--goal", "Inspect"]))
+    assert request.permissions.approval_mode == "manual"
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["resume", "run_test", "--approval-mode", "auto_review"])
+    assert error.value.code == 2
+
+
+def test_run_rejects_unknown_approval_mode_before_building_application(tmp_path):
+    controller = _Controller(_run())
+    builder = _Builder(controller)
+    with pytest.raises(SystemExit) as error:
+        cli(["run", "--goal", "Inspect", "--data-root", str(tmp_path),
+             "--approval-mode", "always_allow"], application_builder=builder)
+    assert error.value.code == 2
+    assert builder.calls == []
+
+
+def test_run_rejects_retired_confirmation_flag():
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["run", "--goal", "Inspect", "--confirm-commands"])
+    assert error.value.code == 2

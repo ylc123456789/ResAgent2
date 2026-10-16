@@ -11,6 +11,7 @@
 | [repo.py](src/resagent2_components/repo.py) | 仓库物化 |
 | [process.py](src/resagent2_components/process.py) | 直接 argv / Linux Bash 执行、凭据过滤、有界日志尾部、进程树超时终止 |
 | [execution_records.py](src/resagent2_components/execution_records.py) | 从本 Agent 的原生工具回执冻结正常、失败、中断命令事实，沿统一 report + artifacts 交回 |
+| [approval_review.py](src/resagent2_components/approval_review.py) | 无状态审阅准确操作；唯一 review_operation 输出，不执行操作 |
 | [dataset.py](src/resagent2_components/dataset.py)、[resources.py](src/resagent2_components/resources.py) | 数据集登记与可用性；部署目录 |
 | [artifacts.py](src/resagent2_components/artifacts.py) | 授权工件读取、明确输出名存在检查、报告生成、媒体类型、登记接口形状 |
 | [context.py](src/resagent2_components/context.py) | 读取/诊断投影 |
@@ -29,7 +30,9 @@
 
 WorkspaceBoundary 只使用 WorkspaceGrant.access：read_paths/write_paths/denied_paths 均为相对前缀，空允许列表拒绝全部，排除项优先。每次文件操作检查解析路径；写范围是读范围的子集。`.git`、`.resagent2` 受保护，普通可重建缓存只是展示时忽略，可按写权限清理。prepare_delete/delete_prepared 先快照准确删除集合，再重验执行；只 unlink 最终链接自身，内容变化或中断时保留部分完成记录。
 
-底层工作区和进程边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复 answer 工件与 Session 中的动作快照，不解析历史问题文案或全局确认标志。run_shell 每次精确人工审批；安装、环境维护和验证使用同一真实脚本批准链路。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；shell-free 和路径 Tool 都不是 OS 沙箱。
+底层工作区和进程边界由 Components 提供；Capabilities 的 OperationPermissionPolicy 组合这些边界与 Run 授权，返回 allow/ask/deny。确认匹配本次恢复的结构化 answer 与 Session 中的动作快照，不解析历史问题文案。`approval_mode=manual` 为默认值，需要确认的 run_shell 和递归删除沿准确操作人工批准；`auto_review` 由 Runtime 在派发前调用注入的 OperationReviewer，确定性 deny 不能被审核模型覆盖。批准不能扩权，实际执行前仍校验范围。无隔离后端时，仅完整可读写且无用户排除路径的可信工作区允许任意脚本执行；模型审核、shell-free 和路径 Tool 都不是 OS 沙箱。
+
+`LLMPermissionReviewer` 复用 Runtime 的 PromptLLMClient，不创建 Session 或 AgentLoop，只有 `review_operation` 输出工具，返回 allow/ask 与理由；每个准确操作最多一次 HTTP 尝试。它完整接收当前任务原文及有序业务对话、工作区授权和操作快照；组合根通过 context_provider 另外提供根用户原始目标、限制及真实用户补充。既往准确操作的批准、拒绝和原说明单独标明为操作历史，不提升为业务要求，也不授予后续操作权限。根记录不可用、输出不合法或审核故障向上交给 Runtime，转人工而不放行；预算、截止时间和取消沿共享 Runtime 传播。没有读文件、运行脚本或获取外部内容的审核工具，脚本效果无法从所给资料确认或风险/授权不明时保守返回 ask。审核费用和 trace 沿同一 Run 的总预算及取消链路，不另开钱包。
 
 ProcessRunner 的 Shell 启动快照包含真实 cwd、shell、shell_args、pipefail 和过滤后启动环境的 SHA256；批准消费后、实际启动前再次比较，不一致则脚本不执行，不保存完整继承变量值。命令完成后 Git 诊断被打断时，原唯一回执保留 completed_command 和诊断真实停止状态，execution_record 分别冻结两项事实。
 

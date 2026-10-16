@@ -27,7 +27,7 @@ class BudgetSnapshot:
     def render(self) -> str:
         owner = (
             "This is the entire Run's shared total, used by Scientific, Compiler, "
-            "all execution Agents and later work, including final delivery. "
+            "all execution Agents, permission reviewers and later work, including final delivery. "
             "It is not a dedicated allowance for the current Agent or Task. "
             "Interrupting, resuming or delegating again does not reset it."
             if self.scope == "run" else
@@ -50,8 +50,15 @@ class DeadlineExceededError(TimeoutError):
     """The effective execution deadline has elapsed."""
 
 
+class UsagePersistenceError(RuntimeError):
+    """Authoritative model usage could not be loaded or saved; stop execution."""
+
+
 class UsagePort(Protocol):
-    """The caller persists a charge before permitting its network attempt."""
+    """Persist a charge before permitting its network attempt.
+
+    Implementations raise UsagePersistenceError for authoritative storage errors.
+    """
 
     @property
     def used(self) -> int: ...

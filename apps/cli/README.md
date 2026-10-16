@@ -9,7 +9,7 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 28.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 29.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
@@ -153,11 +153,11 @@ resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作�
 
 | 参数 | 默认值与含义 |
 |---|---|
-| `--max-llm-calls` | 200；整次 Run 的模型请求占用上限，包含 HTTP 重试、格式纠正和摘要 |
+| `--max-llm-calls` | 200；整次 Run 的模型请求占用上限，包含 HTTP 重试、格式纠正、摘要及自动权限审核 |
 | `--timeout-seconds` | 7200；扣除显式人工等待后的总时长，安装、下载、命令和进程停机均计入 |
 | `--max-tasks` / `--max-attempts` | 8 / 2；图中任务数和每任务尝试数上限，属于 ExecutionLimits |
 | `--no-execute-commands` | 关闭命令执行；CLI 默认明确授权执行，包含环境检查、创建、安装、验证和实验 |
-| `--confirm-commands` | 默认关闭；开启后，权限允许的 Agent 顶层外部操作需逐次确认。`run_shell` 无论此开关是否开启，每次都需确认 |
+| `--approval-mode manual\|auto_review` | 默认 manual：准确操作交用户批准；auto_review：模型明确允许才执行，拿不准、无效返回或审核服务异常转同一人工入口 |
 | `--read-path` / `--write-path` | 可重复的工作区相对前缀，各默认 `.`；写范围必须属于读范围 |
 | `--read-only` | 写范围为空，与 `--write-path` 互斥 |
 | `--deny-path` | 可重复的排除前缀，对读取和写入优先拒绝 |
@@ -171,7 +171,18 @@ resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报�
 
 权限在创建 Run 时固定，内部 Agent 只能继承或收紧。路径按前缀匹配，不接受 glob；系统报告输出不受源目录只读限制。没有 OS 隔离后端时，只读、局部读写或带 `--deny-path` 的工作区不能执行通用脚本/验证/安装，即使开启执行开关或回答同意也不放行。默认完整授权适用于可信项目代码，命令规则不保证脚本无法访问宿主其他路径。
 
-正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具确认目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/启动配置/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 Git 探针由 Components 执行，不是另一个模型命令入口。环境检查、创建和安装都由 Agent 通过 run_shell 明确提交，每条脚本先批准，没有自动环境核验或重建。批准也不开放被拒绝的路径或命令。
+正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具审核目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/启动配置/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 Git 探针由 Components 执行，不是另一个模型命令入口。环境检查、创建和安装都由 Agent 通过 run_shell 明确提交，每条脚本按创建 Run 时选择的模式审批，没有自动环境核验或重建。批准也不开放被拒绝的路径或命令。
+
+自动审核使用既有模型配置（`RESAGENT2_MODEL`、endpoint、API key 和 trace），但使用独立客户端；`RESAGENT2_PERMISSION_REVIEWER_CONTEXT_TOKENS` 控制其完整输入上限，默认沿用 256000。每次审核最多一次模型请求，计入整个 Run 的共享预算，暂停恢复不重置。审核器没有读文件、执行、联网或委派工具，只有返回 allow/ask 与原因的 `review_operation` 输出工具；没有独立 Session、工件或审批账本。超出容量或模型返回无效时转人工，预算耗尽、到期、取消和权威用量保存失败保持原有停止语义。
+
+审核输入包括固定代码准备的准确操作、当前任务与有序上级要求、根用户原始目标/限制和后续业务记录；历史人工操作决定及说明单独标明，不当作新的任务要求或长期批准。脚本正文无法从现有输入确认时应转人工；这也意味着自动审核不保证所有命令都能自动放行。旧 `--confirm-commands` 及公共同名字段已删除，传入会明确报错；旧 schema（包括 28.0）不迁移。审计在发起工具的 Session 中以 `permission_review` 事件保存，唯一工具回执投影来源、状态、原因和事件序号；自动决定不冒充用户回答。
+
+例如创建自动审核的 Run：
+
+```bash
+resagent2 run --workspace /path/to/repo --goal "实现并验证所需功能" \
+  --approval-mode auto_review
+```
 
 CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。操作确认显示完整工具参数及实际目录、Bash 配置和过滤后启动环境指纹等执行上下文。业务问答补充任务信息，进入上下文第二部分；操作决定及可选说明进入原调用的第三部分工具回执，不进入累计任务需求或第四部分工件目录。两类问答直接保存为记录，不产生问答工件；字段名为 `approve` 本身不表示操作批准。
 
@@ -284,7 +295,7 @@ export RESAGENT2_DATASET_ROOT=/data/datasets
 
 Python 依赖不进 catalog。Coding/Experiment 按任务要求通过唯一命令工具 run_shell 自行发现、选择、复用或创建环境，安装依赖并执行检查；pip/conda 自己管理下载缓存，镜像由部署配置负责，不要求每个 Run 填写依赖或缓存参数。系统不固定共享环境路径，不自动接管、删除或重建已有环境。需要多任务共用时由 Agent 在任务指令和公开交接中传递路径与要求。
 
-每次 run_shell 启动独立非登录 Bash，activate/export/cd 不延续到下次调用。Agent 应在同一次脚本中激活并执行，或使用解释器绝对路径、conda run 等明确选择环境。脚本仍运行在受信宿主账户下；环境隔离依赖版本，不隔离宿主文件、网络或进程。本阶段没有 auto reviewer 或 OS 沙箱。
+每次 run_shell 启动独立非登录 Bash，activate/export/cd 不延续到下次调用。Agent 应在同一次脚本中激活并执行，或使用解释器绝对路径、conda run 等明确选择环境。脚本仍运行在受信宿主账户下；环境隔离依赖版本，不隔离宿主文件、网络或进程。可选 auto_review 只审核准确操作，不提供 OS 沙箱。
 
 ## 5. 数据、资源与 trace
 

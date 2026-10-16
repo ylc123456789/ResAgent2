@@ -184,8 +184,9 @@ def _request_from_args(args: argparse.Namespace) -> ResearchRequest:
             timeout_seconds=args.timeout_seconds,
         ),
         execution_limits=ExecutionLimits(max_tasks=args.max_tasks, max_attempts_per_task=args.max_attempts),
-        permissions=RunPermissions(execute_commands=args.execute_commands),
-        confirm_commands=args.confirm_commands,
+        permissions=RunPermissions(
+            execute_commands=args.execute_commands, approval_mode=args.approval_mode,
+        ),
     )
 
 
@@ -244,7 +245,10 @@ def _parser(
     run.add_argument("--max-llm-calls", type=int, default=200)
     run.add_argument("--timeout-seconds", type=int, default=7200)
     run.add_argument("--execute-commands", action=argparse.BooleanOptionalAction, default=True)
-    run.add_argument("--confirm-commands", action="store_true")
+    run.add_argument(
+        "--approval-mode", choices=("manual", "auto_review"), default="manual",
+        help="operation approval strategy; auto_review escalates uncertain decisions to the user",
+    )
     _workspace_args(run)
 
     literature = subparsers.add_parser("literature", help="manage caller-supplied paper materials")

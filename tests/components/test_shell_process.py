@@ -62,6 +62,41 @@ def test_workspace_and_environment_filtering(runner, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("name,first,second", [
+    ("SHLVL", "1", "7"), ("_", "/first/launcher", "/second/launcher"),
+])
+def test_approval_stays_stable_across_bash_rebuilt_launch_state(
+    runner, monkeypatch, name, first, second,
+):
+    import resagent2_components.process as component
+    monkeypatch.setenv(name, first)
+    approved = runner.shell_context()
+    monkeypatch.setenv(name, second)
+    launched = []
+    real_popen = component.subprocess.Popen
+
+    def capture(*args, **kwargs):
+        launched.append(kwargs["env"])
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(component.subprocess, "Popen", capture)
+    result = run_shell(runner, 'printf "%s\\n" "$SHLVL"', expected_context=approved)
+    assert result.exit_code == 0
+    assert result.environment_fingerprint == approved["environment_fingerprint"]
+    assert Path(result.stdout_path).read_text() == "1\n"
+    assert "SHLVL" not in launched[0] and "_" not in launched[0]
+
+
+def test_approval_still_rejects_changed_path_before_execution(runner, monkeypatch):
+    import os
+    approved = runner.shell_context()
+    monkeypatch.setenv("PATH", os.environ["PATH"] + ":/different-search-path")
+    with pytest.raises(PermissionError, match="configuration changed"):
+        run_shell(runner, "touch should-not-exist", expected_context=approved)
+    assert not (runner.boundary.root / "should-not-exist").exists()
+    assert not (runner.boundary.root / ".resagent2").exists()
+
+
 def test_inherited_shell_startup_and_exported_functions_are_not_executed(runner, tmp_path):
     startup = tmp_path / "startup.sh"
     startup.write_text("touch startup-executed\n")

@@ -57,7 +57,7 @@ Session 保存协议身份及固定契约指纹。指纹涵盖实际 system 内�
 
 操作批准也使用暂停、回答入口，但有不同用途。它绑定准确工具、参数、目录、进程启动配置和作用域，权限策略消费它；决定及可选 comment 不进入第二部分，也不生成工件。comment 按原文保存在答案中，仅随匹配动作的原工具回执以顶层 `user_comment` 交给模型，原业务 value 不变：拒绝同时说明 `execution_status=not_executed`，批准说明则随实际执行成功或失败返回。说明本身不授予权限或改变任务，模型结合它与已有需求决定后续行动。
 
-原操作的 native call 保持待回执，恢复后重新检查权限与快照，执行或拒绝后为原调用保存唯一最终回执，不追加另一条说明回执。无需模型重新发一次命令。批准在副作用前持久消费；批准后派发期间期限中断，原回执仍保留说明，以 `execution_status=unknown` 表示可能存在部分执行，不能写成拒绝时的 not_executed，也不自动重放。快照变化后的动作重新询问，不套用旧动作的说明。批准消费后仍在进程启动前复验 cwd、Shell flags 及过滤后启动环境指纹；不一致时原调用明确 not_executed，不沿新配置执行。CLI 的 `answer --comment` 和 shell 的 `/answer` 交互入口沿同一回答链路提交，完整使用方式见 [CLI README](../../apps/cli/README.md)。
+原操作的 native call 保持待回执，恢复后重新检查权限与快照，执行或拒绝后为原调用保存唯一最终回执，不追加另一条说明回执。快照仍匹配的普通批准无需模型重新发一次命令。批准在副作用前持久消费；批准后派发期间期限中断，原回执仍保留说明，以 `execution_status=unknown` 表示可能存在部分执行，不能写成拒绝时的 not_executed，也不自动重放。已回答旧审批后若快照变化而需要重新批准，原调用以 not_executed 结算，保留原说明并告知模型旧决定已失效；模型按需提出新的 native call，再发起新审批，不在同一调用下生成第二个问题 ID，也不套用旧说明。批准消费后仍在进程启动前复验 cwd、Shell flags 及过滤后启动环境指纹（实际环境和指纹输入均剔除 Bash 重建的 SHLVL/_，PATH 等仍参与比较）；不一致时原调用明确 not_executed，不沿新配置执行。CLI 的 `answer --comment` 和 shell 的 `/answer` 交互入口沿同一回答链路提交，完整使用方式见 [CLI README](../../apps/cli/README.md)。
 
 <a id="index"></a>
 

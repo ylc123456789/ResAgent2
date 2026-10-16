@@ -158,6 +158,10 @@ def test_recursive_delete_requires_new_approval_if_target_changes(tmp_path):
     (target / "new.txt").write_text("new")
     second = execute(resumed, [action], tool, store)
     assert second.status == "needs_user_input"
+    assert second.control.source_turn != first.control.source_turn
+    original_receipt = json.loads(store.load(first.session.id).tool_turns[
+        first.control.source_turn].tool_results[first.control.source_call_id])
+    assert original_receipt["value"]["execution_status"] == "not_executed"
     assert sorted(path.name for path in target.iterdir()) == ["new.txt", "old.txt"]
     final = execute(answer(tmp_path, resumed, second), [FINISH], tool, store)
     assert final.status == "completed" and not target.exists()
@@ -246,4 +250,11 @@ def test_shell_approval_does_not_follow_a_changed_startup_environment(tmp_path):
     assert final.status == "completed" and tool.calls == ["python measure.py"]
     receipts = [json.loads(raw) for turn in store.load(first.session.id).tool_turns
                 for raw in turn.tool_results.values()]
-    assert [r["user_comment"] for r in receipts if "user_comment" in r] == ["New startup reviewed"]
+    assert [r["user_comment"] for r in receipts if "user_comment" in r] == [
+        "Only for the original startup", "New startup reviewed",
+    ]
+    original_receipt = json.loads(store.load(first.session.id).tool_turns[
+        first.control.source_turn].tool_results[first.control.source_call_id])
+    assert original_receipt["value"]["execution_status"] == "not_executed"
+    assert "new tool call" in original_receipt["summary"]
+    assert second.control.source_turn != first.control.source_turn

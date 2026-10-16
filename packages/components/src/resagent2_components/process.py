@@ -18,7 +18,12 @@ from resagent2_runtime.cancellation import OperationCancelled, check_cancelled
 from .workspace import WorkspaceBoundary
 
 
-_SHELL_ENVIRONMENT = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH"})
+_SHELL_ENVIRONMENT = frozenset({
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH",
+    # Bash rebuilds these for each shell. Do not let the CLI launcher's nesting
+    # or last command change either the actual startup environment or approval.
+    "SHLVL", "_",
+})
 _BASH_ARGV = ("/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c")
 
 _SENSITIVE_ENV_MARKERS = (

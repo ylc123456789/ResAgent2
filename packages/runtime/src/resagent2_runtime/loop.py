@@ -1229,10 +1229,16 @@ class AgentLoop:
             return self._failure(state, ErrorCode.CONTRACT_ERROR,
                                  "Cannot recheck approved operation: " + str(error), retryable=False)
         if permission.outcome == "ask":
-            # The operation's target or environment changed after the question.
-            # The old answer cannot authorize this newly checked snapshot.
-            self._pause_approval(registry, request, state, action, permission)
-            return self._control_result(state)
+            # One native call owns one received control identity. Settle the
+            # reviewed operation instead of issuing another question for it.
+            comment = next(answer.comment for answer in request.resume_answers
+                           if answer.question_id == control.question.id)
+            permission = permission.model_copy(update={
+                "outcome": "deny",
+                "reason": ("Approval snapshot changed; the original operation was not executed. "
+                           "Submit a new tool call for fresh approval if it is still needed."),
+                "user_comment": comment,
+            })
         state.pending_action = None
         state.pending_control = None
         state.status = SessionStatus.ACTIVE

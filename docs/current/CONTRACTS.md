@@ -103,7 +103,7 @@ Agent 返回 `needs_user_input`、paused Session 和直接 `ControlSignal`。Run
 Controller 保存完整 `RecordedAnswer`（含 source、source_session_id、原题目与作用域），不生成问答工件。子向上问答与收到的上级澄清进入子第二部分；父收到的下级问题和自己答子过程进入父第三部分，不改变父目标。未答下级问题由持久 pending 状态完整重投影，历史压缩不能使它丢失。父自己向上问答才进入父第二部分。操作批准、拒绝及说明不进入第二/第四部分。
 
 
-操作批准的 `ActionSnapshot` 绑定工具、校验参数、真实目录/进程启动配置/目标、Run/Task/Attempt/Session。原操作调用在批准前保持未完成回执；恢复时权限策略检查本次答案与准确快照，批准在副作用前持久消费，然后为原调用写唯一执行/拒绝回执。匹配答案的 comment 经 `PermissionDecision.user_comment` 传入 `ToolObservation.user_comment`，输出在原回执的顶层 `user_comment`；业务 value 保持原形，不要求是字典。拒绝回执 `ok=False`，value 含 `execution_status=not_executed`，批准说明随执行成功或失败回执保留。批准后派发期间期限中断也保存原调用的说明与失败回执，value 的 `execution_status=unknown` 保守表示不能保证没有部分执行，不重放。整个流程不另造反馈回执。说明不扩大许可、不替代命令，不增加继续/停止决策字段；下一步由模型结合任务及反馈判断。快照变化重新询问，旧说明不借给变化后的动作；拒绝、缺少权限或已消费批准不能执行。批次已完成项保留，后续未开始项 not_executed，只恢复当前待批准项。结果未知的副作用不重放。
+操作批准的 `ActionSnapshot` 绑定工具、校验参数、真实目录/进程启动配置/目标、Run/Task/Attempt/Session。原操作调用在批准前保持未完成回执；恢复时权限策略检查本次答案与准确快照，批准在副作用前持久消费，然后为原调用写唯一执行/拒绝回执。匹配答案的 comment 经 `PermissionDecision.user_comment` 传入 `ToolObservation.user_comment`，输出在原回执的顶层 `user_comment`；业务 value 保持原形，不要求是字典。拒绝回执 `ok=False`，value 含 `execution_status=not_executed`，批准说明随执行成功或失败回执保留。批准后派发期间期限中断也保存原调用的说明与失败回执，value 的 `execution_status=unknown` 保守表示不能保证没有部分执行，不重放。整个流程不另造反馈回执。说明不扩大许可、不替代命令，不增加继续/停止决策字段；下一步由模型结合任务及反馈判断。已回答的旧审批在恢复时若因快照变化而需要新批准，原调用以 not_executed 结算并保留该次用户说明，告知模型旧决定已失效；模型按需提出新的 native call，再取得新批准，不在同一调用下生成第二个问题 ID。旧说明不借给新动作；拒绝、缺少权限或已消费批准不能执行。批次已完成项保留，后续未开始项 not_executed，只恢复当前待批准项。结果未知的副作用不重放。
 
 业务等待与普通补充继续原 Attempt/Session，真正 retry 新建尝试并保持问答隔离；用户显式打断终止活动旧委派，继续不复活旧子 Session。控制来源身份是 Session、原始 turn 与 native call ID；不能只用供应商 call ID 作为全局幂等键。业务问答原 accepted 回执不在回答后改写，实际回答完整进入第二部分。
 
@@ -225,7 +225,7 @@ Scientific 的材料归属其 Session，支持 literature_paper/PDF/fulltext、w
 
 Controller/Scheduler 只消费公共 AgentResult 和登记工件，核对来源、hash、状态及内容，不读取下游私有 Session。这一边界防止模型叙述冒充执行事实；它不隔离具有任意 Python 执行权限的恶意自定义 Port。替换 Port 必须遵守相同的可信生产约定。
 
-每次 run_shell 使用独立日志目录，保留该次 stdout/stderr，不覆盖旧日志。执行记录保留实际 command、exit_code、日志路径、耗时及已有超时/中断事实；启动事实包含 cwd、shell、shell_args、pipefail 和 environment_fingerprint。指纹是继承变量与显式注入配置合并、过滤后实际启动环境的 SHA256，不保存完整变量值，也不证明脚本内部解释器或依赖版本。Coding 可附 code_before/code_after 的 Git tree 身份及 changed_paths；模型据此解释检查对应的代码和范围，不由系统生成环境认证结论。
+每次 run_shell 使用独立日志目录，保留该次 stdout/stderr，不覆盖旧日志。执行记录保留实际 command、exit_code、日志路径、耗时及已有超时/中断事实；启动事实包含 cwd、shell、shell_args、pipefail 和 environment_fingerprint。指纹是继承变量与显式注入配置合并、过滤后实际启动环境的 SHA256；Bash 自行重建的 SHLVL 和 _ 从实际传入环境及指纹输入一起移除，PATH 等影响执行的配置仍参与比较。不保存完整变量值，也不证明脚本内部解释器或依赖版本。Coding 可附 code_before/code_after 的 Git tree 身份及 changed_paths；模型据此解释检查对应的代码和范围，不由系统生成环境认证结论。
 
 命令已返回的真实结果不因后置 Git 检查失败而丢失；一般诊断失败保留 workspace_change_error，不把未知代码状态写成已验证。如果脚本已经完成，随后 Git 诊断被打断，同一个原调用仍只保存一个中断/未知回执：completed_command 嵌入已完成脚本的原始结果，顶层保存被打断诊断的实际进程事实与 stop_confirmed。execution_record 分别保留已完成命令和被打断诊断两项事实；不能因为脚本已完成就声称后续诊断已经停止，也不能因诊断中断抹去脚本结果。原生工具批次中断保留已完成命令及准确中断回执，未开始项明确未执行；Shell 内部部分完成的脚本不自动视为完整通过，不虚构退出码。Run 期限继续生效，超时后 Session 仍保留已执行回执，不为了保存回执延长预算。
 
@@ -363,7 +363,7 @@ LoopRequest 只要求身份、预算、父 Session 等运行信息；Scientific 
 | `run_shell` | `execute_commands=True` | 完整可读写的可信工作区；每次准确操作人工批准；环境操作没有额外管理权限或隐式副作用 |
 | 文件读取、创建、修改及 Coding 的 `delete_path` | 对应 WorkspaceAccess 范围 | 模块必须提供该工具；不依赖命令权限 |
 
-`confirm_commands` 保留原有外部操作确认开关，但 False 仍不免除 run_shell 和非空目录递归删除等固定要求的确认，不表示自动批准所有操作。脚本及启动配置变化不能复用旧批准；恢复时先匹配真实 cwd、shell、shell_args、pipefail 与 environment_fingerprint，变化重新询问。消费批准后，ProcessRunner 在真正启动前用同一份过滤后的启动环境重建并比较快照；不一致时不启动脚本，原调用回执为 execution_status=not_executed，不能改用新配置执行。环境创建、安装、修改和删除必须出现在被批准的真实脚本中，系统不自动清理或重建环境。
+`confirm_commands` 保留原有外部操作确认开关，但 False 仍不免除 run_shell 和非空目录递归删除等固定要求的确认，不表示自动批准所有操作。脚本及启动配置变化不能复用旧批准；恢复时先匹配真实 cwd、shell、shell_args、pipefail 与 environment_fingerprint；已回答审批若不再匹配，原调用返回 not_executed 和原用户说明，由模型按需提交新 native call 重新审批，不复用原调用身份再发问题。消费批准后，ProcessRunner 在真正启动前用同一份过滤后的启动环境重建并比较快照；不一致时不启动脚本，原调用回执为 execution_status=not_executed，不能改用新配置执行。环境创建、安装、修改和删除必须出现在被批准的真实脚本中，系统不自动清理或重建环境。
 
 Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或空目录；非空目录须 recursive=True，并确认包含路径、类型和版本信息的目标快照。执行前重验目标，变化使旧批准失效；删除链接只 unlink 自身，不跟随目标。部分删除保留已完成/未完成记录，不承诺原子回滚；代码变化以实际 Git 差异和命令快照为准，不维护旧验证所用的编辑代次。删除文件中的内容仍用 replace_text。
 

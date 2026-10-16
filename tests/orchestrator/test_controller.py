@@ -163,6 +163,120 @@ def test_user_wait_is_excluded_after_restart_without_resetting_budget(tmp_path, 
     assert completed.llm_calls_used == 3
 
 
+def test_repeated_interrupt_preserves_manual_wait_after_restart(tmp_path, run_clock):
+    from resagent2_runtime.cancellation import current_cancellation
+    from resagent2_runtime.controls import RunControlInbox
+
+    class TimedClient(ScriptedLLMClient):
+        def next_tool_call(self, *args, **kwargs):
+            run_clock.advance(5)
+            return super().next_tool_call(*args, **kwargs)
+
+    class InterruptFirstClient(TimedClient):
+        def next_tool_call(self, *args, **kwargs):
+            reply = super().next_tool_call(*args, **kwargs)
+            current_cancellation().cancel("Pause during the first model call")
+            return reply
+
+    def rebuild(client):
+        controller = _build_recoverable_controller(
+            JsonRunStore(tmp_path / "runs"), JsonSessionStore(tmp_path / "sessions"), [],
+        )
+        controller.control_inbox = RunControlInbox(tmp_path / "controls")
+        controller.scientific_port.llm_client = client
+        return controller
+
+    first = rebuild(InterruptFirstClient(tool_turns([finish_action()])))
+    paused = first.create_run("run_manual_wait", research_request())
+    assert paused.status == RunStatus.PAUSED
+    assert paused.remaining_timeout_seconds(run_clock.now()) == 55
+    original_pause = paused.manually_paused_at
+    run_clock.advance(120)
+    assert paused.remaining_timeout_seconds(run_clock.now()) == 55
+
+    second = rebuild(TimedClient(tool_turns([finish_action()])))
+    second.control_inbox.submit(paused.run_id, "interrupt")
+    paused_again = second.resume_run(paused.run_id)
+    assert paused_again.status == RunStatus.PAUSED
+    assert paused_again.manually_paused_at == original_pause
+    assert paused_again.remaining_timeout_seconds(run_clock.now()) == 55
+    run_clock.advance(30)
+    completed = second.resume_run(paused.run_id)
+    assert completed.status == RunStatus.COMPLETED, completed.terminal_error
+    assert completed.user_wait_seconds == 150
+    assert completed.manually_paused_at is None
+    assert completed.remaining_timeout_seconds(run_clock.now()) == 50
+    assert completed.llm_calls_used == 2
+
+
+def test_interrupt_waiting_root_question_counts_overlap_once(tmp_path, run_clock):
+    from resagent2_runtime.controls import RunControlInbox
+
+    class TimedClient(ScriptedLLMClient):
+        def next_tool_call(self, *args, **kwargs):
+            run_clock.advance(5)
+            return super().next_tool_call(*args, **kwargs)
+
+    ask = {"tool": "ask_user", "arguments": {
+        "assessment": {"statement": "Need a user decision"},
+        "text": "Choose the direction", "requested_fields": ["direction"],
+    }}
+    controller = _build_recoverable_controller(
+        JsonRunStore(tmp_path / "runs"), JsonSessionStore(tmp_path / "sessions"), [],
+    )
+    controller.control_inbox = RunControlInbox(tmp_path / "controls")
+    controller.scientific_port.llm_client = TimedClient(tool_turns([ask, finish_action()]))
+    waiting = controller.create_run("run_question_manual_wait", research_request())
+    original_question = waiting.pending_question
+    run_clock.advance(120)
+    controller.control_inbox.submit(waiting.run_id, "interrupt")
+    stopped = controller.resume_run(waiting.run_id)
+    assert stopped.status == RunStatus.PAUSED
+    assert stopped.pending_question == original_question
+    run_clock.advance(30)
+    assert stopped.remaining_timeout_seconds(run_clock.now()) == 55
+    completed = controller.answer_question(waiting.run_id, UserAnswer(
+        question_id=original_question.id, values={"direction": "Continue"},
+        answered_at=run_clock.now(),
+    ))
+    assert completed.status == RunStatus.COMPLETED, completed.terminal_error
+    assert completed.user_wait_seconds == 150
+    assert completed.manually_paused_at is None
+    assert completed.pending_question is None
+    assert completed.remaining_timeout_seconds(run_clock.now()) == 50
+    assert completed.answers[0].question_id == original_question.id
+
+
+def test_interrupt_cancelled_child_question_settles_wait_before_manual_pause(tmp_path, run_clock):
+    from resagent2_runtime.controls import RunControlInbox
+
+    controller = build_controller(actions=[
+        request_work_action(), finish_action(limitations=["The interrupted task remains incomplete"]),
+    ])
+    controller.control_inbox = RunControlInbox(tmp_path / "controls")
+    controller.scheduler.bindings[WorkflowAgentKind.EXPERIMENT] = ModuleBinding(
+        owner=AgentOwner.EXPERIMENT,
+        port=ScopedScriptedModulePort([_task_question_result()]),
+    )
+    waiting = controller.create_run("run_cancel_question_wait", research_request())
+    assert waiting.pending_question.related_question_id
+    run_clock.advance(120)
+    controller.control_inbox.submit(waiting.run_id, "interrupt")
+    stopped = controller.resume_run(waiting.run_id)
+    assert stopped.status == RunStatus.PAUSED
+    assert stopped.pending_question is None
+    assert not stopped.child_questions
+    assert stopped.work_requests[0].status == WorkRequestStatus.CANCELLED
+    assert stopped.user_wait_seconds == 120
+    run_clock.advance(30)
+    assert stopped.remaining_timeout_seconds(run_clock.now()) == 60
+    completed = controller.resume_run(waiting.run_id)
+    assert completed.status == RunStatus.COMPLETED, completed.terminal_error
+    assert completed.user_wait_seconds == 150
+    assert completed.manually_paused_at is None
+    assert completed.remaining_timeout_seconds(run_clock.now()) == 60
+
+
 def test_task_wait_uses_same_clock_and_refreshes_resources(run_clock):
     class Source:
         refs = []

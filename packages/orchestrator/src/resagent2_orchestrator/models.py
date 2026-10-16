@@ -144,7 +144,7 @@ class ResearchRun(OrchestratorModel):
     final_report_artifact_id: ArtifactId | None = None
     delivered_answer_ids: list[QuestionId] = Field(default_factory=list)
     usage: RunUsage = Field(default_factory=RunUsage)
-    # Settled ask_user pauses only; the currently open pause is derived below.
+    # Settled user waits; the currently open question/manual pause is derived below.
     user_wait_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
     completion_violations: list[CompletionViolation] = Field(default_factory=list)
     terminal_error: ModuleError | None = None
@@ -155,6 +155,16 @@ class ResearchRun(OrchestratorModel):
     def llm_calls_used(self) -> int:
         return self.usage.used
 
+    @property
+    def user_wait_started_at(self) -> datetime | None:
+        """Start of the open user-wait interval, counted once if reasons overlap."""
+        if self.status != RunStatus.PAUSED:
+            return None
+        starts = [self.manually_paused_at] if self.manually_paused_at is not None else []
+        if self.pending_question is not None:
+            starts.append(self.pending_question.created_at)
+        return min(starts) if starts else None
+
     def remaining_timeout_seconds(self, now: datetime) -> float:
         """One Run clock for Controller and Scheduler: wall time minus user wait.
 
@@ -162,8 +172,9 @@ class ResearchRun(OrchestratorModel):
         No user-supplied answer timestamp is used to extend this budget.
         """
         waited = self.user_wait_seconds
-        if self.status == RunStatus.PAUSED and self.pending_question is not None:
-            waited += max(0.0, (now - self.pending_question.created_at).total_seconds())
+        started = self.user_wait_started_at
+        if started is not None:
+            waited += max(0.0, (now - started).total_seconds())
         elapsed = max(0.0, (now - self.created_at).total_seconds() - waited)
         return max(0.0, self.request.budget.timeout_seconds - elapsed)
 

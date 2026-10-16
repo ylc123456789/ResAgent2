@@ -186,7 +186,7 @@ class ResearchController:
             if not task.attempts or task.attempts[-1].number != question.attempt_number:
                 raise ValueError("answer does not match the paused Attempt")
         run.answers.append(paired)
-        run.user_wait_seconds += max(0, (datetime.now(UTC)-question.created_at).total_seconds())
+        self._settle_user_wait(run)
         run.pending_question = None
         run.status = RunStatus.RUNNING
         if task_id:
@@ -340,12 +340,18 @@ class ResearchController:
             return self._pause_interrupted(run_id, "User interrupted while the Run was waiting")
         if run.pending_question is not None:
             raise ValueError("answer the pending question before continuing")
-        if run.manually_paused_at is not None:
-            run.user_wait_seconds += max(0, (datetime.now(UTC)-run.manually_paused_at).total_seconds())
-            run.manually_paused_at = None
+        self._settle_user_wait(run)
         run.status = RunStatus.RUNNING
         self._save(run)
         return self.run_until_stable(run_id)
+
+    @staticmethod
+    def _settle_user_wait(run):
+        """End one user wait without counting overlapping pause reasons twice."""
+        started = run.user_wait_started_at
+        if started is not None:
+            run.user_wait_seconds += max(0, (datetime.now(UTC)-started).total_seconds())
+        run.manually_paused_at = None
 
     def _cancel_work(self, run, work, reason):
         """No operations remain in flight here: invoked only after port return."""
@@ -377,11 +383,11 @@ class ResearchController:
             cancel = getattr(self.scientific_port, "cancel_question", None)
             if cancel:
                 cancel(question.session_id, question.id, "Escalated question ended with its original child work")
-            run.user_wait_seconds += max(0, (datetime.now(UTC)-question.created_at).total_seconds())
+            self._settle_user_wait(run)
             run.pending_question = None
         run.child_questions = {key: question for key, question in run.child_questions.items() if question.task_id not in child_ids}
         if run.pending_question is not None and run.pending_question.task_id in child_ids:
-            run.user_wait_seconds += max(0, (datetime.now(UTC)-run.pending_question.created_at).total_seconds())
+            self._settle_user_wait(run)
             run.pending_question = None
         run.pending_compilation = None
         _transition_work_request(work, WorkRequestStatus.CANCELLED, error=error)
@@ -405,7 +411,8 @@ class ResearchController:
         if work is not None and work.status in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING}:
             self._cancel_work(run, work, reason)
         run.status = RunStatus.PAUSED
-        run.manually_paused_at = datetime.now(UTC)
+        if run.manually_paused_at is None:
+            run.manually_paused_at = datetime.now(UTC)
         run.runtime_notices.append({"event_id": "pause:" + str(len(run.runtime_notices)),
                                    "type": "user_interrupted", "reason": reason,
                                    "stop_confirmed": True, "files_retained": True})

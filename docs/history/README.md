@@ -2,6 +2,10 @@
 
 这里回答“为什么改、当时做了什么、怎样验收”。**不是当前规范，也不是入门必读列表。** 当前行为查 [架构](../current/ARCHITECTURE.md) / [接口与契约](../current/CONTRACTS.md) / [模型上下文](../current/CONTEXT.md)。
 
+## 2026-10-16：原生工具、上下文与纠正链路合并收尾
+
+用户授权检查通过后将 `fix/native-agent-receipts` 合入本地 main，权限整体梳理留到后续分支。合并前发现并修复重复打断覆盖暂停起点、问答与手动暂停重叠计时的问题：三个新增用例在旧实现上失败，修复后本地 **2291 passed / 1 skipped**、mock completed/8 工件、pip/diff clean。已复核原 schema27 L3及机制补测、87002b6 的真实交接/预算短场景与原 E40 同条件 31/40 完成；不将旧 L3 或一个 E 样本当作最新版本科研质量/稳定性提升证明。schema 27 不迁移旧 Run/Session，保留所有历史与开发分支，不推送。范围、初始失败与勘误、后续权限事项及恢复边界见[采用与验收记录](reviews/NATIVE_AGENT_RECEIPTS_MERGE_CLOSEOUT_2026-10-16.md)。下文阶段记录保留当时状态。
+
 ## 2026-10-15：中断执行交接、共享总预算与工具说明
 
 在 `fix/native-agent-receipts` 上继续修正：正常、暂停及中断沿原公共工件交接真实 execution_record；每次模型尝试从 Run 总账刷新第三部分共享预算；控制工具说明与校验共用定义，补齐逻辑工作区和科研 verdict 的真实说明缺口。公共 schema 仍为 27.0，固定契约变更的旧 Session 明确拒绝恢复。最终本地全量 2288 passed / 1 skipped，mock completed / 8 工件，diff 检查通过；本地 pip check 仍有既有缺项。服务器连接被拒绝，真实短场景尚未运行。实现边界、失败记录和验证依据见[实施与验证记录](reviews/FEEDBACK_AND_SHARED_BUDGET_IMPLEMENTATION_2026-10-15.md)。

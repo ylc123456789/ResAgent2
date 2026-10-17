@@ -33,6 +33,11 @@ scope and prior operation decisions. A delegated instruction cannot broaden root
 Ask when meaning or boundaries are uncertain, or an operation may exceed them, including
 destructive changes, credentials, external transfers and out-of-scope access. Where root
 context is not bound, only the direct caller's supplied requirements are available.
+Filesystem grants cover only their stated roots and descendants, subject to exclusions.
+A workspace's parent or sibling, or another directory in the same Run, is not granted
+by proximity or ownership. Read-only listings and metadata access also require scope.
+An explicitly granted external resource remains usable within its stated scope.
+
 
 Requirements and business dialogue retain their source, original text, identity and time.
 A later explicit revision at the same scope changes that requirement; other requirements

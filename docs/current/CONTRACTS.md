@@ -371,7 +371,7 @@ Coding 的 `delete_path(path, recursive=False)` 删除单个文件、链接或�
 
 Runtime 暴露 `OperationReviewer.review(ActionSnapshot, AgentRequest) -> ApprovalReviewVerdict`，通过 `AgentDefinition.operation_reviewer` 注入。结果只接受 `decision: allow|ask` 和非空 `reason`。确定性 PermissionPolicy.check 不调用模型；只在派发前 ask 且 Run 选择 auto_review 时调用一次，人工回答恢复直接沿原准确动作校验，不重新审核。拒绝硬授权的操作不会送给 reviewer。
 
-审核输入使用原操作与请求的深副本。`LLMPermissionReviewer` 在 Components，复用 PromptLLMClient、原生 `review_operation` schema、共享传输/预算/期限/取消/trace；没有可执行工具或 Session。组合根额外提供根用户原始业务要求和有序业务记录，历史人工操作决定单独呈现。旧 yes 不是新授权，旧 no 与说明不会因为新的 native call 而消失。材料/脚本/Agent 声称均为待核对数据；看不清脚本效果时应 ask。
+审核输入使用原操作与请求的深副本。`LLMPermissionReviewer` 在 Components，复用 PromptLLMClient、原生 `review_operation` schema、共享传输/预算/期限/取消/trace；没有可执行工具或 Session。组合根额外提供根用户原始业务要求和有序业务记录，历史人工操作决定单独呈现。旧 yes 不是新授权，旧 no 与说明不会因为新的 native call 而消失。材料/脚本/Agent 声称均为待核对数据；看不清脚本效果时应 ask。目录授权依声明根及其子项解释，不因为只读、父子/兄弟位置或同属 Run 自动扩展；显式授予的外部资源仍按自身范围判断。这一语义由 reviewer 判断，不提供 OS 文件访问隔离。
 
 发起 Session 的 `permission_review` 事件按 operation_key 保存原 ActionSnapshot、source=auto_review、状态和原因。先保存 started，模型返回后保存 allow/ask/error/interrupted/invalidated，再保存执行标记并派发；持久化失败不执行。唯一原工具回执投影来源、action_id、状态、原因和 audit_sequence，不创建自动 RecordedAnswer，也不复制为第二部分需求或第四部分工件。
 
@@ -523,6 +523,8 @@ Scheduler 使用冻结的同一 TaskAcceptanceSpec。未明确要求的条件不
 ### ConclusionRequirements：Run 最终交付
 
 最终 Run gate 校验科学意见的结构、证据归属及冻结 hash、所需证据种类及明确输出名；访问记录只用于审计，不是完成或引用门禁；存在失败或阻塞工作时（包括编译失败、未创建 Task），检查 limitations 非空，局限是否充分解释其科研影响由 Scientific 判断。它通过 ArtifactRegistry 查询同一 Run 的实际登记表，共用授权 reader 和冻结 hash 规则；跨 Run 产物、仅磁盘存在的文件或未登记候选不满足要求。缺失输出返回 `code=required_artifact_missing`、`message="required artifact was not produced"`、`subject=名称`，阻止完成并保留证据。损坏或不可读的登记文件仍沿原错误路径拒绝，不伪装成普通缺失。通过后由确定性报告渲染器登记最终报告，再将 Run 标为 completed。inconclusive 可以是合法完成；Run completed 不保证假设成立或科学结论正确。
+
+最终报告的 `Non-completed delegated work` 栏目只列各 WorkRequest outcome 中非 completed 的任务结果，以及 failed/cancelled WorkRequest 的已记录错误；后续委派成功不会删除较早 outcome。它不汇总单次工具失败或权限决定，空项显示 `None in this scope`，不表示执行全程没有错误或人工介入。原工具回执和 trace 继续保留实际历史。
 
 <a id="identities"></a>
 <a id="attempt-session"></a>

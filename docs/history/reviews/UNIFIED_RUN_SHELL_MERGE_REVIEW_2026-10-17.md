@@ -56,3 +56,17 @@ current 已准确同步目录授权语义和报告统计范围，没有把可行
 当前服务器所测 namespace 方案受外层平台限制；较旧 Landlock 只有部分保护。决定暂缓正式接入，保留探针和最小执行约定，待选定首个实际后端并具备部署环境后，再提取接入接口。没有预先增加空框架、环境管理器或容器编排；也不为适配服务器自动弱化隔离或静默退回宿主。
 
 本地独立原始证据与详细评估：`E:/dshWorkSpace/implementation/sandbox-research-20261017/`。本次产品合并就绪判断不依赖这些探针来证明任意 shell 安全。
+
+<a id="authorized-merge"></a>
+
+## 用户授权后的合并与推送
+
+前述“不执行合并或推送”描述先前检查阶段。随后用户明确授权：完成收尾，检查无问题后合并并推送。
+
+- 来源：`feat/unified-run-shell@41ce8b4ff091c33af031bd250584e8d7abf500ab`。
+- 合并前 main：`2bcde651f7bb31add86d79650255c410f7d3591a`，fetch 后与 origin/main 一致。
+- 采用非快进合并保留开发历史，合并提交：`f3c58318ed10d8b1e2a4bad82bfad59e9a7e8137`。
+- 正常推送 `main:main` 成功；首次推送后独立 ls-remote 核对远端 main 为同一合并提交，没有强制推送。
+- 合并后的完整文件树与受验收来源一致；开发分支保留，合并后工作区干净。
+
+本段及历史索引是随后追加的纯文档收尾，产品实现和测试内容没有再改变，沿用本次 2230 passed / 1 skipped、mock completed/8 工件、pip check 和 diff 检查证据，无需因此重复 L3 或模型调用。文档收尾提交的最终推送结果及远端 SHA 另存本地 `implementation/unified-run-shell-merge-review-20261017/publication.json`。

@@ -6,6 +6,8 @@
 
 对 `feat/unified-run-shell` 相对 `main@2bcde651` 复核执行入口、审批恢复、预算、报告与当前文档。当前工作区全量 **2230 passed / 1 skipped**、mock completed/8 工件、pip check 与源码导入检查通过；补齐包 README 的旧 schema、环境 Tool、Compiler 职责及最新验收导航。L3 后续的目录授权语义和报告统计范围修复已经同步 current，原 L3 审核误判及脚本证据局限仍明确保留。沙箱只做独立 WSL 可行性验证，产品未接入；选择首个实际后端后再提取最小接入接口。本次检查不执行合并或推送，完整范围与证据见[收尾检查](reviews/UNIFIED_RUN_SHELL_MERGE_REVIEW_2026-10-17.md)，L3 发现、最小修复与小样本对照见[L3 后续记录](reviews/AUTO_REVIEW_L3_FOLLOWUP_2026-10-16.md)。
 
+随后用户明确授权完成收尾、合并和推送。已将 `feat/unified-run-shell@41ce8b4` 合入 `main`，合并提交 `f3c5831` 已推送且与远端核对一致，开发分支保留。上段未合并/推送描述检查阶段；实际操作见[追加收尾记录](reviews/UNIFIED_RUN_SHELL_MERGE_REVIEW_2026-10-17.md#authorized-merge)。
+
 ## 2026-10-16：自动审核修复与服务器补测
 
 在 `feat/unified-run-shell` 的 schema 29 上区分 Scientific 自身权限与 Run 对执行子任务的授权，将运行时权限事实独立放在第三部分；同时分离无状态单输出与 AgentLoop 协议，审核先说明实际行为依据再判断授权。首版真实 D 仍误放行的失败记录原样保留，最终冻结 `2c61f296` 的本地及服务器全量均 **2230 passed / 1 skipped**、mock 8 工件；13 项真实非执行审核输入全部符合预期，D 拒绝后调整与 G 审核中打断完整通过，独立账本/回执/输入/文件核对通过。保留 G 报告角色名称错误，不据此宣称报告全对、任意命令安全或 L3 提升。两版公共/私有证据已取回并核对哈希；不合并、不推送。完整经过见[修复与验收记录](reviews/AUTO_REVIEW_FIXES_ACCEPTANCE_2026-10-16.md)。

@@ -9,13 +9,13 @@
 
 CLI 不实现另一套研究控制、调度、Agent 或证据逻辑；两种入口最终都调用同一个 `ResearchController`。
 
-当前 contracts schema 为 27.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
+当前 contracts schema 为 29.0。旧版 Run 不支持 show / resume / answer，请创建新 Run；旧记录原样保留，不删除或迁移。CLI 与真实 E2E 共用 `build_application` 装配；E2E 只组织场景，不另设模型、上下文、联网或 PDF 配置。三个 Agent 都以 invoke 接收 instruction + input_artifacts，返回 report + artifacts；预算、权限、工作区、Session 和控制信号保持结构化。业务答案与控制结果直接持久保存；精确验收要求和实际材料冻结为工件，目录完整重建，每个 Agent 只有一种业务模式。
 
 ## 1. 安装与基本配置
 
 推荐从仓库根目录创建项目环境；`environment.yml` 会以 editable 模式安装全部包和 CLI：
 
-当前共 9 个包（包含 `resagent2-components`）。它承接资源、环境、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。真实 E2E 同样通过 CLI 的 `build_application` 装配。
+当前共 9 个包（包含 `resagent2-components`）。它承接资源、进程、文献等普通实现；切换 checkout 时须一并更新全部 editable 指针。真实 E2E 同样通过 CLI 的 `build_application` 装配。
 
 ```bash
 conda env create -f environment.yml
@@ -145,7 +145,7 @@ resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作�
 
 摘要在没有最终意见时显示 `Scientific assessment (interim)`（最近一次过程判断）；有 `Final opinion` 后不再默认展示旧过程判断，避免把已解决的问题当作当前结论。原始过程判断仍保留在 Run 状态中，显示不会改写记录。一次性命令与 shell 共用此规则。
 
-常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint` / `--required-artifact`、Python 版本和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。
+常用 Run 参数可用 `resagent2 run --help` 查看，包括 `--hypothesis`、重复的 `--constraint` / `--required-artifact` 和 Run 预算。`--goal` 的自然语言文本会原样进入 `ResearchRequest`。Python 版本和环境使用要求写入目标或 `--constraint`，例如 `--constraint "使用 Python 3.12；优先复用满足要求的环境"`，不再有专用版本或环境准备参数。
 
 <a id="run-controls"></a>
 
@@ -153,12 +153,11 @@ resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作�
 
 | 参数 | 默认值与含义 |
 |---|---|
-| `--max-llm-calls` | 200；整次 Run 的模型请求占用上限，包含 HTTP 重试、格式纠正和摘要 |
+| `--max-llm-calls` | 200；整次 Run 的模型请求占用上限，包含 HTTP 重试、格式纠正、摘要及自动权限审核 |
 | `--timeout-seconds` | 7200；扣除显式人工等待后的总时长，安装、下载、命令和进程停机均计入 |
 | `--max-tasks` / `--max-attempts` | 8 / 2；图中任务数和每任务尝试数上限，属于 ExecutionLimits |
-| `--no-execute-commands` | 关闭命令执行；CLI 默认明确授权执行，包含验证、实验和环境审计 |
-| `--no-prepare-environment` | 关闭环境准备和安装；CLI 默认明确授权受控环境管理 |
-| `--confirm-commands` | 默认关闭；开启后，权限允许的 Agent 顶层外部操作需逐次确认。`run_shell` 无论此开关是否开启，每次都需确认 |
+| `--no-execute-commands` | 关闭命令执行；CLI 默认明确授权执行，包含环境检查、创建、安装、验证和实验 |
+| `--approval-mode manual\|auto_review` | 默认 manual：准确操作交用户批准；auto_review：模型明确允许才执行，拿不准、无效返回或审核服务异常转同一人工入口 |
 | `--read-path` / `--write-path` | 可重复的工作区相对前缀，各默认 `.`；写范围必须属于读范围 |
 | `--read-only` | 写范围为空，与 `--write-path` 互斥 |
 | `--deny-path` | 可重复的排除前缀，对读取和写入优先拒绝 |
@@ -167,14 +166,25 @@ resagent2 answer <Run ID> --field approve=yes --comment '同意这一次操作�
 
 ```bash
 resagent2 run --workspace /path/to/repo --goal "分析模型实现并形成报告" \
-  --read-only --no-execute-commands --no-prepare-environment
+  --read-only --no-execute-commands
 ```
 
 权限在创建 Run 时固定，内部 Agent 只能继承或收紧。路径按前缀匹配，不接受 glob；系统报告输出不受源目录只读限制。没有 OS 隔离后端时，只读、局部读写或带 `--deny-path` 的工作区不能执行通用脚本/验证/安装，即使开启执行开关或回答同意也不放行。默认完整授权适用于可信项目代码，命令规则不保证脚本无法访问宿主其他路径。
 
-正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具确认目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/环境/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 git 探针和获准命令执行前的环境核验不另外提问；环境核验失败则不执行命令。显式调用 audit_env 等外部操作仍遵守确认设置，批准也不开放被拒绝的路径或命令。
+正常新建、修改和删除授权文件无需逐次询问；非空目录通过结构化删除工具审核目标快照。命令/删除确认仍使用 `answer`，按当前问题的 `approve` 字段回答。批准只对这次工具、参数、实际目录/启动配置/目标生效，并在执行前消费；同样命令再次执行也不会复用旧批准。框架内部固定 Git 探针由 Components 执行，不是另一个模型命令入口。环境检查、创建和安装都由 Agent 通过 run_shell 明确提交，每条脚本按创建 Run 时选择的模式审批，没有自动环境核验或重建。批准也不开放被拒绝的路径或命令。
 
-CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。操作确认显示完整工具参数及实际目录、绑定环境等执行上下文。业务问答补充任务信息，进入上下文第二部分；操作决定及可选说明进入原调用的第三部分工具回执，不进入累计任务需求或第四部分工件目录。两类问答直接保存为记录，不产生问答工件；字段名为 `approve` 本身不表示操作批准。
+自动审核使用既有模型配置（`RESAGENT2_MODEL`、endpoint、API key 和 trace），但使用独立客户端；`RESAGENT2_PERMISSION_REVIEWER_CONTEXT_TOKENS` 控制其完整输入上限，默认沿用 256000。每次审核最多一次模型请求，计入整个 Run 的共享预算，暂停恢复不重置。审核器没有读文件、执行、联网或委派工具，只有返回 allow/ask 与原因的 `review_operation` 输出工具；没有独立 Session、工件或审批账本。超出容量或模型返回无效时转人工，预算耗尽、到期、取消和权威用量保存失败保持原有停止语义。
+
+审核输入包括固定代码准备的准确操作、当前任务与有序上级要求、根用户原始目标/限制和后续业务记录；历史人工操作决定及说明单独标明，不当作新的任务要求或长期批准。脚本正文无法从现有输入确认时应转人工；这也意味着自动审核不保证所有命令都能自动放行。旧 `--confirm-commands` 及公共同名字段已删除，传入会明确报错；旧 schema（包括 28.0）不迁移。审计在发起工具的 Session 中以 `permission_review` 事件保存，唯一工具回执投影来源、状态、原因和事件序号；自动决定不冒充用户回答。
+
+例如创建自动审核的 Run：
+
+```bash
+resagent2 run --workspace /path/to/repo --goal "实现并验证所需功能" \
+  --approval-mode auto_review
+```
+
+CLI 根据问题有无运行时动作快照区分业务问答与操作确认，分别显示 `User question` / `Operation approval`（待答状态带 `Pending`），两者共用 `answer` 入口。操作确认显示完整工具参数及实际目录、Bash 配置和过滤后启动环境指纹等执行上下文。业务问答补充任务信息，进入上下文第二部分；操作决定及可选说明进入原调用的第三部分工具回执，不进入累计任务需求或第四部分工件目录。两类问答直接保存为记录，不产生问答工件；字段名为 `approve` 本身不表示操作批准。
 
 回答后，系统恢复暂停的原工具调用，复验准确动作并消费一次性决定，不需要模型再次提交该调用。批准后才可能执行；拒绝时不执行，并将决定、用户说明和 `not_executed` 事实放入原调用回执。批准后的实际工具回执也保留用户说明。模型根据任务和反馈决定下一步，CLI 不另设“继续／停止”回答字段。最终以实际工具回执和产物判断结果。
 
@@ -283,7 +293,9 @@ export RESAGENT2_DATASET_ROOT=/data/datasets
 只回答“好了”不会让缺失目录变为可用。目录存在也不保证内部文件完整，读取失败仍需据实处理。
 系统不后台监视目录，`resume` 不代替回答。等待用户的 paused 时间不计入 Run 超时，安装/执行等时间照常计入，已用 LLM 次数不重置。
 
-Python 依赖不进 catalog。Coding/Experiment 按项目和运行需要使用现有安装、审计工具；pip/conda 自己管理下载缓存，镜像由部署配置负责，不要求每个 Run 填写依赖或缓存参数。
+Python 依赖不进 catalog。Coding/Experiment 按任务要求通过唯一命令工具 run_shell 自行发现、选择、复用或创建环境，安装依赖并执行检查；pip/conda 自己管理下载缓存，镜像由部署配置负责，不要求每个 Run 填写依赖或缓存参数。系统不固定共享环境路径，不自动接管、删除或重建已有环境。需要多任务共用时由 Agent 在任务指令和公开交接中传递路径与要求。
+
+每次 run_shell 启动独立非登录 Bash，activate/export/cd 不延续到下次调用。Agent 应在同一次脚本中激活并执行，或使用解释器绝对路径、conda run 等明确选择环境。脚本仍运行在受信宿主账户下；环境隔离依赖版本，不隔离宿主文件、网络或进程。可选 auto_review 只审核准确操作，不提供 OS 沙箱。
 
 ## 5. 数据、资源与 trace
 
@@ -294,12 +306,12 @@ export RESAGENT2_DATA_ROOT=/data/resagent2
 # 或对单次命令使用：--data-root /data/resagent2
 ```
 
-CLI 从这个根创建一个共享 `ResourceLayout`，注入三个 Agent。Scientific 只检查数据集，不获得执行环境工具；Coding 与 Experiment 在同 Run、同 Workspace 复用环境。可按部署需要覆盖：
+CLI 从这个根创建一个共享 `ResourceLayout`，注入三个 Agent，用于部署资源与数据集目录。Scientific 不获得命令执行工具；Coding/Experiment 的环境选择由模型根据任务输入决定。可按部署需要覆盖：
 
 - `RESAGENT2_RESOURCE_ROOT`：共享资源根；
-- `RESAGENT2_DATASET_ROOT`：数据集根；
-- `RESAGENT2_ENV_ROOT`：受管 Conda 环境根；
-- `RESAGENT2_CONDA_EXE`：Conda 可执行文件路径。
+- `RESAGENT2_DATASET_ROOT`：数据集根。
+
+不再读取受管环境根或专用 Conda 路径配置；如任务需要某个环境或包管理器，使用实际可访问路径并在任务要求或命令中表达。
 
 LLM trace 默认关闭。每次装配 CLI 都会在 stderr 显示生效档位和目录；`run`、`answer`、`resume` 是独立进程，均从各自启动环境读取配置。非 `off / metadata / full` 档位、启用 trace 却未提供目录会在客户端创建时明确报错。
 
@@ -411,7 +423,7 @@ DeepSeek 搜索固定使用官方 `https://api.deepseek.com/anthropic/v1/message
 
 - `Status: paused`：查看 `Pending question` 和 `Fields`，使用 `answer`；不要用空 `resume` 代替回答；
 - 所需数据集不可用：准备目录并登记，按当前问题字段回答；无关条目暂缺不会提前使整个任务失败；
-- 非交互环境找不到 Conda：设置 `RESAGENT2_CONDA_EXE` 为绝对路径；
+- 非交互命令找不到 Conda：在任务要求中提供可访问的实际路径，由 Agent 在 run_shell 中使用绝对路径或同一脚本内完成必要初始化；
 - `/trace` 显示 `No trace records.`：确认 trace level 为 `full`，并且 shell 与执行进程使用同一 trace 目录。
 
 文献 PDF 默认解析上限为 300 秒，仍受 Run 剩余时间约束。CLI 的 `RESAGENT2_PDF_PARSE_TIMEOUT_SECONDS` 可设为正整数；配置在创建客户端和数据目录前校验，并经 Scientific 的解析器注入传到全文工具。run / answer / resume 每次装配时使用当时的配置，验收需记录该值；真实 E2E 共用这一装配及配置；自行创建的程序化调用不自动读取 CLI 环境变量。增加 Run 总超时不会自动扩大解析上限，模型也不能通过 Tool 参数扩大它。300 秒是初始工程值，不是所有论文都能成功的性能保证。解析超时仍终止受控进程并保留原件；历史 120 秒计时见[文献验收收尾](../../docs/history/reviews/LITERATURE_FOUNDATION_ACCEPTANCE_2026-10-03.md)。

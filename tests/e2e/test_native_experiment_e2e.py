@@ -3,7 +3,9 @@ from e2e.native_fixtures import tool_turns
 
 from resagent2_contracts import WorkspaceAccess, RunPermissions, ExecutionLimits
 from datetime import UTC, datetime
-from pathlib import Path
+import shlex
+import sys
+import subprocess
 
 from resagent2_contracts import (
     AgentOwner,
@@ -15,7 +17,6 @@ from resagent2_contracts import (
     TaskProposal,
     TaskAcceptanceSpec,
     TaskStatus,
-    VerificationResult,
     WorkflowProposal,
     WorkspaceSourceKind,
     WorkspaceSpec,
@@ -41,158 +42,34 @@ def _create_run(engine, run_id, request, proposal):
         )
     )
     return engine.accept_proposal(run_id, proposal)
-from resagent2_capabilities import (
-    AuditEnvTool,
-    PrepareEnvironmentTool,
-)
-from resagent2_components import (
-    EnvironmentBinding,
-    PreparedEnvironment,
-    WorkspaceBoundary,
-)
-from resagent2_runtime import (
-    AgentDefinition,
-    AgentLoop,
-    FinishTool,
-    InMemorySessionStore,
-    ScriptedLLMClient,
-)
-
-from resagent2_capabilities.permissions import OperationPermissionPolicy
-
-from resagent2_experiment.completion import ExperimentCompletionCheck
-from resagent2_experiment.context import EXPERIMENT_PROMPT, build_context
-from resagent2_capabilities import RunShellTool
+from resagent2_experiment import NativeExperimentAgent
+from resagent2_runtime import ScriptedLLMClient
 
 
-class _FakeManager:
-    def __init__(self, root: Path) -> None:
-        self.env_root = root
-        self.conda_exe = "conda"
-
-    def env_id(self, *, run_id: str, workspace_id: str) -> str:
-        return "resenv_x"
-
-    def inspect(self, *, run_id: str, workspace_id: str):
-        prefix = self.env_root / "resenv_x"
-        if prefix.exists():
-            return PreparedEnvironment(env_id="resenv_x", prefix=prefix, python_version="3.12")
-        return None
-
-    def prepare(self, *, run_id: str, workspace_id: str, python_version: str):
-        prefix = self.env_root / "resenv_x"
-        prefix.mkdir(parents=True, exist_ok=True)
-        return PreparedEnvironment(
-            env_id="resenv_x", prefix=prefix, python_version=python_version
-        )
-
-    def audit(self, environment):
-        return {
-            "success": True,
-            "sys_prefix": str(environment.prefix),
-            "python_version": environment.python_version,
-            "pip_available": True,
-            "prefix_match": True,
-            "stderr_tail": "",
-        }
-
-
-class _FakeRunner:
-    def __init__(self, boundary: WorkspaceBoundary) -> None:
-        self.boundary = boundary
-
-    def run_shell(self, command, *, log_dir, index, timeout_seconds, argv_prefix=None, extra_env=None):
-        stdout_rel = f"{log_dir}/command_{index:02d}.stdout"
-        stderr_rel = f"{log_dir}/command_{index:02d}.stderr"
-        stdout = Path(stdout_rel)
-        stderr = Path(stderr_rel)
-        stdout.parent.mkdir(parents=True, exist_ok=True)
-        stderr.parent.mkdir(parents=True, exist_ok=True)
-        (self.boundary.root / "metrics.json").write_text(
-            '{"accuracy": 0.9}', encoding="utf-8"
-        )
-        stdout.write_text("accuracy=0.9", encoding="utf-8")
-        stderr.write_text("", encoding="utf-8")
-        return VerificationResult(
-            command=command,
-            exit_code=0,
-            timed_out=False,
-            stdout_path=stdout_rel,
-            stderr_path=stderr_rel,
-            duration_seconds=0.0,
-        )
-
-
-class _NativeExperimentPort:
-    """A ModulePort that drives the native Experiment tools and finalizer."""
-
-    def __init__(self, loop: AgentLoop) -> None:
-        self._loop = loop
-
-    def invoke(self, request):
-        boundary = WorkspaceBoundary(request.workspace)
-        manager = _FakeManager(Path(request.workspace.root) / "envs")
-        binding = EnvironmentBinding(
-            manager,
-            run_id=request.run_id,
-            workspace_id=request.workspace_id or "default",
-        )
-        runner = _FakeRunner(boundary)
-        tools = (
-            PrepareEnvironmentTool(binding),
-            AuditEnvTool(binding),
-            RunShellTool(runner, binding, timeout_seconds=request.budget.timeout_seconds,
-                         log_dir=f"{request.output_dir}/commands"),
-            FinishTool(),
-        )
-        definition = AgentDefinition(
-            name="experiment",
-            owner=AgentOwner.EXPERIMENT,
-            system_prompt=EXPERIMENT_PROMPT,
-            tools=tools,
-            llm_client=ScriptedLLMClient(
-                tool_turns(([] if request.parent_session_id else [
-                    {"tool": "prepare_environment", "arguments": {"python_version": "3.12"}},
-                    {"tool": "audit_env", "arguments": {}},
-                ]) + ([] if request.parent_session_id else [
-                    {"tool": "run_shell", "arguments": {"command": "python train.py"}},
-                ]) + [
-                    {
-                        "tool": "finish",
-                        "arguments": {
-                            "report": "done",
-                            "artifacts": [{
-                                "kind": "experiment_result", "path": "metrics.json",
-                                "media_type": "application/json", "summary": "Measured accuracy",
-                            }],
-                        },
-                    },
-                ])
-            ),
-            context_builder=lambda request, state, limit: build_context(request, state),
-            permission_policy=OperationPermissionPolicy(
-                tools, boundary=boundary, binding=binding, request=request,
-            ),
-            completion_check=ExperimentCompletionCheck(
-                boundary,
-            ),
-        )
-        return self._loop.run(
-            definition,
-            request,
-            session_id=f"session_{request.task_id}_{request.attempt_number}",
-            initial_memory={
-                "hardware": "",
-                "repo": {"repo_url": "https://example.com/repo.git", "commit": "abc"},
-            },
-        )
+def _native_experiment():
+    return NativeExperimentAgent(ScriptedLLMClient(tool_turns([
+        {"tool": "run_shell", "arguments": {
+            "command": f"{shlex.quote(sys.executable)} train.py",
+        }},
+        {"tool": "finish", "arguments": {
+            "report": "Recorded the actual measured accuracy",
+            "artifacts": [{
+                "kind": "experiment_result", "path": "metrics.json",
+                "media_type": "application/json", "summary": "Measured accuracy",
+            }],
+        }},
+    ])))
 
 
 def test_scheduler_registers_native_experiment_artifacts(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=_NativeExperimentPort(AgentLoop(store=InMemorySessionStore())))}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
-    request = ResearchRequest(goal='Run the experiment', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    (workspace / "train.py").write_text(
+        "from pathlib import Path\nPath('metrics.json').write_text('{\"accuracy\": 0.9}')\n"
+    )
+    scheduler = WorkflowScheduler(bindings={WorkflowAgentKind.EXPERIMENT: ModuleBinding(owner=AgentOwner.EXPERIMENT, port=_native_experiment())}, store=InMemoryRunStore(), artifact_root=tmp_path / 'artifacts', data_root=tmp_path / 'data', workspaces={'ws_main': WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))})
+    request = ResearchRequest(goal='Run the experiment', budget=RunBudget(max_llm_calls=10, timeout_seconds=30), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     proposal = WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[

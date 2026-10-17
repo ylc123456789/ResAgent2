@@ -8,12 +8,13 @@ from resagent2_contracts import ArtifactCandidate, AgentResult, ModuleStatus, Ve
 from resagent2_runtime import AgentState, SessionStore
 
 
-_COMMAND_TOOLS = frozenset({"run_shell", "run_setup", "run_verification", "prepare_environment", "audit_env"})
+_STARTUP_FIELDS = ("cwd", "shell", "shell_args", "pipefail", "environment_fingerprint")
+_CODE_FIELDS = ("code_before", "code_after", "changed_paths", "workspace_change_error")
 _INTERRUPTED_FIELDS = (
     "execution_status", "stop_confirmed", "operation", "command", "pid", "exit_code",
     "stdout_path", "stderr_path", "duration_seconds", "files_retained",
     "unconfirmed_processes", "cleanup_error", "stdout_tail", "stderr_tail",
-)
+) + _STARTUP_FIELDS + _CODE_FIELDS
 _HANDOFF_OUTCOMES = frozenset({
     ModuleStatus.COMPLETED, ModuleStatus.COMPLETED_WITH_WARNINGS,
     ModuleStatus.FAILED, ModuleStatus.BLOCKED, ModuleStatus.INTERRUPTED,
@@ -32,18 +33,19 @@ def execution_record(state: AgentState) -> ArtifactCandidate | None:
     records = []
     for turn in state.tool_turns:
         for call in turn.tool_calls:
-            if call.name not in _COMMAND_TOOLS or call.id not in turn.tool_results:
+            if call.name != "run_shell" or call.id not in turn.tool_results:
                 continue
             receipt = json.loads(turn.tool_results[call.id])
             value = receipt.get("value")
             if not isinstance(value, dict):
                 continue
-            completed = value.get("results", []) if call.name == "run_verification" else []
-            if "execution_status" not in value and "exit_code" in value:
-                completed = [value]
-            for result in completed:
-                fields = {key: result[key] for key in VerificationResult.model_fields if key in result}
-                records.append(VerificationResult.model_validate(fields).model_dump(mode="json"))
+            completed = value.get("completed_command", value)
+            if isinstance(completed, dict) and "execution_status" not in completed and "exit_code" in completed:
+                fields = {key: completed[key] for key in VerificationResult.model_fields if key in completed}
+                records.append({
+                    **VerificationResult.model_validate(fields).model_dump(mode="json"),
+                    **{key: completed[key] for key in (*_STARTUP_FIELDS, *_CODE_FIELDS) if key in completed},
+                })
             if (value.get("execution_status") in {"interrupted", "unknown"}
                     and value.get("operation") == "process" and "command" in value):
                 records.append({key: value[key] for key in _INTERRUPTED_FIELDS if key in value})

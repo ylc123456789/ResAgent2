@@ -38,19 +38,21 @@ Orchestrator 内部的 `ResearchController` 是唯一 Run 入口；Compiler 翻�
 
 ## 当前实现与验证边界
 
-当前只实现 contracts schema `26.0`（`SCHEMA_VERSION="26.0"`）；旧 schema 的 Run/Session 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
+当前只实现 contracts schema `29.0`（`SCHEMA_VERSION="29.0"`）；旧 schema 的 Run/Session 不支持恢复，既有 state/session/trace 原样保留，不迁移、不重写、不自动清理。Session 的解析边界见 [CONTRACTS](docs/current/CONTRACTS.md#schema)。三个原生 Agent 共用 runtime、components 和 capabilities。
 
-Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求、数据集目录、问答和工作反馈都通过冻结工件传递。
+Scientific、Coding、Experiment 都只有一个调用入口和一种业务模式：`invoke(AgentRequest) -> AgentResult`。业务输入是 `instruction + input_artifacts`，业务输出是 `report + artifacts`；身份、权限、预算、工作区、恢复和控制信号保持结构化。Coding 可以理解或修改代码，Experiment 可以分析已有结果或执行新实验，无需切换模式。精确验收要求和数据集目录通过现有任务字段及授权工件传递；业务问答保留原文、来源和时间，工作结果按真实 Task 报告和交付物交接。
 
-调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；依赖沿用安装/审计能力。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
+调用方不预先填写数据集或依赖缓存：系统提供部署资源目录，Agent 在运行中发现需求。数据集缺失时通过已有问答请求人工补充，回答后重新检查；环境和依赖由模型通过 run_shell 检查、选择、创建和维护，不再自动绑定或认证。显式问答等待不消耗 Run 超时预算，其他耗时仍计入。用法见 [CLI 资源库](apps/cli/README.md#4-数据集资源库)。
 
-Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，任务数/尝试数单列为 ExecutionLimits；三个 Agent、Compiler、模型重试与历史压缩共用持久请求用量及截止时间，每次模型 HTTP 尝试发送前登记；固定 Interpreter 不消耗模型调用。工作区统一使用 read_paths/write_paths/denied_paths，操作权限显式继承。共享规则将操作判为允许、询问或拒绝；批准仅供本次动作使用，普通文件删除可直接进行，非空目录清理需确认目标快照。参数见 [CLI 运行控制](apps/cli/README.md#run-controls)。
+Coding/Experiment 的命令工具只保留 `run_shell`。环境检查、安装、测试、训练和评测使用同一准确操作批准与执行链路；固定代码不创建、绑定、认证或重建环境。版本和共用环境要求由任务输入及 Agent 交接传递。每次新建 Shell，不延续上次的 activate/export；模型明确选择解释器或在同一脚本内激活。已有环境不会被系统自动清理。
 
-路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集、环境和依赖缓存继续按原有职责管理，不新增通用资源配额层。
+Run 是预算与授权的上限：RunBudget 只含模型请求次数和时间，任务数/尝试数单列为 ExecutionLimits；三个 Agent、Compiler、自动权限审核、模型重试与历史压缩共用持久请求用量及截止时间，每次模型 HTTP 尝试发送前登记；固定 Interpreter 不消耗模型调用。工作区统一使用 read_paths/write_paths/denied_paths，操作权限显式继承。共享规则将操作判为允许、询问或拒绝；批准仅供本次动作使用，普通文件删除可直接进行，非空目录清理需确认目标快照。参数见 [CLI 运行控制](apps/cli/README.md#run-controls)。
 
-Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Compiler 生成一个任务草图，结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，各提交的真实验证范围与记录限制见 [统一 IO 验收](docs/history/reviews/UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md) 和 [Run 控制验收](docs/history/reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。
+路径检查和命令规则不是 OS 沙箱。没有隔离后端时，受限工作区不能执行任意脚本；完整可读写、无用户排除路径的工作区才开放可信代码执行。数据集登记和包缓存保持原有职责，环境选择与维护由执行 Agent 负责；当前后端为受信宿主执行，没有 OS 沙箱。默认 `manual` 逐次人工确认；创建 Run 时可用 `--approval-mode auto_review` 启用无状态模型审核，拿不准或模型不可用则转人工。审核不扩大操作授权，决定与准确快照保存于原 Session 事件和工具回执；旧人工拒绝及说明也供审核参考。
 
-`report` 解释发现、结果与局限，较长说明可作为 `module_report` 工件交接；测量以原始证据为准。Controller 将原题与用户回答配对成 `answer` 工件，再恢复对应 Session。命令、验证与观察记录由原生 Agent 的确定性完成检查生成，上游只接收公共结果和工件，不读取下游私有 Session。
+Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instruction` 表达意图。跨任务产物通过逻辑 `output_name` 与显式绑定交接；Scientific 明确生成原任务，Compiler 只匹配注册 Agent，固定代码原文传递并组装图；结构不合法时最多纠正一次。设计背景见 [统一 Agent IO V2 方案](docs/history/reviews/UNIFIED_AGENT_IO_V2_PLAN_2026-09-20.md)，各提交的真实验证范围与记录限制见 [统一 IO 验收](docs/history/reviews/UNIFIED_AGENT_IO_V2_RETEST_REVIEW_2026-09-21.md) 和 [Run 控制验收](docs/history/reviews/RUN_CONTROL_SERVER_REVIEW_2026-09-22.md#fixed-round)。
+
+`report` 解释发现、结果与局限，较长说明可作为 `module_report` 工件交接；测量以原始证据为准。业务问答进入对应 Session 的有序任务需求，不生成 answer 工件；操作批准及说明留在原工具回执。execution_record 与读取观察由原生 Agent 的确定性完成检查从实际回执生成，上游只接收公共结果和工件，不读取下游私有 Session。
 
 确定性检查证明的是身份、状态、执行记录和证据引用符合规则，**不是 LLM 的科学观点一定正确**。同样，trace 的 `action_valid` 不能代替工具成功或最终完成验收。
 
@@ -58,13 +60,13 @@ Workflow 只按 `coding / experiment` 路由，任务同样用一条 `instructio
 
 ## 通用部分如何复用
 
-Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。`capabilities` 放模型可调用的 Tool；`components` 放文件授权、Git、进程、环境、工件读取、文献后端等普通 Python 实现。Tool、Agent 和组合根按需直接调用组件，不要求一一对应，也不强制经过中间层。Runtime 仍只管运行机制。入口见 [工具目录](packages/capabilities/README.md) 与 [组件目录](packages/components/README.md)。
+Scientific、Coding、Experiment 使用同一 `AgentLoop`，只装配不同的 prompt、Tool、上下文、权限和完成检查。`capabilities` 放模型可调用的 Tool；`components` 放文件授权、Git、进程、工件读取、文献后端等普通 Python 实现。Tool、Agent 和组合根按需直接调用组件，不要求一一对应，也不强制经过中间层。Runtime 仍只管运行机制。入口见 [工具目录](packages/capabilities/README.md) 与 [组件目录](packages/components/README.md)。
 
 论文按篇登记，摘要、原始 PDF 与解析正文有独立身份。除在线检索外，可通过 CLI 论文清单在创建 Run 时导入材料，或在等待用户时补入；同一科研目录负责导航，全文按需解析，访问历史只记日志。用法见 [外部论文导入](apps/cli/README.md#literature-import)。
 
 Scientific 可使用独立的 `web_search` 与 `web_fetch`。搜索默认可复用 DeepSeek key，也可关闭；抓取单页不依赖搜索后端。搜索只返回临时线索，显式 fetch 后的网页和文献材料进入同一完整工件索引，由模型按目标选择工具和读取范围，不规定固定顺序。接口与限制见[网页工具](docs/current/CONTRACTS.md#web)。三个 Agent 的上下文统一为固定契约、任务需求、配对工具历史、完整工件索引，具体构造见 [CONTEXT](docs/current/CONTEXT.md)。
 
-LLM 客户端的必需方法是 `next_action`；最小客户端由共享入口在调用前计一次，自带 HTTP 重试的客户端须逐次接入同一用量接口。trace hooks 可选。Compiler 复用 LLM、上下文与执行预算基础；Interpreter 只组织已记录内容，不调用模型。两者都不运行 AgentLoop。
+AgentLoop 客户端的必需方法是 `next_tool_call`，只使用原生 function call；每次 HTTP 尝试须在发送前接入同一 Run 用量账本。trace hooks 可选。Compiler 复用 LLM、上下文与执行预算基础；Interpreter 只组织已记录内容，不调用模型。两者都不运行 AgentLoop。
 
 ```text
 apps/cli/                     人类入口与生产装配

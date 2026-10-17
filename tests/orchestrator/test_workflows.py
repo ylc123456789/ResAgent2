@@ -45,7 +45,7 @@ NOW = datetime(2026, 8, 26, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(goal='Evaluate a method', budget=RunBudget(max_llm_calls=50, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=12, max_attempts_per_task=3))
+    return ResearchRequest(goal='Evaluate a method', budget=RunBudget(max_llm_calls=50, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=12, max_attempts_per_task=3))
 
 
 def task(
@@ -453,7 +453,7 @@ def test_task_request_receives_full_remaining_run_budget(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler_module, "datetime", FixedClock)
     engine = scheduler({WorkflowAgentKind.EXPERIMENT: [completed()]})
-    request = ResearchRequest(goal='Use the full remaining budget', budget=RunBudget(max_llm_calls=120, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
+    request = ResearchRequest(goal='Use the full remaining budget', budget=RunBudget(max_llm_calls=120, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=1))
     _create_run(engine, "run_remaining_budget", request, WorkflowProposal(
         work_request_id="work_legacy_initial",
         tasks=[task("task_experiment", WorkflowAgentKind.EXPERIMENT)],

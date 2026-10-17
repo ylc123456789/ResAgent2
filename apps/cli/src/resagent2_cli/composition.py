@@ -24,6 +24,7 @@ from resagent2_components import (
     DatasetCatalog,
     ResourceLayout,
 )
+from resagent2_components.approval_review import LLMPermissionReviewer
 from resagent2_components.literature.fulltext import DEFAULT_PDF_PARSE_TIMEOUT_SECONDS, parse_pdf
 from resagent2_coding import NativeCodingAgent
 from resagent2_contracts import (
@@ -53,6 +54,8 @@ from resagent2_runtime import (
 )
 from resagent2_runtime.controls import RunControlInbox
 from resagent2_scientific import ScientificAgent
+
+from .approval_context import approval_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +186,11 @@ def build_application(
     experiment_context_tokens = _component_context_limit("experiment")
     scientific_context_tokens = _component_context_limit("scientific")
     compiler_context_tokens = _component_context_limit("compiler")
+    operation_reviewer = LLMPermissionReviewer(
+        _client(),
+        max_context_tokens=_component_context_limit("permission_reviewer"),
+        context_provider=partial(approval_context, run_store),
+    )
 
     scheduler = WorkflowScheduler(
         bindings={
@@ -193,6 +201,7 @@ def build_application(
                     store=coding_store,
                     resource_layout=resource_layout,
                     max_context_tokens=coding_context_tokens,
+                    operation_reviewer=operation_reviewer,
                 ),
             ),
             WorkflowAgentKind.EXPERIMENT: ModuleBinding(
@@ -202,6 +211,7 @@ def build_application(
                     store=experiment_store,
                     resource_layout=resource_layout,
                     max_context_tokens=experiment_context_tokens,
+                    operation_reviewer=operation_reviewer,
                 ),
             ),
         },

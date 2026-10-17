@@ -19,17 +19,13 @@ from resagent2_components import (
     GitWorkspace,
     ProcessRunner,
     RegisteredArtifactReader,
-    UnsafeCommandError,
     WorkspaceBoundary,
     WorkspacePermissionError,
-    parse_command,
 )
-from resagent2_coding.verification import VerificationCommandPolicy
 from resagent2_capabilities import (
     ReadFileTool,
     ReplaceTextTool,
 )
-from resagent2_coding.verification import RunVerificationTool
 from resagent2_runtime import AgentState
 
 
@@ -74,56 +70,15 @@ def test_read_only_workspace_cannot_resolve_a_write(tmp_path) -> None:
         boundary.resolve_write_file("new.py", must_be_new=True)
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "python test.py && echo done",
-        "python test.py | tee log",
-        "python test.py > output.txt",
-        "python $(which pytest)",
-        "python test.py\nrm file",
-    ],
-)
-def test_command_parser_rejects_shell_composition(command: str) -> None:
-    with pytest.raises(UnsafeCommandError):
-        parse_command(command)
 
 
-def test_verification_policy_denies_destructive_and_non_verification_commands() -> None:
-    policy = VerificationCommandPolicy()
-    denied = [
-        "rm -rf .",
-        "git clean -fd",
-        "python -m pip install xxx",
-        "curl https://example.com",
-        "bash script.sh",
-        "git commit -m x",
-    ]
-    for command in denied:
-        assert policy.check([command]).allowed is False, command
 
 
-def test_verification_policy_allows_recognised_test_runners() -> None:
-    policy = VerificationCommandPolicy()
-    allowed = [
-        "python -m py_compile train.py",
-        "python -m pytest tests/",
-        "python -m unittest",
-        "pytest -q",
-        "cargo test",
-        "cargo check",
-        "go test ./...",
-        "npm test",
-        "pnpm test",
-        "yarn test",
-    ]
-    for command in allowed:
-        assert policy.check([command]).allowed is True, command
 
 
-def test_process_runner_uses_argv_and_writes_logs(tmp_path) -> None:
+def test_process_runner_writes_shell_logs(tmp_path) -> None:
     boundary = WorkspaceBoundary(grant(tmp_path))
-    result = ProcessRunner(boundary).run(
+    result = ProcessRunner(boundary).run_shell(
         f'{sys.executable} -c "print(42)"',
         log_dir=".resagent2/test",
         index=1,
@@ -136,7 +91,7 @@ def test_process_runner_uses_argv_and_writes_logs(tmp_path) -> None:
 
 def test_process_runner_marks_timeout_and_stops_process(tmp_path) -> None:
     boundary = WorkspaceBoundary(grant(tmp_path))
-    result = ProcessRunner(boundary).run(
+    result = ProcessRunner(boundary).run_shell(
         f'{sys.executable} -c "import time; time.sleep(5)"',
         log_dir=".resagent2/timeout",
         index=1,
@@ -149,7 +104,7 @@ def test_process_runner_marks_timeout_and_stops_process(tmp_path) -> None:
 
 def test_process_runner_extra_env_cannot_inject_credentials(tmp_path) -> None:
     boundary = WorkspaceBoundary(grant(tmp_path))
-    result = ProcessRunner(boundary).run(
+    result = ProcessRunner(boundary).run_shell(
         "env",
         log_dir=".resagent2/env",
         index=1,
@@ -444,75 +399,3 @@ def test_replace_text_rejects_empty_old_text(tmp_path) -> None:
 
     with pytest.raises(Exception, match="old_text must not be empty"):
         tool.input_model(path="m.py", old_text="", new_text="y")
-
-
-class _FailingVerificationRunner:
-    def __init__(self, boundary) -> None:
-        self.boundary = boundary
-
-    def run(
-        self,
-        command,
-        *,
-        log_dir,
-        index,
-        timeout_seconds,
-        argv_prefix=None,
-        extra_env=None,
-    ):
-        self.extra_env = extra_env
-        root = Path(log_dir)
-        root.mkdir(parents=True, exist_ok=True)
-        stdout = root / f"command_{index:02d}.stdout"
-        stderr = root / f"command_{index:02d}.stderr"
-        stdout.write_text("", encoding="utf-8")
-        stderr.write_text("boom", encoding="utf-8")
-        return VerificationResult(
-            command=command,
-            exit_code=1,
-            timed_out=False,
-            stdout_path=str(stdout),
-            stderr_path=str(stderr),
-            duration_seconds=0.0,
-        )
-
-
-def test_run_verification_reports_failed_command_as_not_ok(tmp_path) -> None:
-    init_repo(tmp_path)
-    boundary = WorkspaceBoundary(grant(tmp_path, denied_paths=()))
-    repository = GitWorkspace(boundary)
-    tool = RunVerificationTool(
-        _FailingVerificationRunner(boundary),
-        repository,
-        log_root=str(tmp_path / "verification"),
-        timeout_seconds=10,
-        baseline=repository.snapshot(),
-    )
-
-    observation = tool.execute(
-        _agent_state(), tool.input_model(commands=["python -m py_compile missing.py"])
-    )
-
-    assert observation.ok is False
-    assert observation.value["passed"] is False
-
-
-def test_run_verification_passes_shared_resource_environment(tmp_path) -> None:
-    init_repo(tmp_path)
-    boundary = WorkspaceBoundary(grant(tmp_path, denied_paths=()))
-    repository = GitWorkspace(boundary)
-    runner = _FailingVerificationRunner(boundary)
-    tool = RunVerificationTool(
-        runner,
-        repository,
-        log_root=str(tmp_path / "verification"),
-        timeout_seconds=10,
-        baseline=repository.snapshot(),
-        extra_env={"RESAGENT2_DATASET_ROOT": "/datasets"},
-    )
-
-    tool.execute(
-        _agent_state(), tool.input_model(commands=["python -m py_compile missing.py"])
-    )
-
-    assert runner.extra_env == {"RESAGENT2_DATASET_ROOT": "/datasets"}

@@ -45,7 +45,12 @@ class ContextComposer:
         return ComposedContext(
             text=text, system_prompt=system_prompt,
             task_context="\n\n".join(
-                part for section, part in zip(sections, rendered) if section.name != "artifact_index"
+                part for section, part in zip(sections, rendered)
+                if section.name not in {"artifact_index", "runtime_authority"}
+            ),
+            runtime_context="\n\n".join(
+                part for section, part in zip(sections, rendered)
+                if section.name == "runtime_authority"
             ),
             artifact_index="\n\n".join(
                 part for section, part in zip(sections, rendered) if section.name == "artifact_index"

@@ -17,26 +17,13 @@ from .dataset import (
     dataset_env_overrides,
     resolve_dataset_refs,
 )
-from .environment import (
-    SetupCommandPolicy,
-    EnvironmentBinding,
-    EnvironmentManager,
-    EnvironmentManagerError,
-    PreparedEnvironment,
-    find_conda,
-)
 from .git import (
     GitBaseline,
     GitWorkspace,
     GitWorkspaceError,
 )
 from .execution_records import execution_record, preserve_execution_record
-from .process import (
-    CommandPermissionDecision,
-    ProcessRunner,
-    UnsafeCommandError,
-    parse_command,
-)
+from .process import ProcessRunner
 from .repo import (
     MaterializedRepo,
     RepoMaterializer,
@@ -101,32 +88,23 @@ __all__ = [
     'WebSearchItem',
     'WebSearchResult',
     'ArtifactRegistrationPort',
-    'SetupCommandPolicy',
     'ArtifactReadError',
-    'CommandPermissionDecision',
     'DatasetAvailability',
     'DatasetCatalog',
     'DatasetResolutionError',
-    'EnvironmentBinding',
-    'EnvironmentManager',
-    'EnvironmentManagerError',
     'GitBaseline',
     'GitWorkspace',
     'GitWorkspaceError',
     'MaterializedRepo',
-    'PreparedEnvironment',
     'ProcessRunner',
     'RegisteredArtifactReader',
     'RepoMaterializer',
     'RepoMaterializerError',
     'ResourceLayout',
-    'UnsafeCommandError',
     'WorkspaceBoundary',
     'WorkspacePermissionError',
     'dataset_context',
     'dataset_env_overrides',
-    'find_conda',
     'media_type_for',
-    'parse_command',
     'resolve_dataset_refs',
 ]

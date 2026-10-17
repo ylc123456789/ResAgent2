@@ -63,7 +63,7 @@ def build_context(request, state, max_context_tokens) -> list[ContextSection]:
 
 
 def request(agent: AgentOwner) -> AgentRequest:
-    return AgentRequest(run_id='run_runtime', task_id='task_runtime', attempt_number=1, agent=agent, instruction='Read or store the reference value', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    return AgentRequest(run_id='run_runtime', task_id='task_runtime', attempt_number=1, agent=agent, instruction='Read or store the reference value', budget=TaskBudget(max_llm_calls=5, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
 
 
 def definition(
@@ -371,7 +371,7 @@ def test_consecutive_failures_stop_before_budget() -> None:
         tools=(AlwaysFailTool(), FinishTool()),
         allowed_tools={"always_fail", "finish"},
     )
-    req = AgentRequest(run_id='run_x', task_id='task_x', attempt_number=1, agent=AgentOwner.CODING, instruction='i', budget=TaskBudget(max_llm_calls=50, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    req = AgentRequest(run_id='run_x', task_id='task_x', attempt_number=1, agent=AgentOwner.CODING, instruction='i', budget=TaskBudget(max_llm_calls=50, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
     result = loop.run(profile, req, session_id="session_fail")
 
     assert result.status == ModuleStatus.FAILED
@@ -427,7 +427,7 @@ def test_completion_rejection_counts_as_failure() -> None:
         allowed_tools={"finish"},
         completion_check=RejectWithReason(),
     )
-    req = AgentRequest(run_id='run_x', task_id='task_x', attempt_number=1, agent=AgentOwner.CODING, instruction='i', budget=TaskBudget(max_llm_calls=50, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    req = AgentRequest(run_id='run_x', task_id='task_x', attempt_number=1, agent=AgentOwner.CODING, instruction='i', budget=TaskBudget(max_llm_calls=50, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
     result = loop.run(profile, req, session_id="session_reject_finish")
 
     assert result.status == ModuleStatus.FAILED

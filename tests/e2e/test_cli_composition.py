@@ -25,6 +25,7 @@ def isolated_configuration(monkeypatch):
         "LLM_TIMEOUT_SECONDS", "LLM_TRACE_LEVEL", "LLM_TRACE_DIR",
         "CODING_CONTEXT_TOKENS", "EXPERIMENT_CONTEXT_TOKENS",
         "SCIENTIFIC_CONTEXT_TOKENS", "COMPILER_CONTEXT_TOKENS",
+        "PERMISSION_REVIEWER_CONTEXT_TOKENS",
         "PDF_PARSE_TIMEOUT_SECONDS", "WEB_SEARCH_MODEL",
         "WEB_SEARCH_TIMEOUT_SECONDS", "WEB_TIMEOUT_SECONDS",
         "WEB_MAX_RESPONSE_BYTES", "DATA_ROOT", "RESOURCE_ROOT",
@@ -56,6 +57,7 @@ def test_e2e_application_applies_production_configuration(tmp_path, monkeypatch)
         "EXPERIMENT_CONTEXT_TOKENS": "13000",
         "SCIENTIFIC_CONTEXT_TOKENS": "14000",
         "COMPILER_CONTEXT_TOKENS": "15000",
+        "PERMISSION_REVIEWER_CONTEXT_TOKENS": "16000",
         "PDF_PARSE_TIMEOUT_SECONDS": "91",
         "WEB_SEARCH_PROVIDER": "deepseek",
         "WEB_SEARCH_MODEL": "test-search-model",
@@ -81,8 +83,17 @@ def test_e2e_application_applies_production_configuration(tmp_path, monkeypatch)
             scientific.max_context_tokens, compiler_adapter._max_context_tokens] == [
         12000, 13000, 14000, 15000,
     ]
+    reviewer = coding.operation_reviewer
+    assert reviewer is experiment.operation_reviewer
+    assert reviewer._client._max_context_tokens == 16000
+    assert reviewer._context_provider.func is composition.approval_context
+    assert reviewer._context_provider.args == (app.run_store,)
+    reviewer_client = reviewer._client._client
+    assert all(reviewer_client is not other for other in (
+        coding.llm_client, experiment.llm_client, scientific.llm_client, compiler_adapter._client,
+    ))
     for client in (
-        coding.llm_client, experiment.llm_client, scientific.llm_client,
+        reviewer_client, coding.llm_client, experiment.llm_client, scientific.llm_client,
         compiler_adapter._client,
     ):
         assert client.model == "test-agent-model"
@@ -205,7 +216,7 @@ def test_single_agent_stage_invokes_its_production_binding(tmp_path, monkeypatch
     assert len(requests) == 1
     request = requests[0]
     assert request.agent == AgentOwner(kind.value)
-    assert request.permissions.execute_commands and request.permissions.prepare_environment
+    assert request.permissions.execute_commands
     assert not request.permissions.request_work
     assert request.workspace.root == str(repo)
     assert request.workspace_id == "ws_main"

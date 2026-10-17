@@ -91,9 +91,7 @@ class ReplaceTextTool:
         finally:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
-        revision = int(state.memory.get("edit_revision", 0)) + 1
         return ToolObservation(
             summary=f"Replaced one exact match in {args.path}",
             value={"path": args.path},
-            memory_updates={"edit_revision": revision},
         )

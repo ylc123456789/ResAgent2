@@ -56,12 +56,10 @@ class DeletePathTool:
             error = None
         except DeleteInterruptedError as failure:
             deleted, remaining, error = failure.deleted, failure.remaining, str(failure)
-        revision = int(state.memory.get("edit_revision", 0)) + 1
         return ToolObservation(
             ok=error is None,
             summary=(f"Deleted {snapshot['path']}" if error is None
                      else f"Deletion interrupted after {len(deleted)} entries: {error}"),
             value={"path": snapshot["path"], "deleted_paths": deleted,
                    "remaining_paths": remaining, "error": error},
-            memory_updates={"edit_revision": revision},
         )

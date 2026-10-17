@@ -1,4 +1,4 @@
-"""Deployment roots for datasets and managed environments."""
+"""Deployment roots for shared dataset resources."""
 
 from __future__ import annotations
 
@@ -12,12 +12,11 @@ def _env_or(default: Path, name: str) -> Path:
 
 
 class ResourceLayout:
-    """Resolve dataset and environment roots, not pip/conda package caches.
+    """Resolve dataset resources, without managing Python environments or caches.
 
     Precedence: explicit constructor argument > the matching environment
     variable > derived from ``resource_root`` > derived from
-    ``data_root/resources``. ``env_root`` is the directory that directly holds
-    conda environment prefixes (no extra ``envs`` segment is appended).
+    ``data_root/resources``.
     """
 
     def __init__(
@@ -25,16 +24,12 @@ class ResourceLayout:
         *,
         resource_root: str | Path,
         dataset_root: str | Path | None = None,
-        env_root: str | Path | None = None,
     ) -> None:
         self.resource_root = Path(resource_root).expanduser()
         self.dataset_root = (
             Path(dataset_root).expanduser()
             if dataset_root
             else self.resource_root / "datasets"
-        )
-        self.env_root = (
-            Path(env_root).expanduser() if env_root else self.resource_root / "envs"
         )
 
     @classmethod
@@ -50,5 +45,4 @@ class ResourceLayout:
         return cls(
             resource_root=resource_root,
             dataset_root=_env_or(resource_root / "datasets", "RESAGENT2_DATASET_ROOT"),
-            env_root=_env_or(resource_root / "envs", "RESAGENT2_ENV_ROOT"),
         )

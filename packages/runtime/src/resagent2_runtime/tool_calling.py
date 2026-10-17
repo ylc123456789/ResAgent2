@@ -172,7 +172,9 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
         context = ComposedContext(
             text=context, task_context=context, included_sections=[], omitted_sections=[], estimated_tokens=0,
         )
-    messages = [{"role": "system", "content": _native_system_prompt(context.system_prompt)}]
+    system_prompt = (context.system_prompt if context.protocol_mode == "output"
+                     else _native_system_prompt(context.system_prompt))
+    messages = [{"role": "system", "content": system_prompt}]
     if context.task_context:
         messages.append({"role": "user", "content": context.task_context})
     if context.history_summary:
@@ -183,6 +185,8 @@ def native_input(context: str | ComposedContext, schemas: list[dict], turns: Seq
     messages.extend(tool_messages(turns))
     if context.pending_notifications:
         messages.append({"role": "user", "content": "Pending child questions (runtime facts):\n" + context.pending_notifications})
+    if context.runtime_context:
+        messages.append({"role": "user", "content": "Runtime facts (not task requirements):\n" + context.runtime_context})
     if context.runtime_status:
         messages.append({"role": "user", "content": "Runtime status (current shared limits, not task requirements):\n" + context.runtime_status})
     if context.artifact_index:

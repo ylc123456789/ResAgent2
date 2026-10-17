@@ -15,7 +15,6 @@ from resagent2_contracts import (
     WorkflowAgentKind,
     ActionSnapshot,
     DatasetRef,
-    EnvironmentSpec,
     PendingQuestion,
     ResearchRequest,
     RunBudget,
@@ -30,7 +29,7 @@ from resagent2_cli.main import _parser, _specs_for_existing_run
 
 
 def _request(goal: str = "test goal") -> ResearchRequest:
-    return ResearchRequest(goal=goal, budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=1))
+    return ResearchRequest(goal=goal, budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=2, max_attempts_per_task=1))
 
 
 def _run(status: RunStatus = RunStatus.COMPLETED) -> ResearchRun:
@@ -365,19 +364,17 @@ def test_coding_and_experiment_share_resource_layout(tmp_path: Path):
     coding = bindings[WorkflowAgentKind.CODING].port
     experiment = bindings[WorkflowAgentKind.EXPERIMENT].port
 
-    # Both execution agents must resolve envs/resources from the same layout, so
-    # a code_modify prepare_environment and a follow-on experiment_run see the
-    # same physical env prefix.
+    # Agent contexts use the same configured dataset and resource locations.
     assert coding.resource_layout is experiment.resource_layout
     assert application.controller.scientific_port.resource_layout is coding.resource_layout
 
 
-def test_resume_reuses_persisted_environment_when_python_flag_is_omitted(
+def test_resume_reuses_persisted_workspace(
     tmp_path: Path,
 ):
     workspace = tmp_path / "repo"
     workspace.mkdir()
-    source = WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), environment=EnvironmentSpec(python_version='3.12'), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
+    source = WorkspaceSpec(workspace_id='ws_main', source_kind=WorkspaceSourceKind.LOCAL, location=str(workspace), access=WorkspaceAccess(read_paths=['.'], write_paths=['.']))
     run = _run(RunStatus.PAUSED)
     run.workspaces["ws_main"] = WorkspaceRecord(
         workspace_id="ws_main",
@@ -507,3 +504,82 @@ def test_literature_import_rejects_non_paused_run_before_building(tmp_path, stat
         )
     assert builder.calls == []
     assert store.load(run.run_id) == run
+
+
+@pytest.mark.parametrize("flag", [["--python-version", "3.12"], ["--prepare-environment"], ["--no-prepare-environment"]])
+def test_retired_environment_flags_are_explicitly_rejected(flag):
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["run", "--goal", "Inspect the workspace", *flag])
+    assert error.value.code == 2
+
+
+def test_python_requirement_uses_the_normal_constraint_channel():
+    from resagent2_cli.main import _request_from_args
+
+    requirement = "Use Python 3.11 for this task; reuse /shared/envs/project if suitable."
+    args = _parser().parse_args(["run", "--goal", "Execute the task", "--constraint", requirement])
+    request = _request_from_args(args)
+    assert request.constraints == [requirement]
+    assert "prepare_environment" not in request.permissions.model_dump()
+
+
+@pytest.mark.parametrize("command", ["show", "resume", "answer"])
+def test_schema27_cli_recovery_refuses_without_mutating_evidence(tmp_path, command):
+    from resagent2_contracts import SCHEMA_VERSION
+
+    store = JsonRunStore(tmp_path / "state")
+    run = _run(RunStatus.PAUSED)
+    store.save(run)
+    path = store.root / f"{run.run_id}.json"
+    old = path.read_bytes().replace(f'"{SCHEMA_VERSION}"'.encode(), b'"27.0"')
+    path.write_bytes(old)
+    builder = _Builder(_Controller(run))
+    args = [command, run.run_id, "--data-root", str(tmp_path)]
+    if command == "answer":
+        args += ["ready=yes"]
+    with pytest.raises(ValidationError):
+        cli(args, application_builder=builder)
+    assert path.read_bytes() == old
+    assert builder.calls == []
+
+
+@pytest.mark.parametrize("mode,execute_commands", [("manual", False), ("manual", True),
+                                                       ("auto_review", False), ("auto_review", True)])
+def test_run_persists_approval_mode_without_expanding_execute_grant(tmp_path, mode, execute_commands):
+    controller = _Controller(_run())
+    result = cli(
+        ["run", "--goal", "Inspect the repository", "--data-root", str(tmp_path),
+         "--approval-mode", mode,
+         "--execute-commands" if execute_commands else "--no-execute-commands"],
+        application_builder=_Builder(controller),
+    )
+    assert result == EXIT_COMPLETED
+    permissions = controller.created[1].permissions
+    assert permissions.approval_mode == mode
+    assert permissions.execute_commands is execute_commands
+
+
+def test_run_defaults_to_manual_approval_and_resume_cannot_override_it():
+    from resagent2_cli.main import _request_from_args
+
+    request = _request_from_args(_parser().parse_args(["run", "--goal", "Inspect"]))
+    assert request.permissions.approval_mode == "manual"
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["resume", "run_test", "--approval-mode", "auto_review"])
+    assert error.value.code == 2
+
+
+def test_run_rejects_unknown_approval_mode_before_building_application(tmp_path):
+    controller = _Controller(_run())
+    builder = _Builder(controller)
+    with pytest.raises(SystemExit) as error:
+        cli(["run", "--goal", "Inspect", "--data-root", str(tmp_path),
+             "--approval-mode", "always_allow"], application_builder=builder)
+    assert error.value.code == 2
+    assert builder.calls == []
+
+
+def test_run_rejects_retired_confirmation_flag():
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["run", "--goal", "Inspect", "--confirm-commands"])
+    assert error.value.code == 2

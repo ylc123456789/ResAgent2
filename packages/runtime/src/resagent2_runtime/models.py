@@ -54,8 +54,10 @@ class ComposedContext(RuntimeModel):
     """Complete fixed input, protocol summary and capacity measurement."""
 
     text: str
+    protocol_mode: Literal["agent", "output"] = "agent"
     system_prompt: str = ""
     task_context: str = ""
+    runtime_context: str = ""  # Derived execution facts, separate from business requirements.
     artifact_index: str = ""
     pending_notifications: str = ""
     runtime_status: str = ""
@@ -132,6 +134,19 @@ class CompletionDecision(RuntimeModel):
         return self
 
 
+class ApprovalReviewVerdict(RuntimeModel):
+    """Untrusted model judgment; the runtime binds it to the prepared operation."""
+
+    reason: NonEmptyStr = Field(description=(
+        "Briefly state the supplied evidence for actual effects and any material unknowns, "
+        "then assess authorization and scope. User intent is not implementation evidence."
+    ))
+    decision: Literal["allow", "ask"] = Field(description=(
+        "allow only when actual effects are established and authorization and scope are clear; "
+        "ask when either is unresolved."
+    ))
+
+
 class PermissionDecision(RuntimeModel):
     """Permission result produced before a Tool can execute."""
 
@@ -141,6 +156,7 @@ class PermissionDecision(RuntimeModel):
     prepared: dict[str, JsonValue] | None = None
     approval_id: str | None = None
     user_comment: str | None = None
+    reviewed_action: ActionSnapshot | None = None
 
 
 class AgentEvent(RuntimeModel):
@@ -148,7 +164,7 @@ class AgentEvent(RuntimeModel):
 
     sequence: int = Field(ge=1)
     step: int = Field(ge=0)
-    type: Literal["action", "observation", "error", "compaction"]
+    type: Literal["action", "observation", "error", "compaction", "permission_review"]
     tool: str | None = None
     data: JsonValue
     created_at: datetime
@@ -207,7 +223,7 @@ class HistoryCheckpoint(RuntimeModel):
 class AgentState(RuntimeModel):
     """Persisted generic state owned by one child Agent session."""
 
-    schema_version: Literal["27.0"] = SCHEMA_VERSION
+    schema_version: Literal["29.0"] = SCHEMA_VERSION
     session_id: SessionId
     upstream_session_id: SessionId | None = None
     agent_name: NonEmptyStr

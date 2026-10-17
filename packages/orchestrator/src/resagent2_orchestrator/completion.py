@@ -139,11 +139,13 @@ class FinalReportRenderer:
         for title, values in [("Limitations", opinion.limitations), ("Unresolved questions", opinion.unresolved_questions),
                               ("Recommended next steps", opinion.recommended_next_steps)]:
             lines.extend(["", "## " + title, "", *["- " + item for item in values or ["None."]]])
-        lines.extend(["", "## Execution issues", ""])
-        lines.extend(f"- WorkRequest `{work_id}` (failed): {error.message}" for work_id, error in data.work_errors.items())
+        lines.extend(["", "## Non-completed delegated work", "",
+                      "This section lists non-completed task outcomes and recorded errors from failed or cancelled WorkRequests. "
+                      "It does not summarize individual tool failures or permission decisions.", ""])
+        lines.extend(f"- WorkRequest `{work_id}`: {error.message}" for work_id, error in data.work_errors.items())
         lines.extend(f"- `{issue.task_id}` ({issue.status.value}): {issue.error.message if issue.error else 'No detailed error recorded'}" for issue in data.execution_issues)
         if not data.execution_issues and not data.work_errors:
-            lines.append("- None.")
+            lines.append("- None in this scope.")
         content = "\n".join(lines) + "\n"
         return RenderedFinalReport(ArtifactCandidate(kind="final_report", path="final_report.md", media_type="text/markdown",
                                                      summary=f"Final report for {data.run_id}", metadata={"source_type": "final_report"}), content)

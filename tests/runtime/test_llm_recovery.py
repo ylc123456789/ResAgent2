@@ -85,7 +85,7 @@ def test_bad_json_stops_at_existing_limits(
         permission_policy=AllowListPermissionPolicy({"finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=call_budget, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
 
     with (
         mock.patch("resagent2_runtime.llm.time.sleep"),
@@ -158,7 +158,7 @@ def test_scheduler_keeps_attempt_for_json_but_retries_transport(
         store=store,
         data_root=tmp_path / "data",
     )
-    request = ResearchRequest(goal='exercise retry recovery', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2))
+    request = ResearchRequest(goal='exercise retry recovery', budget=RunBudget(max_llm_calls=10, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=1, max_attempts_per_task=2))
     now = datetime.now(UTC)
     store.save(
         ResearchRun(
@@ -241,7 +241,7 @@ def recovery(monkeypatch, tmp_path):
         permission_policy=AllowListPermissionPolicy({"write_value", "finish"}),
         completion_check=_AcceptFinish(),
     )
-    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=10, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True, prepare_environment=True))
+    request = AgentRequest(run_id='run_r', task_id='task_r', attempt_number=1, agent=AgentOwner.CODING, instruction='q', budget=TaskBudget(max_llm_calls=10, timeout_seconds=60), permissions=AgentPermissions(execute_commands=True))
     return definition, request, InMemorySessionStore()
 
 

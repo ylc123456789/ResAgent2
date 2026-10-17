@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from resagent2_components.process import ProcessRunner, UnsafeCommandError, output_tail
+from resagent2_components.process import ProcessRunner, output_tail
 from resagent2_components.workspace import WorkspaceBoundary
 from resagent2_contracts import WorkspaceAccess, WorkspaceGrant
 from resagent2_runtime.budget import execution_budget
@@ -49,18 +49,55 @@ def test_multiline_heredoc_and_receipt_preserve_script_bytes(runner, tmp_path):
     assert result.command == script
 
 
-def test_workspace_bound_prefix_and_environment_filtering(runner, tmp_path):
+def test_workspace_and_environment_filtering(runner, tmp_path):
     result = run_shell(
         runner,
         "printf '%s\\n' \"$PWD\" \"$RESAGENT_TEST_VALUE\" \"$RESAGENT_PREFIX\" "
         "\"${RESAGENT_TEST_API_KEY-unset}\"",
-        argv_prefix=["/usr/bin/env", "RESAGENT_PREFIX=bound"],
-        extra_env={"RESAGENT_TEST_VALUE": "available", "RESAGENT_TEST_API_KEY": "hidden"},
+        extra_env={"RESAGENT_TEST_VALUE": "available", "RESAGENT_PREFIX": "explicit", "RESAGENT_TEST_API_KEY": "hidden"},
     )
     assert result.exit_code == 0
     assert Path(result.stdout_path).read_text().splitlines() == [
-        str(tmp_path), "available", "bound", "unset",
+        str(tmp_path), "available", "explicit", "unset",
     ]
+
+
+@pytest.mark.parametrize("name,first,second", [
+    ("SHLVL", "1", "7"), ("_", "/first/launcher", "/second/launcher"),
+    ("SSH_CLIENT", "192.0.2.1 10001 22", "192.0.2.1 10002 22"),
+    ("SSH_CONNECTION", "192.0.2.1 10001 192.0.2.2 22", "192.0.2.1 10002 192.0.2.2 22"),
+])
+def test_approval_stays_stable_across_launcher_metadata(
+    runner, monkeypatch, name, first, second,
+):
+    import resagent2_components.process as component
+    monkeypatch.setenv(name, first)
+    approved = runner.shell_context()
+    monkeypatch.setenv(name, second)
+    launched = []
+    real_popen = component.subprocess.Popen
+
+    def capture(*args, **kwargs):
+        launched.append(kwargs["env"])
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(component.subprocess, "Popen", capture)
+    result = run_shell(runner, 'printf "%s\\n" "$SHLVL"', expected_context=approved)
+    assert result.exit_code == 0
+    assert result.environment_fingerprint == approved["environment_fingerprint"]
+    assert Path(result.stdout_path).read_text() == "1\n"
+    assert "SHLVL" not in launched[0] and "_" not in launched[0]
+    assert "SSH_CLIENT" not in launched[0] and "SSH_CONNECTION" not in launched[0]
+
+
+def test_approval_still_rejects_changed_path_before_execution(runner, monkeypatch):
+    import os
+    approved = runner.shell_context()
+    monkeypatch.setenv("PATH", os.environ["PATH"] + ":/different-search-path")
+    with pytest.raises(PermissionError, match="configuration changed"):
+        run_shell(runner, "touch should-not-exist", expected_context=approved)
+    assert not (runner.boundary.root / "should-not-exist").exists()
+    assert not (runner.boundary.root / ".resagent2").exists()
 
 
 def test_inherited_shell_startup_and_exported_functions_are_not_executed(runner, tmp_path):
@@ -103,10 +140,6 @@ def test_shell_obeys_shared_deadline_and_keeps_partial_logs(runner, tmp_path):
         time.sleep(0.01)
 
 
-@pytest.mark.parametrize("script", ["printf hi | cat", "printf hi\nprintf bye", "echo $(pwd)"])
-def test_existing_argv_entry_still_rejects_shell_features(runner, script):
-    with pytest.raises(UnsafeCommandError):
-        runner.run(script, log_dir=".resagent2/plain", index=1, timeout_seconds=5)
 
 
 def test_shell_rejects_non_linux_before_starting_process(runner, monkeypatch):

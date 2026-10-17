@@ -7,7 +7,9 @@ from resagent2_contracts import ArtifactCandidate, ResearchRequest, RunBudget, R
 from resagent2_orchestrator import JsonRunStore, ResearchRun
 from resagent2_orchestrator.artifacts import ArtifactRegistry, ScientificArtifactRegistration
 from resagent2_orchestrator.usage import RunUsagePort
-from resagent2_runtime.budget import BudgetExhaustedError, execution_budget, invoke_model
+from resagent2_runtime.budget import (
+    BudgetExhaustedError, UsagePersistenceError, execution_budget, invoke_model,
+)
 
 
 def prepared(tmp_path, *, calls=2):
@@ -38,19 +40,50 @@ def test_request_reservation_is_on_disk_before_client_is_called(tmp_path):
     assert list(saved.usage.requests.values()) == ["succeeded"]
 
 
-def test_failed_reservation_prevents_dispatch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("store_method", ["load", "save"])
+@pytest.mark.parametrize("storage_error", [OSError, ValueError])
+def test_failed_reservation_prevents_dispatch(tmp_path, monkeypatch, store_method, storage_error):
     store, run = prepared(tmp_path)
     port = RunUsagePort(run, store)
     class Client:
         def next_action(self):
             pytest.fail("request must not be sent before durable reservation")
     def fail(_):
-        raise OSError("storage unavailable")
-    monkeypatch.setattr(store, "save", fail)
+        raise storage_error("private record contents must not appear in feedback")
+    monkeypatch.setattr(store, store_method, fail)
     with execution_budget(max_llm_calls=2, timeout_seconds=60, usage=port):
-        with pytest.raises(OSError, match="storage unavailable"):
+        with pytest.raises(UsagePersistenceError, match="Run model usage could not be persisted") as caught:
             invoke_model(Client(), "next_action")
+    assert isinstance(caught.value.__cause__, storage_error)
+    assert "private record contents" not in str(caught.value)
     assert JsonRunStore(store.root).load(run.run_id).llm_calls_used == 0
+
+
+@pytest.mark.parametrize("store_method", ["load", "save"])
+def test_failed_completion_persistence_remains_unknown_without_replaying(tmp_path, monkeypatch, store_method):
+    store, run = prepared(tmp_path)
+    port = RunUsagePort(run, store)
+    calls = []
+
+    def fail(_):
+        raise OSError("completion storage unavailable")
+
+    class Client:
+        def next_action(self):
+            calls.append("sent")
+            assert list(JsonRunStore(store.root).load(run.run_id).usage.requests.values()) == ["unknown"]
+            monkeypatch.setattr(store, store_method, fail)
+            return "done"
+
+    with execution_budget(max_llm_calls=2, timeout_seconds=60, usage=port):
+        with pytest.raises(UsagePersistenceError) as caught:
+            invoke_model(Client(), "next_action")
+
+    assert isinstance(caught.value.__cause__, OSError)
+    assert calls == ["sent"]
+    saved = JsonRunStore(store.root).load(run.run_id)
+    assert saved.llm_calls_used == 1
+    assert list(saved.usage.requests.values()) == ["unknown"]
 
 
 def test_unknown_reservations_are_not_refunded_on_restart(tmp_path):

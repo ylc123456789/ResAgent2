@@ -47,7 +47,7 @@ def prepared(tmp_path):
     registry = ArtifactRegistry(tmp_path / "artifacts")
     session = SessionRef(id="session_scientific", module="scientific", state_uri="memory://scientific",
         status="completed", created_at=now, updated_at=now)
-    run = ResearchRun(run_id='run_gate', request=ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2)), status='running', scientific_session=session, created_at=now, updated_at=now)
+    run = ResearchRun(run_id='run_gate', request=ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=2)), status='running', scientific_session=session, created_at=now, updated_at=now)
     run.conclusion_requirements_ref = system_artifact(registry, run, "conclusion_requirements", ConclusionRequirements())
     gate = ScientificCompletionValidator(WorkflowAgentRegistry(definitions=[WorkflowAgentDefinition(workflow_agent_kind="experiment")]), registry)
     return registry, run, gate

@@ -22,7 +22,7 @@ def request(**changes):
         instruction="Inspect the implementation", budget=TaskBudget(max_llm_calls=5, timeout_seconds=60),
     )
     data.update(changes)
-    data.setdefault("permissions", AgentPermissions(execute_commands=True, prepare_environment=True))
+    data.setdefault("permissions", AgentPermissions(execute_commands=True))
     return AgentRequest(**data)
 
 
@@ -55,6 +55,7 @@ def test_all_agents_use_the_same_request_and_result(agent):
 @pytest.mark.parametrize("field", [
     "goal", "constraints", "inputs", "dataset_refs", "answers", "facts", "continuation",
     "acceptance", "acceptance_ref", "required_evidence_kinds", "required_artifacts", "capability", "mode",
+    "environment_spec",
 ])
 def test_request_rejects_parallel_task_semantics(field):
     with pytest.raises(ValidationError, match="Extra inputs"):
@@ -67,7 +68,7 @@ def test_request_enforces_invocation_scope_and_dispatch_authority():
     with pytest.raises(ValidationError, match="task_id"):
         request(task_id=None)
     with pytest.raises(ValidationError, match="only Scientific"):
-        request(permissions=AgentPermissions(request_work=True, execute_commands=True, prepare_environment=True))
+        request(permissions=AgentPermissions(request_work=True, execute_commands=True))
     with pytest.raises(ValidationError):
         request(agent="orchestrator")
 
@@ -80,9 +81,7 @@ def test_run_and_agent_require_explicit_permissions():
             max_llm_calls=5, timeout_seconds=60,
         ))
     assert not contracts.RunPermissions().execute_commands
-    assert not contracts.RunPermissions().prepare_environment
     assert not AgentPermissions().execute_commands
-    assert not AgentPermissions().prepare_environment
 
 
 def test_resume_data_requires_origin_session_and_exact_answer_scope():
@@ -215,3 +214,16 @@ def test_unknown_scientific_session_kind_is_rejected():
     with pytest.raises(ValidationError, match="unsupported scientific"):
         artifact(kind="unknown_kind", producer="scientific", task_id=None, attempt_number=None,
                  session_id="session_test", metadata={})
+
+
+def test_environment_authority_is_not_a_separate_permission_or_workspace_contract():
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        contracts.RunPermissions(prepare_environment=True)
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        AgentPermissions(prepare_environment=True)
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        contracts.WorkspaceSpec(
+            workspace_id="ws_test", source_kind="generated",
+            access=contracts.WorkspaceAccess(read_paths=["."], write_paths=["."]),
+            environment={"python_version": "3.12"},
+        )

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from resagent2_capabilities import DeletePathTool
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_components.workspace import WorkspaceBoundary
+from resagent2_components.process import ProcessRunner
 from resagent2_contracts import (
     AgentOwner, AgentPermissions, AgentRequest, ArtifactCandidate, QuestionDraft,
     RecordedAnswer, TaskBudget, WorkspaceAccess, WorkspaceGrant,
@@ -33,6 +34,14 @@ class Command:
     def __init__(self):
         self.calls = []
         self.before_execute = lambda: None
+        self.extra_env = {}
+
+    def approval_context(self):
+        return self.runner.shell_context(extra_env=self.extra_env)
+
+    def execute_prepared(self, state, arguments, prepared):
+        assert prepared == self.approval_context()
+        return self.execute(state, arguments)
 
     def execute(self, state, arguments):
         self.before_execute()
@@ -50,16 +59,17 @@ def request(root, **changes):
         run_id="run_permissions", task_id="task_permissions", attempt_number=1,
         agent=AgentOwner.CODING, instruction="Do the authorized work",
         budget=TaskBudget(max_llm_calls=8, timeout_seconds=60),
-        permissions=AgentPermissions(execute_commands=True, prepare_environment=True),
-        confirm_commands=True,
+        permissions=AgentPermissions(execute_commands=True),
         workspace=WorkspaceGrant(root=str(root), source="local",
                                  access=WorkspaceAccess(read_paths=["."], write_paths=["."])),
     )
     return AgentRequest(**(fields | changes))
 
 
-def execute(req, actions, tool, store, *, binding=None, client=None):
+def execute(req, actions, tool, store, *, client=None):
     boundary = WorkspaceBoundary(req.workspace)
+    if isinstance(tool, Command):
+        tool.runner = ProcessRunner(boundary)
     tools = (tool, FinishTool())
     definition = AgentDefinition(
         name="permissions", owner=AgentOwner.CODING, system_prompt="Test",
@@ -67,7 +77,7 @@ def execute(req, actions, tool, store, *, binding=None, client=None):
         context_builder=lambda *_: [],
         permission_policy=OperationPermissionPolicy(
             tools, boundary=boundary,
-            binding=binding or SimpleNamespace(current=None, hard_constraint=None), request=req,
+            request=req,
         ),
         completion_check=Completion(),
     )
@@ -138,7 +148,7 @@ def test_recursive_delete_requires_new_approval_if_target_changes(tmp_path):
     target = tmp_path / "cache"
     target.mkdir()
     (target / "old.txt").write_text("old")
-    req = request(tmp_path, confirm_commands=False)
+    req = request(tmp_path)
     store = JsonSessionStore(tmp_path / "sessions")
     tool = DeletePathTool(WorkspaceBoundary(req.workspace))
     action = {"tool": "delete_path", "arguments": {"path": "cache", "recursive": True}}
@@ -147,10 +157,13 @@ def test_recursive_delete_requires_new_approval_if_target_changes(tmp_path):
     (target / "new.txt").write_text("new")
     second = execute(resumed, [action], tool, store)
     assert second.status == "needs_user_input"
+    assert second.control.source_turn != first.control.source_turn
+    original_receipt = json.loads(store.load(first.session.id).tool_turns[
+        first.control.source_turn].tool_results[first.control.source_call_id])
+    assert original_receipt["value"]["execution_status"] == "not_executed"
     assert sorted(path.name for path in target.iterdir()) == ["new.txt", "old.txt"]
     final = execute(answer(tmp_path, resumed, second), [FINISH], tool, store)
     assert final.status == "completed" and not target.exists()
-    assert store.load(first.session.id).memory["edit_revision"] == 1
 
 
 def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash(tmp_path):
@@ -185,10 +198,8 @@ def test_consumed_approval_is_durable_before_effect_and_not_replayed_after_crash
     assert all(turn.executing_user_comment is None for turn in restored.tool_turns)
 
 
-@pytest.mark.parametrize("confirm", [False, True])
-def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
-    req = request(tmp_path, confirm_commands=confirm,
-                  permissions=AgentPermissions(execute_commands=True, prepare_environment=False))
+def test_shell_default_mode_asks_with_execution_only_permission(tmp_path):
+    req = request(tmp_path, permissions=AgentPermissions(execute_commands=True))
     tool, store = Command(), JsonSessionStore(tmp_path / "sessions")
     script = "  printf 'one\n' | cat\n"
     first = execute(req, [command(script)], tool, store)
@@ -203,7 +214,7 @@ def test_shell_always_asks_with_execution_only_permission(tmp_path, confirm):
 
 
 def test_changed_shell_script_requires_its_own_approval(tmp_path):
-    req, tool = request(tmp_path, confirm_commands=False), Command()
+    req, tool = request(tmp_path), Command()
     store = JsonSessionStore(tmp_path / "sessions")
     first = execute(req, [command("printf first")], tool, store)
     result = execute(answer(tmp_path, req, first), [command("printf second")], tool, store)
@@ -213,30 +224,34 @@ def test_changed_shell_script_requires_its_own_approval(tmp_path):
     }
 
 
-def test_shell_approval_does_not_follow_a_changed_environment_prefix(tmp_path):
-    req, tool = request(tmp_path, confirm_commands=False), Command()
-    binding = SimpleNamespace(
-        current=SimpleNamespace(prefix=tmp_path / "env_first", python_version="3.12"),
-        hard_constraint=None,
-    )
+def test_shell_approval_does_not_follow_a_changed_startup_environment(tmp_path):
+    req, tool = request(tmp_path), Command()
+    tool.extra_env = {"PATH": "/first/environment/bin"}
     store = JsonSessionStore(tmp_path / "sessions")
     action = command("python measure.py")
-    first = execute(req, [action], tool, store, binding=binding)
-    resumed = answer(tmp_path, req, first, comment="Only for the original environment")
+    first = execute(req, [action], tool, store)
+    resumed = answer(tmp_path, req, first, comment="Only for the original startup")
     original_action = first.control.question.action
-    binding.current = SimpleNamespace(prefix=tmp_path / "env_second", python_version="3.12")
+    tool.extra_env = {"PATH": "/second/environment/bin"}
 
-    second = execute(resumed, [action], tool, store, binding=binding)
+    second = execute(resumed, [action], tool, store)
     assert second.status == "needs_user_input" and tool.calls == []
     next_action = second.control.question.action
     assert next_action.arguments == original_action.arguments
     assert next_action.action_id != original_action.action_id
-    assert original_action.context["environment"] == str(tmp_path / "env_first")
-    assert next_action.context["environment"] == str(tmp_path / "env_second")
+    assert original_action.context["environment_fingerprint"] != next_action.context["environment_fingerprint"]
+    assert "/first/environment/bin" not in json.dumps(original_action.context)
 
-    final = execute(answer(tmp_path, resumed, second, comment="New environment reviewed"),
-                    [FINISH], tool, store, binding=binding)
+    final = execute(answer(tmp_path, resumed, second, comment="New startup reviewed"),
+                    [FINISH], tool, store)
     assert final.status == "completed" and tool.calls == ["python measure.py"]
     receipts = [json.loads(raw) for turn in store.load(first.session.id).tool_turns
                 for raw in turn.tool_results.values()]
-    assert [r["user_comment"] for r in receipts if "user_comment" in r] == ["New environment reviewed"]
+    assert [r["user_comment"] for r in receipts if "user_comment" in r] == [
+        "Only for the original startup", "New startup reviewed",
+    ]
+    original_receipt = json.loads(store.load(first.session.id).tool_turns[
+        first.control.source_turn].tool_results[first.control.source_call_id])
+    assert original_receipt["value"]["execution_status"] == "not_executed"
+    assert "new tool call" in original_receipt["summary"]
+    assert second.control.source_turn != first.control.source_turn

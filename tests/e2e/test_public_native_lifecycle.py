@@ -178,7 +178,7 @@ def test_cli_rebuilds_and_finishes_two_native_work_rounds(tmp_path, monkeypatch)
 
     monkeypatch.setattr("resagent2_runtime.llm.send_request", reply)
     assert cli(["run", "--run-id", run_id, "--goal", "Clean obsolete source and analyze existing accuracy",
-                "--workspace", str(repo), "--data-root", str(data), "--no-execute-commands", "--no-prepare-environment",
+                "--workspace", str(repo), "--data-root", str(data), "--no-execute-commands",
                 "--max-llm-calls", "30", "--max-tasks", "2"]) == EXIT_PAUSED
     first = run()
     assert obsolete.is_dir() and first.pending_question.action.tool == "delete_path"

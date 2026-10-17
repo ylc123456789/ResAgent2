@@ -16,7 +16,7 @@ from resagent2_orchestrator import JsonRunStore, ResearchRun
 from resagent2_orchestrator.usage import RunUsagePort
 from resagent2_runtime import (
     AgentDefinition, AgentLoop, AllowListPermissionPolicy, CompletionDecision,
-    ComposedContext, ContextSection, FinishTool, InMemorySessionStore,
+    ComposedContext, ContextComposer, ContextSection, FinishTool, InMemorySessionStore,
     OpenAICompatibleClient, PromptLLMClient, ScriptedLLMClient,
 )
 from resagent2_runtime.budget import DeadlineExceededError, current_budget_status, execution_budget
@@ -115,8 +115,12 @@ def test_native_retry_refreshes_budget_before_each_charge_and_traces_exact_input
         }}]}).encode())
 
     monkeypatch.setattr("resagent2_runtime.llm.send_request", respond)
-    context = ComposedContext(text="task", task_context="task", artifact_index="complete directory",
-                              included_sections=["task", "artifact_index"], estimated_tokens=1)
+    authority = '{"current_agent":"scientific","run_execution_permissions":{"execute_commands":true,"approval_mode":"auto_review"}}'
+    context = ContextComposer().compose("rules", [
+        ContextSection(name="task", content="unchanged business requirements"),
+        ContextSection(name="runtime_authority", content=authority),
+        ContextSection(name="artifact_index", content="complete directory"),
+    ], max_tokens=4000)
     with execution_budget(max_llm_calls=4, timeout_seconds=10, usage=usage):
         client.next_tool_call(context, native_tool_schemas((FinishTool(),)), [], max_input_tokens=4000)
     snapshots = [_facts(_wire_status(body)) for body in bodies]
@@ -129,7 +133,11 @@ def test_native_retry_refreshes_budget_before_each_charge_and_traces_exact_input
     for body, attempt in zip(bodies, row["attempts"]):
         assert attempt["request_text"] == json.dumps(
             {"messages": body["messages"], "tools": body["tools"]}, ensure_ascii=False)
-        assert body["messages"][-1]["content"] == "complete directory"
+        assert body["messages"][-1]["content"] == "## artifact_index\ncomplete directory"
+        authority_messages = [message["content"] for message in body["messages"]
+                              if message["content"].startswith("Runtime facts (")]
+        assert authority_messages == ["Runtime facts (not task requirements):\n## runtime_authority\n" + authority]
+        assert body["messages"][1]["content"] == "## task\nunchanged business requirements"
     assert row["request_text"] == row["attempts"][-1]["request_text"]
 
 
@@ -262,3 +270,21 @@ def test_no_trace_is_created_when_first_prepared_attempt_cannot_be_reserved(tmp_
             )
         assert budget.usage.used == client.last_attempts == 0
     assert not (client.trace_dir / "llm_traces.jsonl").exists()
+
+
+def test_native_capacity_cannot_silently_omit_required_runtime_authority(monkeypatch):
+    from resagent2_runtime import ContextBudgetExceeded
+
+    monkeypatch.setenv("VISIBLE_BUDGET_KEY", "test-secret")
+    client = OpenAICompatibleClient(
+        model="test", api_base="https://example.invalid/v1", api_key_env="VISIBLE_BUDGET_KEY",
+    )
+    monkeypatch.setattr("resagent2_runtime.llm.send_request", lambda *a, **kw: pytest.fail("must not send"))
+    context = ContextComposer().compose("rules", [
+        ContextSection(name="task", content="business requirement"),
+        ContextSection(name="runtime_authority", content="complete runtime facts " * 2000),
+    ], max_tokens=100000)
+    with execution_budget(max_llm_calls=3, timeout_seconds=10) as budget:
+        with pytest.raises(ContextBudgetExceeded):
+            client.next_tool_call(context, native_tool_schemas((FinishTool(),)), [], max_input_tokens=1000)
+        assert budget.usage.used == 0

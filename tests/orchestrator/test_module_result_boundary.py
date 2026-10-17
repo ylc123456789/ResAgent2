@@ -63,7 +63,7 @@ def _execute(tmp_path, result, agent_kind=WorkflowAgentKind.EXPERIMENT, *, charg
         store=InMemoryRunStore(), artifact_root=tmp_path / "artifacts", data_root=tmp_path / "data",
     )
     now = datetime.now(UTC)
-    engine.store.save(ResearchRun(run_id='run_boundary', request=ResearchRequest(goal='Test ModulePort', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=2)), status=RunStatus.RUNNING, created_at=now, updated_at=now))
+    engine.store.save(ResearchRun(run_id='run_boundary', request=ResearchRequest(goal='Test ModulePort', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=3, max_attempts_per_task=2)), status=RunStatus.RUNNING, created_at=now, updated_at=now))
     engine.accept_proposal("run_boundary", WorkflowProposal(
         work_request_id="work_boundary",
         tasks=[TaskProposal(
@@ -185,8 +185,6 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
     import sys
     from pathlib import Path
 
-    from resagent2_components import EnvironmentBinding
-    from resagent2_components.environment import PreparedEnvironment
     from resagent2_contracts import WorkspaceAccess, WorkspaceSpec
     from resagent2_experiment import NativeExperimentAgent
     from resagent2_orchestrator.handoffs import read_json, system_artifact
@@ -205,17 +203,6 @@ def test_failed_experiment_keeps_execution_record_when_candidate_is_missing(
          "commit", "-qm", "baseline"], cwd=workspace, check=True,
     )
 
-    def prepared_binding(*args, **kwargs):
-        binding = EnvironmentBinding(*args, **kwargs)
-        binding.current = PreparedEnvironment(
-            env_id="test_environment", prefix=Path(sys.prefix),
-            python_version=sys.version.split()[0],
-        )
-        binding.certified = True
-        binding.argv_prefix = lambda: None
-        return binding
-
-    monkeypatch.setattr("resagent2_experiment.agent.EnvironmentBinding", prepared_binding)
     command = f"{shlex.quote(sys.executable)} train.py"
     agent = NativeExperimentAgent(ScriptedLLMClient(tool_turns([
         {"tool": "run_shell", "arguments": {"command": command}},

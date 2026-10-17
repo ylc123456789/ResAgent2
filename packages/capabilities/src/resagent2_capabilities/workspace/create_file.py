@@ -44,9 +44,7 @@ class CreateFileTool:
         path = self.boundary.resolve_write_file(args.path, must_be_new=True)
         with path.open("xb") as handle:
             handle.write(content)
-        revision = int(state.memory.get("edit_revision", 0)) + 1
         return ToolObservation(
             summary=f"Created {args.path}",
             value={"path": args.path, "bytes": len(content)},
-            memory_updates={"edit_revision": revision},
         )

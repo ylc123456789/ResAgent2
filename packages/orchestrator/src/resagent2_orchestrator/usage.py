@@ -2,7 +2,10 @@
 
 from datetime import UTC, datetime
 
-from resagent2_runtime.budget import BudgetExhaustedError, BudgetSnapshot, DeadlineExceededError, RequestOutcome
+from resagent2_runtime.budget import (
+    BudgetExhaustedError, BudgetSnapshot, DeadlineExceededError, RequestOutcome,
+    UsagePersistenceError,
+)
 
 from .models import ResearchRun
 from .store import RunStore
@@ -48,7 +51,12 @@ class RunUsagePort:
         self._save()
 
     def _save(self) -> None:
-        latest = self.store.load(self.run.run_id)
-        latest.usage = self.run.usage.model_copy(deep=True)
-        latest.updated_at = datetime.now(UTC)
-        self.store.save(latest)
+        try:
+            latest = self.store.load(self.run.run_id)
+            latest.usage = self.run.usage.model_copy(deep=True)
+            latest.updated_at = datetime.now(UTC)
+            self.store.save(latest)
+        except Exception as error:
+            # This is authoritative Run storage, not an optional model service.
+            # Keep the cause locally without exposing record contents in feedback.
+            raise UsagePersistenceError("Run model usage could not be persisted") from error

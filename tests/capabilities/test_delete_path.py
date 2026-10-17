@@ -27,15 +27,14 @@ def boundary(root, write=(".",)):
     ))
 
 
-def test_delete_file_advances_edit_revision(tmp_path):
+def test_delete_file_records_actual_deleted_paths(tmp_path):
     (tmp_path / "old.py").write_text("pass")
     tool = DeletePathTool(boundary(tmp_path))
     current = state()
-    current.memory["edit_revision"] = 3
     result = tool.execute(current, tool.input_model(path="old.py"))
     assert result.ok
     assert result.value["deleted_paths"] == ["old.py"]
-    assert result.memory_updates == {"edit_revision": 4}
+    assert not (tmp_path / "old.py").exists()
 
 
 def test_recursive_delete_cannot_execute_without_snapshot_approval(tmp_path):

@@ -6,23 +6,20 @@ CODING_PROMPT 和 CodingCompletionCheck。解释、调查、修改均由 instruc
 读写权限由 WorkspaceGrant 约束；只读源码仍可以通过受控输出通道提交报告。
 可写不表示必须修改，无修改也可结束本次调用。
 
-共享 capabilities 提供文件、Git、artifact、环境及 run_shell 工具。Shell 每次审批，
-运行前使旧环境认证及验证失效，按实际变化更新编辑记录；它的成功不自动成为验证结果。
-[verification.py](src/resagent2_coding/verification.py) 保留 shell-free 验证命令策略：
-测试进程需要执行授权、完整可读写且无用户排除路径的可信工作区，以及已准备的环境。
-操作获准后，run_verification 在执行前自动核验尚未认证的环境；批准恢复不会信任旧认证，
-也不要求模型先单独 audit_env。核验失败或 Run 期限耗尽时不执行验证命令。
-环境发生变化后，旧验证不会被表示为覆盖当前环境；后续编辑或 Git diff 变化也会使记录失效。
-这些当前验证事实通过 git_diff 回执按需取得，与原始命令结果一同留在原生历史；
-不再另行投影到第四部分上下文。
+命令执行仅装配共享 capabilities 的 run_shell：检查、依赖安装、环境创建和正确性验证
+均由模型在任务及授权范围内提交普通命令。系统不创建、绑定或认证环境；模型检查需求、
+选择环境并明确使用解释器。每次 Shell 独立，activate/export/cd 不跨调用保留。
+run_shell 需要执行授权及完整可信工作区；默认 approval_mode=manual，逐次匹配准确操作的人工批准。auto_review 通过注入的无状态 reviewer 在派发前审阅一次，只有 allow 才执行，ask 或审核故障回到人工；预检和人工恢复不重复调用审核模型。审核不会覆盖固定授权或跳过启动快照复验，当前没有 OS 沙箱。进程管理、超时、中断与实际日志由组件负责。
+审核完整核对根用户原始要求、当前任务及有序业务补充、准确操作和历史拒绝说明；不明确的脚本效果保守交人工。审核只有 review_operation 输出工具，与主/子 Agent 共用 Run 总预算及取消信号。审核来源与理由属于第三部分执行事实，不冒充用户要求或批准，也不产生第四部分工件。
+代码执行成功不证明验证充分，模型根据目标、实际检查与局限报告完成情况。
 
 delete_path 只装配到 Coding：普通授权文件或空目录可直接删除，非空目录需确认准确目标快照。
 批准绑定单次操作，目标变化不能复用旧批准；删除部分内容仍使用 replace_text。
 
-完成时从实际 Git 增量生成 code_patch/code_change，从真实验证记录生成
-verification_result，记录其是否覆盖当前工作区。模型不能提交伪造的执行记录。
-正常完成、失败和中断均通过共享组件从原生工具回执生成 execution_record，随原 report + artifacts
-交接；中断记录保留实际停止确认和已有日志，不把保留的部分文件自动登记为完成交付。
+完成时从实际 Git 增量生成 code_patch/code_change。正常完成、失败和中断均通过共享组件
+从原生 run_shell 回执生成 execution_record，随原 report + artifacts 交接；不再生成专用
+verification_result 或环境认证状态。模型不能提交伪造的系统记录。
+中断记录保留实际停止确认和已有日志，不把保留的部分文件自动登记为完成交付。
 失败在剩余期限内尽力收集真实诊断 patch；期限耗尽或 Git 诊断失败时，保留原错误、Session、
 调用计量与已有工件，在 error.details.diagnostic_patch_error 说明未能收集的原因，并禁止自动重试。
 显式交付要求由 Scheduler 对登记后的 artifact 检查。

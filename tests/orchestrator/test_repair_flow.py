@@ -176,7 +176,7 @@ def test_repair_flow_preserves_failed_task_and_completes(tmp_path) -> None:
         scheduler=scheduler,
         registry=_registry(),
     )
-    request = ResearchRequest(goal='Run the experiment; if it fails, fix and rerun.', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3))
+    request = ResearchRequest(goal='Run the experiment; if it fails, fix and rerun.', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3))
 
     run = controller.create_run("run_repair", request)
 
@@ -264,7 +264,7 @@ def test_repair_flow_with_semantic_compiler(tmp_path) -> None:
         scheduler=scheduler,
         registry=_registry(),
     )
-    request = ResearchRequest(goal='Run the experiment; if it fails, fix and rerun.', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3))
+    request = ResearchRequest(goal='Run the experiment; if it fails, fix and rerun.', budget=RunBudget(max_llm_calls=50, timeout_seconds=60), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=5, max_attempts_per_task=3))
 
     run = controller.create_run("run_repair_semantic", request)
 

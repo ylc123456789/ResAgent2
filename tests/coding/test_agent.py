@@ -28,7 +28,7 @@ def init_repo(root: Path) -> None:
 
 def request(root: Path, *, writable=False, task_id="task_coding", **updates) -> AgentRequest:
     values = dict(run_id='run_coding', task_id=task_id, attempt_number=1, agent=AgentOwner.CODING, instruction='Inspect add and make only needed changes', budget=TaskBudget(max_llm_calls=8, timeout_seconds=30), workspace=WorkspaceGrant(root=str(root), source=WorkspaceSourceKind.LOCAL, access=WorkspaceAccess(read_paths=['.'], write_paths=['.']) if writable else WorkspaceAccess(read_paths=['.'], write_paths=[])), workspace_id='ws_test', output_dir=str(root.parent / 'output'))
-    values["permissions"] = AgentPermissions(execute_commands=True, prepare_environment=True)
+    values["permissions"] = AgentPermissions(execute_commands=True)
     values.update(updates)
     return AgentRequest(**values)
 
@@ -119,7 +119,7 @@ def test_write_action_has_one_schema_but_read_only_grant_denies_it(tmp_path):
     assert "Return the sum" not in (tmp_path / "util.py").read_text()
 
 
-def test_disallowed_verification_command_does_not_execute(tmp_path):
+def test_removed_verification_tool_does_not_execute(tmp_path):
     init_repo(tmp_path)
     result = NativeCodingAgent(ScriptedLLMClient(tool_turns([
         {"tool": "run_verification", "arguments": {"commands": ["touch unauthorized"]}},
@@ -130,7 +130,7 @@ def test_disallowed_verification_command_does_not_execute(tmp_path):
 
 def test_process_permission_is_enforced(tmp_path):
     init_repo(tmp_path)
-    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([{'tool': 'run_verification', 'arguments': {'commands': ['python -m pytest']}}]))).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False, prepare_environment=True)))
+    result = NativeCodingAgent(ScriptedLLMClient(tool_turns([{'tool': 'run_shell', 'arguments': {'command': 'python -m pytest'}}]))).invoke(request(tmp_path, writable=True, permissions=AgentPermissions(execute_commands=False)))
     assert result.status == ModuleStatus.FAILED
 
 
@@ -144,7 +144,7 @@ def test_failed_call_retains_diagnostic_patch(tmp_path):
     assert result.error.retryable is False
 
 
-@pytest.mark.parametrize("kind", ["verification_result", "execution_record", "observation_trace", "code_patch"])
+@pytest.mark.parametrize("kind", ["execution_record", "observation_trace", "code_patch"])
 def test_model_cannot_fabricate_system_record(tmp_path, kind):
     init_repo(tmp_path)
     result = NativeCodingAgent(ScriptedLLMClient(tool_turns([finish(artifacts=[{
@@ -264,3 +264,57 @@ def test_native_question_wait_already_preserves_completed_command_snapshot(tmp_p
     assert json.loads(result.artifacts[0].content) == {"results": [VerificationResult(**facts).model_dump(mode="json")]}
     agent.terminate_session(result.session.id, "User cancelled while waiting")
     assert agent.loop.store.load(result.session.id).status == "cancelled"
+
+
+@pytest.mark.parametrize("owner", [AgentOwner.CODING, AgentOwner.EXPERIMENT])
+def test_native_execution_agent_can_create_and_explicitly_reuse_environment(tmp_path, owner):
+    """Exercise actual shell, approvals and resume, without a lifecycle manager."""
+    import shlex
+    import sys
+    from resagent2_experiment import NativeExperimentAgent
+    from resagent2_contracts import RecordedAnswer
+
+    init_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".venv/\n")
+    env = tmp_path / ".venv"
+    target_python = env / "bin" / "python"
+    create = f"{shlex.quote(sys.executable)} -m venv --without-pip .venv"
+    code = "import pathlib,sys; pathlib.Path('.venv/actual-prefix.txt').write_text(sys.prefix)"
+    reuse = f"{shlex.quote(str(target_python))} -c {shlex.quote(code)}"
+    client = ScriptedLLMClient(tool_turns([
+        {"tool": "run_shell", "arguments": {"command": create}},
+        {"tool": "run_shell", "arguments": {"command": reuse}},
+        finish("Created the requested environment and observed its actual interpreter prefix."),
+    ]))
+    agent = NativeCodingAgent(client) if owner == AgentOwner.CODING else NativeExperimentAgent(client)
+    req = request(tmp_path, writable=True, agent=owner)
+    result = agent.invoke(req)
+    assert result.status == "needs_user_input"
+    assert not env.exists(), "creating the environment must wait for exact approval"
+    for index in range(2):
+        assert result.status == "needs_user_input"
+        question = result.control.question
+        answer = RecordedAnswer(
+            question_id=question.id, question_text=question.text,
+            requested_fields=question.requested_fields, options=question.options,
+            values={"approve": "yes"}, answered_at=datetime.now(UTC),
+            run_id=req.run_id, task_id=req.task_id, attempt_number=req.attempt_number,
+            session_id=result.session.id, action=question.action,
+        )
+        req = req.model_copy(update={
+            "parent_session_id": result.session.id,
+            "resume_answers": [answer], "control_ack": result.control.origin,
+        })
+        result = agent.invoke(req)
+        if index == 0:
+            assert target_python.exists()
+            assert not (env / "actual-prefix.txt").exists()
+    assert result.status == "completed", result.report
+    assert Path((env / "actual-prefix.txt").read_text()).resolve() == env.resolve()
+    rows = json.loads(next(item.content for item in result.artifacts
+                           if item.kind == "execution_record"))["results"]
+    assert [item["command"] for item in rows] == [create, reuse]
+    assert all(item["exit_code"] == 0 for item in rows)
+    names = {schema["function"]["name"] for schema in client.schemas[0]}
+    assert "run_shell" in names
+    assert names.isdisjoint({"prepare_environment", "run_setup", "audit_env", "run_verification"})

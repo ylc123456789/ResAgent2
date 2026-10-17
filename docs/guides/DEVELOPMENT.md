@@ -51,7 +51,7 @@ cd "$repo_dir"
 | 代码修改策略 | agents/coding | 真实变更、当前版本验证和失败记录 |
 | 实验执行或指标 | agents/experiment | 命令记录、完整证据集和 warnings |
 | Run、图、暂停恢复 | orchestrator | 身份、状态、重复交付、消费保留 |
-| 工作区/文件、进程、环境事实、文献后端、资源与通用材料校验 | components | 所有同语义消费者，别复制进另一 Agent |
+| 工作区/文件、进程执行事实、文献后端、资源与通用材料校验 | components | 所有同语义消费者，别复制进另一 Agent |
 | 模型 Tool、权限适配器与共享 Tool 行为指引 | capabilities | 复用 components/runtime，不复制底层边界 |
 | Scientific WorkFeedback 事实框与报告呈现 | agents/scientific/context.py | 保持 Scientific 专用展示与通用材料校验分离 |
 | 模型工具入口、参数与局部工具逻辑 | capabilities | 复用 components/runtime，不要求对应组件；领域控制与验证策略留在 Agent |
@@ -77,7 +77,7 @@ cd "$repo_dir"
 - 失败保留实际消费、原始错误、Session 和已有工件，不伪装成功。
 - 重复交付不误消费下一题/工作结果；跨 Run 不串证据。
 
-Protocol 描述方法形状，不保证实现守约。注入的进程内 ModulePort 和原生确定性 finalizer 属于可信实现；模型候选不能提交 execution_record、verification_result 或 observation_trace。上游只检验公开返回和登记工件，不读取下游私有 Session；替换 Port 必须通过相同的行为测试。
+Protocol 描述方法形状，不保证实现守约。注入的进程内 ModulePort 和原生确定性 finalizer 属于可信实现；模型候选不能提交 execution_record 或 observation_trace；执行事实来自 run_shell 的真实回执，不再生产专用验证或环境认证工件。上游只检验公开返回和登记工件，不读取下游私有 Session；替换 Port 必须通过相同的行为测试。
 
 ## 5. 什么时候需要真实服务器验收
 

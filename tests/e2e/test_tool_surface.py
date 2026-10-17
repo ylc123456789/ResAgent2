@@ -32,6 +32,10 @@ Schema 26 only updates embedded public schema constants; approval explanations
 are supplied by the user and returned in receipts, not added to tool inputs.
 Later schema 27 guidance derives singleton hints for all five control tools
 from the enforced rule and describes declared logical workspace selection.
+Schema 28 retains only run_shell for command execution and removes dedicated
+environment management, setup and verification Tools.
+Schema 29 updates embedded contract versions and run_shell guidance for
+manual/auto_review; the permission reviewer is not an execution Agent Tool.
 """
 
 import hashlib
@@ -39,23 +43,19 @@ import json
 from pathlib import Path
 
 from resagent2_capabilities import (
-    AuditEnvTool,
     CreateFileTool,
     DeletePathTool,
     GitDiffTool,
     FetchLiteratureTool,
     ListFilesTool,
     LiteratureSearchTool,
-    PrepareEnvironmentTool,
     ReadArtifactTool,
     ReadFileTool,
     ReplaceTextTool,
-    RunSetupTool,
     SearchTextTool,
     WebFetchTool,
     WebSearchTool,
 )
-from resagent2_coding.verification import RunVerificationTool
 from resagent2_capabilities import RunShellTool
 from resagent2_runtime import AskUserTool, FinishTool
 from resagent2_runtime.tool_calling import native_tool_schemas
@@ -69,10 +69,10 @@ from resagent2_scientific.tools import (
 
 def tool_surface_fingerprints() -> dict[str, str]:
     groups = {
-        "shared": (AuditEnvTool, CreateFileTool, GitDiffTool, ListFilesTool,
-                   LiteratureSearchTool, FetchLiteratureTool, PrepareEnvironmentTool, ReadArtifactTool,
-                   ReadFileTool, ReplaceTextTool, RunSetupTool, RunShellTool, SearchTextTool),
-        "coding": (RunVerificationTool, DeletePathTool),
+        "shared": (CreateFileTool, GitDiffTool, ListFilesTool,
+                   LiteratureSearchTool, FetchLiteratureTool, ReadArtifactTool,
+                   ReadFileTool, ReplaceTextTool, RunShellTool, SearchTextTool),
+        "coding": (DeletePathTool,),
         "runtime": (AskUserTool, FinishTool),
         "scientific": (ScientificAskUserTool, ScientificFinishTool, RequestWorkTool,
                        WebFetchTool, WebSearchTool, ReplyToTaskTool, AbandonWorkTool),

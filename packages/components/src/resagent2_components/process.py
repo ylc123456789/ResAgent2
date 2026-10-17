@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-import shlex
+import hashlib
+import json
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -18,13 +18,16 @@ from resagent2_runtime.cancellation import OperationCancelled, check_cancelled
 from .workspace import WorkspaceBoundary
 
 
-class UnsafeCommandError(ValueError):
-    """Raised when a command requires shell interpretation."""
-
-
-_SHELL_TOKENS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "<<"})
-
-_SHELL_ENVIRONMENT = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH"})
+_SHELL_ENVIRONMENT = frozenset({
+    "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH",
+    # Bash rebuilds these for each shell. Do not let the CLI launcher's nesting
+    # or last command change either the actual startup environment or approval.
+    "SHLVL", "_",
+    # SSH endpoints describe the connection, not the managed command. A fresh
+    # CLI connection must not change the command's actual launch environment.
+    "SSH_CLIENT", "SSH_CONNECTION",
+})
+_BASH_ARGV = ("/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c")
 
 _SENSITIVE_ENV_MARKERS = (
     "API_KEY",
@@ -70,34 +73,16 @@ def output_tail(path: str | Path, *, limit: int = 2000) -> str:
         return ""
 
 
-def parse_command(command: str) -> list[str]:
-    """Parse one command to argv and reject every shell composition feature."""
-    if "\n" in command or "\r" in command:
-        raise UnsafeCommandError(
-            "multiline commands and command substitution are forbidden"
-        )
-    if "$(" in command or "`" in command:
-        raise UnsafeCommandError("command substitution is forbidden")
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    try:
-        argv = list(lexer)
-    except ValueError as error:
-        raise UnsafeCommandError(f"invalid command quoting: {error}") from error
-    if not argv:
-        raise UnsafeCommandError("command cannot be empty")
-    if any(token in _SHELL_TOKENS for token in argv):
-        raise UnsafeCommandError("shell operators are forbidden; declare separate commands")
-    return argv
+def _shell_environment(extra_env: dict[str, str] | None) -> dict[str, str]:
+    environment = _sanitized_environment({**os.environ, **(extra_env or {})}, shell=True)
+    environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    return environment
 
 
-@dataclass(frozen=True, slots=True)
-class CommandPermissionDecision:
-    """Outcome of a command-permission check."""
-
-    allowed: bool
-    reason: str = ""
+def _environment_fingerprint(environment: dict[str, str]) -> str:
+    """Compare startup environments without persisting their variable values."""
+    encoded = json.dumps(environment, sort_keys=True, ensure_ascii=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _descendant_pids(root: int) -> list[int]:
@@ -390,21 +375,18 @@ class ProcessRunner:
     def __init__(self, boundary: WorkspaceBoundary) -> None:
         self.boundary = boundary
 
-    def run(
-        self,
-        command: str,
-        *,
-        log_dir: str,
-        index: int,
-        timeout_seconds: int,
-        argv_prefix: list[str] | None = None,
-        extra_env: dict[str, str] | None = None,
-    ) -> VerificationResult:
-        return self._run_argv(
-            [*(argv_prefix or []), *parse_command(command)], command=command,
-            log_dir=log_dir, index=index, timeout_seconds=timeout_seconds,
-            extra_env=extra_env,
-        )
+    def shell_context(self, *, extra_env: dict[str, str] | None = None) -> dict:
+        """Bind approval to the real shell flags, cwd and filtered environment."""
+        return self._shell_context(_shell_environment(extra_env))
+
+    def _shell_context(self, environment: dict[str, str]) -> dict:
+        return {
+            "cwd": str(self.boundary.root),
+            "shell": _BASH_ARGV[0],
+            "shell_args": list(_BASH_ARGV[1:]),
+            "pipefail": True,
+            "environment_fingerprint": _environment_fingerprint(environment),
+        }
 
     def run_shell(
         self,
@@ -413,19 +395,22 @@ class ProcessRunner:
         log_dir: str,
         index: int,
         timeout_seconds: int,
-        argv_prefix: list[str] | None = None,
         extra_env: dict[str, str] | None = None,
+        expected_context: dict | None = None,
     ) -> VerificationResult:
         """Run an exact script in fixed non-login Bash, with pipeline failures retained."""
         if sys.platform != "linux":
             raise RuntimeError("Shell execution is supported only on Linux")
         if not script.strip() or "\x00" in script:
             raise ValueError("shell script must be nonempty and contain no NUL bytes")
+        environment = _shell_environment(extra_env)
+        context = self._shell_context(environment)
+        if expected_context is not None and expected_context != context:
+            raise PermissionError("Shell startup configuration changed after approval; script was not executed")
         return self._run_argv(
-            [*(argv_prefix or []), "/bin/bash", "--noprofile", "--norc",
-             "-o", "pipefail", "-c", script], command=script,
+            [*_BASH_ARGV, script], command=script,
             log_dir=log_dir, index=index, timeout_seconds=timeout_seconds,
-            extra_env=extra_env, shell=True,
+            environment=environment, context=context,
         )
 
     def _run_argv(
@@ -436,8 +421,8 @@ class ProcessRunner:
         log_dir: str,
         index: int,
         timeout_seconds: int,
-        extra_env: dict[str, str] | None,
-        shell: bool = False,
+        environment: dict[str, str],
+        context: dict,
     ) -> VerificationResult:
         check_cancelled()
         timeout_seconds = remaining_timeout(timeout_seconds)
@@ -445,11 +430,6 @@ class ProcessRunner:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         started = monotonic()
         timed_out = False
-        environment = os.environ.copy()
-        if extra_env:
-            environment.update(extra_env)
-        environment = _sanitized_environment(environment, shell=shell)
-        environment.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(
                 argv,
@@ -474,6 +454,7 @@ class ProcessRunner:
                 if isinstance(error, OperationCancelled):
                     raise OperationCancelled(error.reason, stopped=stopped, details={
                         "operation": "process", "command": command, "pid": process.pid,
+                        **context,
                         "exit_code": process.returncode,
                         "unconfirmed_processes": [pid for pid, identity in identities.items()
                                                   if _owned_process_running(pid, identity)],
@@ -489,6 +470,7 @@ class ProcessRunner:
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
             duration_seconds=monotonic() - started,
+            **context,
         )
 
     def _log_paths(self, log_dir: str, index: int) -> tuple[Path, Path]:

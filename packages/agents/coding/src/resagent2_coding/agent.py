@@ -9,26 +9,23 @@ from resagent2_contracts import (
     ModuleError, ModuleStatus, task_session_id,
 )
 from resagent2_capabilities import (
-    AuditEnvTool, CreateFileTool, DeletePathTool, GitDiffTool, ListFilesTool,
-    PrepareEnvironmentTool, ReadArtifactTool, ReadFileTool, ReplaceTextTool,
-    RunSetupTool, RunShellTool, SearchTextTool,
+    CreateFileTool, DeletePathTool, GitDiffTool, ListFilesTool,
+    ReadArtifactTool, ReadFileTool, ReplaceTextTool, RunShellTool, SearchTextTool,
 )
 from resagent2_components import (
-    ArtifactReadError, DatasetResolutionError, EnvironmentBinding,
-    EnvironmentManager, GitWorkspace, GitWorkspaceError, ProcessRunner,
+    ArtifactReadError, DatasetResolutionError, GitWorkspace, GitWorkspaceError, ProcessRunner,
     RegisteredArtifactReader, RepoMaterializer, RepoMaterializerError,
     ResourceLayout, WorkspaceBoundary, WorkspacePermissionError,
     GitBaseline, dataset_env_overrides, request_dataset_refs, resolve_dataset_refs, preserve_execution_record,
 )
 from resagent2_runtime import (
-    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop,
+    DEFAULT_AGENT_CONTEXT_TOKENS, AgentDefinition, AgentLoop, OperationReviewer,
     AskUserTool, FinishTool,
     InMemorySessionStore, LLMClient, SessionStore,
 )
 
-from .completion import CodingCompletionCheck, derive_control_state
+from .completion import CodingCompletionCheck
 from .context import CODING_PROMPT, build_context
-from .verification import RunVerificationTool
 from resagent2_capabilities.permissions import OperationPermissionPolicy
 from resagent2_runtime.budget import DeadlineExceededError, execution_budget
 
@@ -47,6 +44,7 @@ class NativeCodingAgent:
         self, llm_client: LLMClient, *, store: SessionStore | None = None,
         resource_layout: ResourceLayout | None = None,
         max_context_tokens: int = DEFAULT_AGENT_CONTEXT_TOKENS,
+        operation_reviewer: OperationReviewer | None = None,
     ) -> None:
         if max_context_tokens < 1:
             raise ValueError("max_context_tokens must be positive")
@@ -54,6 +52,7 @@ class NativeCodingAgent:
         self.loop = AgentLoop(store=store or InMemorySessionStore())
         self.resource_layout = resource_layout or ResourceLayout.from_env()
         self.max_context_tokens = max_context_tokens
+        self.operation_reviewer = operation_reviewer
 
     @staticmethod
     def _failure(message: str, *, blocked: bool = False) -> AgentResult:
@@ -100,7 +99,7 @@ class NativeCodingAgent:
                 RepoMaterializerError, DatasetResolutionError, ArtifactReadError) as error:
             return self._failure(str(error), blocked=True)
 
-        initial_memory: dict = {"edit_revision": 0}
+        initial_memory: dict = {}
         if request.parent_session_id is not None:
             try:
                 prior = self.loop.store.load(request.parent_session_id)
@@ -111,39 +110,18 @@ class NativeCodingAgent:
             baseline = repository.snapshot()
             initial_memory["workspace_snapshot"] = baseline.to_memory()
 
-        workspace_id = request.workspace_id or (
-            request.workspace_spec.workspace_id if request.workspace_spec else "workspace"
-        )
-        binding = EnvironmentBinding(
-            EnvironmentManager(env_root=self.resource_layout.env_root),
-            run_id=request.run_id, workspace_id=workspace_id,
-            hard_constraint=request.environment_spec.python_version,
-        )
         output_root = request.output_dir or str(boundary.root / ".resagent2" / request.task_id)
         runner = ProcessRunner(boundary)
         tools = (
             ListFilesTool(boundary), ReadFileTool(boundary), SearchTextTool(boundary),
             ReadArtifactTool(RegisteredArtifactReader(request.input_artifacts, run_id=request.run_id)),
-            GitDiffTool(repository, baseline=baseline,
-                        verification_state=lambda state, diff: derive_control_state(state, binding, diff=diff)),
+            GitDiffTool(repository, baseline=baseline),
             CreateFileTool(boundary), ReplaceTextTool(boundary), DeletePathTool(boundary),
-            PrepareEnvironmentTool(binding, allowed=request.permissions.prepare_environment),
-            RunSetupTool(runner, binding, log_dir=f"{output_root}/setup",
-                         timeout_seconds=request.budget.timeout_seconds,
-                         allowed=request.permissions.execute_commands and request.permissions.prepare_environment),
-            AuditEnvTool(binding, allowed=request.permissions.execute_commands),
             RunShellTool(
-                runner, binding, repository=repository,
+                runner, repository=repository,
                 timeout_seconds=request.budget.timeout_seconds,
                 extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
                 log_dir=f"{output_root}/commands",
-                allowed=request.permissions.execute_commands,
-            ),
-            RunVerificationTool(
-                runner, repository, log_root=f"{output_root}/verification",
-                timeout_seconds=request.budget.timeout_seconds,
-                baseline=baseline, env_binding=binding,
-                extra_env=dataset_env_overrides(self.resource_layout.dataset_root, datasets),
                 allowed=request.permissions.execute_commands,
             ),
             AskUserTool(), FinishTool(),
@@ -154,9 +132,10 @@ class NativeCodingAgent:
             context_builder=lambda request, state, limit: build_context(
                 request, state, datasets=datasets,
             ),
-            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, binding=binding, request=request),
+            permission_policy=OperationPermissionPolicy(tools, boundary=boundary, request=request),
+            operation_reviewer=self.operation_reviewer,
             completion_check=CodingCompletionCheck(
-                repository, boundary, baseline=baseline, env_binding=binding, output_dir=request.output_dir,
+                repository, boundary, baseline=baseline, output_dir=request.output_dir,
             ),
             max_context_tokens=self.max_context_tokens,
         )

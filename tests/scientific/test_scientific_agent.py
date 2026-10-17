@@ -19,7 +19,7 @@ from resagent2_runtime import AgentState, ScriptedLLMClient, ToolRegistry
 
 
 def request(*, artifacts=(), parent=None, budget=10, request_work=True, **extra):
-    return AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=list(artifacts), parent_session_id=parent, budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60), permissions=AgentPermissions(request_work=request_work, execute_commands=True, prepare_environment=True), **extra)
+    return AgentRequest(run_id='run_example', agent=AgentOwner.SCIENTIFIC, instruction='Evaluate the method', input_artifacts=list(artifacts), parent_session_id=parent, budget=TaskBudget(max_llm_calls=budget, timeout_seconds=60), permissions=AgentPermissions(request_work=request_work, execute_commands=True), **extra)
 
 
 def artifact(root, artifact_id="artifact_1", *, kind="experiment_result", content=None, session=None):
@@ -330,3 +330,16 @@ def _search_result(papers):
                                       "source": "arxiv", "status": "success",
                                       "error_type": None, "error": None,
                                   }])
+
+
+def test_standalone_role_permissions_do_not_imply_a_run_execution_grant():
+    client = ScriptedLLMClient(tool_turns([finish()]))
+    result = ScientificAgent(client).invoke(request())
+    assert result.status == "completed", result.report
+    context = client.contexts[0]
+    task = json.loads(context.task_context.split("\n", 1)[1])
+    assert task["instruction"] == "Evaluate the method"
+    assert "permissions" not in task
+    authority = json.loads(context.runtime_context.split("\n", 1)[1])
+    assert authority["current_agent_permissions"]["execute_commands"] is True
+    assert authority["run_execution_permissions"] is None

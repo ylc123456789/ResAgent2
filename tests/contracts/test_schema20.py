@@ -13,7 +13,7 @@ NOW = datetime(2026, 8, 28, tzinfo=UTC)
 
 
 def research_request() -> ResearchRequest:
-    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True, prepare_environment=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
+    return ResearchRequest(goal='Evaluate the method', budget=RunBudget(max_llm_calls=20, timeout_seconds=3600), permissions=RunPermissions(execute_commands=True), execution_limits=ExecutionLimits(max_tasks=8, max_attempts_per_task=2))
 
 
 def session_ref(status: SessionStatus = SessionStatus.PAUSED) -> SessionRef:

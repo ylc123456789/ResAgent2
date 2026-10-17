@@ -531,7 +531,9 @@ class ResearchController:
             release_control=run.parent_attention,
             user_answers=[answer for answer in answers if answer.action is None],
             resume_answers=fresh if parent else [], work_results=results, control_ack=origin if parent else None,
-            task_context={"active_work_request_id": self._active_work_request(run).id if self._active_work_request(run) and self._active_work_request(run).status in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING} else None,
+            task_context={"run_permissions": run.request.permissions.model_dump(
+                mode="json", exclude={"schema_version"}),
+                          "active_work_request_id": self._active_work_request(run).id if self._active_work_request(run) and self._active_work_request(run).status in {WorkRequestStatus.REQUESTED, WorkRequestStatus.COMPILING, WorkRequestStatus.EXECUTING} else None,
                           "child_tasks": [{"task_id": t.id, "instruction": t.instruction, "status": t.status.value}
                               for t in run.workflow.tasks if self._active_work_request(run) and t.work_request_id == self._active_work_request(run).id
                               and t.status in {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.NEEDS_USER_INPUT}] if run.workflow else [],

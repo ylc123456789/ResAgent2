@@ -20,8 +20,8 @@ def request_task_context(request: AgentRequest) -> dict:
     """Initial facts and complete business dialogue; no operation approvals."""
     value = request.model_dump(mode="json", exclude_none=True, include={
         "run_id", "task_id", "attempt_number", "instruction", "task_context",
-        "permissions", "confirm_commands", "workspace", "workspace_id",
-        "workspace_spec", "environment_spec", "output_dir",
+        "permissions", "workspace", "workspace_id",
+        "workspace_spec", "output_dir",
     })
     value["business_dialogue"] = sorted(
         [{"event_id": event.event_id, "created_at": event.created_at.isoformat(),

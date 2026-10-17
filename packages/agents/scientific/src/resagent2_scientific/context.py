@@ -32,6 +32,12 @@ Fulltext acquisition and parsing may fail; retain the stated gaps rather than
 assuming a saved PDF or extracted text includes its figures and formulas.
 Use request_work for code inspection, implementation, or experiments; execution
 Agents own that work. Literature search and scientific judgment remain yours.
+Runtime authority separately identifies your role permissions and the Run execution
+grant. Your role has no shell tool; this does not imply execution Agents cannot run
+commands. Fixed code propagates the Run grant and review mode to execution Agents.
+These control values are runtime facts, not business requirements: do not copy them
+into work objectives, task instructions or common constraints, or infer unavailable
+Run grants from your role permissions.
 Web search provides optional general web leads; web_fetch saves one HTML or text
 page as a web_page artifact. Choose web tools, literature tools, existing artifacts,
 or delegated work according to the user's goal; there is no fixed search sequence.
@@ -152,8 +158,18 @@ def build_context(
     reader: RegisteredArtifactReader | None = None,
 ) -> list[ContextSection]:
     task = request_task_context(request)
+    task.pop("permissions")
+    run_permissions = task["task_context"].pop("run_permissions", None)
+    authority = {
+        "source": "runtime",
+        "current_agent": request.agent.value,
+        "current_agent_permissions": request.permissions.model_dump(
+            mode="json", exclude={"schema_version"}),
+        "run_execution_permissions": run_permissions,
+    }
     task["dataset_catalog"] = dataset_context(datasets or DatasetAvailability())
     return [
         ContextSection(name="task", content=json.dumps(task, ensure_ascii=False)),
+        ContextSection(name="runtime_authority", content=json.dumps(authority, ensure_ascii=False)),
         artifact_index_context(request, state, reader=reader),
     ]
